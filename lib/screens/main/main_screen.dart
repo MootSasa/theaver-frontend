@@ -102,6 +102,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         final provider = context.read<UnreadCountProvider>();
         provider.addListener(_onUnreadCountProviderChanged);
       } catch (_) {}
+      NotificationService().isMainScreenReady = true;
       NotificationService().consumePendingNotification();
     });
   }
@@ -766,6 +767,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     _searchFocusNode.dispose();

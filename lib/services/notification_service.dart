@@ -11,6 +11,7 @@ import 'package:local_notifier/local_notifier.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
 import 'websocket_service.dart';
@@ -21,6 +22,7 @@ import 'push_service_detector.dart';
 import 'settings_service.dart';
 import 'deep_link_service.dart';
 import '../config/app_config.dart';
+import '../utils/image_utils.dart';
 import '../screens/chat/private_chat_screen.dart';
 import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/channel_screen.dart';
@@ -33,26 +35,63 @@ export '../widgets/notifications/in_app_notification_banner.dart' show InAppNoti
 Future<String?> downloadOrGetCachedImage(String? url, {String prefix = 'notif_img'}) async {
   if (url == null || url.isEmpty) return null;
   try {
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      final file = File(url);
-      if (await file.exists()) return file.path;
+    // 1. Data URLs (Base64 avatar string from backend/database)
+    if (url.startsWith('data:')) {
+      final commaIndex = url.indexOf(',');
+      if (commaIndex != -1) {
+        final base64Str = url.substring(commaIndex + 1);
+        final bytes = base64Decode(base64Str);
+        final tempDir = await getTemporaryDirectory();
+        final hash = url.hashCode.abs().toString();
+        final cachedFile = File('${tempDir.path}/${prefix}_$hash.png');
+        await cachedFile.writeAsBytes(bytes, flush: true);
+        return cachedFile.path;
+      }
       return null;
     }
 
+    // 2. Local file paths or file:// URIs
+    if (url.startsWith('file://')) {
+      final f = File(Uri.parse(url).toFilePath());
+      if (await f.exists()) return f.path;
+    }
+    final directFile = File(url);
+    if (await directFile.exists()) return directFile.path;
+
+    // 3. Resolve URL with getValidAvatarUrl (handles / relative paths and domain fixes)
+    final validUrl = getValidAvatarUrl(url);
+    if (validUrl == null) return null;
+
+    if (!validUrl.startsWith('http://') && !validUrl.startsWith('https://')) {
+      final f = File(validUrl);
+      if (await f.exists()) return f.path;
+      return null;
+    }
+
+    // 4. Try DefaultCacheManager first (instant local disk hit if CachedNetworkImage loaded it)
+    try {
+      final fileInfo = await DefaultCacheManager().getFileFromCache(validUrl);
+      if (fileInfo != null && await fileInfo.file.exists() && (await fileInfo.file.length()) > 0) {
+        return fileInfo.file.path;
+      }
+    } catch (_) {}
+
+    // 5. Try temporary directory cache
     final tempDir = await getTemporaryDirectory();
-    final hash = url.hashCode.abs().toString();
+    final hash = validUrl.hashCode.abs().toString();
     final cachedFile = File('${tempDir.path}/${prefix}_$hash.png');
 
     if (await cachedFile.exists() && (await cachedFile.length()) > 0) {
       return cachedFile.path;
     }
 
+    // 6. Download via Dio
     final response = await Dio().get<List<int>>(
-      url,
+      validUrl,
       options: Options(
         responseType: ResponseType.bytes,
-        sendTimeout: const Duration(milliseconds: 3500),
-        receiveTimeout: const Duration(milliseconds: 3500),
+        sendTimeout: const Duration(milliseconds: 4000),
+        receiveTimeout: const Duration(milliseconds: 4000),
       ),
     );
     if (response.statusCode == 200 && response.data != null && response.data!.isNotEmpty) {
@@ -181,9 +220,23 @@ Future<void> _showBackgroundNotification(
         : null,
   );
   final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
-  final notifId = (messageId != null && messageId.isNotEmpty)
+  final rawNotifId = (messageId != null && messageId.isNotEmpty)
       ? (int.tryParse(messageId) ?? (chatId.hashCode ^ messageId.hashCode))
-      : DateTime.now().millisecondsSinceEpoch.remainder(100000);
+      : (DateTime.now().millisecondsSinceEpoch.remainder(100000) ^ chatId.hashCode);
+  final notifId = rawNotifId.abs() % 2147483647;
+
+  // Persist notification ID for cancellation on read
+  if (chatId.isNotEmpty) {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'chat_notif_ids_$chatId';
+      final existing = prefs.getStringList(key) ?? [];
+      if (!existing.contains('$notifId')) {
+        existing.add('$notifId');
+        await prefs.setStringList(key, existing);
+      }
+    } catch (_) {}
+  }
 
   final payloadData = jsonEncode({
     'chat_id': chatId,
@@ -235,6 +288,9 @@ class NotificationService {
   String? get pushToken => _pushToken;
   bool get isInitialized => _initialized;
   PushServiceType get pushServiceType => _detector.serviceType;
+
+  /// Флаг готовности MainScreen для безопасной навигации при тапе на уведомление
+  bool isMainScreenReady = false;
 
   /// ID чата, открытого прямо сейчас на экране пользователя (для подавления уведомлений)
   String? currentActiveChatId;
@@ -843,8 +899,23 @@ class NotificationService {
     // Dismiss in-app banner if showing
     dismissBanner();
 
+    // If MainScreen is not ready yet (e.g. cold start splash or auth loading),
+    // save to _pendingNotificationData so MainScreen can consume it when mounted.
+    if (!isMainScreenReady) {
+      debugPrint('NotificationService: MainScreen not ready yet, queuing pending navigation for chat $chatId');
+      _pendingNotificationData = data;
+      return;
+    }
+
     // Check if user is logged in
-    final token = await AuthService.getToken();
+    var token = await AuthService.getToken();
+    if (token == null) {
+      for (var i = 0; i < 5; i++) {
+        await Future.delayed(const Duration(milliseconds: 150));
+        token = await AuthService.getToken();
+        if (token != null) break;
+      }
+    }
     if (token == null) {
       debugPrint('NotificationService: user not logged in, ignoring navigation');
       return;
@@ -854,6 +925,11 @@ class NotificationService {
     if (navState == null) {
       debugPrint('NotificationService: navigatorState is null, queueing pending navigation');
       _pendingNotificationData = data;
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (_pendingNotificationData != null && isMainScreenReady) {
+          consumePendingNotification();
+        }
+      });
       return;
     }
 
@@ -865,6 +941,11 @@ class NotificationService {
       debugPrint('NotificationService: chat $chatId is already active');
       return;
     }
+
+    // Pop any open sub-screens (like other chats or profiles) back to MainScreen
+    try {
+      navState.popUntil((route) => route.isFirst);
+    } catch (_) {}
 
     final chatName = data['chat_name']?.toString() ?? data['sender_name']?.toString() ?? '';
     final avatarUrl = data['avatar_url']?.toString() ?? data['avatar']?.toString();
@@ -929,7 +1010,7 @@ class NotificationService {
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       try {
         final notification = LocalNotification(
-          identifier: messageId != null && messageId.isNotEmpty ? 'msg_$messageId' : 'chat_$chatId',
+          identifier: 'msg_${chatId}_${messageId ?? DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecondsSinceEpoch}',
           title: title,
           body: body,
           silent: !(effective?.soundEnabled ?? true),
@@ -1022,10 +1103,24 @@ class NotificationService {
     );
 
     final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
-    final notifId = (messageId != null && messageId.isNotEmpty)
+    final rawNotifId = (messageId != null && messageId.isNotEmpty)
         ? (int.tryParse(messageId) ?? (chatId.hashCode ^ messageId.hashCode))
-        : DateTime.now().millisecondsSinceEpoch.remainder(100000);
+        : (DateTime.now().millisecondsSinceEpoch.remainder(100000) ^ chatId.hashCode);
+    final notifId = rawNotifId.abs() % 2147483647;
     (_chatNotificationIds[chatId] ??= []).add(notifId);
+
+    // Persist notification ID for cancellation on read across isolates
+    if (chatId.isNotEmpty) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final key = 'chat_notif_ids_$chatId';
+        final existing = prefs.getStringList(key) ?? [];
+        if (!existing.contains('$notifId')) {
+          existing.add('$notifId');
+          await prefs.setStringList(key, existing);
+        }
+      } catch (_) {}
+    }
 
     final payloadData = jsonEncode({
       'chat_id': chatId,
@@ -1097,13 +1192,30 @@ class NotificationService {
       }
     }
 
-    // 2. Mobile local_notifications
+    // 2. Mobile local_notifications from memory
     final ids = _chatNotificationIds.remove(chatId);
     if (ids != null) {
       for (final id in ids) {
         await _localNotifications.cancel(id);
       }
     }
+
+    // 3. Stored notification IDs across isolates
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'chat_notif_ids_$chatId';
+      final storedIds = prefs.getStringList(key);
+      if (storedIds != null) {
+        for (final idStr in storedIds) {
+          final id = int.tryParse(idStr);
+          if (id != null) {
+            await _localNotifications.cancel(id);
+          }
+        }
+        await prefs.remove(key);
+      }
+    } catch (_) {}
+
     // Cancel by chat Tag (used in FCM and HMS push notifications)
     try {
       await _localNotifications.cancel(0, tag: 'chat_$chatId');

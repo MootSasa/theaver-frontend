@@ -109,6 +109,9 @@ class DesktopTrayService with TrayListener, WindowListener {
   Future<void> showAndFocusWindow() async {
     if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) return;
     try {
+      if (await windowManager.isMinimized()) {
+        await windowManager.restore();
+      }
       await windowManager.show();
       await windowManager.focus();
     } catch (e) {
