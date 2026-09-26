@@ -100,6 +100,7 @@ flutter:
   
   # Localization assets
   assets:
+    - assets/icons/
     - assets/l10n/
     - assets/fonts/AppleColorEmoji.woff2
     - assets/fonts/AppleColorEmoji.ttf

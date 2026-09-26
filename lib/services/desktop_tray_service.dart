@@ -1,5 +1,7 @@
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, File;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:path_provider/path_provider.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -14,6 +16,32 @@ class DesktopTrayService with TrayListener, WindowListener {
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
+
+  /// Извлекает иконку приложения из assets во временную/системную директорию
+  /// для передачи абсолютного пути в Win32/X11 API trayManager.
+  Future<String> _resolveTrayIconPath() async {
+    try {
+      final isWin = Platform.isWindows;
+      final assetKey = isWin ? 'assets/icons/app_icon.ico' : 'assets/icons/app_icon.png';
+      final fileName = isWin ? 'tray_icon.ico' : 'tray_icon.png';
+
+      final appSupportDir = await getApplicationSupportDirectory();
+      final targetFile = File('${appSupportDir.path}/$fileName');
+
+      if (!await targetFile.exists() || (await targetFile.length()) == 0) {
+        final byteData = await rootBundle.load(assetKey);
+        final bytes = byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes);
+        await targetFile.writeAsBytes(bytes, flush: true);
+      }
+      return targetFile.path;
+    } catch (e) {
+      debugPrint('DesktopTrayService: failed to resolve tray icon path: $e');
+      if (Platform.isWindows) {
+        return 'windows/runner/resources/app_icon.ico';
+      }
+      return '';
+    }
+  }
 
   /// Инициализация управления окном и треем
   Future<void> init() async {
@@ -45,15 +73,14 @@ class DesktopTrayService with TrayListener, WindowListener {
       // Инициализируем системный трей
       trayManager.addListener(this);
 
-      String iconPath = '';
-      if (Platform.isWindows) {
-        iconPath = 'windows/runner/resources/app_icon.ico';
-      }
-
+      final iconPath = await _resolveTrayIconPath();
       if (iconPath.isNotEmpty) {
         try {
           await trayManager.setIcon(iconPath);
-        } catch (_) {}
+          await trayManager.setToolTip('Theaver');
+        } catch (e) {
+          debugPrint('DesktopTrayService: setIcon warning: $e');
+        }
       }
 
       final menu = Menu(
@@ -82,6 +109,9 @@ class DesktopTrayService with TrayListener, WindowListener {
   Future<void> showAndFocusWindow() async {
     if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) return;
     try {
+      if (await windowManager.isMinimized()) {
+        await windowManager.restore();
+      }
       await windowManager.show();
       await windowManager.focus();
     } catch (e) {

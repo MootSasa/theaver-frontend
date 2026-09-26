@@ -44,6 +44,62 @@ class InAppNotificationBanner extends StatefulWidget {
     this.onDismiss,
   }) : super(key: key);
 
+  /// Показывает баннер нового сообщения вверху экрана
+  static OverlayEntry? _activeTopBannerOverlay;
+
+  static void showTopBanner(
+    BuildContext context, {
+    required InAppNotificationData data,
+    VoidCallback? onTap,
+    VoidCallback? onDismiss,
+  }) {
+    final overlayState = Overlay.maybeOf(context, rootOverlay: true);
+    if (overlayState == null) return;
+
+    _activeTopBannerOverlay?.remove();
+    _activeTopBannerOverlay = null;
+
+    late OverlayEntry overlayEntry;
+    overlayEntry = OverlayEntry(
+      builder: (context) {
+        final mediaQuery = MediaQuery.of(context);
+        return Positioned(
+          top: 10 + mediaQuery.padding.top,
+          left: 16,
+          right: 16,
+          child: Material(
+            color: Colors.transparent,
+            child: InAppNotificationBanner(
+              data: data,
+              onTap: () {
+                overlayEntry.remove();
+                if (_activeTopBannerOverlay == overlayEntry) {
+                  _activeTopBannerOverlay = null;
+                }
+                onTap?.call();
+              },
+              onDismiss: () {
+                overlayEntry.remove();
+                if (_activeTopBannerOverlay == overlayEntry) {
+                  _activeTopBannerOverlay = null;
+                }
+                onDismiss?.call();
+              },
+            ),
+          ),
+        );
+      },
+    );
+
+    _activeTopBannerOverlay = overlayEntry;
+    overlayState.insert(overlayEntry);
+  }
+
+  static void dismissTopBanner() {
+    _activeTopBannerOverlay?.remove();
+    _activeTopBannerOverlay = null;
+  }
+
   /// Показывает баннер информирования о синхронизации внизу экрана
   static OverlayEntry? _activeBottomSyncOverlay;
 

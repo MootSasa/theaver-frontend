@@ -93,6 +93,7 @@ class UnreadCountProvider extends ChangeNotifier {
     final newCount = (current - count).clamp(0, current);
     if (newCount == 0) {
       _counts.remove(chatId);
+      NotificationService().cancelChatNotifications(chatId);
     } else {
       _counts[chatId] = newCount;
     }
@@ -102,6 +103,7 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Clear unread count for a chat (optimistically)
   void clear(String chatId) {
     _counts.remove(chatId);
+    NotificationService().cancelChatNotifications(chatId);
     notifyListeners();
   }
 
@@ -118,6 +120,7 @@ class UnreadCountProvider extends ChangeNotifier {
     if (chatId != null) {
       if (unreadCount == 0) {
         _counts.remove(chatId);
+        NotificationService().cancelChatNotifications(chatId);
       } else {
         _counts[chatId] = unreadCount;
       }

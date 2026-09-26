@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import 'auth_service.dart';
 import 'database/app_database.dart';
+import 'notification_service.dart';
 import '../utils/date_time_utils.dart';
 
 /// Chat represents a chat conversation.
@@ -1370,6 +1371,7 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
+        NotificationService().cancelChatNotifications(chatId);
         return {
           'success': true,
           'marked_count': data['marked_count'] ?? 0,
