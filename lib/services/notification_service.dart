@@ -616,6 +616,22 @@ class NotificationService {
     // Обработчики
     _hmsPushService!.onMessageReceived.listen(_onHMSForegroundMessage);
     _hmsPushService!.onMessageOpenedApp.listen(_onHMSMessageOpenedApp);
+
+    // Проверяем начальное уведомление при холодном старте
+    await _checkHMSInitialMessage();
+  }
+
+  Future<void> _checkHMSInitialMessage() async {
+    try {
+      final initialData = await _hmsPushService?.getInitialNotification();
+      if (initialData != null && initialData.isNotEmpty) {
+        debugPrint('NotificationService: HMS initial notification detected: $initialData');
+        _pendingNotificationData = initialData;
+        _navigateFromNotificationData(initialData);
+      }
+    } catch (e) {
+      debugPrint('NotificationService: _checkHMSInitialMessage error: $e');
+    }
   }
 
   // ============ Local Notifications ============
@@ -880,7 +896,57 @@ class NotificationService {
     );
   }
 
-  Future<void> _navigateFromNotificationData(Map<String, dynamic> data) async {
+  Future<void> _navigateFromNotificationData(Map<String, dynamic> rawData) async {
+    final Map<String, dynamic> data = Map<String, dynamic>.from(rawData);
+
+    // Defensive unpacking if chat_id is missing at top level
+    if (!data.containsKey('chat_id') || data['chat_id'] == null) {
+      if (data['remoteMessage'] is Map) {
+        final rm = Map<String, dynamic>.from(data['remoteMessage']);
+        if (rm['dataOfMap'] != null) {
+          if (rm['dataOfMap'] is Map) {
+            data.addAll(Map<String, dynamic>.from(rm['dataOfMap']));
+          } else if (rm['dataOfMap'] is String && (rm['dataOfMap'] as String).isNotEmpty) {
+            try {
+              final decoded = json.decode(rm['dataOfMap'] as String);
+              if (decoded is Map) data.addAll(Map<String, dynamic>.from(decoded));
+            } catch (_) {}
+          }
+        }
+        if (rm['data'] != null) {
+          if (rm['data'] is Map) {
+            data.addAll(Map<String, dynamic>.from(rm['data']));
+          } else if (rm['data'] is String && (rm['data'] as String).isNotEmpty) {
+            try {
+              final decoded = json.decode(rm['data'] as String);
+              if (decoded is Map) data.addAll(Map<String, dynamic>.from(decoded));
+            } catch (_) {}
+          }
+        }
+      }
+      if (data['extras'] is Map) {
+        final extras = Map<String, dynamic>.from(data['extras']);
+        if (extras.containsKey('chat_id')) {
+          data.addAll(extras);
+        } else if (extras['data'] != null) {
+          if (extras['data'] is Map) {
+            data.addAll(Map<String, dynamic>.from(extras['data']));
+          } else if (extras['data'] is String && (extras['data'] as String).isNotEmpty) {
+            try {
+              final decoded = json.decode(extras['data'] as String);
+              if (decoded is Map) data.addAll(Map<String, dynamic>.from(decoded));
+            } catch (_) {}
+          }
+        }
+      }
+      if (data['data'] is String && (data['data'] as String).isNotEmpty) {
+        try {
+          final decoded = json.decode(data['data'] as String);
+          if (decoded is Map) data.addAll(Map<String, dynamic>.from(decoded));
+        } catch (_) {}
+      }
+    }
+
     final chatId = data['chat_id']?.toString();
     if (chatId == null || chatId.isEmpty) {
       return;
@@ -1206,15 +1272,29 @@ class NotificationService {
       final key = 'chat_notif_ids_$chatId';
       final storedIds = prefs.getStringList(key);
       if (storedIds != null) {
+        final parsedIds = <int>[];
         for (final idStr in storedIds) {
           final id = int.tryParse(idStr);
           if (id != null) {
+            parsedIds.add(id);
             await _localNotifications.cancel(id);
           }
+        }
+        if (parsedIds.isNotEmpty && Platform.isAndroid) {
+          try {
+            await (_hmsPushService ?? HMSPushService()).cancelNotificationsWithIds(parsedIds);
+          } catch (_) {}
         }
         await prefs.remove(key);
       }
     } catch (_) {}
+
+    // 4. Cancel active notifications via Huawei Push SDK (for HMS Core notifications)
+    if (Platform.isAndroid) {
+      try {
+        await (_hmsPushService ?? HMSPushService()).cancelChatNotifications(chatId);
+      } catch (_) {}
+    }
 
     // Cancel by chat Tag (used in FCM and HMS push notifications)
     try {
@@ -1245,6 +1325,11 @@ class NotificationService {
     _desktopNotifications.clear();
     _chatNotificationIds.clear();
     await _localNotifications.cancelAll();
+    if (Platform.isAndroid) {
+      try {
+        await (_hmsPushService ?? HMSPushService()).cancelAllNotifications();
+      } catch (_) {}
+    }
   }
 
   // ============ Logic ============

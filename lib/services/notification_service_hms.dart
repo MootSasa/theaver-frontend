@@ -25,9 +25,32 @@ class HMSPushService {
       StreamController<Map<String, dynamic>>.broadcast();
 
   String? _token;
+  Map<String, dynamic>? _initialNotificationData;
 
   /// Текущий HMS Push токен
   String? get token => _token;
+
+  /// Получить данные уведомления, открывшего приложение при холодном старте
+  Future<Map<String, dynamic>?> getInitialNotification() async {
+    if (!Platform.isAndroid) return null;
+    if (_initialNotificationData != null && _initialNotificationData!.isNotEmpty) {
+      final data = _initialNotificationData;
+      _initialNotificationData = null;
+      return data;
+    }
+    try {
+      final dynamic event = await Push.getInitialNotification();
+      if (event != null) {
+        final data = _extractMap(event);
+        if (data.isNotEmpty) {
+          return data;
+        }
+      }
+    } catch (e) {
+      debugPrint('HMSPushService: getInitialNotification error: $e');
+    }
+    return null;
+  }
 
   /// Поток обновлений токена
   Stream<String> get onTokenRefresh => _tokenController.stream;
@@ -168,8 +191,9 @@ class HMSPushService {
     Push.getInitialNotification().then((dynamic event) {
       if (event != null) {
         debugPrint('HMSPushService: getInitialNotification: $event');
-        Map<String, dynamic> data = _extractMap(event);
+        final Map<String, dynamic> data = _extractMap(event);
         if (data.isNotEmpty) {
+          _initialNotificationData = data;
           _messageOpenedAppController.add(data);
         }
       }
@@ -180,20 +204,148 @@ class HMSPushService {
 
   Map<String, dynamic> _extractMap(dynamic event) {
     if (event == null) return {};
+    Map<String, dynamic> raw = {};
     if (event is Map) {
-      return Map<String, dynamic>.from(event);
-    }
-    if (event is String && event.isNotEmpty) {
+      raw = Map<String, dynamic>.from(event);
+    } else if (event is String && event.isNotEmpty) {
       try {
         final decoded = json.decode(event);
         if (decoded is Map) {
-          return Map<String, dynamic>.from(decoded);
+          raw = Map<String, dynamic>.from(decoded);
         }
       } catch (_) {
         return {'data': event};
       }
     }
-    return {};
+
+    if (raw.isEmpty) return {};
+
+    // If chat_id is already present at top level, return raw
+    if (raw.containsKey('chat_id') && raw['chat_id'] != null) {
+      return raw;
+    }
+
+    final Map<String, dynamic> result = Map<String, dynamic>.from(raw);
+
+    // 1. Try extracting payload from remoteMessage (HMS Push Kit structure)
+    if (raw['remoteMessage'] is Map) {
+      final rm = Map<String, dynamic>.from(raw['remoteMessage']);
+      if (rm['dataOfMap'] != null) {
+        if (rm['dataOfMap'] is Map) {
+          result.addAll(Map<String, dynamic>.from(rm['dataOfMap']));
+        } else if (rm['dataOfMap'] is String && rm['dataOfMap'].isNotEmpty) {
+          try {
+            final decoded = json.decode(rm['dataOfMap']);
+            if (decoded is Map) {
+              result.addAll(Map<String, dynamic>.from(decoded));
+            }
+          } catch (_) {}
+        }
+      }
+      if (rm['data'] != null) {
+        if (rm['data'] is Map) {
+          result.addAll(Map<String, dynamic>.from(rm['data']));
+        } else if (rm['data'] is String && rm['data'].isNotEmpty) {
+          try {
+            final decoded = json.decode(rm['data']);
+            if (decoded is Map) {
+              result.addAll(Map<String, dynamic>.from(decoded));
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    // 2. Try extracting payload from extras
+    if (raw['extras'] is Map) {
+      final extras = Map<String, dynamic>.from(raw['extras']);
+      if (extras.containsKey('chat_id')) {
+        result.addAll(extras);
+      } else if (extras['data'] != null) {
+        if (extras['data'] is Map) {
+          result.addAll(Map<String, dynamic>.from(extras['data']));
+        } else if (extras['data'] is String && extras['data'].isNotEmpty) {
+          try {
+            final decoded = json.decode(extras['data']);
+            if (decoded is Map) {
+              result.addAll(Map<String, dynamic>.from(decoded));
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    // 3. Try top-level data string
+    if (raw['data'] is String && (raw['data'] as String).isNotEmpty) {
+      try {
+        final decoded = json.decode(raw['data'] as String);
+        if (decoded is Map) {
+          result.addAll(Map<String, dynamic>.from(decoded));
+        }
+      } catch (_) {}
+    }
+
+    return result;
+  }
+
+  /// Отменить уведомления чата в строке состояния Huawei / Android
+  Future<void> cancelChatNotifications(String chatId) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final activeNotifications = await Push.getNotifications();
+      final idsToCancel = <int>[];
+      final idTagsToCancel = <int, String>{};
+
+      for (final notif in activeNotifications) {
+        final tag = notif['tag']?.toString() ?? '';
+        final idStr = notif['id']?.toString() ?? notif['identifier']?.toString();
+        final id = int.tryParse(idStr ?? '');
+
+        if (tag == 'chat_$chatId' || tag.startsWith('chat_${chatId}_')) {
+          if (id != null) {
+            idsToCancel.add(id);
+            idTagsToCancel[id] = tag;
+          }
+          try {
+            await Push.cancelNotificationsWithTag(tag);
+          } catch (_) {}
+        }
+      }
+
+      if (idsToCancel.isNotEmpty) {
+        try {
+          await Push.cancelNotificationsWithId(idsToCancel);
+        } catch (_) {}
+      }
+      if (idTagsToCancel.isNotEmpty) {
+        try {
+          await Push.cancelNotificationsWithIdTag(idTagsToCancel);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('HMSPushService: cancelChatNotifications error: $e');
+    }
+  }
+
+  /// Отменить конкретные notification IDs
+  Future<void> cancelNotificationsWithIds(List<int> ids) async {
+    if (!Platform.isAndroid || ids.isEmpty) return;
+    try {
+      await Push.cancelNotificationsWithId(ids);
+    } catch (e) {
+      debugPrint('HMSPushService: cancelNotificationsWithIds error: $e');
+    }
+  }
+
+  /// Отменить все уведомления в NotificationManager
+  Future<void> cancelAllNotifications() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await Push.cancelNotifications();
+      await Push.cancelAllNotifications();
+    } catch (e) {
+      debugPrint('HMSPushService: cancelAllNotifications error: $e');
+    }
   }
 
   /// Освободить ресурсы
