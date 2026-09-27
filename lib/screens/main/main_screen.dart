@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import '../../utils/haptic_utils.dart';
 import '../../screens/chat/create_private_chat_screen.dart';
@@ -2084,45 +2083,163 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   ], // closes PageView children
                 ); // closes PageView
 
-            final Widget body;
-            final isImpeller = ui.ImageFilter.isShaderFilterSupported;
-            if (glassProvider.enabled && !isImpeller) {
-              // На Skia для оптического преломления линз LiquidGlassLens нужен предок LiquidGlassView
-              body = LiquidGlassView(
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final reduceMotion = MediaQuery.disableAnimationsOf(context);
+            final lightAngle =
+                glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
+
+            if (glassProvider.enabled) {
+              final double screen = MediaQuery.sizeOf(context).width;
+              const double barHeight = 60.0;
+              const double edgePadding = 16.0;
+              const double spacing = 10.0;
+              const double actionSize = 60.0;
+              const double bottomMargin = 16.0;
+              const double maxGroupWidth = 560.0;
+
+              final double totalRequiredWidth = screen - edgePadding * 2;
+              final double leftMargin;
+              final double actionMargin;
+              final double barWidth;
+
+              if (totalRequiredWidth <= maxGroupWidth) {
+                leftMargin = edgePadding;
+                actionMargin = edgePadding;
+                barWidth = totalRequiredWidth - actionSize - spacing;
+              } else {
+                final double groupLeft = (screen - maxGroupWidth) / 2;
+                leftMargin = groupLeft;
+                actionMargin = groupLeft;
+                barWidth = maxGroupWidth - actionSize - spacing;
+              }
+
+              final shape = _glassShape(barHeight / 2, lightAngle);
+
+              final barStyle = LiquidGlassStyle(
+                shape: shape,
+                appearance: LiquidGlassAppearance(
+                  color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+                  blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+                  shadow: LiquidGlassShadow(
+                    blur: 16,
+                    opacity: isDark ? 0.40 : 0.18,
+                    offset: const Offset(0, 8),
+                    color: Colors.black,
+                  ),
+                ),
+                refraction: const LiquidGlassRefraction(
+                  distortion: 0.06,
+                  distortionWidth: 26,
+                ),
+              );
+
+              final actionStyle = LiquidGlassStyle(
+                shape: shape,
+                appearance: LiquidGlassAppearance(
+                  color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+                  blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+                  shadow: LiquidGlassShadow(
+                    blur: 16,
+                    opacity: isDark ? 0.40 : 0.18,
+                    offset: const Offset(0, 8),
+                    color: Colors.black,
+                  ),
+                ),
+                refraction: const LiquidGlassRefraction(
+                  distortion: 0.06,
+                  distortionWidth: 26,
+                ),
+              );
+
+              return LiquidGlassScaffold(
                 pixelRatio: 1.0,
                 useSync: true,
-                backgroundWidget: Material(
-                  type: MaterialType.transparency,
-                  child: pageView,
-                ),
-                child: Stack(
-                  children: [
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: _buildLiquidGlassBottomBar(context, glassProvider),
+                backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+                body: pageView,
+                actionMargin: actionMargin,
+                bottomNavigationBar: LiquidGlassTabBar(
+                  items: [
+                    _buildTabBarItem(
+                      icon: Icons.settings_outlined,
+                      label: 'Настройки',
+                    ),
+                    _buildTabBarItem(
+                      icon: Icons.chat_bubble_outline_rounded,
+                      label: 'Чаты',
+                    ),
+                    _buildTabBarItem(
+                      icon: Icons.search_rounded,
+                      label: 'Поиск',
                     ),
                   ],
+                  selectedIndex: _currentIndex,
+                  onChanged: (index) {
+                    HapticUtils.selection();
+                    _onTabTapped(index);
+                  },
+                  width: barWidth,
+                  height: barHeight,
+                  alignment: Alignment.bottomLeft,
+                  margin: EdgeInsets.only(left: leftMargin, bottom: bottomMargin),
+                  itemPadding: 3,
+                  style: barStyle,
+                  itemStyle: LiquidGlassTabItemStyle(
+                    selectedColor: const Color(0xFF0088CC),
+                    unselectedColor: isDark
+                        ? const Color(0xFF8E8E93)
+                        : const Color(0xFF636366),
+                    iconSize: 24,
+                    labelFontSize: 10,
+                    iconLabelGap: 2,
+                    underGlassIconSize: 28,
+                    underGlassLabelFontSize: 10,
+                    selectedFontWeight: FontWeight.w700,
+                    unselectedFontWeight: FontWeight.w600,
+                  ),
+                  pillStyle: LiquidGlassTabPillStyle(
+                    mode: LiquidGlassPillMode.both,
+                    show: true,
+                    animated: true,
+                    growHeight: 7,
+                    rest: LiquidGlassStyle(
+                      shape: _glassShape(28, lightAngle),
+                      appearance: LiquidGlassAppearance(
+                        color: isDark
+                            ? const Color(0x38FFFFFF)
+                            : const Color(0x2EAEAEB2),
+                      ),
+                    ),
+                  ),
+                ),
+                bottomNavigationBarAction: LiquidGlassButton(
+                  width: actionSize,
+                  height: barHeight,
+                  padding: EdgeInsets.zero,
+                  icon: Icons.add_rounded,
+                  iconSize: 28,
+                  touch: const LiquidGlassTouch(
+                    flex: LiquidGlassFlex(
+                      stretch: 18,
+                      squeeze: 0.75,
+                      holdScale: 0.08,
+                      tapScale: 0.06,
+                    ),
+                  ),
+                  foregroundColor:
+                      isDark ? Colors.white : const Color(0xFF121215),
+                  style: actionStyle,
+                  onPressed: () {
+                    HapticUtils.tap();
+                    _showCreateMenu();
+                  },
                 ),
               );
-            } else if (glassProvider.enabled) {
-              // На Impeller линзы LiquidGlassLens работают напрямую с live backdrop через шейдеры,
-              // поэтому LiquidGlassView не требуется и PageView не захватывается в оффскрин-буфер
-              body = Stack(
-                children: [
-                  Positioned.fill(child: pageView),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: _buildLiquidGlassBottomBar(context, glassProvider),
-                  ),
-                ],
-              );
-            } else {
-              // Классический режим — сплошная заливка бара поверх контента
-              body = Stack(
+            }
+
+            // Классический режим — сплошная заливка бара поверх контента
+            return Scaffold(
+              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              body: Stack(
                 children: [
                   Positioned.fill(child: pageView),
                   Positioned(
@@ -2138,12 +2255,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ],
-              );
-            }
-
-            return Scaffold(
-              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-              body: body,
+              ),
             );
           },
         ),
@@ -2182,192 +2294,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildLiquidGlassBottomBar(
-      BuildContext context, LiquidGlassProvider glassProvider) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle =
-        glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
 
-    const double barHeight = 60.0;
-    const double edgePadding = 16.0;
-    const double spacing = 10.0;
-    const double bottomMargin = 16.0;
-    const double maxBarWidth = 560.0;
-
-    final shape = _glassShape(barHeight / 2, lightAngle);
-
-    final barShadow = [
-      BoxShadow(
-        color: isDark
-            ? Colors.black.withValues(alpha: 0.40)
-            : Colors.black.withValues(alpha: 0.12),
-        blurRadius: 18,
-        offset: const Offset(0, 6),
-      ),
-      BoxShadow(
-        color: isDark
-            ? Colors.black.withValues(alpha: 0.22)
-            : Colors.black.withValues(alpha: 0.06),
-        blurRadius: 6,
-        offset: const Offset(0, 2),
-      ),
-    ];
-
-    final barStyle = LiquidGlassStyle(
-      shape: shape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.35 : 0.18,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-    );
-
-    final actionStyle = LiquidGlassStyle(
-      shape: _glassShape(barHeight / 2, lightAngle),
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.35 : 0.18,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-    );
-
-    return Padding(
-      padding: EdgeInsets.only(
-        left: edgePadding,
-        right: edgePadding,
-        bottom: bottomInset + bottomMargin,
-      ),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: maxBarWidth),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                flex: 5,
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    return DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(barHeight / 2),
-                        boxShadow: barShadow,
-                      ),
-                      child: LiquidGlassTabBar(
-                        items: [
-                          _buildTabBarItem(
-                            icon: Icons.settings_outlined,
-                            label: 'Настройки',
-                          ),
-                          _buildTabBarItem(
-                            icon: Icons.chat_bubble_outline_rounded,
-                            label: 'Чаты',
-                          ),
-                          _buildTabBarItem(
-                            icon: Icons.search_rounded,
-                            label: 'Поиск',
-                          ),
-                        ],
-                        selectedIndex: _currentIndex,
-                        onChanged: (index) {
-                          HapticUtils.selection();
-                          _onTabTapped(index);
-                        },
-                        width: constraints.maxWidth,
-                        height: barHeight,
-                        margin: EdgeInsets.zero,
-                        itemPadding: 3,
-                        style: barStyle,
-                        itemStyle: LiquidGlassTabItemStyle(
-                          selectedColor: const Color(0xFF0088CC),
-                          unselectedColor: isDark
-                              ? const Color(0xFF8E8E93)
-                              : const Color(0xFF636366),
-                          iconSize: 24,
-                          labelFontSize: 10,
-                          iconLabelGap: 2,
-                          underGlassIconSize: 26,
-                          underGlassLabelFontSize: 10,
-                          selectedFontWeight: FontWeight.w700,
-                          unselectedFontWeight: FontWeight.w600,
-                        ),
-                        pillStyle: LiquidGlassTabPillStyle(
-                          mode: LiquidGlassPillMode.both,
-                          show: true,
-                          animated: true,
-                          animationDuration: const Duration(milliseconds: 280),
-                          animationCurve: Curves.easeOutCubic,
-                          color: isDark
-                              ? const Color(0x38FFFFFF)
-                              : const Color(0x2EAEAEB2),
-                          rest: LiquidGlassStyle(
-                            shape: _glassShape(28, lightAngle),
-                            appearance: LiquidGlassAppearance(
-                              color: isDark
-                                  ? const Color(0x38FFFFFF)
-                                  : const Color(0x2EAEAEB2),
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: spacing),
-              Flexible(
-                flex: 1,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: barShadow,
-                    ),
-                    child: LiquidGlassActionButton(
-                      icon: Icons.add_rounded,
-                      size: barHeight,
-                      touch: const LiquidGlassTouch(
-                        flex: LiquidGlassFlex(
-                          stretch: 18,
-                          squeeze: 0.75,
-                          holdScale: 0.08,
-                          tapScale: 0.06,
-                        ),
-                      ),
-                      foregroundColor:
-                          isDark ? Colors.white : const Color(0xFF121215),
-                      style: actionStyle,
-                      onTap: () {
-                        HapticUtils.tap();
-                        _showCreateMenu();
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _buildSearchResults() {
     final l10n = context.l10n;
@@ -2609,87 +2536,4 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
   }
 }
 
-/// Circular liquid glass action button with touch deformation (flex).
-class LiquidGlassActionButton extends StatelessWidget {
-  const LiquidGlassActionButton({
-    super.key,
-    required this.icon,
-    required this.onTap,
-    this.foregroundColor,
-    this.size = 56,
-    this.style,
-    this.touch,
-  });
-
-  final IconData icon;
-  final VoidCallback? onTap;
-  final Color? foregroundColor;
-  final double size;
-  final LiquidGlassStyle? style;
-  final LiquidGlassTouch? touch;
-
-  static const LiquidGlassAppearance _defaultAppearance = LiquidGlassAppearance(
-    blur: LiquidGlassBlur(sigmaX: 2, sigmaY: 2),
-  );
-
-  static const LiquidGlassRefraction _defaultRefraction = LiquidGlassRefraction(
-    distortion: 0.07,
-    distortionWidth: 28,
-    chromaticAberration: 0.002,
-  );
-
-  static const LiquidGlassStyle defaultStyle = LiquidGlassStyle(
-    appearance: _defaultAppearance,
-    refraction: _defaultRefraction,
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    final LiquidGlassStyle resolved = defaultStyle.merge(style);
-    final effectiveShape = resolved.shape ??
-        LiquidGlassShape.roundedRectangle(
-          cornerRadius: size / 2,
-          borderWidth: 1.2,
-          lightIntensity: 1.1,
-          lightDirection: 80,
-          borderType: const OpticalBorder(
-            borderSaturation: 1.2,
-            ambientIntensity: 1.0,
-            borderSolidity: 0.35,
-          ),
-        );
-
-    final resolvedStyle = LiquidGlassStyle(
-      shape: effectiveShape,
-      appearance: resolved.appearance,
-      refraction: resolved.refraction,
-      adaptivity: resolved.adaptivity,
-      liteGlass: resolved.liteGlass,
-    );
-
-    return SizedBox(
-      width: size,
-      height: size,
-      child: LiquidGlassLens(
-        touch: touch,
-        style: resolvedStyle,
-        child: Material(
-          color: Colors.transparent,
-          shape: const CircleBorder(),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: onTap,
-            child: Center(
-              child: Icon(
-                icon,
-                color: foregroundColor ?? Colors.white,
-                size: size * 0.46,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
