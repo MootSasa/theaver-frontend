@@ -2246,124 +2246,100 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 : maxGroupWidth;
             final double barWidth = groupWidth - actionSize - spacing;
 
-            return Stack(
-              alignment: Alignment.center,
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Теневой слой под стеклянными элементами
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(barHeight / 2),
-                        boxShadow: barShadow,
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(barHeight / 2),
+                    boxShadow: barShadow,
+                  ),
+                  child: LiquidGlassTabBar(
+                    items: [
+                      _buildTabBarItem(
+                        icon: Icons.settings_outlined,
+                        label: 'Настройки',
                       ),
-                      child: SizedBox(
-                        width: barWidth,
-                        height: barHeight,
+                      _buildTabBarItem(
+                        icon: Icons.chat_bubble_outline_rounded,
+                        label: 'Чаты',
                       ),
+                      _buildTabBarItem(
+                        icon: Icons.search_rounded,
+                        label: 'Поиск',
+                      ),
+                    ],
+                    selectedIndex: _currentIndex,
+                    onChanged: (index) {
+                      HapticUtils.selection();
+                      _onTabTapped(index);
+                    },
+                    width: barWidth,
+                    height: barHeight,
+                    margin: EdgeInsets.zero,
+                    itemPadding: 3,
+                    style: sharedStyle,
+                    itemStyle: LiquidGlassTabItemStyle(
+                      selectedColor: const Color(0xFF0088CC),
+                      unselectedColor: isDark
+                          ? const Color(0xFF8E8E93)
+                          : const Color(0xFF636366),
+                      iconSize: 24,
+                      labelFontSize: 10,
+                      iconLabelGap: 2,
+                      underGlassIconSize: 28,
+                      underGlassLabelFontSize: 10,
+                      selectedFontWeight: FontWeight.w700,
+                      unselectedFontWeight: FontWeight.w600,
                     ),
-                    const SizedBox(width: spacing),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        boxShadow: barShadow,
-                      ),
-                      child: const SizedBox(
-                        width: actionSize,
-                        height: barHeight,
-                      ),
-                    ),
-                  ],
-                ),
-                // Единая blend group для tab bar и кнопки '+'
-                LiquidGlassBlender(
-                  smoothness: 24,
-                  style: sharedStyle,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      LiquidGlassTabBar(
-                        items: [
-                          _buildTabBarItem(
-                            icon: Icons.settings_outlined,
-                            label: 'Настройки',
-                          ),
-                          _buildTabBarItem(
-                            icon: Icons.chat_bubble_outline_rounded,
-                            label: 'Чаты',
-                          ),
-                          _buildTabBarItem(
-                            icon: Icons.search_rounded,
-                            label: 'Поиск',
-                          ),
-                        ],
-                        selectedIndex: _currentIndex,
-                        onChanged: (index) {
-                          HapticUtils.selection();
-                          _onTabTapped(index);
-                        },
-                        width: barWidth,
-                        height: barHeight,
-                        margin: EdgeInsets.zero,
-                        itemPadding: 3,
-                        style: sharedStyle,
-                        itemStyle: LiquidGlassTabItemStyle(
-                          selectedColor: const Color(0xFF0088CC),
-                          unselectedColor: isDark
-                              ? const Color(0xFF8E8E93)
-                              : const Color(0xFF636366),
-                          iconSize: 24,
-                          labelFontSize: 10,
-                          iconLabelGap: 2,
-                          underGlassIconSize: 28,
-                          underGlassLabelFontSize: 10,
-                          selectedFontWeight: FontWeight.w700,
-                          unselectedFontWeight: FontWeight.w600,
-                        ),
-                        pillStyle: LiquidGlassTabPillStyle(
-                          mode: LiquidGlassPillMode.both,
-                          show: true,
-                          animated: true,
-                          animationDuration: const Duration(milliseconds: 280),
-                          animationCurve: Curves.easeOutCubic,
+                    pillStyle: LiquidGlassTabPillStyle(
+                      mode: LiquidGlassPillMode.both,
+                      show: true,
+                      animated: true,
+                      animationDuration: const Duration(milliseconds: 280),
+                      animationCurve: Curves.easeOutCubic,
+                      color: isDark
+                          ? const Color(0x38FFFFFF)
+                          : const Color(0x2EAEAEB2),
+                      rest: LiquidGlassStyle(
+                        shape: _glassShape(27, lightAngle),
+                        appearance: LiquidGlassAppearance(
                           color: isDark
                               ? const Color(0x38FFFFFF)
                               : const Color(0x2EAEAEB2),
-                          rest: LiquidGlassStyle(
-                            shape: _glassShape(27, lightAngle),
-                            appearance: LiquidGlassAppearance(
-                              color: isDark
-                                  ? const Color(0x38FFFFFF)
-                                  : const Color(0x2EAEAEB2),
-                            ),
-                          ),
                         ),
                       ),
-                      const SizedBox(width: spacing),
-                      LiquidGlassButton(
-                        width: actionSize,
-                        height: barHeight,
-                        padding: EdgeInsets.zero,
-                        icon: Icons.add_rounded,
-                        iconSize: 28,
-                        touch: const LiquidGlassTouch(
-                          flex: LiquidGlassFlex(
-                            stretch: 18,
-                            squeeze: 0.75,
-                            holdScale: 0.08,
-                            tapScale: 0.06,
-                          ),
-                        ),
-                        foregroundColor:
-                            isDark ? Colors.white : const Color(0xFF121215),
-                        style: sharedStyle,
-                        onPressed: () {
-                          HapticUtils.tap();
-                          _showCreateMenu();
-                        },
+                    ),
+                  ),
+                ),
+                const SizedBox(width: spacing),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: barShadow,
+                  ),
+                  child: LiquidGlassButton(
+                    width: actionSize,
+                    height: barHeight,
+                    padding: EdgeInsets.zero,
+                    icon: Icons.add_rounded,
+                    iconSize: 28,
+                    touch: const LiquidGlassTouch(
+                      flex: LiquidGlassFlex(
+                        stretch: 8,
+                        squeeze: 0.70,
+                        holdScale: 0.03,
+                        tapScale: 0.02,
                       ),
-                    ],
+                    ),
+                    foregroundColor:
+                        isDark ? Colors.white : const Color(0xFF121215),
+                    style: sharedStyle,
+                    onPressed: () {
+                      HapticUtils.tap();
+                      _showCreateMenu();
+                    },
                   ),
                 ),
               ],
