@@ -851,14 +851,25 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _onTabTapped(int index) {
+    if (_currentIndex == index) return;
     // Закрываем клавиатуру при уходе с поиска
     if (_currentIndex == 2 && index != 2) {
       _searchFocusNode.unfocus();
     }
+    setState(() {
+      _currentIndex = index;
+      if (index == 2) {
+        _searchController.clear();
+        _searchQuery = '';
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _searchFocusNode.requestFocus();
+        });
+      }
+    });
     _pageController.animateToPage(
       index,
       duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
+      curve: Curves.easeOutCubic,
     );
   }
 
@@ -1718,18 +1729,20 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     if (_currentIndex == 2 && page != 2) {
                       _searchFocusNode.unfocus();
                     }
-                    setState(() {
-                      _currentIndex = page;
-                      if (page == 2) {
-                        // Поиск — очищаем поле при переходе
-                        _searchController.clear();
-                        _searchQuery = '';
-                        // Клавиатура появляется после завершения перехода
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted) _searchFocusNode.requestFocus();
-                        });
-                      }
-                    });
+                    if (_currentIndex != page) {
+                      setState(() {
+                        _currentIndex = page;
+                        if (page == 2) {
+                          // Поиск — очищаем поле при переходе
+                          _searchController.clear();
+                          _searchQuery = '';
+                          // Клавиатура появляется после завершения перехода
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted) _searchFocusNode.requestFocus();
+                          });
+                        }
+                      });
+                    }
                   },
                   children: [
                     // Страница 0: Настройки (встроенная)
@@ -2295,17 +2308,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           mode: LiquidGlassPillMode.both,
                           show: true,
                           animated: true,
-                          animationDuration: const Duration(milliseconds: 300),
+                          animationDuration: const Duration(milliseconds: 280),
                           animationCurve: Curves.easeOutCubic,
                           color: isDark
                               ? const Color(0x38FFFFFF)
-                              : const Color(0x22000000),
+                              : const Color(0x2EAEAEB2),
                           rest: LiquidGlassStyle(
                             shape: _glassShape(28, lightAngle),
                             appearance: LiquidGlassAppearance(
                               color: isDark
                                   ? const Color(0x38FFFFFF)
-                                  : const Color(0x22000000),
+                                  : const Color(0x2EAEAEB2),
                             ),
                           ),
                         ),
@@ -2324,10 +2337,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       shape: BoxShape.circle,
                       boxShadow: barShadow,
                     ),
-                    child: LiquidGlassTabBarAction(
+                    child: LiquidGlassActionButton(
                       icon: Icons.add_rounded,
                       size: barHeight,
-                      touch: const LiquidGlassTouch(flex: LiquidGlassFlex()),
+                      touch: const LiquidGlassTouch(
+                        flex: LiquidGlassFlex(
+                          stretch: 18,
+                          squeeze: 0.75,
+                          holdScale: 0.08,
+                          tapScale: 0.06,
+                        ),
+                      ),
                       foregroundColor:
                           isDark ? Colors.white : const Color(0xFF121215),
                       style: actionStyle,
@@ -2585,3 +2605,88 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
     return widget.child;
   }
 }
+
+/// Circular liquid glass action button with touch deformation (flex).
+class LiquidGlassActionButton extends StatelessWidget {
+  const LiquidGlassActionButton({
+    super.key,
+    required this.icon,
+    required this.onTap,
+    this.foregroundColor,
+    this.size = 56,
+    this.style,
+    this.touch,
+  });
+
+  final IconData icon;
+  final VoidCallback? onTap;
+  final Color? foregroundColor;
+  final double size;
+  final LiquidGlassStyle? style;
+  final LiquidGlassTouch? touch;
+
+  static const LiquidGlassAppearance _defaultAppearance = LiquidGlassAppearance(
+    blur: LiquidGlassBlur(sigmaX: 2, sigmaY: 2),
+  );
+
+  static const LiquidGlassRefraction _defaultRefraction = LiquidGlassRefraction(
+    distortion: 0.07,
+    distortionWidth: 28,
+    chromaticAberration: 0.002,
+  );
+
+  static const LiquidGlassStyle defaultStyle = LiquidGlassStyle(
+    appearance: _defaultAppearance,
+    refraction: _defaultRefraction,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final LiquidGlassStyle resolved = defaultStyle.merge(style);
+    final effectiveShape = resolved.shape ??
+        LiquidGlassShape.roundedRectangle(
+          cornerRadius: size / 2,
+          borderWidth: 1.2,
+          lightIntensity: 1.1,
+          lightDirection: 80,
+          borderType: const OpticalBorder(
+            borderSaturation: 1.2,
+            ambientIntensity: 1.0,
+            borderSolidity: 0.35,
+          ),
+        );
+
+    final resolvedStyle = LiquidGlassStyle(
+      shape: effectiveShape,
+      appearance: resolved.appearance,
+      refraction: resolved.refraction,
+      adaptivity: resolved.adaptivity,
+      liteGlass: resolved.liteGlass,
+    );
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: LiquidGlassLens(
+        touch: touch,
+        style: resolvedStyle,
+        child: Material(
+          color: Colors.transparent,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap,
+            child: Center(
+              child: Icon(
+                icon,
+                color: foregroundColor ?? Colors.white,
+                size: size * 0.46,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
