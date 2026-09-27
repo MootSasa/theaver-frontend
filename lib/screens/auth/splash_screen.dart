@@ -53,6 +53,10 @@ class _SplashScreenState extends State<SplashScreen> {
       SwipeBackPageRoute(builder: (_) => const MainScreen()),
       (route) => false,
     );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationService().consumePendingNotification();
+    });
   }
 
   void _navigateToLogin() {

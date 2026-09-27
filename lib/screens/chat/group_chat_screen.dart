@@ -18,6 +18,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../l10n/app_localizations.dart';
@@ -287,6 +288,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       try {
         context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
       } catch (_) {}
+      NotificationService().cancelChatNotifications(widget.chatId, chatTitle: widget.groupName);
     });
   }
 
@@ -624,7 +626,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _markMessagesAsRead() async {
-    await ChatService.markMessagesAsRead(chatId: widget.chatId);
+    await ChatService.markMessagesAsRead(
+      chatId: widget.chatId,
+      chatTitle: widget.groupName,
+    );
     // Notify via WebSocket that messages were read
     _wsService.sendMessageRead(widget.chatId);
   }

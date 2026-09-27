@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
@@ -113,6 +115,49 @@ class WebSocketService {
   static const Duration _pingInterval = Duration(seconds: 30);
   StreamSubscription? _streamSubscription;
   bool _isSessionTerminated = false;
+  bool _isKeepAliveEnabled = false;
+  bool get isKeepAliveEnabled => _isKeepAliveEnabled;
+
+  /// Initialize KeepAlive background service based on saved settings
+  Future<void> initKeepAlive() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _isKeepAliveEnabled = prefs.getBool('bg_connection_enabled') ?? false;
+      if (_isKeepAliveEnabled && Platform.isAndroid) {
+        const channel = MethodChannel('app.theaver.messenger/push_detector');
+        await channel.invokeMethod('startKeepAliveService');
+      }
+    } catch (_) {}
+  }
+
+  /// Enable or disable KeepAlive background service (for VPN / background connection)
+  Future<void> setKeepAliveEnabled(bool enabled) async {
+    _isKeepAliveEnabled = enabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('bg_connection_enabled', enabled);
+    } catch (_) {}
+
+    if (Platform.isAndroid) {
+      try {
+        const channel = MethodChannel('app.theaver.messenger/push_detector');
+        if (enabled) {
+          await channel.invokeMethod('startKeepAliveService');
+          await channel.invokeMethod('requestIgnoreBatteryOptimizations');
+        } else {
+          await channel.invokeMethod('stopKeepAliveService');
+        }
+      } catch (e) {
+        debugPrint('WebSocket: error setting KeepAlive service: $e');
+      }
+    }
+
+    if (enabled) {
+      if (!_isConnected && !_isConnecting) {
+        tryReconnect();
+      }
+    }
+  }
 
   void _setConnected(bool connected) {
     _isConnected = connected;
@@ -374,7 +419,8 @@ class WebSocketService {
   /// Start ping timer to keep connection alive
   void _startPingTimer() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(_pingInterval, (_) {
+    final interval = _isKeepAliveEnabled ? const Duration(seconds: 25) : _pingInterval;
+    _pingTimer = Timer.periodic(interval, (_) {
       sendPing();
     });
   }
