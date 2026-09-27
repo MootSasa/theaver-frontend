@@ -1,9 +1,7 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart' hide LiquidGlassAppBar;
 
 /// AppBar с Liquid Glass эффектом и затемнением.
 ///
@@ -13,10 +11,6 @@ import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
 ///
 /// Содержимое AppBar (заголовок, действия) отображается поверх
 /// glass-эффекта. Поддерживает необязательный [bottom] виджет (TabBar).
-///
-/// Окантовка (видимый край glass-формы) убрана за счёт использования
-/// [LiquidGlassLayer] + [LiquidGlass.grouped] — форма выходит за пределы
-/// видимой области, и Layer обрезает её до своих границ.
 class LiquidGlassAppBar extends StatelessWidget
     implements PreferredSizeWidget {
   /// Виджет заголовка (обычно Row с аватаром и именем)
@@ -38,6 +32,9 @@ class LiquidGlassAppBar extends StatelessWidget
   /// Включён ли облегчённый режим (FakeGlass вместо LiquidGlass)
   final bool isLite;
 
+  /// Динамический угол освещения бликов (в градусах)
+  final double? lightAngle;
+
   const LiquidGlassAppBar({
     Key? key,
     required this.title,
@@ -46,6 +43,7 @@ class LiquidGlassAppBar extends StatelessWidget
     this.bottom,
     this.centerTitle = false,
     this.isLite = false,
+    this.lightAngle,
   }) : super(key: key);
 
   @override
@@ -58,23 +56,28 @@ class LiquidGlassAppBar extends StatelessWidget
     final brightness = MediaQuery.platformBrightnessOf(context);
     final isDark = brightness == Brightness.dark;
 
-    final glassSettings = LiquidGlassSettings(
-      refractiveIndex: 1.1,
-      thickness: 10,
-      blur: 12,
-      saturation: 1.3,
-      lightIntensity: isDark ? 0.5 : 0.8,
-      ambientStrength: isDark ? 0.15 : 0.3,
-      lightAngle: math.pi / 2,
-      glassColor: isDark
-          ? const Color.fromARGB(80, 20, 20, 30)
-          : const Color.fromARGB(80, 200, 200, 210),
-    );
-
-    // Получаем высоту статус-бара для отступа
     final statusBarHeight = MediaQuery.of(context).padding.top;
     final bottomHeight = bottom?.preferredSize.height ?? 0;
     final totalHeight = kToolbarHeight + statusBarHeight + bottomHeight;
+
+    final barStyle = LiquidGlassStyle(
+      shape: LiquidGlassShape.roundedRectangle(
+        cornerRadius: 0,
+        borderWidth: 0,
+        lightDirection: lightAngle ?? 62.0,
+      ),
+      appearance: LiquidGlassAppearance(
+        color: isDark
+            ? const Color.fromARGB(80, 20, 20, 30)
+            : const Color.fromARGB(80, 200, 200, 210),
+        blur: const LiquidGlassBlur(sigmaX: 12, sigmaY: 12),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.05,
+        distortionWidth: 20,
+      ),
+      liteGlass: isLite ? LiquidGlassLitePickup.surface : null,
+    );
 
     // Делаем статус-бар прозрачным чтобы glass-эффект AppBar
     // распространялся на область статус-бара без цветового разрыва
@@ -86,44 +89,13 @@ class LiquidGlassAppBar extends StatelessWidget
       ),
       child: SizedBox(
         height: totalHeight,
-        // ClipRect обрезает glass-форму по границам AppBar,
-        // убирая видимую окантовку по краям
-        child: ClipRect(
-          child: LiquidGlassLayer(
-            settings: glassSettings,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // Glass-форма выходит за пределы видимой области
-                // (на 40px в каждую сторону), Layer обрезает до своих границ.
-                // Таким образом окантовка (рефрактивный край) не видна.
-                Positioned(
-                  top: -40,
-                  left: -40,
-                  right: -40,
-                  bottom: -40,
-                  child: isLite
-                      ? FakeGlass.inLayer(
-                          shape: const LiquidRoundedSuperellipse(borderRadius: 0),
-                          child: Container(
-                            // Лёгкое затемнение поверх glass
-                            color: isDark
-                                ? Colors.black.withValues(alpha: 0.15)
-                                : Colors.white.withValues(alpha: 0.1),
-                          ),
-                        )
-                      : LiquidGlass.grouped(
-                          clipBehavior: Clip.none,
-                          shape: const LiquidRoundedSuperellipse(borderRadius: 0),
-                          child: Container(
-                            // Лёгкое затемнение поверх glass
-                            color: isDark
-                                ? Colors.black.withValues(alpha: 0.15)
-                                : Colors.white.withValues(alpha: 0.1),
-                          ),
-                        ),
-                ),
-                // Содержимое AppBar поверх glass
+        width: double.infinity,
+        child: LiquidGlassLens(
+          style: barStyle,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // Содержимое AppBar поверх glass
                 Positioned(
                   left: 0,
                   right: 0,
@@ -196,7 +168,6 @@ class LiquidGlassAppBar extends StatelessWidget
             ),
           ),
         ),
-      ),
     );
   }
 }

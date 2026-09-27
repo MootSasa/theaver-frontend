@@ -28,7 +28,6 @@ import '../../screens/auth/login_screen.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/chat/liquid_glass_filter_chips.dart';
-import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart' hide LiquidGlassAppBar;
@@ -1817,6 +1816,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                       leading: const SizedBox.shrink(),
                                       centerTitle: true,
                                       isLite: glassProvider.isLite,
+                                      lightAngle: glassProvider.getEffectiveLightAngle(
+                                        reduceMotion: MediaQuery.disableAnimationsOf(context),
+                                      ),
                                     ),
                                   ),
                                   // Фильтры плавают ниже AppBar
