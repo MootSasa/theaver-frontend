@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'settings_service.dart';
 import 'notification_service.dart';
 import 'auth_service.dart';
+import 'websocket_service.dart';
 import '../config/app_config.dart';
 
 /// Provider для управления настройками уведомлений.
@@ -14,10 +16,12 @@ class NotificationSettingsProvider extends ChangeNotifier {
   GlobalNotificationSettings _globalSettings = GlobalNotificationSettings.defaults();
   Map<String, ChatNotificationSettings> _chatSettings = {};
   List<ChatNotificationException> _exceptions = [];
+  bool _backgroundConnection = false;
 
   GlobalNotificationSettings get globalSettings => _globalSettings;
   Map<String, ChatNotificationSettings> get chatSettings => _chatSettings;
   List<ChatNotificationException> get exceptions => _exceptions;
+  bool get backgroundConnection => _backgroundConnection;
 
   Future<Map<String, String>> _authHeaders() async {
     final token = await AuthService.getToken();
@@ -31,6 +35,13 @@ class NotificationSettingsProvider extends ChangeNotifier {
   Future<void> init() async {
     _globalSettings = _settingsService.notificationSettings;
     _chatSettings = _settingsService.allChatNotificationSettings;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _backgroundConnection = prefs.getBool('bg_connection_enabled') ?? false;
+      await WebSocketService().initKeepAlive();
+    } catch (_) {}
+
     notifyListeners();
 
     try {
@@ -42,6 +53,13 @@ class NotificationSettingsProvider extends ChangeNotifier {
     // Фоновая синхронизация с сервером
     loadSettingsFromServer();
     loadExceptionsFromServer();
+  }
+
+  /// Включить / выключить постоянное фоновое соединение (Keep-Alive для VPN)
+  Future<void> updateBackgroundConnection(bool enabled) async {
+    _backgroundConnection = enabled;
+    notifyListeners();
+    await WebSocketService().setKeepAliveEnabled(enabled);
   }
 
   /// Загрузить настройки уведомлений с сервера

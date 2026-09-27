@@ -453,6 +453,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     ],
                   ),
 
+                  // === Фоновое подключение (для VPN и надежности) ===
+                  SettingsGroup(
+                    title: 'Фоновые службы',
+                    children: [
+                      SwitchListTile(
+                        secondary: const Icon(Icons.wifi_tethering, color: Color(0xFF0088CC)),
+                        title: const Text('Фоновое подключение'),
+                        subtitle: const Text(
+                          'Постоянное соединение в фоне для надежной доставки сообщений и работы через VPN (как в Telegram)',
+                        ),
+                        value: provider.backgroundConnection,
+                        onChanged: (val) {
+                          HapticUtils.selection();
+                          provider.updateBackgroundConnection(val);
+                        },
+                      ),
+                    ],
+                  ),
+
                   // === Исключения ===
                   SettingsGroup(
                     title: 'Исключения',

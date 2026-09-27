@@ -19,6 +19,7 @@ import '../../services/file_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/sync_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
 import '../../services/database/app_database.dart';
@@ -238,6 +239,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       try {
         context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
       } catch (_) {}
+      NotificationService().cancelChatNotifications(widget.chatId, chatTitle: widget.otherUserName);
     });
   }
 
@@ -800,7 +802,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
   /// Mark all unread messages in this chat as read (used when entering chat)
   Future<void> _markAllMessagesAsRead() async {
-    final result = await ChatService.markMessagesAsRead(chatId: widget.chatId);
+    final result = await ChatService.markMessagesAsRead(
+      chatId: widget.chatId,
+      chatTitle: widget.otherUserName,
+    );
     final markedCount = result['marked_count'] as int? ?? 0;
     if (markedCount > 0) {
       _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);

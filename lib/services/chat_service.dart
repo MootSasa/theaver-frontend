@@ -1354,6 +1354,7 @@ class ChatService {
   /// [chatId] - The ID of the chat
   static Future<Map<String, dynamic>> markMessagesAsRead({
     required String chatId,
+    String? chatTitle,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -1371,7 +1372,7 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
-        NotificationService().cancelChatNotifications(chatId);
+        NotificationService().cancelChatNotifications(chatId, chatTitle: chatTitle);
         return {
           'success': true,
           'marked_count': data['marked_count'] ?? 0,

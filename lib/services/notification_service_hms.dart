@@ -289,28 +289,44 @@ class HMSPushService {
   }
 
   /// Отменить уведомления чата в строке состояния Huawei / Android
-  Future<void> cancelChatNotifications(String chatId) async {
+  Future<void> cancelChatNotifications(String chatId, {String? chatTitle}) async {
     if (!Platform.isAndroid) return;
     try {
       final activeNotifications = await Push.getNotifications();
       final idsToCancel = <int>[];
       final idTagsToCancel = <int, String>{};
+      final targetTitle = chatTitle?.trim().toLowerCase();
 
       for (final notif in activeNotifications) {
-        final tag = notif['tag']?.toString() ?? '';
+        final tag = notif['tag']?.toString();
         final idStr = notif['statusBarNotificationId']?.toString() ??
             notif['id']?.toString() ??
             notif['identifier']?.toString();
         final id = int.tryParse(idStr ?? '');
+        final rawTitle = notif['title']?.toString();
+        final title = rawTitle?.trim().toLowerCase();
 
-        if (tag == 'chat_$chatId' || tag.startsWith('chat_${chatId}_')) {
+        bool match = false;
+        if (tag != null && (tag == 'chat_$chatId' || tag.startsWith('chat_${chatId}_') || tag == chatId)) {
+          match = true;
+        } else if (targetTitle != null && targetTitle.isNotEmpty && title != null && (title == targetTitle || title.contains(targetTitle))) {
+          match = true;
+        } else if (id != null && (id == int.tryParse(chatId))) {
+          match = true;
+        }
+
+        if (match) {
           if (id != null) {
             idsToCancel.add(id);
-            idTagsToCancel[id] = tag;
+            if (tag != null && tag.isNotEmpty) {
+              idTagsToCancel[id] = tag;
+            }
           }
-          try {
-            await Push.cancelNotificationsWithTag(tag);
-          } catch (_) {}
+          if (tag != null && tag.isNotEmpty) {
+            try {
+              await Push.cancelNotificationsWithTag(tag);
+            } catch (_) {}
+          }
         }
       }
 

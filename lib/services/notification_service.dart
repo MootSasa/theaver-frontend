@@ -143,6 +143,16 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     ));
   }
   final data = message.data;
+  if (data['type'] == 'read_status_updated') {
+    final cid = data['chat_id']?.toString();
+    if (cid != null && cid.isNotEmpty && Platform.isAndroid) {
+      try {
+        const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+        await nativeChannel.invokeMethod('cancelChatNotifications', {'chat_id': cid});
+      } catch (_) {}
+    }
+    return;
+  }
   if (data.containsKey('chat_id') && data.containsKey('chat_name')) {
     await _showBackgroundNotification(localNotifications, data);
   }
@@ -1249,7 +1259,7 @@ class NotificationService {
     await _localNotifications.show(-1, 'Theaver', '$count непрочитанных', details);
   }
 
-  Future<void> cancelChatNotifications(String chatId) async {
+  Future<void> cancelChatNotifications(String chatId, {String? chatTitle}) async {
     // 1. Desktop local_notifier
     final desktopNotifications = _desktopNotifications.remove(chatId);
     if (desktopNotifications != null) {
@@ -1295,10 +1305,13 @@ class NotificationService {
     if (Platform.isAndroid) {
       try {
         const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
-        await nativeChannel.invokeMethod('cancelChatNotifications', {'chat_id': chatId});
+        await nativeChannel.invokeMethod('cancelChatNotifications', {
+          'chat_id': chatId,
+          if (chatTitle != null && chatTitle.isNotEmpty) 'chat_title': chatTitle,
+        });
       } catch (_) {}
       try {
-        await (_hmsPushService ?? HMSPushService()).cancelChatNotifications(chatId);
+        await (_hmsPushService ?? HMSPushService()).cancelChatNotifications(chatId, chatTitle: chatTitle);
       } catch (_) {}
     }
 

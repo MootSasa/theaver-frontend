@@ -10,6 +10,7 @@ import '../../services/websocket_service.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import 'package:drift/drift.dart' show Value;
 import '../../utils/image_utils.dart';
@@ -168,6 +169,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
       try {
         context.read<UnreadCountProvider>().setOpenChat(widget.channelId);
       } catch (_) {}
+      NotificationService().cancelChatNotifications(widget.channelId, chatTitle: widget.channelName);
     });
   }
 
@@ -276,7 +278,10 @@ class _ChannelScreenState extends State<ChannelScreen> {
   }
 
   Future<void> _markMessagesAsRead() async {
-    await ChatService.markMessagesAsRead(chatId: widget.channelId);
+    await ChatService.markMessagesAsRead(
+      chatId: widget.channelId,
+      chatTitle: widget.channelName,
+    );
     // Notify via WebSocket that messages were read
     _wsService.sendMessageRead(widget.channelId);
   }
