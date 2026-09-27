@@ -30,7 +30,7 @@ import '../../widgets/chat/liquid_glass_filter_chips.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart' hide LiquidGlassAppBar;
 import '../../widgets/settings/settings_group.dart';
 import '../../services/sync_service.dart';
 import '../../services/database/app_database.dart';
@@ -2258,7 +2258,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             foregroundColor: isDark ? Colors.white : const Color(0xFF121215),
             style: actionStyle,
             onTap: () {
-              HapticUtils.lightImpact();
+              HapticUtils.tap();
               _showCreateMenu();
             },
           ),
