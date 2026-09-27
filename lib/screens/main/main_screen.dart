@@ -2225,21 +2225,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-                bottomNavigationBarAction: LiquidGlassTabBarAction(
-                  size: actionSize,
+                bottomNavigationBarAction: LiquidGlassButton(
+                  width: actionSize,
+                  height: actionSize,
+                  padding: EdgeInsets.zero,
                   icon: Icons.add_rounded,
+                  iconSize: 28,
                   touch: const LiquidGlassTouch(
                     flex: LiquidGlassFlex(
-                      stretch: 8,
+                      stretch: 12,
                       squeeze: 0.70,
-                      holdScale: 0.03,
-                      tapScale: 0.02,
+                      lean: 0.50,
+                      grip: 0.70,
+                      holdScale: 0.05,
+                      tapScale: 0.04,
                     ),
                   ),
                   foregroundColor:
                       isDark ? Colors.white : const Color(0xFF121215),
                   style: actionStyle,
-                  onTap: () {
+                  onPressed: () {
                     HapticUtils.tap();
                     _showCreateMenu();
                   },
