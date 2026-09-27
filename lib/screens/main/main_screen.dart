@@ -1842,6 +1842,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                     child: LiquidGlassFilterChips(
                                       enabled: true,
                                       isLite: glassProvider.isLite,
+                                      lightAngle: glassProvider.getEffectiveLightAngle(
+                                        reduceMotion: MediaQuery.disableAnimationsOf(context),
+                                      ),
                                       filters: filters,
                                       activeFilter: _activeFilter,
                                       onFilterSelected: (i) =>

@@ -1,16 +1,14 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:motor/motor.dart';
 
 import '../../utils/haptic_utils.dart';
 
-/// Создаёт матрицу jelly-трансформации (копия из liquid_glass_bottom_bar.dart).
+/// Создаёт матрицу jelly-трансформации.
 Matrix4 _buildJellyTransform({
   required Offset velocity,
-  double maxDistortion = 0.7,
-  double velocityScale = 1000.0,
+  double maxDistortion = 0.35,
+  double velocityScale = 500.0,
 }) {
   final speed = velocity.distance;
   final direction = speed > 0 ? velocity / speed : Offset.zero;
@@ -33,12 +31,6 @@ Matrix4 _buildJellyTransform({
 }
 
 /// Фильтры чатов (Все, Личные, Группы, Каналы) с Liquid Glass эффектом.
-///
-/// Дизайн — точная копия нижнего бара, но уменьшенный:
-/// - Та же структура: LiquidGlassLayer + LiquidGlassBlendGroup +
-///   LiquidGlass.grouped + скользящий glass-индикатор
-/// - Высота 36 (вместо 64), borderRadius 18 (вместо 32)
-/// - Те же настройки стекла, пружинные анимации, jelly-эффект
 class LiquidGlassFilterChips extends StatefulWidget {
   final bool enabled;
   final List<String> filters;
@@ -46,8 +38,11 @@ class LiquidGlassFilterChips extends StatefulWidget {
   final ValueChanged<int> onFilterSelected;
   final List<int> unreadCounts;
 
-  /// Включён ли облегчённый режим (FakeGlass вместо LiquidGlass)
+  /// Включён ли облегчённый режим
   final bool isLite;
+
+  /// Угол падения света для бликов (от гироскопа или ручной настройки)
+  final double? lightAngle;
 
   const LiquidGlassFilterChips({
     Key? key,
@@ -57,6 +52,7 @@ class LiquidGlassFilterChips extends StatefulWidget {
     required this.onFilterSelected,
     this.unreadCounts = const [],
     this.isLite = false,
+    this.lightAngle,
   }) : super(key: key);
 
   @override
@@ -77,9 +73,7 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
     final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
 
-    final bgColor = isDark
-        ? const Color(0xFF2C2C2E)
-        : Colors.white;
+    final bgColor = isDark ? const Color(0xFF2C2C2E) : Colors.white;
     final borderColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.04);
@@ -127,117 +121,70 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
     );
   }
 
-  /// Glass-версия — точная копия структуры нижнего бара.
-  /// LiquidGlassLayer → LiquidGlassBlendGroup → Padding →
-  /// LiquidGlass.grouped → Container(height: 36) →
-  /// _FilterIndicator (скользящий glass-индикатор) → Row с фильтрами.
+  /// Glass-версия на базе LiquidGlassLens
   Widget _buildGlassFilters(BuildContext context) {
     final brightness = MediaQuery.platformBrightnessOf(context);
     final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
 
-    // Те же настройки стекла что и у нижнего бара
-    final glassSettings = LiquidGlassSettings(
-      refractiveIndex: 1.21,
-      thickness: 30,
-      blur: 8,
-      saturation: 1.5,
-      lightIntensity: isDark ? 0.7 : 1.0,
-      ambientStrength: isDark ? 0.2 : 0.5,
-      lightAngle: math.pi / 2,
-      glassColor: isDark
-          ? const Color.fromARGB(60, 30, 30, 40)
-          : const Color.fromARGB(80, 200, 200, 210),
+    final shape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: 18,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.7,
+      lightIntensity: 0.9,
+      lightDirection: widget.lightAngle ?? 62.0,
+      borderType: const OpticalBorder(
+        borderSaturation: 1.1,
+        ambientIntensity: 0.85,
+        borderSolidity: 0.95,
+      ),
     );
 
-    // Padding снаружи LiquidGlassLayer чтобы слой стекла
-    // покрывал только стеклянную форму, а не область отступов
+    final style = LiquidGlassStyle(
+      shape: shape,
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+        shadow: const LiquidGlassShadow(blur: 8, opacity: 0.12),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.05,
+        distortionWidth: 20,
+      ),
+      liteGlass: widget.isLite ? LiquidGlassLitePickup.surface : null,
+    );
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: LiquidGlassLayer(
-        settings: glassSettings,
-        child: LiquidGlassBlendGroup(
-          blend: 10,
+      child: SizedBox(
+        height: 36,
+        child: LiquidGlassLens(
+          style: style,
           child: _FilterIndicator(
             tabIndex: widget.activeFilter,
             tabCount: widget.filters.length,
             onTabChanged: widget.onFilterSelected,
-            child: widget.isLite
-                ? FakeGlass.inLayer(
-                    shape: const LiquidRoundedSuperellipse(borderRadius: 18),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      height: 36,
-                      decoration: isDark
-                          ? null
-                          : BoxDecoration(
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(
-                                color: Colors.black.withValues(alpha: 0.12),
-                                width: 0.5,
-                              ),
-                            ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          for (var i = 0; i < widget.filters.length; i++)
-                            Expanded(
-                              child: _GlassFilterChip(
-                                label: widget.filters[i],
-                                unreadCount: i < widget.unreadCounts.length
-                                    ? widget.unreadCounts[i]
-                                    : 0,
-                                isActive: widget.activeFilter == i,
-                                isDark: isDark,
-                                theme: theme,
-                                onTap: () {
-                                  HapticUtils.selection();
-                                  widget.onFilterSelected(i);
-                                },
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  )
-                : LiquidGlass.grouped(
-                    clipBehavior: Clip.none,
-                    shape: const LiquidRoundedSuperellipse(borderRadius: 18),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      height: 36,
-                      decoration: isDark
-                          ? null
-                          : BoxDecoration(
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(
-                                color: Colors.black.withValues(alpha: 0.12),
-                                width: 0.5,
-                              ),
-                            ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          for (var i = 0; i < widget.filters.length; i++)
-                            Expanded(
-                              child: _GlassFilterChip(
-                                label: widget.filters[i],
-                                unreadCount: i < widget.unreadCounts.length
-                                    ? widget.unreadCounts[i]
-                                    : 0,
-                                isActive: widget.activeFilter == i,
-                                isDark: isDark,
-                                theme: theme,
-                                onTap: () {
-                                  HapticUtils.selection();
-                                  widget.onFilterSelected(i);
-                                },
-                              ),
-                            ),
-                        ],
-                      ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                for (var i = 0; i < widget.filters.length; i++)
+                  Expanded(
+                    child: _GlassFilterChip(
+                      label: widget.filters[i],
+                      unreadCount: i < widget.unreadCounts.length
+                          ? widget.unreadCounts[i]
+                          : 0,
+                      isActive: widget.activeFilter == i,
+                      isDark: isDark,
+                      theme: theme,
+                      onTap: () {
+                        HapticUtils.selection();
+                        widget.onFilterSelected(i);
+                      },
                     ),
                   ),
+              ],
+            ),
           ),
         ),
       ),
@@ -246,7 +193,7 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
 }
 
 // ============================================================
-// Glass-фильтр (копия _BottomBarTab из liquid_glass_bottom_bar.dart)
+// Glass-фильтр
 // ============================================================
 
 class _GlassFilterChip extends StatelessWidget {
@@ -403,7 +350,7 @@ class _ClassicFilterChip extends StatelessWidget {
 }
 
 // ============================================================
-// Скользящий glass-индикатор (копия _TabIndicator из bottom_bar)
+// Скользящий glass-индикатор
 // ============================================================
 
 class _FilterIndicator extends StatefulWidget {
@@ -423,14 +370,13 @@ class _FilterIndicator extends StatefulWidget {
   State<_FilterIndicator> createState() => _FilterIndicatorState();
 }
 
-class _FilterIndicatorState extends State<_FilterIndicator>
-    with SingleTickerProviderStateMixin {
-  bool _isDown = false;
+class _FilterIndicatorState extends State<_FilterIndicator> {
   bool _isDragging = false;
 
   late double xAlign = _computeXAlignmentForTab(widget.tabIndex);
 
   double _computeXAlignmentForTab(int tabIndex) {
+    if (widget.tabCount <= 1) return 0;
     final relativeTabIndex =
         (tabIndex / (widget.tabCount - 1)).clamp(0.0, 1.0);
     return (relativeTabIndex * 2) - 1; // от -1 до 1
@@ -438,17 +384,18 @@ class _FilterIndicatorState extends State<_FilterIndicator>
 
   @override
   void didUpdateWidget(covariant _FilterIndicator oldWidget) {
+    super.didUpdateWidget(oldWidget);
     if (oldWidget.tabIndex != widget.tabIndex ||
         oldWidget.tabCount != widget.tabCount) {
       setState(() {
         xAlign = _computeXAlignmentForTab(widget.tabIndex);
       });
     }
-    super.didUpdateWidget(oldWidget);
   }
 
   double _getAlignmentFromGlobalPosition(Offset globalPosition) {
-    final box = context.findRenderObject() as RenderBox;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize || box.size.width <= 0) return 0;
     final localPosition = box.globalToLocal(globalPosition);
 
     final indicatorWidth = 1.0 / widget.tabCount;
@@ -482,7 +429,6 @@ class _FilterIndicatorState extends State<_FilterIndicator>
 
   void _onDragDown(DragDownDetails details) {
     setState(() {
-      _isDown = true;
       xAlign = _getAlignmentFromGlobalPosition(details.globalPosition);
     });
   }
@@ -497,10 +443,10 @@ class _FilterIndicatorState extends State<_FilterIndicator>
   void _onDragEnd(DragEndDetails details) {
     setState(() {
       _isDragging = false;
-      _isDown = false;
     });
 
-    final box = context.findRenderObject() as RenderBox;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize || box.size.width <= 0) return;
     final currentRelativeX = (xAlign + 1) / 2;
     final tabWidth = 1.0 / widget.tabCount;
 
@@ -552,9 +498,9 @@ class _FilterIndicatorState extends State<_FilterIndicator>
   Widget build(BuildContext context) {
     final brightness = MediaQuery.platformBrightnessOf(context);
     final isDark = brightness == Brightness.dark;
-    final indicatorColor =
-        isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.1);
-    final targetAlignment = _computeXAlignmentForTab(widget.tabIndex);
+    final indicatorColor = isDark
+        ? const Color(0x38FFFFFF)
+        : const Color(0x2EAEAEB2);
 
     return GestureDetector(
       onHorizontalDragDown: _onDragDown,
@@ -562,7 +508,6 @@ class _FilterIndicatorState extends State<_FilterIndicator>
       onHorizontalDragEnd: _onDragEnd,
       onHorizontalDragCancel: () => setState(() {
         _isDragging = false;
-        _isDown = false;
       }),
       child: VelocityMotionBuilder(
         converter: const SingleMotionConverter(),
@@ -571,136 +516,42 @@ class _FilterIndicatorState extends State<_FilterIndicator>
             ? const Motion.interactiveSpring(snapToEnd: true)
             : const Motion.bouncySpring(snapToEnd: true),
         builder: (context, value, velocity, child) {
-          final alignment = Alignment(value, 0);
-          return SingleMotionBuilder(
-            motion: const Motion.snappySpring(
-              snapToEnd: true,
-              duration: Duration(milliseconds: 300),
-            ),
-            value: (_isDown ||
-                    (alignment.x - targetAlignment).abs() > 0.30)
-                ? 1.0
-                : 0.0,
-            builder: (context, thickness, child) {
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  // Обычный индикатор (цветной, появляется когда glass исчезает)
-                  if (thickness < 1)
-                    _FilterIndicatorTransform(
-                      velocity: velocity,
-                      tabCount: widget.tabCount,
-                      alignment: alignment,
-                      thickness: thickness,
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 120),
-                        opacity: thickness <= 0.2 ? 1 : 0,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: indicatorColor,
-                            borderRadius: BorderRadius.circular(64),
-                          ),
-                          child: const SizedBox.expand(),
+          final alignment = Alignment(value.clamp(-1.0, 1.0), 0);
+          return Stack(
+            children: [
+              // Sliding soft-pill indicator
+              Positioned.fill(
+                left: 3,
+                right: 3,
+                top: 3,
+                bottom: 3,
+                child: Align(
+                  alignment: alignment,
+                  child: FractionallySizedBox(
+                    widthFactor:
+                        widget.tabCount > 0 ? (1.0 / widget.tabCount) : 1.0,
+                    child: Transform(
+                      alignment: Alignment.center,
+                      transform: _buildJellyTransform(
+                        velocity: Offset(velocity, 0),
+                        maxDistortion: 0.35,
+                        velocityScale: 500,
+                      ),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: indicatorColor,
+                          borderRadius: BorderRadius.circular(15),
                         ),
                       ),
                     ),
-                  child!,
-                  // Glass-индикатор (появляется при перетаскивании)
-                  if (thickness > 0)
-                    _FilterIndicatorTransform(
-                      velocity: velocity,
-                      tabCount: widget.tabCount,
-                      alignment: alignment,
-                      thickness: thickness,
-                      child: LiquidGlass.withOwnLayer(
-                        settings: LiquidGlassSettings(
-                          visibility: thickness,
-                          glassColor: const Color.fromARGB(25, 255, 255, 255),
-                          saturation: 1.5,
-                          refractiveIndex: 1.15,
-                          thickness: 20,
-                          lightIntensity: 2,
-                          chromaticAberration: 0.5,
-                          blur: 0,
-                        ),
-                        shape: const LiquidRoundedSuperellipse(
-                          borderRadius: 64,
-                        ),
-                        child: const GlassGlow(child: SizedBox.expand()),
-                      ),
-                    ),
-                ],
-              );
-            },
-            child: child,
+                  ),
+                ),
+              ),
+              child!,
+            ],
           );
         },
         child: widget.child,
-      ),
-    );
-  }
-}
-
-// ============================================================
-// Трансформация индикатора (копия _IndicatorTransform из bottom_bar)
-// ============================================================
-
-class _FilterIndicatorTransform extends StatelessWidget {
-  const _FilterIndicatorTransform({
-    required this.velocity,
-    required this.tabCount,
-    required this.alignment,
-    required this.thickness,
-    required this.child,
-  });
-
-  final double velocity;
-  final int tabCount;
-  final Alignment alignment;
-  final double thickness;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final rect = RelativeRect.lerp(
-      RelativeRect.fill,
-      const RelativeRect.fromLTRB(-14, -14, -14, -14),
-      thickness,
-    );
-    return Positioned.fill(
-      left: 4,
-      right: 4,
-      top: 4,
-      bottom: 4,
-      child: FractionallySizedBox(
-        widthFactor: 1 / tabCount,
-        alignment: alignment,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Positioned.fromRelativeRect(
-              rect: rect!,
-              child: SingleMotionBuilder(
-                motion: const Motion.bouncySpring(
-                  duration: Duration(milliseconds: 600),
-                ),
-                value: velocity,
-                builder: (context, velocity, child) {
-                  return Transform(
-                    alignment: Alignment.center,
-                    transform: _buildJellyTransform(
-                      velocity: Offset(velocity, 0),
-                      maxDistortion: 0.8,
-                      velocityScale: 10,
-                    ),
-                    child: child,
-                  );
-                },
-                child: child,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
 
 import '../../utils/haptic_utils.dart';
 
@@ -171,53 +170,37 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
               ),
             ),
           ),
-          // Кнопка "+" — супер-сглаженная через LiquidOval
+          // Кнопка "+"
           if (widget.onAddTap != null)
-            LiquidGlassLayer(
-              settings: LiquidGlassSettings(
-                thickness: 0,
-                blur: 0,
-                glassColor: addButtonColor,
-              ),
-              child: FakeGlass.inLayer(
-                shape: const LiquidOval(),
-                child: GestureDetector(
-                  onTap: widget.onAddTap,
-                  child: Container(
-                    height: widget.barHeight,
-                    width: widget.barHeight,
-                    decoration: BoxDecoration(
-                      color: addButtonColor,
-                      border: Border.all(
-                        color: isDark
-                            ? Colors.white.withValues(alpha: 0.1)
-                            : Colors.black.withValues(alpha: 0.06),
-                        width: 0.5,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: isDark
-                              ? Colors.black.withValues(alpha: 0.3)
-                              : Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
+            GestureDetector(
+              onTap: widget.onAddTap,
+              child: Container(
+                height: widget.barHeight,
+                width: widget.barHeight,
+                decoration: BoxDecoration(
+                  color: addButtonColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.1)
+                        : Colors.black.withValues(alpha: 0.06),
+                    width: 0.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: isDark
+                          ? Colors.black.withValues(alpha: 0.3)
+                          : Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
                     ),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: addButtonColor, width: 0.2),
-                      ),
-                      child: Center(
-                        child: iconoir.Plus(
-                          width: 28,
-                          height: 28,
-                          color: isDark ? Colors.white70 : Colors.black54,
-                        ),
-                      ),
-                    ),
+                  ],
+                ),
+                child: Center(
+                  child: iconoir.Plus(
+                    width: 28,
+                    height: 28,
+                    color: isDark ? Colors.white70 : Colors.black54,
                   ),
                 ),
               ),
