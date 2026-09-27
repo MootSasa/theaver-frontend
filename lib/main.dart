@@ -25,6 +25,7 @@ import 'services/wallpaper_provider.dart';
 import 'services/profile_theme_provider.dart';
 import 'utils/emoji_utils.dart';
 import 'l10n/app_localizations.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,6 +55,15 @@ void main() async {
     }
   } else {
     debugPrint('Firebase skipped: GMS not available (pushType=$pushType)');
+  }
+
+  // Preload Liquid Glass shaders if supported
+  if (SettingsService.isLiquidGlassSupported) {
+    try {
+      await LiquidGlassShaders.ensureLoaded();
+    } catch (e) {
+      debugPrint('Failed to preload LiquidGlassShaders: $e');
+    }
   }
 
   // Initialize services

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'glass_mode.dart';
+import 'light_angle_mode.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Сервис для хранения и управления настройками пользователя
@@ -19,6 +20,8 @@ class SettingsService {
   static const String _powerSavingKey = 'power_saving_settings';
   static const String _liquidGlassDesignKey = 'liquid_glass_design';
   static const String _glassModeKey = 'glass_mode';
+  static const String _lightAngleModeKey = 'light_angle_mode';
+  static const String _manualLightAngleKey = 'manual_light_angle';
   static const String _notificationSettingsKey = 'notification_settings';
   static const String _chatNotificationSettingsKey = 'chat_notification_settings';
 
@@ -29,6 +32,8 @@ class SettingsService {
   PowerSavingSettings? _cachedPowerSavingSettings;
   bool? _cachedLiquidGlassDesign;
   GlassMode? _cachedGlassMode;
+  LightAngleMode? _cachedLightAngleMode;
+  double? _cachedManualLightAngle;
   GlobalNotificationSettings? _cachedNotificationSettings;
   Map<String, ChatNotificationSettings>? _cachedChatNotificationSettings;
 
@@ -82,6 +87,18 @@ class SettingsService {
     } else {
       _cachedGlassMode = GlassMode.disabled;
     }
+
+    // Загрузка режима угла освещения / бликов
+    final lightAngleModeIndex = _prefs.getInt(_lightAngleModeKey);
+    if (lightAngleModeIndex != null &&
+        lightAngleModeIndex >= 0 &&
+        lightAngleModeIndex < LightAngleMode.values.length) {
+      _cachedLightAngleMode = LightAngleMode.values[lightAngleModeIndex];
+    } else {
+      _cachedLightAngleMode = LightAngleMode.gyroscope;
+    }
+
+    _cachedManualLightAngle = _prefs.getDouble(_manualLightAngleKey) ?? 62.0;
 
     // Загрузка глобальных настроек уведомлений
     final notifJson = _prefs.getString(_notificationSettingsKey);
@@ -277,6 +294,25 @@ class SettingsService {
     await _prefs.setInt(_glassModeKey, _cachedGlassMode!.index);
   }
 
+  /// Получить режим угла бликов/освещения
+  LightAngleMode get lightAngleMode =>
+      _cachedLightAngleMode ?? LightAngleMode.gyroscope;
+
+  /// Сохранить режим угла бликов/освещения
+  Future<void> saveLightAngleMode(LightAngleMode mode) async {
+    _cachedLightAngleMode = mode;
+    await _prefs.setInt(_lightAngleModeKey, mode.index);
+  }
+
+  /// Получить значение угла освещения при ручной настройке (в градусах)
+  double get manualLightAngle => _cachedManualLightAngle ?? 62.0;
+
+  /// Сохранить значение угла освещения при ручной настройке (в градусах)
+  Future<void> saveManualLightAngle(double angle) async {
+    _cachedManualLightAngle = angle;
+    await _prefs.setDouble(_manualLightAngleKey, angle);
+  }
+
   // ============ Глобальные настройки уведомлений ============
 
   /// Получить глобальные настройки уведомлений
@@ -362,6 +398,8 @@ class SettingsService {
     _cachedPowerSavingSettings = null;
     _cachedLiquidGlassDesign = null;
     _cachedGlassMode = null;
+    _cachedLightAngleMode = null;
+    _cachedManualLightAngle = null;
     _cachedNotificationSettings = null;
     _cachedChatNotificationSettings = null;
     await _prefs.remove(_profileKey);
@@ -370,6 +408,8 @@ class SettingsService {
     await _prefs.remove(_powerSavingKey);
     await _prefs.remove(_liquidGlassDesignKey);
     await _prefs.remove(_glassModeKey);
+    await _prefs.remove(_lightAngleModeKey);
+    await _prefs.remove(_manualLightAngleKey);
     await _prefs.remove(_notificationSettingsKey);
     await _prefs.remove(_chatNotificationSettingsKey);
   }

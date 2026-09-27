@@ -36,6 +36,8 @@ dependencies:
   url_launcher: ^6.2.0
   open_file: ^3.3.2
   liquid_glass_renderer: ^0.2.0-dev.4
+  liquid_glass_easy: ^4.3.2
+  sensors_plus: ^6.1.1
   motor: ^1.1.0
   visibility_detector: ^0.4.0+2
   drift: ^2.22.1
