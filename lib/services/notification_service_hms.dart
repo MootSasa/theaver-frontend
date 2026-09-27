@@ -298,7 +298,9 @@ class HMSPushService {
 
       for (final notif in activeNotifications) {
         final tag = notif['tag']?.toString() ?? '';
-        final idStr = notif['id']?.toString() ?? notif['identifier']?.toString();
+        final idStr = notif['statusBarNotificationId']?.toString() ??
+            notif['id']?.toString() ??
+            notif['identifier']?.toString();
         final id = int.tryParse(idStr ?? '');
 
         if (tag == 'chat_$chatId' || tag.startsWith('chat_${chatId}_')) {

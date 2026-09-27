@@ -36,6 +36,15 @@ class PushDetectorHandler(private val context: Context) {
                     "isHuaweiDevice" -> {
                         result.success(isHuaweiDevice())
                     }
+                    "cancelChatNotifications" -> {
+                        val chatId = call.argument<String>("chat_id") ?: ""
+                        cancelChatNotifications(chatId)
+                        result.success(true)
+                    }
+                    "cancelAllNotifications" -> {
+                        cancelAllNotifications()
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -131,5 +140,31 @@ class PushDetectorHandler(private val context: Context) {
         val manufacturer = android.os.Build.MANUFACTURER.lowercase()
         val brand = android.os.Build.BRAND.lowercase()
         return manufacturer.contains("huawei") || brand.contains("huawei") || brand.contains("honor")
+    }
+
+    private fun cancelChatNotifications(chatId: String) {
+        if (chatId.isEmpty()) return
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                val active = nm.activeNotifications ?: return
+                for (sbn in active) {
+                    val tag = sbn.tag ?: ""
+                    val id = sbn.id
+                    if (tag == "chat_$chatId" || tag.startsWith("chat_${chatId}_") || tag == chatId) {
+                        nm.cancel(tag, id)
+                    }
+                }
+            } else {
+                nm.cancel("chat_$chatId", 0)
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun cancelAllNotifications() {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+            nm.cancelAll()
+        } catch (_: Throwable) {}
     }
 }

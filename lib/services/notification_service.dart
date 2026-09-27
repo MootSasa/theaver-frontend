@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform, File;
-import 'package:flutter/material.dart' show Color, Widget;
+import 'package:flutter/material.dart' show Color, Widget, WidgetsFlutterBinding;
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -117,6 +118,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
+  WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   final localNotifications = FlutterLocalNotificationsPlugin();
   const androidSettings = AndroidInitializationSettings('@drawable/ic_notification');
@@ -1289,8 +1291,12 @@ class NotificationService {
       }
     } catch (_) {}
 
-    // 4. Cancel active notifications via Huawei Push SDK (for HMS Core notifications)
+    // 4. Cancel active notifications via native Android NotificationManager and Huawei Push SDK
     if (Platform.isAndroid) {
+      try {
+        const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+        await nativeChannel.invokeMethod('cancelChatNotifications', {'chat_id': chatId});
+      } catch (_) {}
       try {
         await (_hmsPushService ?? HMSPushService()).cancelChatNotifications(chatId);
       } catch (_) {}
@@ -1326,6 +1332,10 @@ class NotificationService {
     _chatNotificationIds.clear();
     await _localNotifications.cancelAll();
     if (Platform.isAndroid) {
+      try {
+        const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+        await nativeChannel.invokeMethod('cancelAllNotifications');
+      } catch (_) {}
       try {
         await (_hmsPushService ?? HMSPushService()).cancelAllNotifications();
       } catch (_) {}
