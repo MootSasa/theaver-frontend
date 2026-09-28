@@ -2233,12 +2233,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   iconSize: 28,
                   touch: const LiquidGlassTouch(
                     flex: LiquidGlassFlex(
-                      stretch: 12,
-                      squeeze: 0.70,
-                      lean: 0.50,
-                      grip: 0.70,
-                      holdScale: 0.05,
-                      tapScale: 0.04,
+                      stretch: 8,
+                      squeeze: 0.65,
+                      lean: 0.35,
+                      grip: 0.55,
+                      holdScale: 0.035,
+                      tapScale: 0.025,
                     ),
                   ),
                   foregroundColor:
