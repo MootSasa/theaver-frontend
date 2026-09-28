@@ -2,6 +2,7 @@ import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 
 import '../../utils/haptic_utils.dart';
@@ -27,9 +28,8 @@ import '../../screens/auth/login_screen.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/chat/liquid_glass_filter_chips.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart' hide LiquidGlassAppBar;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../services/sync_service.dart';
 import '../../services/database/app_database.dart';
@@ -68,6 +68,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // Multi-select mode
   bool _isSelectMode = false;
   Set<String> _selectedChatIds = {};
+
+  // Top glass bar & morph context menu
+  bool _isTopMenuOpen = false;
+  bool _isTopMenuWide = false;
+  bool _isMorphing = false;
 
   // Search results
   List<SearchResultUser> _users = [];
@@ -841,6 +846,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   // Метод для получения общего количества непрочитанных
+  // ignore: unused_element
   int _getTotalUnreadCount() {
     try {
       return context.read<UnreadCountProvider>().totalUnread;
@@ -850,6 +856,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _onTabTapped(int index) {
+    if (_isTopMenuOpen) {
+      _closeTopMenu();
+    }
     if (_currentIndex == index) return;
     // Закрываем клавиатуру при уходе с поиска
     if (_currentIndex == 2 && index != 2) {
@@ -925,65 +934,600 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ignore: unused_element
-  void _showProfileMenu() {
-    final l10n = context.l10n;
-    final totalUnread = _getTotalUnreadCount();
+  // ── Top Glass Bar & Morph Menu Logic ──────────────────────────────
 
+  void _openTopMenu() {
+    if (_isMorphing || _isTopMenuOpen) return;
+    HapticUtils.tap();
+    setState(() {
+      _isTopMenuWide = true;
+      _isTopMenuOpen = true;
+      _isMorphing = true;
+    });
+  }
+
+  void _closeTopMenu() {
+    if (!_isTopMenuOpen) return;
+    setState(() {
+      _isTopMenuOpen = false;
+      _isMorphing = true;
+    });
+  }
+
+  void _toggleTopMenu() {
+    if (_isTopMenuOpen) {
+      _closeTopMenu();
+    } else {
+      _openTopMenu();
+    }
+  }
+
+  String get _currentTitleText {
+    final l10n = context.l10n;
+    switch (_currentIndex) {
+      case 0:
+        return l10n.translate('settings_title');
+      case 2:
+        return l10n.translate('common_search');
+      case 1:
+      default:
+        return _isWsConnected
+            ? (l10n.translate('app_title').isNotEmpty
+                ? l10n.translate('app_title')
+                : 'Theaver')
+            : 'соединение';
+    }
+  }
+
+  String get _currentTitleKey {
+    switch (_currentIndex) {
+      case 0:
+        return 'settings';
+      case 2:
+        return 'search';
+      case 1:
+      default:
+        return _isWsConnected ? 'theaver' : 'connecting';
+    }
+  }
+
+  bool get _isTitleConnected {
+    if (_currentIndex == 1) {
+      return _isWsConnected;
+    }
+    return true;
+  }
+
+  List<_MorphMenuItemData> _getMenuItems(int index) {
+    final l10n = context.l10n;
+    switch (index) {
+      case 0: // Settings
+        return [
+          _MorphMenuItemData(
+            id: 'profile',
+            label: l10n.translate('settings_profile'),
+            icon: Icons.person_outline_rounded,
+          ),
+          _MorphMenuItemData(
+            id: 'clear_data',
+            label: l10n.translate('clear_data_title'),
+            icon: Icons.delete_outline_rounded,
+            color: Colors.orange,
+          ),
+          _MorphMenuItemData(
+            id: 'logout',
+            label: l10n.translate('menu_logout'),
+            icon: Icons.logout_rounded,
+            color: Colors.red,
+          ),
+        ];
+      case 2: // Search
+        return [
+          const _MorphMenuItemData(
+            id: 'clear_search',
+            label: 'Очистить поиск',
+            icon: Icons.clear_all_rounded,
+          ),
+          _MorphMenuItemData(
+            id: 'profile',
+            label: l10n.translate('settings_profile'),
+            icon: Icons.person_outline_rounded,
+          ),
+        ];
+      case 1: // Chats
+      default:
+        return [
+          const _MorphMenuItemData(
+            id: 'select_chats',
+            label: 'Выбрать чаты',
+            icon: Icons.checklist_rounded,
+          ),
+          _MorphMenuItemData(
+            id: 'new_chat',
+            label: l10n.translate('chat_new_private'),
+            icon: Icons.person_add_outlined,
+          ),
+          _MorphMenuItemData(
+            id: 'new_group',
+            label: l10n.translate('chat_new_group'),
+            icon: Icons.group_add_outlined,
+          ),
+          _MorphMenuItemData(
+            id: 'new_channel',
+            label: l10n.translate('chat_new_channel'),
+            icon: Icons.campaign_outlined,
+          ),
+          _MorphMenuItemData(
+            id: 'profile',
+            label: l10n.translate('settings_profile'),
+            icon: Icons.person_outline_rounded,
+          ),
+        ];
+    }
+  }
+
+  double _getMenuHeight(int index) {
+    final count = _getMenuItems(index).length;
+    return count * 44.0 + 12.0;
+  }
+
+  void _handleMenuAction(String actionId) {
+    _closeTopMenu();
+
+    switch (actionId) {
+      case 'select_chats':
+        setState(() {
+          _isSelectMode = true;
+          _selectedChatIds = {};
+        });
+        break;
+      case 'new_chat':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const CreatePrivateChatScreen()),
+        );
+        break;
+      case 'new_group':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const CreateGroupScreen()),
+        );
+        break;
+      case 'new_channel':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const CreateChannelScreen()),
+        );
+        break;
+      case 'profile':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const ProfileScreen()),
+        );
+        break;
+      case 'clear_data':
+        _showClearDataDialog();
+        break;
+      case 'logout':
+        _showLogoutDialog();
+        break;
+      case 'clear_search':
+        _searchController.clear();
+        setState(() {
+          _searchQuery = '';
+          _users = [];
+          _groups = [];
+          _channels = [];
+          _messages = [];
+        });
+        break;
+    }
+  }
+
+  void _showLogoutDialog() {
+    final l10n = context.l10n;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.translate('menu_logout')),
+        content: Text(l10n.translate('accounts_logout_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.translate('common_cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await AuthService.logout();
+              if (!mounted) return;
+              // ignore: use_build_context_synchronously
+              Navigator.of(context).pushAndRemoveUntil(
+                SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(l10n.translate('menu_logout')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showClearDataDialog() {
+    final l10n = context.l10n;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.translate('clear_data_title')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l10n.translate('clear_data_message')),
+            const SizedBox(height: 12),
+            Text(
+              l10n.translate('clear_data_warning'),
+              style: const TextStyle(
+                color: Colors.red,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.translate('common_cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final scaffoldMessenger = ScaffoldMessenger.of(context);
+              final navigator = Navigator.of(context);
+              navigator.pop();
+              try {
+                await _accountManager.clearAll();
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.clear();
+              } catch (_) {}
+              if (!mounted) return;
+              scaffoldMessenger.showSnackBar(
+                SnackBar(
+                  content: Text(l10n.translate('clear_data_success')),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+              navigator.pushAndRemoveUntil(
+                SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(l10n.translate('clear_data_button')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showClassicMenu(BuildContext context) {
+    final items = _getMenuItems(_currentIndex);
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.person, color: Color(0xFF0088CC)),
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(l10n.translate('menu_profile')),
-                  if (totalUnread > 0)
-                    Text(
-                      '$totalUnread ${l10n.translate('menu_unread')}',
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF0088CC)),
+          children: items
+              .map(
+                (item) => ListTile(
+                  leading: Icon(item.icon, color: item.color),
+                  title: Text(item.label, style: TextStyle(color: item.color)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _handleMenuAction(item.id);
+                  },
+                ),
+              )
+              .toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopGlassBar(
+    BuildContext context,
+    LiquidGlassProvider glassProvider,
+  ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle =
+        glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
+    const double ctrlSize = 42.0;
+    const double menuWidth = 200.0;
+    final double menuHeight = _getMenuHeight(_currentIndex);
+
+    final pillStyle = LiquidGlassStyle(
+      shape: _glassShape(21, lightAngle),
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+        shadow: LiquidGlassShadow(
+          blur: 16,
+          opacity: isDark ? 0.40 : 0.18,
+          offset: const Offset(0, 4),
+          color: Colors.black,
+        ),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.06,
+        distortionWidth: 26,
+      ),
+    );
+
+    final morphStyle = LiquidGlassStyle(
+      shape: _glassShape(_isTopMenuOpen ? 20 : 21, lightAngle),
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+        shadow: LiquidGlassShadow(
+          blur: 16,
+          opacity: isDark ? 0.40 : 0.18,
+          offset: const Offset(0, 4),
+          color: Colors.black,
+        ),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.06,
+        distortionWidth: 26,
+      ),
+    );
+
+    return SizedBox(
+      width: double.infinity,
+      height: _isTopMenuWide ? menuHeight + 8 : ctrlSize + 4,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Centered oval glass pill that smoothly resizes width to fit its text
+          Positioned(
+            top: 2,
+            left: 60,
+            right: 60,
+            height: ctrlSize,
+            child: Center(
+              child: AnimatedSize(
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.easeOutCubic,
+                clipBehavior: Clip.hardEdge,
+                child: LiquidGlassLens(
+                  style: pillStyle,
+                  child: Container(
+                    height: ctrlSize,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    alignment: Alignment.center,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 280),
+                      transitionBuilder: (child, animation) {
+                        final inAnimation = Tween<Offset>(
+                          begin: const Offset(0.0, -1.0),
+                          end: Offset.zero,
+                        ).animate(CurvedAnimation(
+                          parent: animation,
+                          curve: Curves.easeOutCubic,
+                        ));
+                        final outAnimation = Tween<Offset>(
+                          begin: const Offset(0.0, 1.0),
+                          end: Offset.zero,
+                        ).animate(CurvedAnimation(
+                          parent: animation,
+                          curve: Curves.easeInCubic,
+                        ));
+                        final isIncoming =
+                            child.key == ValueKey<String>(_currentTitleKey);
+                        return ClipRect(
+                          child: SlideTransition(
+                            position: isIncoming ? inAnimation : outAnimation,
+                            child: FadeTransition(
+                              opacity: animation,
+                              child: child,
+                            ),
+                          ),
+                        );
+                      },
+                      layoutBuilder: (currentChild, previousChildren) {
+                        return Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            ...previousChildren,
+                            if (currentChild != null) currentChild,
+                          ],
+                        );
+                      },
+                      child: Text(
+                        _currentTitleText,
+                        key: ValueKey<String>(_currentTitleKey),
+                        maxLines: 1,
+                        softWrap: false,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: _isTitleConnected
+                              ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
+                              : Colors.grey,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
                     ),
-                ],
-              ),
-              onTap: () async {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  SwipeBackPageRoute(
-                    builder: (_) => const ProfileScreen(),
                   ),
-                );
-              },
+                ),
+              ),
             ),
-            ListTile(
-              leading: const Icon(Icons.settings, color: Color(0xFF0088CC)),
-              title: Text(l10n.translate('menu_settings')),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  SwipeBackPageRoute(builder: (_) => const SettingsScreen()),
-                );
+          ),
+
+          // Persistent three dots button and morph context menu
+          Positioned(
+            top: 2,
+            right: 16,
+            width: _isTopMenuWide ? menuWidth : ctrlSize,
+            height: _isTopMenuWide ? menuHeight : ctrlSize,
+            child: LiquidGlassMorph(
+              alignment: Alignment.topRight,
+              motion: LiquidGlassMorphMotion.fluid,
+              smoothness: 28,
+              style: morphStyle,
+              onEnd: () {
+                if (_isTopMenuWide != _isTopMenuOpen) {
+                  setState(() => _isTopMenuWide = _isTopMenuOpen);
+                }
+                _isMorphing = false;
               },
+              child: _isTopMenuOpen
+                  ? _TopMorphMenu(
+                      key: const ValueKey<String>('menu'),
+                      width: menuWidth,
+                      items: _getMenuItems(_currentIndex),
+                      onItemTap: _handleMenuAction,
+                    )
+                  : _ThreeDotsGlyph(
+                      key: const ValueKey<String>('glyph'),
+                      size: ctrlSize,
+                      onTap: _toggleTopMenu,
+                    ),
             ),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: Text(l10n.translate('menu_logout')),
-              onTap: () async {
-                Navigator.pop(context);
-                await AuthService.logout();
-                if (!mounted) return;
-                // ignore: use_build_context_synchronously
-                Navigator.of(context).pushAndRemoveUntil(
-                  SwipeBackPageRoute(builder: (_) => const LoginScreen()),
-                  (route) => false,
-                );
-              },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectModeBar(BuildContext context) {
+    return Container(
+      height: 44,
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0088CC),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0088CC).withValues(alpha: 0.35),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white, size: 20),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: _exitSelectMode,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Выбрано: ${_selectedChatIds.length}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.select_all, color: Colors.white, size: 20),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            tooltip: 'Выбрать все',
+            onPressed: _selectAllChats,
+          ),
+          IconButton(
+            icon: const Icon(Icons.more_vert, color: Colors.white, size: 20),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: _showSelectedChatsMenu,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClassicTopBar(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return SafeArea(
+      bottom: false,
+      child: SizedBox(
+        height: 52,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Center(
+              child: Container(
+                height: 38,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? const Color(0xFF2C2C2E)
+                      : const Color(0xFFF2F2F7),
+                  borderRadius: BorderRadius.circular(19),
+                ),
+                alignment: Alignment.center,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 280),
+                  transitionBuilder: (child, animation) {
+                    final inAnimation = Tween<Offset>(
+                      begin: const Offset(0.0, -1.0),
+                      end: Offset.zero,
+                    ).animate(CurvedAnimation(
+                      parent: animation,
+                      curve: Curves.easeOutCubic,
+                    ));
+                    final outAnimation = Tween<Offset>(
+                      begin: const Offset(0.0, 1.0),
+                      end: Offset.zero,
+                    ).animate(CurvedAnimation(
+                      parent: animation,
+                      curve: Curves.easeInCubic,
+                    ));
+                    final isIncoming =
+                        child.key == ValueKey<String>(_currentTitleKey);
+                    return ClipRect(
+                      child: SlideTransition(
+                        position: isIncoming ? inAnimation : outAnimation,
+                        child: FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        ),
+                      ),
+                    );
+                  },
+                  child: Text(
+                    _currentTitleText,
+                    key: ValueKey<String>(_currentTitleKey),
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: _isTitleConnected
+                          ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
+                          : Colors.grey,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              right: 16,
+              child: IconButton(
+                icon: const Icon(Icons.more_vert_rounded),
+                onPressed: () => _showClassicMenu(context),
+              ),
             ),
           ],
         ),
@@ -1710,9 +2254,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
       ),
       child: PopScope(
-        canPop: _currentIndex == 1,
+        canPop: _currentIndex == 1 && !_isTopMenuOpen && !_isSelectMode,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && _currentIndex != 1) {
+          if (didPop) return;
+          if (_isTopMenuOpen) {
+            _closeTopMenu();
+            return;
+          }
+          if (_isSelectMode) {
+            _exitSelectMode();
+            return;
+          }
+          if (_currentIndex != 1) {
             _onTabTapped(1);
           }
         },
@@ -1724,6 +2277,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   controller: _pageController,
                   physics: const BouncingScrollPhysics(),
                   onPageChanged: (page) {
+                    if (_isTopMenuOpen) {
+                      _closeTopMenu();
+                    }
                     // Закрываем клавиатуру при уходе с поиска (свайпом)
                     if (_currentIndex == 2 && page != 2) {
                       _searchFocusNode.unfocus();
@@ -1770,10 +2326,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                               _getUnreadCountForFilter(3),
                             ];
                             // === Glass-режим ===
-                            // Плавающий glass AppBar + фильтры поверх списка чатов
+                            // Фильтры плавают поверх списка чатов ниже стационарного бара
                             if (glassEnabled) {
                               final statusBarHeight =
-                                  MediaQuery.of(context).padding.top;
+                                   MediaQuery.of(context).padding.top;
                               final topBarHeight =
                                   statusBarHeight + kToolbarHeight;
                               const filterAreaHeight = 48.0;
@@ -1786,54 +2342,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                               return Stack(
                                 children: [
                                   // Список чатов заполняет весь экран —
-                                  // стеклянные AppBar и фильтры преломляют контент
+                                  // стеклянный бар и фильтры преломляют контент
                                   Positioned.fill(
                                     child: chatList,
                                   ),
-                                  // Glass AppBar с заголовком "Miptgram"
-                                  Positioned(
-                                    top: 0,
-                                    left: 0,
-                                    right: 0,
-                                    child: LiquidGlassAppBar(
-                                      title: Text(
-                                        _isWsConnected
-                                            ? l10n.translate('app_title')
-                                            : 'соединение',
-                                        style: TextStyle(
-                                          fontSize: 28,
-                                          fontWeight: FontWeight.bold,
-                                          color: _isWsConnected
-                                              ? Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurface
-                                              : Colors.grey,
-                                        ),
-                                      ),
-                                      actions: [
-                                        Padding(
-                                          padding: const EdgeInsets.only(right: 8),
-                                          child: Container(
-                                            width: 10,
-                                            height: 10,
-                                            decoration: BoxDecoration(
-                                              color: _isWsConnected
-                                                  ? Colors.green
-                                                  : Colors.grey,
-                                              shape: BoxShape.circle,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                      leading: const SizedBox.shrink(),
-                                      centerTitle: true,
-                                      isLite: glassProvider.isLite,
-                                      lightAngle: glassProvider.getEffectiveLightAngle(
-                                        reduceMotion: MediaQuery.disableAnimationsOf(context),
-                                      ),
-                                    ),
-                                  ),
-                                  // Фильтры плавают ниже AppBar
+                                  // Фильтры плавают ниже стационарного бара
                                   Positioned(
                                     top: topBarHeight,
                                     left: 0,
@@ -1851,64 +2364,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                       unreadCounts: unreadCounts,
                                     ),
                                   ),
-                                  // Режим выбора — поверх всего
-                                  if (_isSelectMode)
-                                    Positioned(
-                                      top: 0,
-                                      left: 0,
-                                      right: 0,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 8),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF0088CC),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: const Color(0xFF0088CC)
-                                                  .withValues(alpha: 0.3),
-                                              blurRadius: 8,
-                                              offset: const Offset(0, 2),
-                                            ),
-                                          ],
-                                        ),
-                                        child: SafeArea(
-                                          bottom: false,
-                                          child: Row(
-                                            children: [
-                                              IconButton(
-                                                icon: const Icon(Icons.close,
-                                                    color: Colors.white),
-                                                onPressed: _exitSelectMode,
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                'Выбрано: ${_selectedChatIds.length}',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 18,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                              const Spacer(),
-                                              IconButton(
-                                                icon: const Icon(
-                                                    Icons.select_all,
-                                                    color: Colors.white),
-                                                tooltip: 'Выбрать все',
-                                                onPressed: _selectAllChats,
-                                              ),
-                                              IconButton(
-                                                icon: const Icon(
-                                                    Icons.more_vert,
-                                                    color: Colors.white),
-                                                onPressed:
-                                                    _showSelectedChatsMenu,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
                                 ],
                               );
                             }
@@ -1959,7 +2414,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                           IconButton(
                                             icon: const Icon(Icons.more_vert,
                                                 color: Colors.white),
-                                            onPressed: _showSelectedChatsMenu,
+                                            onPressed:
+                                                _showSelectedChatsMenu,
                                           ),
                                         ],
                                       ),
@@ -1969,35 +2425,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 12, vertical: 8),
                                       child: Center(
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              _isWsConnected
-                                                  ? l10n.translate('app_title')
-                                                  : 'соединение',
-                                              style: TextStyle(
-                                                fontSize: 20,
-                                                fontWeight: FontWeight.bold,
-                                                color: _isWsConnected
-                                                    ? Theme.of(context)
-                                                        .colorScheme
-                                                        .onSurface
-                                                    : Colors.grey,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Container(
-                                              width: 10,
-                                              height: 10,
-                                              decoration: BoxDecoration(
-                                                color: _isWsConnected
-                                                    ? Colors.green
-                                                    : Colors.grey,
-                                                shape: BoxShape.circle,
-                                              ),
-                                            ),
-                                          ],
+                                        child: Text(
+                                          _isWsConnected
+                                              ? l10n.translate('app_title')
+                                              : 'соединение',
+                                          style: TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.bold,
+                                            color: _isWsConnected
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface
+                                                : Colors.grey,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -2025,20 +2465,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                         child: SafeArea(
                           child: Column(
                             children: [
-                              // Заголовок поиска — по центру
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 8),
-                                child: Center(
-                                  child: Text(
-                                    l10n.translate('common_search'),
-                                    style: const TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ),
+                              // Отступ под стационарный верхний бар
+                              const SizedBox(height: 52),
                               // Поле поиска
                               Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -2162,6 +2590,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 pixelRatio: 1.0,
                 useSync: true,
                 backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+                appBar: _isSelectMode
+                    ? _buildSelectModeBar(context)
+                    : _buildTopGlassBar(context, glassProvider),
+                appBarTopMargin: 8.0,
+                lenses: [
+                  if (_isTopMenuOpen)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _closeTopMenu,
+                    ),
+                ],
                 body: Scaffold(
                   backgroundColor: Colors.transparent,
                   resizeToAvoidBottomInset: true,
@@ -2259,6 +2698,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               body: Stack(
                 children: [
                   Positioned.fill(child: pageView),
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: _isSelectMode
+                        ? SafeArea(child: _buildSelectModeBar(context))
+                        : _buildClassicTopBar(context),
+                  ),
                   Positioned(
                     left: 0,
                     right: 0,
@@ -2550,6 +2997,149 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
   Widget build(BuildContext context) {
     super.build(context);
     return widget.child;
+  }
+}
+
+class _MorphMenuItemData {
+  final String id;
+  final String label;
+  final IconData icon;
+  final Color? color;
+
+  const _MorphMenuItemData({
+    required this.id,
+    required this.label,
+    required this.icon,
+    this.color,
+  });
+}
+
+class _ThreeDotsGlyph extends StatelessWidget {
+  final double size;
+  final VoidCallback onTap;
+
+  const _ThreeDotsGlyph({
+    super.key,
+    required this.size,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Center(
+          child: Icon(
+            Icons.more_vert_rounded,
+            size: 22.0,
+            color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TopMorphMenu extends StatelessWidget {
+  final double width;
+  final List<_MorphMenuItemData> items;
+  final ValueChanged<String> onItemTap;
+
+  const _TopMorphMenu({
+    super.key,
+    required this.width,
+    required this.items,
+    required this.onItemTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (int i = 0; i < items.length; i++)
+              _MorphMenuRow(
+                key: ValueKey(items[i].id),
+                item: items[i],
+                isLast: i == items.length - 1,
+                onTap: () => onItemTap(items[i].id),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MorphMenuRow extends StatelessWidget {
+  final _MorphMenuItemData item;
+  final bool isLast;
+  final VoidCallback onTap;
+
+  const _MorphMenuRow({
+    super.key,
+    required this.item,
+    required this.isLast,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final defaultColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final itemColor = item.color ?? defaultColor;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        height: 44.0,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: isLast
+                ? null
+                : Border(
+                    bottom: BorderSide(
+                      color: (isDark ? Colors.white : Colors.black)
+                          .withValues(alpha: 0.08),
+                      width: 0.6,
+                    ),
+                  ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14.0),
+            child: Row(
+              children: [
+                Icon(item.icon, size: 20.0, color: itemColor),
+                const SizedBox(width: 10.0),
+                Expanded(
+                  child: Text(
+                    item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15.0,
+                      fontWeight: FontWeight.w500,
+                      color: itemColor,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

@@ -634,62 +634,14 @@ class _SettingsScreenState extends State<SettingsScreen>
 
     // Встроенный режим — используется внутри PageView на главном экране
     if (widget.isEmbedded) {
-      return Consumer<LiquidGlassProvider>(
-        builder: (context, glassProvider, _) {
-          final glassEnabled = glassProvider.enabled;
-
-          if (glassEnabled) {
-            // Glass-режим: Stack с glass AppBar поверх контента
-            // Список уходит под AppBar — стекло преломляет контент
-            final topPadding =
-                MediaQuery.of(context).padding.top + kToolbarHeight;
-
-            return Stack(
-              children: [
-                // Контент настроек заполняет весь экран —
-                // стеклянный AppBar преломляет список под ним
-                Positioned.fill(
-                  child: ListView(
-                    physics: const ClampingScrollPhysics(),
-                    padding: const EdgeInsets.only(bottom: 120),
-                    children: [
-                      // Отступ чтобы первые элементы были ниже AppBar
-                      SizedBox(height: topPadding),
-                      // Содержимое списка
-                      ...listChildren,
-                    ],
-                  ),
-                ),
-                // Glass AppBar поверх контента (без кнопки «назад»)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: appBarTitle,
-                    actions: appBarActions,
-                    leading: const SizedBox.shrink(),
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            );
-          }
-
-          // Classic встроенный режим: AppBar + ListView (без кнопки «назад»)
-          return Column(
-            children: [
-              AppBar(
-                title: appBarTitle,
-                actions: appBarActions,
-                automaticallyImplyLeading: false,
-                centerTitle: true,
-              ),
-              Expanded(child: listView),
-            ],
-          );
-        },
+      final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
+      return ListView(
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: 120),
+        children: [
+          SizedBox(height: topPadding),
+          ...listChildren,
+        ],
       );
     }
 
