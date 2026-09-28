@@ -1302,68 +1302,86 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             right: 60,
             height: ctrlSize,
             child: Center(
-              child: AnimatedSize(
-                duration: const Duration(milliseconds: 320),
-                curve: Curves.easeOutCubic,
-                clipBehavior: Clip.hardEdge,
-                child: LiquidGlassLens(
-                  style: pillStyle,
+              child: LiquidGlassLens(
+                style: pillStyle,
+                child: AnimatedSize(
+                  duration: const Duration(milliseconds: 320),
+                  curve: Curves.easeOutCubic,
+                  clipBehavior: Clip.none,
                   child: Container(
                     height: ctrlSize,
                     padding: const EdgeInsets.symmetric(horizontal: 20),
-                    alignment: Alignment.center,
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 280),
-                      transitionBuilder: (child, animation) {
-                        final inAnimation = Tween<Offset>(
-                          begin: const Offset(0.0, -1.0),
-                          end: Offset.zero,
-                        ).animate(CurvedAnimation(
-                          parent: animation,
-                          curve: Curves.easeOutCubic,
-                        ));
-                        final outAnimation = Tween<Offset>(
-                          begin: const Offset(0.0, 1.0),
-                          end: Offset.zero,
-                        ).animate(CurvedAnimation(
-                          parent: animation,
-                          curve: Curves.easeInCubic,
-                        ));
-                        final isIncoming =
-                            child.key == ValueKey<String>(_currentTitleKey);
-                        return ClipRect(
-                          child: SlideTransition(
-                            position: isIncoming ? inAnimation : outAnimation,
-                            child: FadeTransition(
-                              opacity: animation,
-                              child: child,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 280),
+                          transitionBuilder: (child, animation) {
+                            final inAnimation = Tween<Offset>(
+                              begin: const Offset(0.0, -1.0),
+                              end: Offset.zero,
+                            ).animate(CurvedAnimation(
+                              parent: animation,
+                              curve: Curves.easeOutCubic,
+                            ));
+                            final outAnimation = Tween<Offset>(
+                              begin: const Offset(0.0, 1.0),
+                              end: Offset.zero,
+                            ).animate(CurvedAnimation(
+                              parent: animation,
+                              curve: Curves.easeInCubic,
+                            ));
+                            final isIncoming =
+                                child.key == ValueKey<String>(_currentTitleKey);
+                            return ClipRect(
+                              child: SlideTransition(
+                                position: isIncoming ? inAnimation : outAnimation,
+                                child: FadeTransition(
+                                  opacity: animation,
+                                  child: child,
+                                ),
+                              ),
+                            );
+                          },
+                          layoutBuilder: (currentChild, previousChildren) {
+                            return Stack(
+                              alignment: Alignment.center,
+                              clipBehavior: Clip.none,
+                              children: [
+                                ...previousChildren.map(
+                                  (w) => Positioned.fill(
+                                    child: Center(
+                                      child: OverflowBox(
+                                        minWidth: 0,
+                                        maxWidth: double.infinity,
+                                        minHeight: 0,
+                                        maxHeight: double.infinity,
+                                        child: w,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                if (currentChild != null) currentChild,
+                              ],
+                            );
+                          },
+                          child: Text(
+                            _currentTitleText,
+                            key: ValueKey<String>(_currentTitleKey),
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: _isTitleConnected
+                                  ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
+                                  : Colors.grey,
+                              letterSpacing: -0.2,
                             ),
                           ),
-                        );
-                      },
-                      layoutBuilder: (currentChild, previousChildren) {
-                        return Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            ...previousChildren,
-                            if (currentChild != null) currentChild,
-                          ],
-                        );
-                      },
-                      child: Text(
-                        _currentTitleText,
-                        key: ValueKey<String>(_currentTitleKey),
-                        maxLines: 1,
-                        softWrap: false,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: _isTitleConnected
-                              ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
-                              : Colors.grey,
-                          letterSpacing: -0.2,
                         ),
-                      ),
+                      ],
                     ),
                   ),
                 ),
@@ -1471,52 +1489,86 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             Center(
               child: Container(
                 height: 38,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
                   color: isDark
                       ? const Color(0xFF2C2C2E)
                       : const Color(0xFFF2F2F7),
                   borderRadius: BorderRadius.circular(19),
                 ),
-                alignment: Alignment.center,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 280),
-                  transitionBuilder: (child, animation) {
-                    final inAnimation = Tween<Offset>(
-                      begin: const Offset(0.0, -1.0),
-                      end: Offset.zero,
-                    ).animate(CurvedAnimation(
-                      parent: animation,
-                      curve: Curves.easeOutCubic,
-                    ));
-                    final outAnimation = Tween<Offset>(
-                      begin: const Offset(0.0, 1.0),
-                      end: Offset.zero,
-                    ).animate(CurvedAnimation(
-                      parent: animation,
-                      curve: Curves.easeInCubic,
-                    ));
-                    final isIncoming =
-                        child.key == ValueKey<String>(_currentTitleKey);
-                    return ClipRect(
-                      child: SlideTransition(
-                        position: isIncoming ? inAnimation : outAnimation,
-                        child: FadeTransition(
-                          opacity: animation,
-                          child: child,
+                child: AnimatedSize(
+                  duration: const Duration(milliseconds: 320),
+                  curve: Curves.easeOutCubic,
+                  clipBehavior: Clip.none,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 280),
+                          transitionBuilder: (child, animation) {
+                            final inAnimation = Tween<Offset>(
+                              begin: const Offset(0.0, -1.0),
+                              end: Offset.zero,
+                            ).animate(CurvedAnimation(
+                              parent: animation,
+                              curve: Curves.easeOutCubic,
+                            ));
+                            final outAnimation = Tween<Offset>(
+                              begin: const Offset(0.0, 1.0),
+                              end: Offset.zero,
+                            ).animate(CurvedAnimation(
+                              parent: animation,
+                              curve: Curves.easeInCubic,
+                            ));
+                            final isIncoming =
+                                child.key == ValueKey<String>(_currentTitleKey);
+                            return ClipRect(
+                              child: SlideTransition(
+                                position: isIncoming ? inAnimation : outAnimation,
+                                child: FadeTransition(
+                                  opacity: animation,
+                                  child: child,
+                                ),
+                              ),
+                            );
+                          },
+                          layoutBuilder: (currentChild, previousChildren) {
+                            return Stack(
+                              alignment: Alignment.center,
+                              clipBehavior: Clip.none,
+                              children: [
+                                ...previousChildren.map(
+                                  (w) => Positioned.fill(
+                                    child: Center(
+                                      child: OverflowBox(
+                                        minWidth: 0,
+                                        maxWidth: double.infinity,
+                                        minHeight: 0,
+                                        maxHeight: double.infinity,
+                                        child: w,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                if (currentChild != null) currentChild,
+                              ],
+                            );
+                          },
+                          child: Text(
+                            _currentTitleText,
+                            key: ValueKey<String>(_currentTitleKey),
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: _isTitleConnected
+                                  ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
+                                  : Colors.grey,
+                            ),
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                  child: Text(
-                    _currentTitleText,
-                    key: ValueKey<String>(_currentTitleKey),
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                      color: _isTitleConnected
-                          ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
-                          : Colors.grey,
+                      ],
                     ),
                   ),
                 ),
