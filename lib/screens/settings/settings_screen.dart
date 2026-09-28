@@ -634,7 +634,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
     // Встроенный режим — используется внутри PageView на главном экране
     if (widget.isEmbedded) {
-      final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
+      final topPadding = MediaQuery.of(context).padding.top + 68.0;
       return ListView(
         physics: const ClampingScrollPhysics(),
         padding: const EdgeInsets.only(bottom: 120),
