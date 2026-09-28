@@ -1252,9 +1252,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     const double ctrlSize = 42.0;
     const double menuWidth = 200.0;
     final double menuHeight = _getMenuHeight(_currentIndex);
+    const double barHeight = 60.0;
+    const double barRadius = barHeight / 2; // 30.0 — same as bottom tab bar
 
     final pillStyle = LiquidGlassStyle(
-      shape: _glassShape(21, lightAngle),
+      shape: _glassShape(barRadius, lightAngle),
       appearance: LiquidGlassAppearance(
         color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
         blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
@@ -1272,7 +1274,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
 
     final morphStyle = LiquidGlassStyle(
-      shape: _glassShape(_isTopMenuOpen ? 20 : 21, lightAngle),
+      shape: _glassShape(barRadius, lightAngle),
       appearance: LiquidGlassAppearance(
         color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
         blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
@@ -1493,7 +1495,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   color: isDark
                       ? const Color(0xFF2C2C2E)
                       : const Color(0xFFF2F2F7),
-                  borderRadius: BorderRadius.circular(19),
+                  borderRadius: BorderRadius.circular(30),
                 ),
                 child: AnimatedSize(
                   duration: const Duration(milliseconds: 320),
