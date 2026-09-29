@@ -1,6 +1,7 @@
 import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
@@ -900,7 +901,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.person_add, color: Color(0xFF0088CC)),
+              leading: const iconoir.UserPlus(
+                color: Color(0xFF0088CC),
+                width: 24,
+                height: 24,
+              ),
               title: Text(l10n.translate('chat_new_private')),
               subtitle: Text(l10n.translate('chat_new_private_desc')),
               onTap: () {
@@ -913,7 +918,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.group_add, color: Color(0xFF0088CC)),
+              leading: const iconoir.Group(
+                color: Color(0xFF0088CC),
+                width: 24,
+                height: 24,
+              ),
               title: Text(l10n.translate('chat_new_group')),
               subtitle: Text(l10n.translate('chat_new_group_desc')),
               onTap: () {
@@ -925,7 +934,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.campaign, color: Color(0xFF0088CC)),
+              leading: const iconoir.Megaphone(
+                color: Color(0xFF0088CC),
+                width: 24,
+                height: 24,
+              ),
               title: Text(l10n.translate('chat_new_channel')),
               subtitle: Text(l10n.translate('chat_new_channel_desc')),
               onTap: () {
@@ -1060,61 +1073,61 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           _MorphMenuItemData(
             id: 'profile',
             label: l10n.translate('settings_profile'),
-            icon: Icons.person_outline_rounded,
+            iconBuilder: (color, size) => iconoir.User(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
             id: 'clear_data',
             label: l10n.translate('clear_data_title'),
-            icon: Icons.delete_outline_rounded,
+            iconBuilder: (color, size) => iconoir.Trash(color: color, width: size, height: size),
             color: Colors.orange,
           ),
           _MorphMenuItemData(
             id: 'logout',
             label: l10n.translate('menu_logout'),
-            icon: Icons.logout_rounded,
+            iconBuilder: (color, size) => iconoir.LogOut(color: color, width: size, height: size),
             color: Colors.red,
           ),
         ];
       case 2: // Search
         return [
-          const _MorphMenuItemData(
+          _MorphMenuItemData(
             id: 'clear_search',
             label: 'Очистить поиск',
-            icon: Icons.clear_all_rounded,
+            iconBuilder: (color, size) => iconoir.Trash(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
             id: 'profile',
             label: l10n.translate('settings_profile'),
-            icon: Icons.person_outline_rounded,
+            iconBuilder: (color, size) => iconoir.User(color: color, width: size, height: size),
           ),
         ];
       case 1: // Chats
       default:
         return [
-          const _MorphMenuItemData(
+          _MorphMenuItemData(
             id: 'select_chats',
             label: 'Выбрать чаты',
-            icon: Icons.checklist_rounded,
+            iconBuilder: (color, size) => iconoir.ListSelect(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
             id: 'new_chat',
             label: l10n.translate('chat_new_private'),
-            icon: Icons.person_add_outlined,
+            iconBuilder: (color, size) => iconoir.UserPlus(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
             id: 'new_group',
             label: l10n.translate('chat_new_group'),
-            icon: Icons.group_add_outlined,
+            iconBuilder: (color, size) => iconoir.Group(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
             id: 'new_channel',
             label: l10n.translate('chat_new_channel'),
-            icon: Icons.campaign_outlined,
+            iconBuilder: (color, size) => iconoir.Megaphone(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
             id: 'profile',
             label: l10n.translate('settings_profile'),
-            icon: Icons.person_outline_rounded,
+            iconBuilder: (color, size) => iconoir.User(color: color, width: size, height: size),
           ),
         ];
     }
@@ -1281,7 +1294,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           children: items
               .map(
                 (item) => ListTile(
-                  leading: Icon(item.icon, color: item.color),
+                  leading: item.iconBuilder(
+                    item.color ??
+                        (Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white
+                            : const Color(0xFF1C1C1E)),
+                    24.0,
+                  ),
                   title: Text(item.label, style: TextStyle(color: item.color)),
                   onTap: () {
                     Navigator.pop(context);
@@ -1456,7 +1475,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       child: Row(
         children: [
           IconButton(
-            icon: const Icon(Icons.close, color: Colors.white, size: 20),
+            icon: const iconoir.Xmark(color: Colors.white, width: 20, height: 20),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             onPressed: _exitSelectMode,
@@ -1472,14 +1491,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           ),
           const Spacer(),
           IconButton(
-            icon: const Icon(Icons.select_all, color: Colors.white, size: 20),
+            icon: const iconoir.ListSelect(color: Colors.white, width: 20, height: 20),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             tooltip: 'Выбрать все',
             onPressed: _selectAllChats,
           ),
           IconButton(
-            icon: const Icon(Icons.more_vert, color: Colors.white, size: 20),
+            icon: const iconoir.MoreVert(color: Colors.white, width: 20, height: 20),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             onPressed: _showSelectedChatsMenu,
@@ -1589,7 +1608,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             Positioned(
               right: 16,
               child: IconButton(
-                icon: const Icon(Icons.more_vert_rounded),
+                icon: const iconoir.MoreVert(width: 24, height: 24),
                 onPressed: () => _showClassicMenu(context),
               ),
             ),
@@ -1657,9 +1676,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.chat_bubble_outline,
-              size: 80,
+            iconoir.ChatBubble(
+              width: 80,
+              height: 80,
               color: Colors.grey[400],
             ),
             const SizedBox(height: 16),
@@ -1701,25 +1720,25 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildChatListItem(Chat chat) {
-    IconData icon;
+    Widget iconWidget;
     switch (chat.chatType) {
       case 'private':
-        icon = Icons.person;
+        iconWidget = const iconoir.User(color: Colors.white, width: 22, height: 22);
         break;
       case 'group':
-        icon = Icons.group;
+        iconWidget = const iconoir.Group(color: Colors.white, width: 22, height: 22);
         break;
       case 'channel':
-        icon = Icons.campaign;
+        iconWidget = const iconoir.Megaphone(color: Colors.white, width: 22, height: 22);
         break;
       case 'saved':
-        icon = Icons.bookmark;
+        iconWidget = const iconoir.Bookmark(color: Colors.white, width: 22, height: 22);
         break;
       case 'system':
-        icon = Icons.shield_outlined;
+        iconWidget = const iconoir.ShieldCheck(color: Colors.white, width: 22, height: 22);
         break;
       default:
-        icon = Icons.chat;
+        iconWidget = const iconoir.ChatBubble(color: Colors.white, width: 22, height: 22);
     }
 
     final hasUnread = chat.unreadCount > 0;
@@ -1752,7 +1771,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       ? avatarImageProvider(chat.avatarUrl)
                       : null,
               child: chat.avatarUrl == null || chat.avatarUrl!.isEmpty
-                  ? Icon(icon, color: Colors.white)
+                  ? iconWidget
                   : null,
             ),
           if (hasUnread)
@@ -1814,9 +1833,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             if (chat.isPinned || chat.chatType == 'saved')
               Padding(
                 padding: const EdgeInsets.only(right: 4),
-                child: Icon(
-                  Icons.push_pin,
-                  size: 14,
+                child: iconoir.Pin(
+                  width: 14,
+                  height: 14,
                   color: hasUnread
                       ? Theme.of(context).colorScheme.primary
                       : Colors.grey[500],
@@ -1836,7 +1855,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   ),
                   if (chat.chatType == 'system') ...[
                     const SizedBox(width: 4),
-                    const Icon(Icons.verified, size: 16, color: Color(0xFF0088CC)),
+                    const iconoir.CheckCircle(width: 16, height: 16, color: Color(0xFF0088CC)),
                   ],
                 ],
               ),
@@ -1846,8 +1865,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         subtitle: _buildChatSubtitle(chat, hasUnread),
         trailing: _isSelectMode
             ? (isSelected
-                ? const Icon(Icons.check_circle, color: Color(0xFF0088CC))
-                : Icon(Icons.radio_button_unchecked, color: Colors.grey[400]))
+                ? const iconoir.CheckCircle(color: Color(0xFF0088CC), width: 22, height: 22)
+                : iconoir.Circle(color: Colors.grey[400], width: 22, height: 22))
             : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -2020,10 +2039,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             // Pin/Unpin
             if (!hasSavedChat || selectedChats.length > 1)
               ListTile(
-                leading: Icon(
-                  allPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                  color: const Color(0xFF0088CC),
-                ),
+                leading: allPinned
+                    ? const iconoir.PinSlash(color: Color(0xFF0088CC), width: 22, height: 22)
+                    : const iconoir.Pin(color: Color(0xFF0088CC), width: 22, height: 22),
                 title: Text(allPinned ? 'Открепить чаты' : 'Закрепить чаты'),
                 onTap: () {
                   Navigator.pop(context);
@@ -2033,7 +2051,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             // Mark as read
             if (anyUnread)
               ListTile(
-                leading: const Icon(Icons.done_all, color: Color(0xFF0088CC)),
+                leading: const iconoir.DoubleCheck(color: Color(0xFF0088CC), width: 22, height: 22),
                 title: const Text('Отметить как прочитанные'),
                 onTap: () {
                   Navigator.pop(context);
@@ -2043,7 +2061,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             // Delete (not for saved chat)
             if (deletableChats.isNotEmpty)
               ListTile(
-                leading: const Icon(Icons.delete, color: Colors.red),
+                leading: const iconoir.Trash(color: Colors.red, width: 22, height: 22),
                 title: Text(
                   'Удалить чаты${hasSavedChat ? ' (кроме Избранного)' : ''}',
                   style: const TextStyle(color: Colors.red),
@@ -2436,8 +2454,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                       child: Row(
                                         children: [
                                           IconButton(
-                                            icon: const Icon(Icons.close,
-                                                color: Colors.white),
+                                            icon: const iconoir.Xmark(
+                                                color: Colors.white,
+                                                width: 22,
+                                                height: 22),
                                             onPressed: _exitSelectMode,
                                           ),
                                           const SizedBox(width: 8),
@@ -2451,14 +2471,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                           ),
                                           const Spacer(),
                                           IconButton(
-                                            icon: const Icon(Icons.select_all,
-                                                color: Colors.white),
+                                            icon: const iconoir.ListSelect(
+                                                color: Colors.white,
+                                                width: 22,
+                                                height: 22),
                                             tooltip: 'Выбрать все',
                                             onPressed: _selectAllChats,
                                           ),
                                           IconButton(
-                                            icon: const Icon(Icons.more_vert,
-                                                color: Colors.white),
+                                            icon: const iconoir.MoreVert(
+                                                color: Colors.white,
+                                                width: 22,
+                                                height: 22),
                                             onPressed:
                                                 _showSelectedChatsMenu,
                                           ),
@@ -2522,9 +2546,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                   focusNode: _searchFocusNode,
                                   decoration: InputDecoration(
                                     hintText: l10n.translate('common_search'),
-                                    prefixIcon: const Icon(Icons.search),
+                                    prefixIcon: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: iconoir.Search(
+                                        width: 20,
+                                        height: 20,
+                                        color: Theme.of(context).iconTheme.color ?? Colors.grey,
+                                      ),
+                                    ),
                                     suffixIcon: IconButton(
-                                      icon: const Icon(Icons.close, size: 20),
+                                      icon: const iconoir.Xmark(width: 20, height: 20),
                                       onPressed: () {
                                         _searchController.clear();
                                         setState(() {
@@ -2658,16 +2689,25 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 bottomNavigationBar: LiquidGlassTabBar(
                   items: [
                     _buildTabBarItem(
-                      icon: Icons.settings_outlined,
-                      label: 'Настройки',
+                      iconBuilder: (i) => iconoir.Settings(
+                        color: i.color,
+                        width: i.size,
+                        height: i.size,
+                      ),
                     ),
                     _buildTabBarItem(
-                      icon: Icons.chat_bubble_outline_rounded,
-                      label: 'Чаты',
+                      iconBuilder: (i) => iconoir.ChatBubble(
+                        color: i.color,
+                        width: i.size,
+                        height: i.size,
+                      ),
                     ),
                     _buildTabBarItem(
-                      icon: Icons.search_rounded,
-                      label: 'Поиск',
+                      iconBuilder: (i) => iconoir.Search(
+                        color: i.color,
+                        width: i.size,
+                        height: i.size,
+                      ),
                     ),
                   ],
                   selectedIndex: _currentIndex,
@@ -2689,10 +2729,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     unselectedColor: isDark
                         ? const Color(0xFF8E8E93)
                         : const Color(0xFF636366),
-                    iconSize: 24,
+                    iconSize: 26,
                     labelFontSize: 10,
-                    iconLabelGap: 2,
-                    underGlassIconSize: 28,
+                    iconLabelGap: 0,
+                    underGlassIconSize: 30,
                     underGlassLabelFontSize: 10,
                     selectedFontWeight: FontWeight.w700,
                     unselectedFontWeight: FontWeight.w600,
@@ -2716,8 +2756,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   width: actionSize,
                   height: actionSize,
                   padding: EdgeInsets.zero,
-                  icon: Icons.add_rounded,
-                  iconSize: 28,
                   touch: const LiquidGlassTouch(
                     flex: LiquidGlassFlex(
                       stretch: 8,
@@ -2735,6 +2773,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     HapticUtils.tap();
                     _showCreateMenu();
                   },
+                  child: iconoir.Plus(
+                    color: isDark ? Colors.white : const Color(0xFF121215),
+                    width: 28,
+                    height: 28,
+                  ),
                 ),
               );
             }
@@ -2794,19 +2837,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
 
   LiquidGlassTabBarItem _buildTabBarItem({
-    required IconData icon,
-    required String label,
+    required Widget Function(LiquidGlassGlyph i) iconBuilder,
   }) {
     return LiquidGlassTabBarItem(
-      label: label,
-      iconBuilder: (context, i) => Icon(
-        icon,
-        size: i.underGlass == true ? 26 : 24,
-        color: i.color,
-        shadows: i.selected
-            ? [Shadow(color: i.color.withValues(alpha: 0.85), blurRadius: 14)]
-            : null,
-      ),
+      iconBuilder: (context, i) => iconBuilder(i),
     );
   }
 
@@ -2827,7 +2861,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.search, size: 80, color: Colors.grey[400]),
+            iconoir.Search(width: 80, height: 80, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
               l10n.translate('common_nothing_found'),
@@ -2873,7 +2907,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               l10n.translate('search_groups'),
               _groups
                   .map((g) => ListTile(
-                        leading: const Icon(Icons.group, size: 40),
+                        leading: const iconoir.Group(width: 40, height: 40),
                         title: Text(g.name),
                         subtitle: Text(g.description.isNotEmpty
                             ? g.description
@@ -2886,7 +2920,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               l10n.translate('search_channels'),
               _channels
                   .map((c) => ListTile(
-                        leading: const Icon(Icons.forum, size: 40),
+                        leading: const iconoir.Megaphone(width: 40, height: 40),
                         title: Text(c.name),
                         subtitle: Text(c.description.isNotEmpty
                             ? c.description
@@ -2899,7 +2933,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               l10n.translate('search_messages'),
               _messages
                   .map((m) => ListTile(
-                        leading: const Icon(Icons.message),
+                        leading: const iconoir.Message(width: 24, height: 24),
                         title: Text(m.content,
                             maxLines: 2, overflow: TextOverflow.ellipsis),
                         subtitle: Text(
@@ -3055,13 +3089,13 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
 class _MorphMenuItemData {
   final String id;
   final String label;
-  final IconData icon;
+  final Widget Function(Color color, double size) iconBuilder;
   final Color? color;
 
   const _MorphMenuItemData({
     required this.id,
     required this.label,
-    required this.icon,
+    required this.iconBuilder,
     this.color,
   });
 }
@@ -3086,9 +3120,9 @@ class _ThreeDotsGlyph extends StatelessWidget {
         width: size,
         height: size,
         child: Center(
-          child: Icon(
-            Icons.more_vert_rounded,
-            size: 22.0,
+          child: iconoir.MoreVert(
+            width: 22.0,
+            height: 22.0,
             color: isDark ? Colors.white : const Color(0xFF1C1C1E),
           ),
         ),
@@ -3156,7 +3190,7 @@ class _MorphMenuRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14.0),
           child: Row(
               children: [
-                Icon(item.icon, size: 20.0, color: itemColor),
+                item.iconBuilder(itemColor, 20.0),
                 const SizedBox(width: 10.0),
                 Expanded(
                   child: Text(
@@ -3304,28 +3338,32 @@ class _FolderMorphMenu extends StatelessWidget {
         label: l10n.translate('filter_all').isNotEmpty
             ? l10n.translate('filter_all')
             : 'Все',
-        icon: Icons.chat_bubble_outline_rounded,
+        iconBuilder: (color, size) =>
+            iconoir.ChatBubble(color: color, width: size, height: size),
       ),
       _FolderMenuItemData(
         index: 1,
         label: l10n.translate('filter_personal').isNotEmpty
             ? l10n.translate('filter_personal')
             : 'Личные',
-        icon: Icons.person_outline_rounded,
+        iconBuilder: (color, size) =>
+            iconoir.User(color: color, width: size, height: size),
       ),
       _FolderMenuItemData(
         index: 2,
         label: l10n.translate('filter_groups').isNotEmpty
             ? l10n.translate('filter_groups')
             : 'Группы',
-        icon: Icons.group_outlined,
+        iconBuilder: (color, size) =>
+            iconoir.Group(color: color, width: size, height: size),
       ),
       _FolderMenuItemData(
         index: 3,
         label: l10n.translate('filter_channels').isNotEmpty
             ? l10n.translate('filter_channels')
             : 'Каналы',
-        icon: Icons.campaign_outlined,
+        iconBuilder: (color, size) =>
+            iconoir.Megaphone(color: color, width: size, height: size),
       ),
     ];
 
@@ -3356,12 +3394,12 @@ class _FolderMorphMenu extends StatelessWidget {
 class _FolderMenuItemData {
   final int index;
   final String label;
-  final IconData icon;
+  final Widget Function(Color color, double size) iconBuilder;
 
   const _FolderMenuItemData({
     required this.index,
     required this.label,
-    required this.icon,
+    required this.iconBuilder,
   });
 }
 
@@ -3395,7 +3433,7 @@ class _FolderMenuRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14.0),
           child: Row(
             children: [
-              Icon(item.icon, size: 20.0, color: itemColor),
+              item.iconBuilder(itemColor, 20.0),
               const SizedBox(width: 10.0),
               Expanded(
                 child: Text(
@@ -3439,7 +3477,7 @@ class _FolderMenuRow extends StatelessWidget {
                 const SizedBox(width: 8.0),
               ],
               if (isSelected)
-                const Icon(Icons.check_rounded, size: 18.0, color: accentColor)
+                const iconoir.Check(width: 18.0, height: 18.0, color: accentColor)
               else
                 const SizedBox(width: 18.0),
             ],
