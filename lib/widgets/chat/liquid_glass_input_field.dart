@@ -593,18 +593,13 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   Widget _buildSendButton(Color rightButtonBg) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlassEnabled = widget.enabled && glassProvider.enabled;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
-
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: widget.controller,
       builder: (context, value, child) {
         final canSend = value.text.isNotEmpty || widget.hasAttachments;
         final color = widget.isSending ? Colors.grey : rightButtonBg;
 
-        final innerButton = GestureDetector(
+        return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
             if (widget.isSending) return;
@@ -650,12 +645,10 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
           child: Container(
             width: _kActionButtonSize,
             height: _kActionButtonSize,
-            decoration: isGlassEnabled
-                ? null
-                : BoxDecoration(
-                    color: color,
-                    shape: BoxShape.circle,
-                  ),
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
             alignment: Alignment.center,
             child: widget.isSending
                 ? const SizedBox(
@@ -692,49 +685,6 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                         },
                       )),
           ),
-        );
-
-        if (!isGlassEnabled) {
-          return innerButton;
-        }
-
-        final buttonShape = LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: _kActionButtonSize / 2,
-          clipQuality: LiquidGlassClipQuality.exact,
-          borderWidth: 0.6,
-          lightIntensity: 0.9,
-          lightDirection: lightAngle,
-          borderType: const OpticalBorder(
-            borderSaturation: 1.1,
-            ambientIntensity: 0.85,
-            borderSolidity: 0.95,
-          ),
-        );
-
-        final buttonStyle = LiquidGlassStyle(
-          shape: buttonShape,
-          appearance: LiquidGlassAppearance(
-            color: color,
-            blur: glassProvider.blurEffect,
-            shadow: const LiquidGlassShadow(
-              blur: 8,
-              opacity: 0.25,
-              offset: Offset(0, 2),
-              color: Colors.black,
-            ),
-          ),
-          liteGlass: widget.isLite ? LiquidGlassLitePickup.surface : null,
-        );
-
-        return LiquidGlassLens(
-          style: buttonStyle,
-          touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
-            stretch: 5,
-            squeeze: 0.65,
-            lean: 0.3,
-            grip: 0.5,
-          )),
-          child: innerButton,
         );
       },
     );
