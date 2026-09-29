@@ -332,64 +332,67 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     final isDark = theme.brightness == Brightness.dark;
     final glassProvider = context.watch<LiquidGlassProvider>();
 
-    if (opacity <= 0) return const SizedBox.shrink();
+    if (!glassProvider.enabled && opacity <= 0) return const SizedBox.shrink();
 
     final Widget searchContent = Opacity(
-      opacity: opacity,
-      child: Row(
-        children: [
-          const SizedBox(width: 12),
-          Icon(
-            Icons.search,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.4 * opacity),
-            size: 20,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              onChanged: onChanged,
-              cursorColor: theme.colorScheme.primary.withOpacity(opacity),
-              style: TextStyle(
-                color: theme.colorScheme.onSurface.withOpacity(opacity),
-                fontSize: 16,
-              ),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: TextStyle(
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4 * opacity),
-                ),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                filled: false,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 0),
-              ),
+      opacity: opacity.clamp(0.0, 1.0),
+      child: IgnorePointer(
+        ignoring: opacity <= 0.1,
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            Icon(
+              Icons.search,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+              size: 20,
             ),
-          ),
-          if (query.isNotEmpty)
-            GestureDetector(
-              onTap: () {
-                controller.clear();
-                onChanged('');
-                // Keep focus so user can type again
-                if (!focusNode.hasFocus) {
-                  focusNode.requestFocus();
-                }
-              },
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Icon(
-                  Icons.close,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.4 * opacity),
-                  size: 18,
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: controller,
+                focusNode: focusNode,
+                onChanged: onChanged,
+                cursorColor: theme.colorScheme.primary,
+                style: TextStyle(
+                  color: theme.colorScheme.onSurface,
+                  fontSize: 16,
+                ),
+                decoration: InputDecoration(
+                  hintText: hint,
+                  hintStyle: TextStyle(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                  ),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
                 ),
               ),
             ),
-          const SizedBox(width: 8),
-        ],
+            if (query.isNotEmpty)
+              GestureDetector(
+                onTap: () {
+                  controller.clear();
+                  onChanged('');
+                  // Keep focus so user can type again
+                  if (!focusNode.hasFocus) {
+                    focusNode.requestFocus();
+                  }
+                },
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Icon(
+                    Icons.close,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                    size: 18,
+                  ),
+                ),
+              ),
+            const SizedBox(width: 8),
+          ],
+        ),
       ),
     );
 
@@ -500,39 +503,84 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
   Widget _buildEmojiTopControls() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final glassProvider = context.watch<LiquidGlassProvider>();
+
     return AnimatedBuilder(
       animation: _searchCollapseController,
       builder: (context, child) {
         final collapse = _searchCollapseController.value;
-        final searchOpacity = (1.0 - collapse).clamp(0.0, 1.0);
-        
+        final textOpacity = Curves.easeOut.transform((1.0 - collapse * 1.5).clamp(0.0, 1.0));
+        final fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
+        final blendSmoothness = math.sin(collapse * math.pi) * 28.0;
+
+        final searchWidget = Positioned(
+          top: _kEmojiSelectorHeight,
+          left: 0,
+          right: 0,
+          child: Transform.translate(
+            offset: Offset(0, -collapse * _kEmojiSelectorHeight),
+            child: Transform.scale(
+              scale: 1.0 - (collapse * 0.15),
+              child: _buildSearch(
+                'Поиск эмодзи', 
+                _emojiSearchController,
+                _emojiSearchQuery, 
+                (v) => setState(() => _emojiSearchQuery = v), 
+                _emojiSearchFocusNode,
+                isGrouped: true,
+                opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+              ),
+            ),
+          ),
+        );
+
+        final selectorWidget = _buildEmojiSetSelector(isGrouped: true);
+
+        if (glassProvider.enabled) {
+          final sharedStyle = LiquidGlassStyle(
+            shape: LiquidGlassShape.continuousRoundedRectangle(
+              cornerRadius: 24,
+              clipQuality: LiquidGlassClipQuality.exact,
+              borderWidth: 0.6,
+              lightIntensity: isDark ? 0.7 : 0.95,
+              lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
+            ),
+            appearance: LiquidGlassAppearance(
+              color: isDark
+                  ? const Color(0x33202025)
+                  : const Color(0x8FFFFFFF),
+              blur: glassProvider.blurEffect,
+            ),
+            refraction: const LiquidGlassRefraction(
+              distortion: 0.06,
+              distortionWidth: 20,
+            ),
+            liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+          );
+
+          return SizedBox(
+            height: _kEmojiSelectorHeight + _kSearchHeight,
+            child: LiquidGlassBlender(
+              smoothness: blendSmoothness,
+              style: sharedStyle,
+              child: Stack(
+                children: [
+                  searchWidget,
+                  selectorWidget,
+                ],
+              ),
+            ),
+          );
+        }
+
         return SizedBox(
           height: _kEmojiSelectorHeight + _kSearchHeight,
           child: Stack(
             children: [
-              // Search cloud (behind)
-              Positioned(
-                top: _kEmojiSelectorHeight,
-                left: 0,
-                right: 0,
-                child: Transform.translate(
-                  offset: Offset(0, -collapse * 48),
-                  child: Transform.scale(
-                    scale: 1.0 - (collapse * 0.4),
-                    child: _buildSearch(
-                      'Поиск эмодзи', 
-                      _emojiSearchController,
-                      _emojiSearchQuery, 
-                      (v) => setState(() => _emojiSearchQuery = v), 
-                      _emojiSearchFocusNode,
-                      isGrouped: true,
-                      opacity: searchOpacity,
-                    ),
-                  ),
-                ),
-              ),
-              // Selector cloud (on top)
-              _buildEmojiSetSelector(isGrouped: true),
+              searchWidget,
+              selectorWidget,
             ],
           ),
         );
