@@ -637,7 +637,9 @@ class _SettingsScreenState extends State<SettingsScreen>
       final topPadding = MediaQuery.of(context).padding.top + 52.0;
       return ListView(
         physics: const ClampingScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 120),
+        padding: EdgeInsets.only(
+          bottom: 120 + MediaQuery.paddingOf(context).bottom,
+        ),
         children: [
           SizedBox(height: topPadding),
           ...listChildren,

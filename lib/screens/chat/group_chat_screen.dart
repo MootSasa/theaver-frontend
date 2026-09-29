@@ -2273,13 +2273,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           )
         : null;
 
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final effectiveBottom = bottomInset > 0 ? bottomInset : safeBottom;
+
     final messageList = ChatMessagesListView(
       isLoading: _isLoading,
       isLoadingMore: _isLoadingMore,
       itemCount: _feedItems.length,
       scrollController: _scrollController,
       topPadding: topPadding,
-      bottomPadding: _inputHeight + bottomInset + 8,
+      bottomPadding: _inputHeight + effectiveBottom + 8,
       typingIndicator: typingWidget,
       itemBuilder: (context, index) => _buildFeedItem(index),
     );
@@ -2291,7 +2294,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         Positioned(
           left: 0,
           right: 0,
-          bottom: bottomInset,
+          bottom: effectiveBottom,
           child: Container(
             key: _inputKey,
             child: _buildMessageInput(),
@@ -2299,7 +2302,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         ),
         Positioned(
           right: 14,
-          bottom: _inputHeight + 10 + bottomInset,
+          bottom: _inputHeight + 10 + effectiveBottom,
           child: ScrollDownFab(
             visible: _showScrollDownFab,
             unreadCount: 0,

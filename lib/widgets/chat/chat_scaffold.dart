@@ -69,7 +69,11 @@ class ChatScaffold extends StatelessWidget {
               child: Column(
                 children: [
                   Expanded(child: body),
-                  if (bottomBar != null) bottomBar!,
+                  if (bottomBar != null)
+                    SafeArea(
+                      top: false,
+                      child: bottomBar!,
+                    ),
                 ],
               ),
             ),

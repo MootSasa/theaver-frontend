@@ -1677,7 +1677,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       physics: const AlwaysScrollableScrollPhysics(
         parent: BouncingScrollPhysics(),
       ),
-      padding: EdgeInsets.only(top: topPadding, bottom: 120),
+      padding: EdgeInsets.only(
+        top: topPadding,
+        bottom: 120 + MediaQuery.paddingOf(context).bottom,
+      ),
       itemCount: filteredChats.length,
       itemBuilder: (context, index) {
         final chat = filteredChats[index];
@@ -2635,8 +2638,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               );
 
               final double effectiveBottomMargin = keyboardHeight > 0
-                  ? (bottomMargin + keyboardHeight - safeBottom)
-                  : bottomMargin;
+                  ? (bottomMargin + keyboardHeight)
+                  : (bottomMargin + safeBottom);
 
               return LiquidGlassScaffold(
                 pixelRatio: 1.0,
@@ -2762,12 +2765,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    child: ClassicBottomBar(
-                      selectedIndex: _currentIndex,
-                      onTabSelected: (index) {
-                        _onTabTapped(index);
-                      },
-                      onAddTap: _showCreateMenu,
+                    child: SafeArea(
+                      top: false,
+                      child: ClassicBottomBar(
+                        selectedIndex: _currentIndex,
+                        onTabSelected: (index) {
+                          _onTabTapped(index);
+                        },
+                        onAddTap: _showCreateMenu,
+                      ),
                     ),
                   ),
                 ],
@@ -2851,7 +2857,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
 
     return ListView(
-      padding: const EdgeInsets.only(bottom: 120),
+      padding: EdgeInsets.only(
+        bottom: 120 + MediaQuery.paddingOf(context).bottom,
+      ),
       children: [
         if (_users.isNotEmpty)
           _buildSearchSection(

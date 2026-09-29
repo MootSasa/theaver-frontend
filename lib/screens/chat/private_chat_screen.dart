@@ -2212,12 +2212,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     // We don't lift it if the keyboard is just falling from the main input.
     final bool isSearchingInPanel = _showEmojiPanel && bottomInset > 0 && !_isKeyboardRising && !_isKeyboardFalling;
 
+    final double safeBottom = MediaQuery.paddingOf(context).bottom;
+
     // Total stable offset for message list and input field.
     final double bottomOffset = isSearchingInPanel
         ? (targetPanelHeight + bottomInset)
         : (shouldShowPanel 
             ? math.max(targetPanelHeight, bottomInset) 
-            : (bottomInset > 0 ? bottomInset : 0));
+            : (bottomInset > 0 ? bottomInset : safeBottom));
 
     // The actual height of the emoji panel container.
     final double effectivePanelHeight = shouldShowPanel ? targetPanelHeight : 0;
