@@ -1,7 +1,10 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:inspire_blur/inspire_blur.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import '../../services/liquid_glass_provider.dart';
 import '../../services/wallpaper_provider.dart';
 
 /// Unified scaffold for all chat screens (private chat, group chat, channel).
@@ -17,6 +20,7 @@ class ChatScaffold extends StatelessWidget {
   final bool? canPop;
   final void Function(bool didPop, dynamic result)? onPopInvoked;
   final bool enableStatusBarBlur;
+  final bool enableBottomScrollEdge;
 
   const ChatScaffold({
     Key? key,
@@ -29,6 +33,7 @@ class ChatScaffold extends StatelessWidget {
     this.canPop,
     this.onPopInvoked,
     this.enableStatusBarBlur = true,
+    this.enableBottomScrollEdge = true,
   }) : super(key: key);
 
   /// Helper to calculate standard top padding for chat message lists
@@ -42,6 +47,7 @@ class ChatScaffold extends StatelessWidget {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final bool isKeyboardVisible = bottomInset > 0;
     final defaultCanPop = canPop ?? !isKeyboardVisible;
+    final glassProvider = context.watch<LiquidGlassProvider?>();
 
     return PopScope(
       canPop: defaultCanPop,
@@ -78,11 +84,13 @@ class ChatScaffold extends StatelessWidget {
               ),
             ),
 
-            // 3. Status bar blur layer (inspire_blur)
-            if (enableStatusBarBlur)
-              _buildStatusBarBlur(context),
+            // 3. Top scroll edge / status bar blur
+            _buildTopScrollEdge(context, glassProvider),
 
-            // 4. Floating AppBar layer
+            // 4. Bottom scroll edge
+            _buildBottomScrollEdge(context, glassProvider),
+
+            // 5. Floating AppBar layer
             if (appBar != null)
               Positioned(
                 top: 0,
@@ -91,7 +99,7 @@ class ChatScaffold extends StatelessWidget {
                 child: appBar!,
               ),
 
-            // 5. Floating Action Button layer
+            // 6. Floating Action Button layer
             if (floatingActionButton != null)
               Positioned(
                 right: 16,
@@ -104,10 +112,30 @@ class ChatScaffold extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusBarBlur(BuildContext context) {
+  Widget _buildTopScrollEdge(BuildContext context, LiquidGlassProvider? glassProvider) {
+    if (!enableStatusBarBlur) return const SizedBox.shrink();
+
     final statusBarHeight = MediaQuery.paddingOf(context).top;
+    // On PC / desktop / web, statusBarHeight is 0, so do not apply blur at all
     if (statusBarHeight <= 0) return const SizedBox.shrink();
 
+    final isGlass = glassProvider?.enabled ?? false;
+    if (isGlass) {
+      return Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        height: statusBarHeight,
+        child: LiquidGlassScrollEdge(
+          edge: LiquidGlassEdge.top,
+          style: LiquidGlassScrollEdgeStyle.soft,
+          blur: glassProvider?.blur ?? 8.0,
+          color: Colors.transparent,
+        ),
+      );
+    }
+
+    // Fallback for classic / matte mode
     return Positioned(
       top: 0,
       left: 0,
@@ -123,6 +151,33 @@ class ChatScaffold extends StatelessWidget {
           ),
           child: const SizedBox.expand(),
         ),
+      ),
+    );
+  }
+
+  Widget _buildBottomScrollEdge(BuildContext context, LiquidGlassProvider? glassProvider) {
+    if (!enableBottomScrollEdge) return const SizedBox.shrink();
+
+    final isGlass = glassProvider?.enabled ?? false;
+    if (!isGlass) return const SizedBox.shrink();
+
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    // Hide bottom scroll edge when virtual keyboard is visible
+    if (bottomInset > 0) return const SizedBox.shrink();
+
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final height = math.max(safeBottom + 8.0, 24.0);
+
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: height,
+      child: LiquidGlassScrollEdge(
+        edge: LiquidGlassEdge.bottom,
+        style: LiquidGlassScrollEdgeStyle.soft,
+        blur: glassProvider?.blur ?? 8.0,
+        color: Colors.transparent,
       ),
     );
   }
