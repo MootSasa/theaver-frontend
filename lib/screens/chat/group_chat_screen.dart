@@ -2164,8 +2164,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             isOnline: false, // Group itself doesn't have online status
             statusText: statusSubtitle,
             statusColor: _isTyping
-                ? Theme.of(context).colorScheme.primary
-                : Colors.grey[600],
+                ? (Theme.of(context).brightness == Brightness.dark
+                    ? const Color(0xFF5CB8E6)
+                    : Theme.of(context).colorScheme.primary)
+                : null,
             onBack: () => Navigator.pop(context),
             onTitleTap: () => Navigator.push(
                 context,

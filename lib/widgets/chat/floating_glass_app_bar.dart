@@ -158,82 +158,109 @@ class FloatingGlassAppBar extends StatelessWidget {
   }
 
   Widget _buildContent(BuildContext context) {
-    return Row(
-      children: [
-        const SizedBox(width: 4),
-        _buildCircularButton(
-          context,
-          iconWidget: iconoir.NavArrowLeft(
-            width: _kCircularIconSize,
-            height: _kCircularIconSize,
-            color: Theme.of(context).colorScheme.onSurface,
-          ),
-          onTap: onBack,
-          iconSize: _kCircularIconSize,
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final secondaryTextColor = isDark
+        ? Colors.white.withValues(alpha: 0.75)
+        : const Color(0xFF4A4A4C);
+
+    return DefaultTextStyle(
+      style: TextStyle(
+        color: primaryTextColor,
+        fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+      ),
+      child: IconTheme(
+        data: IconThemeData(
+          color: primaryTextColor,
         ),
-        Expanded(
-          child: GestureDetector(
-            onTap: onTitleTap,
-            behavior: HitTestBehavior.opaque,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (titleWidget != null)
-                  titleWidget!
-                else
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      fontSize: _kTitleFontSize,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ValueListenableBuilder<bool>(
-                  valueListenable: WebSocketService().isConnectedNotifier,
-                  builder: (context, wsConnected, _) {
-                    final bool serverAvailable = isConnected ?? wsConnected;
-                    if (!serverAvailable) {
-                      return AnimatedEllipsisText(
-                        text: context.l10n.translate('chat_status_connecting'),
-                        style: TextStyle(
-                          fontSize: _kStatusFontSize,
-                          color: Colors.grey[600],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      );
-                    }
-                    if (statusText != null) {
-                      return AnimatedEllipsisText(
-                        text: statusText!,
-                        style: TextStyle(
-                          fontSize: _kStatusFontSize,
-                          color: statusColor ?? Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      );
-                    }
-                    return _buildStatusText(context);
-                  },
-                ),
-              ],
+        child: Row(
+          children: [
+            const SizedBox(width: 4),
+            _buildCircularButton(
+              context,
+              iconWidget: iconoir.NavArrowLeft(
+                width: _kCircularIconSize,
+                height: _kCircularIconSize,
+                color: primaryTextColor,
+              ),
+              onTap: onBack,
+              iconSize: _kCircularIconSize,
             ),
-          ),
-        ),
-        GestureDetector(
-          onTap: onAvatarTap,
-          child: Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: avatarWidget ??
-                AvatarWithStatus(
-                  avatarUrl: avatarUrl,
-                  name: name,
-                  radius: _kAvatarRadius,
-                  isOnline: isOnline,
+            Expanded(
+              child: GestureDetector(
+                onTap: onTitleTap,
+                behavior: HitTestBehavior.opaque,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (titleWidget != null)
+                      titleWidget!
+                    else
+                      Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: _kTitleFontSize,
+                          fontWeight: FontWeight.bold,
+                          color: primaryTextColor,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: WebSocketService().isConnectedNotifier,
+                      builder: (context, wsConnected, _) {
+                        final bool serverAvailable = isConnected ?? wsConnected;
+                        if (!serverAvailable) {
+                          return AnimatedEllipsisText(
+                            text: context.l10n.translate('chat_status_connecting'),
+                            style: TextStyle(
+                              fontSize: _kStatusFontSize,
+                              color: secondaryTextColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          );
+                        }
+                        if (statusText != null) {
+                          final isHardcodedGrey = statusColor == Colors.grey[600] ||
+                              statusColor == Colors.grey;
+                          final defaultAccent = isDark
+                              ? const Color(0xFF5CB8E6)
+                              : theme.colorScheme.primary;
+                          final effectiveColor = (statusColor == null || isHardcodedGrey)
+                              ? secondaryTextColor
+                              : (statusColor == theme.colorScheme.primary ? defaultAccent : statusColor);
+                          return AnimatedEllipsisText(
+                            text: statusText!,
+                            style: TextStyle(
+                              fontSize: _kStatusFontSize,
+                              color: effectiveColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          );
+                        }
+                        return _buildStatusText(context);
+                      },
+                    ),
+                  ],
                 ),
-          ),
+              ),
+            ),
+            GestureDetector(
+              onTap: onAvatarTap,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: avatarWidget ??
+                    AvatarWithStatus(
+                      avatarUrl: avatarUrl,
+                      name: name,
+                      radius: _kAvatarRadius,
+                      isOnline: isOnline,
+                    ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -251,6 +278,9 @@ class FloatingGlassAppBar extends StatelessWidget {
     required VoidCallback onTap,
     double iconSize = 20,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+
     return IconButton(
       onPressed: onTap,
       icon: iconWidget ??
@@ -258,7 +288,7 @@ class FloatingGlassAppBar extends StatelessWidget {
               ? Icon(
                   icon,
                   size: iconSize,
-                  color: Theme.of(context).colorScheme.onSurface,
+                  color: primaryTextColor,
                 )
               : const SizedBox.shrink()),
       splashRadius: 24,
@@ -345,6 +375,12 @@ class _AutoRefreshingLastSeenTextState
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final onlineColor = isDark ? const Color(0xFF4ADE80) : const Color(0xFF2E7D32);
+    final offlineColor = isDark
+        ? Colors.white.withValues(alpha: 0.75)
+        : const Color(0xFF4A4A4C);
+
     final status = _currentStatus.isNotEmpty
         ? _currentStatus
         : (widget.isOnline
@@ -355,7 +391,8 @@ class _AutoRefreshingLastSeenTextState
       text: status,
       style: TextStyle(
         fontSize: _kStatusFontSize,
-        color: widget.isOnline ? Colors.green : Colors.grey[600],
+        color: widget.isOnline ? onlineColor : offlineColor,
+        fontWeight: FontWeight.w500,
       ),
     );
   }
@@ -592,11 +629,20 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
     Widget Function(Color color)? iconBuilder,
     bool isDestructive = false,
   }) {
-    final theme = Theme.of(widget.chatContext);
-    final color = isDestructive ? Colors.redAccent : theme.colorScheme.onSurface;
+    final isDark = Theme.of(widget.chatContext).brightness == Brightness.dark;
+    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final destructiveColor = isDark ? const Color(0xFFFF453A) : const Color(0xFFD32F2F);
+    final color = isDestructive ? destructiveColor : primaryTextColor;
 
     return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      highlightColor: isDark
+          ? Colors.white.withValues(alpha: 0.08)
+          : Colors.black.withValues(alpha: 0.04),
+      splashColor: isDark
+          ? Colors.white.withValues(alpha: 0.12)
+          : Colors.black.withValues(alpha: 0.08),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
@@ -619,7 +665,8 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
                 label,
                 style: TextStyle(
                   fontSize: 15,
-                  color: isDestructive ? Colors.redAccent : null,
+                  fontWeight: FontWeight.w500,
+                  color: color,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),

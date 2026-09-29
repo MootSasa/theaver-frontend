@@ -1015,7 +1015,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
         avatarUrl: widget.channelAvatar ?? _channelAvatar,
         isOnline: false, // Channel doesn't have online status
         statusText: subscriberText,
-        statusColor: Colors.grey[600],
         onBack: () => Navigator.pop(context),
         onTitleTap: () {
           // TODO: Open channel info
