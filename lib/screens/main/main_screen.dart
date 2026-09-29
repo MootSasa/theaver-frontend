@@ -1249,10 +1249,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final lightAngle =
         glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
-    const double ctrlSize = 60.0;
+    const double ctrlSize = 44.0;
     const double menuWidth = 200.0;
     final double menuHeight = _getMenuHeight(_currentIndex);
-    const double barRadius = ctrlSize / 2; // 30.0 — same as bottom tab bar
+    const double barRadius = ctrlSize / 2; // 22.0 — stadium capsule ratio
 
     final pillStyle = LiquidGlassStyle(
       shape: _glassShape(barRadius, lightAngle),
@@ -1299,8 +1299,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           // Centered oval glass pill that smoothly resizes width to fit its text
           Positioned(
             top: 2,
-            left: 84,
-            right: 84,
+            left: 68,
+            right: 68,
             height: ctrlSize,
             child: Center(
               child: LiquidGlassLens(
@@ -1311,7 +1311,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   clipBehavior: Clip.none,
                   child: Container(
                     height: ctrlSize,
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -2383,7 +2383,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                             if (glassEnabled) {
                               final statusBarHeight =
                                    MediaQuery.of(context).padding.top;
-                              final topBarHeight = statusBarHeight + 68.0;
+                              final topBarHeight = statusBarHeight + 52.0;
                               const filterAreaHeight = 48.0;
                               // Отступ внутри ListView чтобы первые чаты
                               // были видны ниже стеклянных элементов
@@ -2518,7 +2518,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           child: Column(
                             children: [
                               // Отступ под стационарный верхний бар
-                              const SizedBox(height: 68),
+                              const SizedBox(height: 52),
                               // Поле поиска
                               Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -3088,7 +3088,7 @@ class _ThreeDotsGlyph extends StatelessWidget {
         child: Center(
           child: Icon(
             Icons.more_vert_rounded,
-            size: 26.0,
+            size: 22.0,
             color: isDark ? Colors.white : const Color(0xFF1C1C1E),
           ),
         ),
