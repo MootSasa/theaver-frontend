@@ -1396,8 +1396,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       title: _currentTitleText,
                       titleKey: _currentTitleKey,
                       isConnected: _isTitleConnected,
-                      isFolderMenuOpen: _isFolderMenuOpen,
-                      canOpenMenu: _currentIndex == 1,
                       onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
                     ),
             ),
@@ -3201,8 +3199,6 @@ class _TitlePillContent extends StatelessWidget {
   final String title;
   final String titleKey;
   final bool isConnected;
-  final bool isFolderMenuOpen;
-  final bool canOpenMenu;
   final VoidCallback? onTap;
 
   const _TitlePillContent({
@@ -3210,8 +3206,6 @@ class _TitlePillContent extends StatelessWidget {
     required this.title,
     required this.titleKey,
     required this.isConnected,
-    required this.isFolderMenuOpen,
-    required this.canOpenMenu,
     this.onTap,
   });
 
@@ -3227,7 +3221,7 @@ class _TitlePillContent extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 44.0,
-        padding: const EdgeInsets.symmetric(horizontal: 18.0),
+        padding: const EdgeInsets.symmetric(horizontal: 20.0),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
@@ -3296,19 +3290,6 @@ class _TitlePillContent extends StatelessWidget {
                 ),
               ),
             ),
-            if (canOpenMenu) ...[
-              const SizedBox(width: 4),
-              AnimatedRotation(
-                turns: isFolderMenuOpen ? 0.5 : 0.0,
-                duration: const Duration(milliseconds: 240),
-                curve: Curves.easeOutCubic,
-                child: Icon(
-                  Icons.keyboard_arrow_down_rounded,
-                  size: 20,
-                  color: textColor.withValues(alpha: 0.7),
-                ),
-              ),
-            ],
           ],
         ),
       ),
