@@ -1679,7 +1679,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       ),
       padding: EdgeInsets.only(
         top: topPadding,
-        bottom: 120 + MediaQuery.paddingOf(context).bottom,
+        bottom: 100,
       ),
       itemCount: filteredChats.length,
       itemBuilder: (context, index) {
@@ -2580,7 +2580,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               const double edgePadding = 16.0;
               const double spacing = 10.0;
               const double actionSize = 60.0;
-              const double bottomMargin = 16.0;
+              const double bottomMargin = 12.0;
               const double maxGroupWidth = 560.0;
 
               final double totalRequiredWidth = screen - edgePadding * 2;
@@ -2638,8 +2638,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               );
 
               final double effectiveBottomMargin = keyboardHeight > 0
-                  ? (bottomMargin + keyboardHeight)
-                  : (bottomMargin + safeBottom);
+                  ? (bottomMargin + keyboardHeight - safeBottom)
+                  : bottomMargin;
 
               return LiquidGlassScaffold(
                 pixelRatio: 1.0,
@@ -2773,6 +2773,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           _onTabTapped(index);
                         },
                         onAddTap: _showCreateMenu,
+                        bottomPadding: 8,
                       ),
                     ),
                   ),
@@ -2857,9 +2858,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
 
     return ListView(
-      padding: EdgeInsets.only(
-        bottom: 120 + MediaQuery.paddingOf(context).bottom,
-      ),
+      padding: const EdgeInsets.only(bottom: 100),
       children: [
         if (_users.isNotEmpty)
           _buildSearchSection(
