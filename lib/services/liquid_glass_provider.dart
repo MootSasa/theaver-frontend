@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'glass_mode.dart';
 import 'light_angle_mode.dart';
@@ -30,6 +31,7 @@ class LiquidGlassProvider extends ChangeNotifier {
   LightAngleMode _lightAngleMode = LightAngleMode.gyroscope;
   double _manualLightAngle = 62.0;
   double _gyroscopeLightAngle = 62.0;
+  double _blur = 8.0;
 
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   double _smoothedX = 0.0;
@@ -61,6 +63,12 @@ class LiquidGlassProvider extends ChangeNotifier {
   /// Динамический угол освещения по гироскопу (в градусах)
   double get gyroscopeLightAngle => _gyroscopeLightAngle;
 
+  /// Степень размытия заднего плана (blur sigma)
+  double get blur => _blur;
+
+  /// Эффект размытия заднего плана для передачи в LiquidGlassLens
+  LiquidGlassBlur get blurEffect => LiquidGlassBlur(sigmaX: _blur, sigmaY: _blur);
+
   /// Вычисляет итоговый угол освещения для передачи в шейдеры/виджеты.
   ///
   /// При [reduceMotion] == true (iOS Reduce Motion / Android Remove Animations)
@@ -85,6 +93,7 @@ class LiquidGlassProvider extends ChangeNotifier {
     }
     _lightAngleMode = _settingsService.lightAngleMode;
     _manualLightAngle = _settingsService.manualLightAngle;
+    _blur = _settingsService.glassBlur;
 
     _updateSensorSubscription();
     notifyListeners();
@@ -127,6 +136,15 @@ class LiquidGlassProvider extends ChangeNotifier {
     if (_lightAngleMode == LightAngleMode.manual) {
       notifyListeners();
     }
+  }
+
+  /// Задать степень размытия стекла (0..30)
+  Future<void> setBlur(double blur) async {
+    final clamped = blur.clamp(0.0, 30.0);
+    if (_blur == clamped) return;
+    _blur = clamped;
+    await _settingsService.saveGlassBlur(clamped);
+    notifyListeners();
   }
 
   void _updateSensorSubscription() {

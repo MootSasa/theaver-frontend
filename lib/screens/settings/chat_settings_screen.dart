@@ -214,6 +214,61 @@ class ChatSettingsScreen extends StatelessWidget {
                         ),
                       ),
                     ],
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Степень размытия (блюр): ${provider.blur.toStringAsFixed(1)}',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[700],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Slider(
+                      value: provider.blur,
+                      min: 0,
+                      max: 30,
+                      divisions: 60,
+                      activeColor: const Color(0xFF0088CC),
+                      label: provider.blur.toStringAsFixed(1),
+                      onChanged: (val) => provider.setBlur(val),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          ActionChip(
+                            label: const Text('Слабое (4)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setBlur(4.0),
+                          ),
+                          ActionChip(
+                            label: const Text('Стандарт (8)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setBlur(8.0),
+                          ),
+                          ActionChip(
+                            label: const Text('Сильное (16)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setBlur(16.0),
+                          ),
+                          ActionChip(
+                            label: const Text('Максимум (24)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setBlur(24.0),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 8),
                 ],

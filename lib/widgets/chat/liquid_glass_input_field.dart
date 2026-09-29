@@ -5,10 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
@@ -310,24 +311,20 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final glassSettings = LiquidGlassSettings(
-      blur: 15,
-      refractiveIndex: 1.0,
-      thickness: 10,
-      glassColor: isDark
-          ? Colors.black.withValues(alpha: 0.65)
-          : Colors.white.withValues(alpha: 0.65),
-    );
-
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: _kInputHorizontalPadding, vertical: _kInputVerticalPadding),
-      child: LiquidGlassLayer(
-        settings: glassSettings,
-        child: FakeGlass(
-          settings: glassSettings,
-          shape: const LiquidRoundedSuperellipse(borderRadius: _kInputFillBorderRadius),
+      padding: const EdgeInsets.symmetric(
+        horizontal: _kInputHorizontalPadding,
+        vertical: _kInputVerticalPadding,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
             decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.black.withValues(alpha: 0.65)
+                  : Colors.white.withValues(alpha: 0.65),
               borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
               border: Border.all(
                 color: isDark ? Colors.white10 : Colors.black12,
@@ -342,34 +339,52 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   Widget _buildGlassInput(BuildContext context) {
-    final isDark = MediaQuery.platformBrightnessOf(context) == Brightness.dark;
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
 
-    final glassSettings = LiquidGlassSettings(
-      refractiveIndex: 1.15,
-      thickness: 20,
-      blur: 8,
-      saturation: 1.5,
-      lightIntensity: isDark ? 0.7 : 1.0,
-      ambientStrength: isDark ? 0.2 : 0.5,
-      lightAngle: math.pi / 2,
-      glassColor: isDark
-          ? const Color.fromARGB(40, 30, 30, 40)
-          : const Color.fromARGB(50, 255, 255, 255),
+    final shape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: _kInputFillBorderRadius,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.7,
+      lightIntensity: isDark ? 0.7 : 0.95,
+      lightDirection: lightAngle,
+      borderType: const OpticalBorder(
+        borderSaturation: 1.1,
+        ambientIntensity: 0.85,
+        borderSolidity: 0.95,
+      ),
+    );
+
+    final style = LiquidGlassStyle(
+      shape: shape,
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+        blur: glassProvider.blurEffect,
+        shadow: LiquidGlassShadow(
+          blur: 16,
+          opacity: isDark ? 0.40 : 0.18,
+          offset: const Offset(0, 4),
+          color: Colors.black,
+        ),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.06,
+        distortionWidth: 26,
+      ),
+      liteGlass: widget.isLite ? LiquidGlassLitePickup.backdrop : null,
     );
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: _kInputHorizontalPadding, vertical: _kInputVerticalPadding),
-      child: widget.isLite
-          ? FakeGlass(
-              settings: glassSettings,
-              shape: const LiquidRoundedSuperellipse(borderRadius: _kInputFillBorderRadius),
-              child: GlassGlow(child: _buildInputRow(context)),
-            )
-          : LiquidGlass.withOwnLayer(
-              settings: glassSettings,
-              shape: const LiquidRoundedSuperellipse(borderRadius: _kInputFillBorderRadius),
-              child: GlassGlow(child: _buildInputRow(context)),
-            ),
+      padding: const EdgeInsets.symmetric(
+        horizontal: _kInputHorizontalPadding,
+        vertical: _kInputVerticalPadding,
+      ),
+      child: LiquidGlassLens(
+        style: style,
+        child: _buildInputRow(context),
+      ),
     );
   }
 
@@ -578,97 +593,148 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   Widget _buildSendButton(Color rightButtonBg) {
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final isGlassEnabled = widget.enabled && glassProvider.enabled;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
+
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: widget.controller,
       builder: (context, value, child) {
         final canSend = value.text.isNotEmpty || widget.hasAttachments;
-        return FakeGlass.inLayer(
-          shape: const LiquidOval(),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              if (widget.isSending) return;
-              if (canSend) {
-                widget.onSend?.call();
-              } else {
-                _toggleMediaMode();
-              }
-            },
-            onLongPressStart: (details) {
-              if (canSend || widget.isSending) return;
-              if (_isVideoMode) {
-                widget.onStartVideoRecord?.call();
-              } else {
-                widget.onStartVoiceRecord?.call();
-                widget.onVoice?.call();
-              }
-            },
-            onLongPressMoveUpdate: (details) {
-              if (canSend || widget.isSending) return;
-              if (_isVideoMode) {
-                widget.onVideoRecordMove?.call(details.offsetFromOrigin);
-              } else {
-                widget.onVoiceRecordMove?.call(details.offsetFromOrigin);
-              }
-            },
-            onLongPressEnd: (details) {
-              if (canSend || widget.isSending) return;
-              if (_isVideoMode) {
-                widget.onVideoRecordEnd?.call();
-              } else {
-                widget.onVoiceRecordEnd?.call();
-              }
-            },
-            onLongPressCancel: () {
-              if (canSend || widget.isSending) return;
-              if (_isVideoMode) {
-                widget.onVideoRecordCancel?.call();
-              } else {
-                widget.onVoiceRecordCancel?.call();
-              }
-            },
-            child: Container(
-              width: _kActionButtonSize,
-              height: _kActionButtonSize,
-              decoration: BoxDecoration(
-                  color: widget.isSending ? Colors.grey : rightButtonBg),
-              alignment: Alignment.center,
-              child: widget.isSending
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
-                    )
-                  : (canSend
-                      ? const iconoir.SendDiagonalSolid(
-                          width: 22, height: 22, color: Colors.white)
-                      : AnimatedBuilder(
-                          animation: _mediaFlipController,
-                          builder: (context, child) {
-                            final angle = _mediaFlipController.value * math.pi;
-                            final isVideo = _mediaFlipController.value >= 0.5;
-                            return Transform(
-                              alignment: Alignment.center,
-                              transform: Matrix4.identity()
-                                ..setEntry(3, 2, 0.002)
-                                ..rotateY(angle + (isVideo ? math.pi : 0)),
-                              child: isVideo
-                                  ? const iconoir.VideoCamera(
-                                      width: 22,
-                                      height: 22,
-                                      color: Colors.white,
-                                    )
-                                  : const iconoir.MicrophoneSolid(
-                                      width: 22,
-                                      height: 22,
-                                      color: Colors.white,
-                                    ),
-                            );
-                          },
-                        )),
+        final color = widget.isSending ? Colors.grey : rightButtonBg;
+
+        final innerButton = GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            if (widget.isSending) return;
+            if (canSend) {
+              widget.onSend?.call();
+            } else {
+              _toggleMediaMode();
+            }
+          },
+          onLongPressStart: (details) {
+            if (canSend || widget.isSending) return;
+            if (_isVideoMode) {
+              widget.onStartVideoRecord?.call();
+            } else {
+              widget.onStartVoiceRecord?.call();
+              widget.onVoice?.call();
+            }
+          },
+          onLongPressMoveUpdate: (details) {
+            if (canSend || widget.isSending) return;
+            if (_isVideoMode) {
+              widget.onVideoRecordMove?.call(details.offsetFromOrigin);
+            } else {
+              widget.onVoiceRecordMove?.call(details.offsetFromOrigin);
+            }
+          },
+          onLongPressEnd: (details) {
+            if (canSend || widget.isSending) return;
+            if (_isVideoMode) {
+              widget.onVideoRecordEnd?.call();
+            } else {
+              widget.onVoiceRecordEnd?.call();
+            }
+          },
+          onLongPressCancel: () {
+            if (canSend || widget.isSending) return;
+            if (_isVideoMode) {
+              widget.onVideoRecordCancel?.call();
+            } else {
+              widget.onVoiceRecordCancel?.call();
+            }
+          },
+          child: Container(
+            width: _kActionButtonSize,
+            height: _kActionButtonSize,
+            decoration: isGlassEnabled
+                ? null
+                : BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                  ),
+            alignment: Alignment.center,
+            child: widget.isSending
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : (canSend
+                    ? const iconoir.SendDiagonalSolid(
+                        width: 22, height: 22, color: Colors.white)
+                    : AnimatedBuilder(
+                        animation: _mediaFlipController,
+                        builder: (context, child) {
+                          final angle = _mediaFlipController.value * math.pi;
+                          final isVideo = _mediaFlipController.value >= 0.5;
+                          return Transform(
+                            alignment: Alignment.center,
+                            transform: Matrix4.identity()
+                              ..setEntry(3, 2, 0.002)
+                              ..rotateY(angle + (isVideo ? math.pi : 0)),
+                            child: isVideo
+                                ? const iconoir.VideoCamera(
+                                    width: 22,
+                                    height: 22,
+                                    color: Colors.white,
+                                  )
+                                : const iconoir.MicrophoneSolid(
+                                    width: 22,
+                                    height: 22,
+                                    color: Colors.white,
+                                  ),
+                          );
+                        },
+                      )),
+          ),
+        );
+
+        if (!isGlassEnabled) {
+          return innerButton;
+        }
+
+        final buttonShape = LiquidGlassShape.continuousRoundedRectangle(
+          cornerRadius: _kActionButtonSize / 2,
+          clipQuality: LiquidGlassClipQuality.exact,
+          borderWidth: 0.6,
+          lightIntensity: 0.9,
+          lightDirection: lightAngle,
+          borderType: const OpticalBorder(
+            borderSaturation: 1.1,
+            ambientIntensity: 0.85,
+            borderSolidity: 0.95,
+          ),
+        );
+
+        final buttonStyle = LiquidGlassStyle(
+          shape: buttonShape,
+          appearance: LiquidGlassAppearance(
+            color: color,
+            blur: glassProvider.blurEffect,
+            shadow: const LiquidGlassShadow(
+              blur: 8,
+              opacity: 0.25,
+              offset: Offset(0, 2),
+              color: Colors.black,
             ),
           ),
+          liteGlass: widget.isLite ? LiquidGlassLitePickup.surface : null,
+        );
+
+        return LiquidGlassLens(
+          style: buttonStyle,
+          touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
+            stretch: 5,
+            squeeze: 0.65,
+            lean: 0.3,
+            grip: 0.5,
+          )),
+          child: innerButton,
         );
       },
     );

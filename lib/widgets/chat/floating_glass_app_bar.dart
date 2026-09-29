@@ -1,9 +1,8 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../user/avatar_with_status.dart';
@@ -30,8 +29,6 @@ const double _kStatusFontSize = 12.0;
 /// Радиус аватарки в панели.
 const double _kAvatarRadius = 22.0;
 
-/// Размер круглых кнопок действий (назад и др.).
-const double _kCircularButtonSize = 38.0;
 /// Размер иконки внутри кнопок действий.
 const double _kCircularIconSize = 18.0;
 
@@ -78,8 +75,42 @@ class FloatingGlassAppBar extends StatelessWidget {
     final isGlassEnabled = glassProvider.enabled;
     final isLite = glassProvider.isLite;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
 
     final statusBarHeight = MediaQuery.of(context).padding.top;
+
+    final shape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: _kAppBarBorderRadius,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.7,
+      lightIntensity: isDark ? 0.7 : 0.95,
+      lightDirection: lightAngle,
+      borderType: const OpticalBorder(
+        borderSaturation: 1.1,
+        ambientIntensity: 0.85,
+        borderSolidity: 0.95,
+      ),
+    );
+
+    final style = LiquidGlassStyle(
+      shape: shape,
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+        blur: glassProvider.blurEffect,
+        shadow: LiquidGlassShadow(
+          blur: 16,
+          opacity: isDark ? 0.40 : 0.18,
+          offset: const Offset(0, 4),
+          color: Colors.black,
+        ),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.06,
+        distortionWidth: 26,
+      ),
+      liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
+    );
 
     return Container(
       padding: EdgeInsets.only(
@@ -87,38 +118,19 @@ class FloatingGlassAppBar extends StatelessWidget {
         left: _kAppBarHorizontalPadding,
         right: _kAppBarHorizontalPadding,
       ),
-      child: LiquidGlassLayer(
-        settings: LiquidGlassSettings(
-          refractiveIndex: 1.15,
-          thickness: 20,
-          blur: 8,
-          saturation: 1.5,
-          lightIntensity: isDark ? 0.7 : 1.0,
-          ambientStrength: isDark ? 0.2 : 0.5,
-          lightAngle: math.pi / 2,
-          glassColor: isDark
-              ? const Color.fromARGB(40, 30, 30, 40)
-              : const Color.fromARGB(50, 255, 255, 255),
-        ),
-        child: isGlassEnabled
-            ? _buildGlassCloud(context, isDark, isLite, _kAppBarHeight)
-            : _buildMatteCloud(context, isDark, _kAppBarHeight),
-      ),
+      child: isGlassEnabled
+          ? _buildGlassCloud(context, style, _kAppBarHeight)
+          : _buildMatteCloud(context, isDark, _kAppBarHeight),
     );
   }
 
-  Widget _buildGlassCloud(BuildContext context, bool isDark, bool isLite, double height) {
-    return Container(
+  Widget _buildGlassCloud(BuildContext context, LiquidGlassStyle style, double height) {
+    return SizedBox(
       height: height,
-      child: isLite
-          ? FakeGlass(
-              shape: const LiquidRoundedSuperellipse(borderRadius: _kAppBarBorderRadius),
-              child: GlassGlow(child: _buildContent(context)),
-            )
-          : LiquidGlass.grouped(
-              shape: const LiquidRoundedSuperellipse(borderRadius: _kAppBarBorderRadius),
-              child: GlassGlow(child: _buildContent(context)),
-            ),
+      child: LiquidGlassLens(
+        style: style,
+        child: _buildContent(context),
+      ),
     );
   }
 
@@ -425,33 +437,7 @@ class GlassChatMenu extends StatefulWidget {
   State<GlassChatMenu> createState() => _GlassChatMenuState();
 }
 
-class _GlassChatMenuState extends State<GlassChatMenu> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
-  late Animation<double> _opacityAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
-    _scaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
-    );
-    _opacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeIn),
-    );
-    _controller.forward();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
+class _GlassChatMenuState extends State<GlassChatMenu> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -482,28 +468,45 @@ class _GlassChatMenuState extends State<GlassChatMenu> with SingleTickerProvider
     );
   }
 
-  // Removed old build methods and dismissal logic as showGeneralDialog handles it
-
-  void _dismiss() {
-    _controller.reverse().then((_) {
-       // We can't easily remove overlay from here without passing it.
-       // Let's use Navigator instead for the menu, it's easier.
-       // Re-thinking: I'll use a PageRoute for the menu instead.
-    });
-  }
-
   Widget _buildGlassMenu(bool isDark, ThemeData theme) {
-    return LiquidGlass.withOwnLayer(
-      shape: const LiquidRoundedSuperellipse(borderRadius: _kMenuBorderRadius),
-      settings: LiquidGlassSettings(
-        blur: 8,
-        thickness: 20,
-        refractiveIndex: 1.15,
-        saturation: 1.5,
-        glassColor: isDark
-            ? const Color.fromARGB(40, 30, 30, 40)
-            : const Color.fromARGB(50, 255, 255, 255),
+    final glassProvider = Provider.of<LiquidGlassProvider>(context, listen: false);
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
+
+    final shape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: _kMenuBorderRadius,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.7,
+      lightIntensity: isDark ? 0.7 : 0.95,
+      lightDirection: lightAngle,
+      borderType: const OpticalBorder(
+        borderSaturation: 1.1,
+        ambientIntensity: 0.85,
+        borderSolidity: 0.95,
       ),
+    );
+
+    final style = LiquidGlassStyle(
+      shape: shape,
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x44202025) : const Color(0x9EFFFFFF),
+        blur: glassProvider.blurEffect,
+        shadow: LiquidGlassShadow(
+          blur: 20,
+          opacity: isDark ? 0.45 : 0.22,
+          offset: const Offset(0, 6),
+          color: Colors.black,
+        ),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.08,
+        distortionWidth: 24,
+      ),
+      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+    );
+
+    return LiquidGlassLens(
+      style: style,
       child: _buildMenuItems(theme),
     );
   }

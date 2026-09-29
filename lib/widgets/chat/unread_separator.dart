@@ -1,8 +1,7 @@
-import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/liquid_glass_provider.dart';
 
@@ -54,7 +53,6 @@ class DateSeparator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
       child: Row(
@@ -145,24 +143,51 @@ class ScrollDownFab extends StatelessWidget {
   }
 
   Widget _buildGlassButton(BuildContext context, bool isDark, Widget child) {
-    final glassSettings = LiquidGlassSettings(
-      refractiveIndex: 1.15,
-      thickness: 15,
-      blur: 10,
-      lightIntensity: isDark ? 0.6 : 0.9,
-      ambientStrength: isDark ? 0.2 : 0.4,
-      lightAngle: math.pi / 2,
-      glassColor: isDark
-          ? const Color.fromARGB(60, 40, 40, 50)
-          : const Color.fromARGB(70, 255, 255, 255),
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
+
+    final shape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: 24,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.7,
+      lightIntensity: isDark ? 0.7 : 0.95,
+      lightDirection: lightAngle,
+      borderType: const OpticalBorder(
+        borderSaturation: 1.1,
+        ambientIntensity: 0.85,
+        borderSolidity: 0.95,
+      ),
     );
 
-    return LiquidGlass.withOwnLayer(
-      settings: glassSettings,
-      shape: const LiquidOval(),
-      child: GlassGlow(
-        child: Center(child: child),
+    final style = LiquidGlassStyle(
+      shape: shape,
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+        blur: glassProvider.blurEffect,
+        shadow: const LiquidGlassShadow(
+          blur: 12,
+          opacity: 0.3,
+          offset: Offset(0, 3),
+          color: Colors.black,
+        ),
       ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.08,
+        distortionWidth: 24,
+      ),
+      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+    );
+
+    return LiquidGlassLens(
+      style: style,
+      touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
+        stretch: 6,
+        squeeze: 0.65,
+        lean: 0.3,
+        grip: 0.5,
+      )),
+      child: Center(child: child),
     );
   }
 

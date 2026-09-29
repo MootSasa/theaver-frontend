@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 import 'dart:convert';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,12 +12,9 @@ import '../../utils/emoji_utils.dart';
 
 // --- CONSTANTS ---
 const double _kPanelHeight = 280.0;
-const double _kHeaderHeight = 44.0;
 const double _kSearchHeight = 48.0;
 const double _kEmojiSelectorHeight = 48.0;
 const double _kEmojiHeaderHeight = _kEmojiSelectorHeight + _kSearchHeight; // 96.0
-const double _kNavPillHeight = 38.0;
-const double _kEmojiSize = 32.0;
 // -----------------
 
 class CustomEmojiPack {
@@ -247,28 +244,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     final isDark = theme.brightness == Brightness.dark;
     final glassProvider = context.watch<LiquidGlassProvider>();
 
-    final settings = glassProvider.enabled
-        ? LiquidGlassSettings(
-            refractiveIndex: 1.15,
-            thickness: 20,
-            blur: 8,
-            saturation: 1.5,
-            lightIntensity: isDark ? 0.7 : 1.0,
-            ambientStrength: isDark ? 0.2 : 0.5,
-            lightAngle: math.pi / 2,
-            glassColor: isDark
-                ? const Color.fromARGB(40, 30, 30, 40)
-                : const Color.fromARGB(50, 255, 255, 255),
-          )
-        : LiquidGlassSettings(
-            blur: 15,
-            refractiveIndex: 1.0,
-            thickness: 10,
-            glassColor: isDark
-                ? Colors.black.withValues(alpha: 0.65)
-                : Colors.white.withValues(alpha: 0.65),
-          );
-
     final displayHeight = widget.height;
 
     return SizedBox(
@@ -279,18 +254,35 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           Positioned.fill(
             child: Offstage(
               offstage: displayHeight <= 0,
-              child: glassProvider.isFull
-                  ? LiquidGlass.withOwnLayer(
-                      settings: settings,
-                      shape: const LiquidRoundedSuperellipse(borderRadius: 0),
-                      child: const GlassGlow(child: SizedBox.expand()),
+              child: glassProvider.enabled
+                  ? LiquidGlassLens(
+                      style: LiquidGlassStyle(
+                        shape: const LiquidGlassShape.continuousRoundedRectangle(
+                          cornerRadius: 0,
+                        ),
+                        appearance: LiquidGlassAppearance(
+                          color: isDark
+                              ? const Color(0x33202025)
+                              : const Color(0x8FFFFFFF),
+                          blur: glassProvider.blurEffect,
+                        ),
+                        refraction: const LiquidGlassRefraction(
+                          distortion: 0.05,
+                          distortionWidth: 20,
+                        ),
+                        liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+                      ),
+                      child: const SizedBox.expand(),
                     )
-                  : FakeGlass(
-                      settings: settings,
-                      shape: const LiquidRoundedSuperellipse(borderRadius: 0),
-                      child: glassProvider.enabled
-                          ? const GlassGlow(child: SizedBox.expand())
-                          : const SizedBox.expand(),
+                  : ClipRect(
+                      child: BackdropFilter(
+                        filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                        child: Container(
+                          color: isDark
+                              ? Colors.black.withValues(alpha: 0.65)
+                              : Colors.white.withValues(alpha: 0.65),
+                        ),
+                      ),
                     ),
             ),
           ),
@@ -341,28 +333,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     final glassProvider = context.watch<LiquidGlassProvider>();
 
     if (opacity <= 0) return const SizedBox.shrink();
-
-    final glassSettings = glassProvider.enabled
-        ? LiquidGlassSettings(
-            refractiveIndex: 1.15,
-            thickness: 20,
-            blur: 8,
-            saturation: 1.5,
-            lightIntensity: isDark ? 0.7 : 1.0,
-            ambientStrength: isDark ? 0.2 : 0.5,
-            lightAngle: math.pi / 2,
-            glassColor: isDark
-                ? const Color.fromARGB(40, 30, 30, 40).withOpacity(opacity * 0.15)
-                : const Color.fromARGB(50, 255, 255, 255).withOpacity(opacity * 0.2),
-          )
-        : LiquidGlassSettings(
-            blur: 15,
-            refractiveIndex: 1.0,
-            thickness: 10,
-            glassColor: isDark
-                ? const Color(0xFF2C2C2E).withOpacity(0.7 * opacity)
-                : Colors.white.withOpacity(0.7 * opacity),
-          );
 
     final Widget searchContent = Opacity(
       opacity: opacity,
@@ -429,6 +399,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         color: (isDark ? Colors.white : Colors.black).withOpacity(0.1 * opacity),
         width: 0.5,
       ),
+      color: isDark
+          ? const Color(0xFF2C2C2E).withOpacity(0.7 * opacity)
+          : Colors.white.withOpacity(0.7 * opacity),
       boxShadow: glassProvider.enabled ? null : [
         BoxShadow(
           color: Colors.black.withValues(alpha: 0.15 * opacity),
@@ -438,45 +411,49 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       ],
     );
 
-    if (isGrouped && glassProvider.enabled) {
-      return Container(
-        height: 40 + 8,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: LiquidGlass.grouped(
-          shape: const LiquidRoundedSuperellipse(borderRadius: 24),
-          child: GlassGlow(
-            child: Container(
-              height: 40,
-              decoration: boxDecoration,
-              child: searchContent,
-            ),
-          ),
-        ),
-      );
-    }
+    final searchShape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: 24,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.6,
+      lightIntensity: isDark ? 0.7 : 0.95,
+      lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
+    );
+
+    final searchStyle = LiquidGlassStyle(
+      shape: searchShape,
+      appearance: LiquidGlassAppearance(
+        color: isDark
+            ? const Color(0x33202025)
+            : const Color(0x8FFFFFFF),
+        blur: glassProvider.blurEffect,
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.06,
+        distortionWidth: 20,
+      ),
+      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+    );
 
     return Container(
       height: 40 + 8,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: glassProvider.enabled
-          ? LiquidGlass.withOwnLayer(
-              settings: glassSettings,
-              shape: const LiquidRoundedSuperellipse(borderRadius: 24),
-              child: GlassGlow(
+          ? LiquidGlassLens(
+              style: searchStyle,
+              child: SizedBox(
+                height: 40,
+                child: searchContent,
+              ),
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                 child: Container(
                   height: 40,
                   decoration: boxDecoration,
                   child: searchContent,
                 ),
-              ),
-            )
-          : FakeGlass(
-              settings: glassSettings,
-              shape: const LiquidRoundedSuperellipse(borderRadius: 24),
-              child: Container(
-                height: 40,
-                decoration: boxDecoration,
-                child: searchContent,
               ),
             ),
     );
@@ -523,33 +500,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
   Widget _buildEmojiTopControls() {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-
-    final glassSettings = glassProvider.enabled
-        ? LiquidGlassSettings(
-            refractiveIndex: 1.15,
-            thickness: 20,
-            blur: 8,
-            saturation: 1.5,
-            lightIntensity: isDark ? 0.7 : 1.0,
-            ambientStrength: isDark ? 0.2 : 0.5,
-            lightAngle: math.pi / 2,
-            glassColor: isDark
-                ? const Color.fromARGB(40, 30, 30, 40)
-                : const Color.fromARGB(50, 255, 255, 255),
-          )
-        : LiquidGlassSettings(
-            blur: 15,
-            refractiveIndex: 1.0,
-            thickness: 10,
-            glassColor: isDark
-                ? Colors.black.withValues(alpha: 0.65)
-                : Colors.white.withValues(alpha: 0.65),
-          );
-
-    final content = AnimatedBuilder(
+    return AnimatedBuilder(
       animation: _searchCollapseController,
       builder: (context, child) {
         final collapse = _searchCollapseController.value;
@@ -587,18 +538,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         );
       },
     );
-
-    if (glassProvider.enabled) {
-      return LiquidGlassLayer(
-        settings: glassSettings,
-        child: LiquidGlassBlendGroup(
-          blend: 12,
-          child: content,
-        ),
-      );
-    }
-
-    return content;
   }
 
   void _onEmojiSelected(Emoji emoji, {String? packId}) {
@@ -769,28 +708,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     final isDark = theme.brightness == Brightness.dark;
     final glassProvider = context.watch<LiquidGlassProvider>();
 
-    final glassSettings = glassProvider.enabled
-        ? LiquidGlassSettings(
-            refractiveIndex: 1.15,
-            thickness: 20,
-            blur: 8,
-            saturation: 1.5,
-            lightIntensity: isDark ? 0.7 : 1.0,
-            ambientStrength: isDark ? 0.2 : 0.5,
-            lightAngle: math.pi / 2,
-            glassColor: isDark
-                ? const Color.fromARGB(40, 30, 30, 40)
-                : const Color.fromARGB(50, 255, 255, 255),
-          )
-        : LiquidGlassSettings(
-            blur: 15,
-            refractiveIndex: 1.0,
-            thickness: 10,
-            glassColor: isDark
-                ? const Color(0xFF2C2C2E).withOpacity(0.7)
-                : Colors.white.withOpacity(0.7),
-          );
-
     final sortedPacks = List<CustomEmojiPack>.from(_customPacks)
       ..sort((a, b) {
         int countA = _packUsageStats[a.id] ?? 0;
@@ -825,6 +742,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         color: isDark ? Colors.white10 : Colors.black12,
         width: 0.5,
       ),
+      color: isDark
+          ? const Color(0xFF2C2C2E).withOpacity(0.7)
+          : Colors.white.withOpacity(0.7),
       boxShadow: glassProvider.enabled ? null : [
         BoxShadow(
           color: Colors.black.withValues(alpha: 0.15),
@@ -834,48 +754,49 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       ],
     );
 
-    if (isGrouped && glassProvider.enabled) {
-      return Container(
-        height: 40 + 8,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: LiquidGlass.grouped(
-          shape: const LiquidRoundedSuperellipse(borderRadius: 24),
-          child: GlassGlow(
-            child: Container(
-              height: 40,
-              width: double.infinity,
-              decoration: boxDecoration,
-              child: selectorContent,
-            ),
-          ),
-        ),
-      );
-    }
+    final selectorShape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: 24,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.6,
+      lightIntensity: isDark ? 0.7 : 0.95,
+      lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
+    );
+
+    final selectorStyle = LiquidGlassStyle(
+      shape: selectorShape,
+      appearance: LiquidGlassAppearance(
+        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+        blur: glassProvider.blurEffect,
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.06,
+        distortionWidth: 20,
+      ),
+      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+    );
 
     return Container(
       height: 40 + 8,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: glassProvider.enabled
-          ? LiquidGlass.withOwnLayer(
-              settings: glassSettings,
-              shape: const LiquidRoundedSuperellipse(borderRadius: 24),
-              child: GlassGlow(
+          ? LiquidGlassLens(
+              style: selectorStyle,
+              child: SizedBox(
+                height: 40,
+                width: double.infinity,
+                child: selectorContent,
+              ),
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                 child: Container(
                   height: 40,
                   width: double.infinity,
                   decoration: boxDecoration,
                   child: selectorContent,
                 ),
-              ),
-            )
-          : FakeGlass(
-              settings: glassSettings,
-              shape: const LiquidRoundedSuperellipse(borderRadius: 24),
-              child: Container(
-                height: 40,
-                width: double.infinity,
-                decoration: boxDecoration,
-                child: selectorContent,
               ),
             ),
     );
@@ -1042,8 +963,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         return 'СИМВОЛЫ';
       case Category.FLAGS:
         return 'ФЛАГИ';
-      default:
-        return category.name.toUpperCase();
     }
   }
 
@@ -1136,153 +1055,228 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
   Widget _buildClassicNav(bool isDark, ThemeData theme) {
+    final glassProvider = context.watch<LiquidGlassProvider>();
     final indicatorColor = isDark
         ? Colors.white.withValues(alpha: 0.15)
         : Colors.black.withValues(alpha: 0.08);
 
-    final navSettings = LiquidGlassSettings(
-      blur: 15,
-      refractiveIndex: 1.0,
-      thickness: 10,
-      glassColor: isDark
-          ? const Color(0xFF2C2C2E).withOpacity(0.7)
-          : Colors.white.withOpacity(0.7),
-    );
-
-    return FakeGlass(
-      settings: navSettings,
-      shape: const LiquidRoundedSuperellipse(borderRadius: 32),
-      child: Container(
-        height: 40,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.1)
-                : Colors.black.withValues(alpha: 0.06),
-            width: 0.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+    final navContent = Container(
+      height: 40,
+      decoration: glassProvider.enabled
+          ? null
+          : BoxDecoration(
+              color: isDark
+                  ? const Color(0xFF2C2C2E).withOpacity(0.7)
+                  : Colors.white.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.1)
+                    : Colors.black.withValues(alpha: 0.06),
+                width: 0.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.15),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            // Sliding indicator matching ClassicBottomBar
-            AnimatedBuilder(
-              animation: _pageController,
-              builder: (context, child) {
-                double offset = 0;
-                try {
-                  offset = _pageController.hasClients
-                      ? (_pageController.page ?? _currentTab.index.toDouble())
-                      : _currentTab.index.toDouble();
-                } catch (_) {
-                  offset = _currentTab.index.toDouble();
-                }
-                return Align(
-                  alignment: Alignment(
-                    (offset / (PanelTab.values.length - 1) * 2) - 1,
-                    0,
-                  ),
-                  child: child!,
-                );
-              },
-              child: FractionallySizedBox(
-                widthFactor: 1 / PanelTab.values.length,
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: indicatorColor,
-                      borderRadius: BorderRadius.circular(64),
-                      border: Border.all(color: indicatorColor, width: 0.2),
-                    ),
+      child: Stack(
+        children: [
+          // Sliding indicator matching ClassicBottomBar
+          AnimatedBuilder(
+            animation: _pageController,
+            builder: (context, child) {
+              double offset = 0;
+              try {
+                offset = _pageController.hasClients
+                    ? (_pageController.page ?? _currentTab.index.toDouble())
+                    : _currentTab.index.toDouble();
+              } catch (_) {
+                offset = _currentTab.index.toDouble();
+              }
+              return Align(
+                alignment: Alignment(
+                  (offset / (PanelTab.values.length - 1) * 2) - 1,
+                  0,
+                ),
+                child: child!,
+              );
+            },
+            child: FractionallySizedBox(
+              widthFactor: 1 / PanelTab.values.length,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: indicatorColor,
+                    borderRadius: BorderRadius.circular(64),
+                    border: Border.all(color: indicatorColor, width: 0.2),
                   ),
                 ),
               ),
             ),
-            // Tabs
-            Row(
-              children: [
-                for (var tab in PanelTab.values)
-                  Expanded(
-                    child: _NavTab(
-                      label: _getTabLabel(tab),
-                      selected: _currentTab == tab,
-                      onTap: () {
-                        if (_currentTab != tab) {
-                          HapticUtils.selection();
-                          _pageController.animateToPage(
-                            tab.index,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOutCubic,
-                          );
-                        }
-                      },
-                      isDark: isDark,
-                      isGlass: false,
-                      theme: theme,
-                    ),
+          ),
+          // Tabs
+          Row(
+            children: [
+              for (var tab in PanelTab.values)
+                Expanded(
+                  child: _NavTab(
+                    label: _getTabLabel(tab),
+                    selected: _currentTab == tab,
+                    onTap: () {
+                      if (_currentTab != tab) {
+                        HapticUtils.selection();
+                        _pageController.animateToPage(
+                          tab.index,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOutCubic,
+                        );
+                      }
+                    },
+                    isDark: isDark,
+                    isGlass: false,
+                    theme: theme,
                   ),
-              ],
-            ),
-          ],
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    if (glassProvider.enabled) {
+      final navShape = LiquidGlassShape.continuousRoundedRectangle(
+        cornerRadius: 32,
+        clipQuality: LiquidGlassClipQuality.exact,
+        borderWidth: 0.6,
+        lightIntensity: isDark ? 0.7 : 0.95,
+        lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
+      );
+
+      final navStyle = LiquidGlassStyle(
+        shape: navShape,
+        appearance: LiquidGlassAppearance(
+          color: isDark
+              ? const Color(0x33202025)
+              : const Color(0x8FFFFFFF),
+          blur: glassProvider.blurEffect,
         ),
+        refraction: const LiquidGlassRefraction(
+          distortion: 0.06,
+          distortionWidth: 20,
+        ),
+        liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+      );
+
+      return LiquidGlassLens(
+        style: navStyle,
+        child: SizedBox(
+          height: 40,
+          child: navContent,
+        ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(32),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: navContent,
       ),
     );
   }
 
   Widget _buildBackspaceButton(bool isDark, ThemeData theme) {
-    final navSettings = LiquidGlassSettings(
-      blur: 15,
-      refractiveIndex: 1.0,
-      thickness: 10,
-      glassColor: isDark
-          ? const Color(0xFF2C2C2E).withOpacity(0.7)
-          : Colors.white.withOpacity(0.7),
+    final glassProvider = context.watch<LiquidGlassProvider>();
+
+    final backspaceContent = GestureDetector(
+      onTap: () {
+        HapticUtils.tap();
+        widget.onBackspace();
+      },
+      onLongPress: _startContinuousDelete,
+      onLongPressUp: _stopContinuousDelete,
+      onLongPressEnd: (_) => _stopContinuousDelete(),
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: glassProvider.enabled
+            ? null
+            : BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF2C2C2E).withOpacity(0.7)
+                    : Colors.white.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(32),
+                border: Border.all(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.1)
+                      : Colors.black.withValues(alpha: 0.06),
+                  width: 0.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+        child: Icon(
+          Icons.backspace_outlined,
+          color: isDark ? Colors.white70 : Colors.black87,
+          size: 20,
+        ),
+      ),
     );
 
-    return FakeGlass(
-      settings: navSettings,
-      shape: const LiquidRoundedSuperellipse(borderRadius: 32),
-      child: GestureDetector(
-        onTap: () {
-          HapticUtils.tap();
-          widget.onBackspace();
-        },
-        onLongPress: _startContinuousDelete,
-        onLongPressUp: _stopContinuousDelete,
-        onLongPressEnd: (_) => _stopContinuousDelete(),
-        child: Container(
+    if (glassProvider.enabled) {
+      final buttonShape = LiquidGlassShape.continuousRoundedRectangle(
+        cornerRadius: 20,
+        clipQuality: LiquidGlassClipQuality.exact,
+        borderWidth: 0.6,
+        lightIntensity: isDark ? 0.7 : 0.95,
+        lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
+      );
+
+      final buttonStyle = LiquidGlassStyle(
+        shape: buttonShape,
+        appearance: LiquidGlassAppearance(
+          color: isDark
+              ? const Color(0x33202025)
+              : const Color(0x8FFFFFFF),
+          blur: glassProvider.blurEffect,
+        ),
+        refraction: const LiquidGlassRefraction(
+          distortion: 0.06,
+          distortionWidth: 20,
+        ),
+        liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+      );
+
+      return LiquidGlassLens(
+        style: buttonStyle,
+        touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
+          stretch: 4,
+          squeeze: 0.8,
+          lean: 0.2,
+        )),
+        child: SizedBox(
           width: 40,
           height: 40,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(32),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.1)
-                  : Colors.black.withValues(alpha: 0.06),
-              width: 0.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.15),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Icon(
-            Icons.backspace_outlined,
-            color: isDark ? Colors.white70 : Colors.black87,
-            size: 20,
-          ),
+          child: backspaceContent,
         ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(32),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: backspaceContent,
       ),
     );
   }

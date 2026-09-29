@@ -1258,7 +1258,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       shape: _glassShape(barRadius, lightAngle),
       appearance: LiquidGlassAppearance(
         color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+        blur: glassProvider.blurEffect,
         shadow: LiquidGlassShadow(
           blur: 16,
           opacity: isDark ? 0.40 : 0.18,
@@ -1276,7 +1276,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       shape: _glassShape(barRadius, lightAngle),
       appearance: LiquidGlassAppearance(
         color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+        blur: glassProvider.blurEffect,
         shadow: LiquidGlassShadow(
           blur: 16,
           opacity: isDark ? 0.40 : 0.18,
@@ -2605,7 +2605,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 shape: shape,
                 appearance: LiquidGlassAppearance(
                   color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-                  blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+                  blur: glassProvider.blurEffect,
                   shadow: LiquidGlassShadow(
                     blur: 16,
                     opacity: isDark ? 0.40 : 0.18,
@@ -2623,7 +2623,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 shape: _glassShape(barHeight / 2, lightAngle),
                 appearance: LiquidGlassAppearance(
                   color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-                  blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
+                  blur: glassProvider.blurEffect,
                   shadow: LiquidGlassShadow(
                     blur: 16,
                     opacity: isDark ? 0.40 : 0.18,

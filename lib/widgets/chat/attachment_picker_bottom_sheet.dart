@@ -7,9 +7,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/liquid_glass_provider.dart';
 
 enum AttachmentPickerAction {
   camera,
@@ -502,9 +505,13 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final isGlassEnabled = glassProvider.enabled;
+    final effectiveBlur = isGlassEnabled ? (glassProvider.blur * 2.0).clamp(8.0, 30.0) : 24.0;
+
     final backgroundColor = isDark
-        ? const Color(0xFF1E1E24).withValues(alpha: 0.96)
-        : Colors.white.withValues(alpha: 0.97);
+        ? const Color(0xFF1E1E24).withValues(alpha: isGlassEnabled ? 0.85 : 0.96)
+        : Colors.white.withValues(alpha: isGlassEnabled ? 0.88 : 0.97);
 
     return DraggableScrollableSheet(
       initialChildSize: 0.58,
@@ -522,7 +529,7 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
         return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            filter: ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur),
             child: Container(
               decoration: BoxDecoration(
                 color: backgroundColor,
@@ -1068,54 +1075,27 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
         ),
     ];
 
-    return Padding(
-      padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(36),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            key: const ValueKey('actions_dock'),
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF24242C).withValues(alpha: 0.92)
-                  : Colors.white.withValues(alpha: 0.94),
-              borderRadius: BorderRadius.circular(36),
-              border: Border.all(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.1)
-                    : Colors.black.withValues(alpha: 0.08),
-                width: 0.8,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
+    return _wrapWithGlassDock(
+      context,
+      isDark: isDark,
+      key: const ValueKey('actions_dock'),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: items.map((item) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _AnimatedPickerButton(
+                item: item,
+                onTap: () => Navigator.pop(
+                  context,
+                  AttachmentPickerResult.action(item.action),
                 ),
-              ],
-            ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: items.map((item) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: _AnimatedPickerButton(
-                      item: item,
-                      onTap: () => Navigator.pop(
-                        context,
-                        AttachmentPickerResult.action(item.action),
-                      ),
-                    ),
-                  );
-                }).toList(),
               ),
-            ),
-          ),
+            );
+          }).toList(),
         ),
       ),
     );
@@ -1124,35 +1104,11 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   Widget _buildSendBar(bool isDark, ThemeData theme) {
     final count = _selectedAssets.length;
 
-    return Padding(
-      padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(36),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            key: const ValueKey('send_dock'),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF25252D).withValues(alpha: 0.94)
-                  : Colors.white.withValues(alpha: 0.96),
-              borderRadius: BorderRadius.circular(36),
-              border: Border.all(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.12)
-                    : Colors.black.withValues(alpha: 0.08),
-                width: 0.8,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Row(
+    return _wrapWithGlassDock(
+      context,
+      isDark: isDark,
+      key: const ValueKey('send_dock'),
+      child: Row(
               children: [
                 // "Без сжатия" toggle
                 GestureDetector(
@@ -1247,7 +1203,99 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _wrapWithGlassDock(
+    BuildContext context, {
+    required Widget child,
+    required bool isDark,
+    required Key key,
+  }) {
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final isGlassEnabled = glassProvider.enabled;
+
+    if (!isGlassEnabled) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(36),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              key: key,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF24242C).withValues(alpha: 0.92)
+                    : Colors.white.withValues(alpha: 0.94),
+                borderRadius: BorderRadius.circular(36),
+                border: Border.all(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.1)
+                      : Colors.black.withValues(alpha: 0.08),
+                  width: 0.8,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: child,
+            ),
           ),
+        ),
+      );
+    }
+
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
+
+    final shape = LiquidGlassShape.continuousRoundedRectangle(
+      cornerRadius: 36,
+      clipQuality: LiquidGlassClipQuality.exact,
+      borderWidth: 0.7,
+      lightIntensity: isDark ? 0.7 : 0.95,
+      lightDirection: lightAngle,
+      borderType: const OpticalBorder(
+        borderSaturation: 1.1,
+        ambientIntensity: 0.85,
+        borderSolidity: 0.95,
+      ),
+    );
+
+    final style = LiquidGlassStyle(
+      shape: shape,
+      appearance: LiquidGlassAppearance(
+        color: isDark
+            ? const Color(0x3D24242C)
+            : const Color(0x9EFFFFFF),
+        blur: glassProvider.blurEffect,
+        shadow: LiquidGlassShadow(
+          blur: 16,
+          opacity: isDark ? 0.35 : 0.12,
+          offset: const Offset(0, 4),
+          color: Colors.black,
+        ),
+      ),
+      refraction: const LiquidGlassRefraction(
+        distortion: 0.06,
+        distortionWidth: 26,
+      ),
+      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
+      child: LiquidGlassLens(
+        key: key,
+        style: style,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+          child: child,
         ),
       ),
     );

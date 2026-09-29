@@ -22,6 +22,7 @@ class SettingsService {
   static const String _glassModeKey = 'glass_mode';
   static const String _lightAngleModeKey = 'light_angle_mode';
   static const String _manualLightAngleKey = 'manual_light_angle';
+  static const String _glassBlurKey = 'glass_blur';
   static const String _notificationSettingsKey = 'notification_settings';
   static const String _chatNotificationSettingsKey = 'chat_notification_settings';
 
@@ -34,6 +35,7 @@ class SettingsService {
   GlassMode? _cachedGlassMode;
   LightAngleMode? _cachedLightAngleMode;
   double? _cachedManualLightAngle;
+  double? _cachedGlassBlur;
   GlobalNotificationSettings? _cachedNotificationSettings;
   Map<String, ChatNotificationSettings>? _cachedChatNotificationSettings;
 
@@ -99,6 +101,7 @@ class SettingsService {
     }
 
     _cachedManualLightAngle = _prefs.getDouble(_manualLightAngleKey) ?? 62.0;
+    _cachedGlassBlur = _prefs.getDouble(_glassBlurKey) ?? 8.0;
 
     // Загрузка глобальных настроек уведомлений
     final notifJson = _prefs.getString(_notificationSettingsKey);
@@ -313,6 +316,15 @@ class SettingsService {
     await _prefs.setDouble(_manualLightAngleKey, angle);
   }
 
+  /// Получить степень размытия стекла (блюр)
+  double get glassBlur => _cachedGlassBlur ?? 8.0;
+
+  /// Сохранить степень размытия стекла (блюр)
+  Future<void> saveGlassBlur(double blur) async {
+    _cachedGlassBlur = blur;
+    await _prefs.setDouble(_glassBlurKey, blur);
+  }
+
   // ============ Глобальные настройки уведомлений ============
 
   /// Получить глобальные настройки уведомлений
@@ -400,6 +412,7 @@ class SettingsService {
     _cachedGlassMode = null;
     _cachedLightAngleMode = null;
     _cachedManualLightAngle = null;
+    _cachedGlassBlur = null;
     _cachedNotificationSettings = null;
     _cachedChatNotificationSettings = null;
     await _prefs.remove(_profileKey);
@@ -410,6 +423,7 @@ class SettingsService {
     await _prefs.remove(_glassModeKey);
     await _prefs.remove(_lightAngleModeKey);
     await _prefs.remove(_manualLightAngleKey);
+    await _prefs.remove(_glassBlurKey);
     await _prefs.remove(_notificationSettingsKey);
     await _prefs.remove(_chatNotificationSettingsKey);
   }
