@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'dart:math' as math;
 
 import '../../utils/haptic_utils.dart';
 import '../../screens/chat/create_private_chat_screen.dart';
@@ -73,6 +74,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _isTopMenuOpen = false;
   bool _isTopMenuWide = false;
   bool _isMorphing = false;
+
+  // Central folder morph menu
+  bool _isFolderMenuOpen = false;
+  bool _isFolderMenuWide = false;
+  bool _isFolderMorphing = false;
 
   // Search results
   List<SearchResultUser> _users = [];
@@ -859,6 +865,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (_isTopMenuOpen) {
       _closeTopMenu();
     }
+    if (_isFolderMenuOpen) {
+      _closeFolderMenu();
+    }
     if (_currentIndex == index) return;
     // Закрываем клавиатуру при уходе с поиска
     if (_currentIndex == 2 && index != 2) {
@@ -938,6 +947,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   void _openTopMenu() {
     if (_isMorphing || _isTopMenuOpen) return;
+    if (_isFolderMenuOpen) {
+      _closeFolderMenu();
+    }
     HapticUtils.tap();
     setState(() {
       _isTopMenuWide = true;
@@ -962,6 +974,36 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _openFolderMenu() {
+    if (_currentIndex != 1) return;
+    if (_isFolderMorphing || _isFolderMenuOpen) return;
+    if (_isTopMenuOpen) {
+      _closeTopMenu();
+    }
+    HapticUtils.tap();
+    setState(() {
+      _isFolderMenuWide = true;
+      _isFolderMenuOpen = true;
+      _isFolderMorphing = true;
+    });
+  }
+
+  void _closeFolderMenu() {
+    if (!_isFolderMenuOpen) return;
+    setState(() {
+      _isFolderMenuOpen = false;
+      _isFolderMorphing = true;
+    });
+  }
+
+  void _toggleFolderMenu() {
+    if (_isFolderMenuOpen) {
+      _closeFolderMenu();
+    } else {
+      _openFolderMenu();
+    }
+  }
+
   String get _currentTitleText {
     final l10n = context.l10n;
     switch (_currentIndex) {
@@ -971,11 +1013,23 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         return l10n.translate('common_search');
       case 1:
       default:
-        return _isWsConnected
-            ? (l10n.translate('app_title').isNotEmpty
+        if (!_isWsConnected) return 'соединение';
+        switch (_activeFilter) {
+          case 1:
+            final name = l10n.translate('filter_personal');
+            return name.isNotEmpty ? name : 'Личные';
+          case 2:
+            final name = l10n.translate('filter_groups');
+            return name.isNotEmpty ? name : 'Группы';
+          case 3:
+            final name = l10n.translate('filter_channels');
+            return name.isNotEmpty ? name : 'Каналы';
+          case 0:
+          default:
+            return l10n.translate('app_title').isNotEmpty
                 ? l10n.translate('app_title')
-                : 'Theaver')
-            : 'соединение';
+                : 'Theaver';
+        }
     }
   }
 
@@ -987,7 +1041,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         return 'search';
       case 1:
       default:
-        return _isWsConnected ? 'theaver' : 'connecting';
+        return _isWsConnected ? 'chats_filter_$_activeFilter' : 'connecting';
     }
   }
 
@@ -1252,6 +1306,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     const double ctrlSize = 44.0;
     const double menuWidth = 200.0;
     final double menuHeight = _getMenuHeight(_currentIndex);
+    const double folderMenuWidth = 220.0;
+    const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
     const double barRadius = ctrlSize / 2; // 22.0 — stadium capsule ratio
 
     final pillStyle = LiquidGlassStyle(
@@ -1290,103 +1346,60 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       ),
     );
 
+    final double maxActiveMenuHeight = math.max(
+      _isTopMenuWide ? menuHeight : 0,
+      _isFolderMenuWide ? folderMenuHeight : 0,
+    );
+
     return SizedBox(
       width: double.infinity,
-      height: _isTopMenuWide ? menuHeight + 8 : ctrlSize + 4,
+      height: maxActiveMenuHeight > 0 ? maxActiveMenuHeight + 8 : ctrlSize + 4,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          // Centered oval glass pill that smoothly resizes width to fit its text
+          // Centered title pill / morph folder dropdown menu
           Positioned(
             top: 2,
-            left: 68,
-            right: 68,
-            height: ctrlSize,
-            child: Center(
-              child: LiquidGlassLens(
-                style: pillStyle,
-                child: AnimatedSize(
-                  duration: const Duration(milliseconds: 320),
-                  curve: Curves.easeOutCubic,
-                  clipBehavior: Clip.none,
-                  child: Container(
-                    height: ctrlSize,
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 280),
-                          transitionBuilder: (child, animation) {
-                            final inAnimation = Tween<Offset>(
-                              begin: const Offset(0.0, -1.0),
-                              end: Offset.zero,
-                            ).animate(CurvedAnimation(
-                              parent: animation,
-                              curve: Curves.easeOutCubic,
-                            ));
-                            final outAnimation = Tween<Offset>(
-                              begin: const Offset(0.0, 1.0),
-                              end: Offset.zero,
-                            ).animate(CurvedAnimation(
-                              parent: animation,
-                              curve: Curves.easeInCubic,
-                            ));
-                            final isIncoming =
-                                child.key == ValueKey<String>(_currentTitleKey);
-                            return ClipRect(
-                              child: SlideTransition(
-                                position: isIncoming ? inAnimation : outAnimation,
-                                child: FadeTransition(
-                                  opacity: animation,
-                                  child: child,
-                                ),
-                              ),
-                            );
-                          },
-                          layoutBuilder: (currentChild, previousChildren) {
-                            return Stack(
-                              alignment: Alignment.center,
-                              clipBehavior: Clip.none,
-                              children: [
-                                ...previousChildren.map(
-                                  (w) => Positioned.fill(
-                                    child: Center(
-                                      child: OverflowBox(
-                                        minWidth: 0,
-                                        maxWidth: double.infinity,
-                                        minHeight: 0,
-                                        maxHeight: double.infinity,
-                                        child: w,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                if (currentChild != null) currentChild,
-                              ],
-                            );
-                          },
-                          child: Text(
-                            _currentTitleText,
-                            key: ValueKey<String>(_currentTitleKey),
-                            maxLines: 1,
-                            softWrap: false,
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: _isTitleConnected
-                                  ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
-                                  : Colors.grey,
-                              letterSpacing: -0.2,
-                            ),
-                          ),
-                        ),
+            left: 0,
+            right: 0,
+            height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
+            child: LiquidGlassMorph(
+              alignment: Alignment.topCenter,
+              motion: LiquidGlassMorphMotion.fluid,
+              smoothness: 28,
+              style: pillStyle,
+              onEnd: () {
+                if (_isFolderMenuWide != _isFolderMenuOpen) {
+                  setState(() => _isFolderMenuWide = _isFolderMenuOpen);
+                }
+                _isFolderMorphing = false;
+              },
+              child: _isFolderMenuOpen
+                  ? _FolderMorphMenu(
+                      key: const ValueKey<String>('folder_menu'),
+                      width: folderMenuWidth,
+                      activeFilter: _activeFilter,
+                      unreadCounts: [
+                        _getUnreadCountForFilter(0),
+                        _getUnreadCountForFilter(1),
+                        _getUnreadCountForFilter(2),
+                        _getUnreadCountForFilter(3),
                       ],
+                      onSelectFolder: (index) {
+                        HapticUtils.selection();
+                        setState(() => _activeFilter = index);
+                        _closeFolderMenu();
+                      },
+                    )
+                  : _TitlePillContent(
+                      key: const ValueKey<String>('title_pill'),
+                      title: _currentTitleText,
+                      titleKey: _currentTitleKey,
+                      isConnected: _isTitleConnected,
+                      isFolderMenuOpen: _isFolderMenuOpen,
+                      canOpenMenu: _currentIndex == 1,
+                      onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
                     ),
-                  ),
-                ),
-              ),
             ),
           ),
 
@@ -2310,11 +2323,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
       ),
       child: PopScope(
-        canPop: _currentIndex == 1 && !_isTopMenuOpen && !_isSelectMode,
+        canPop: _currentIndex == 1 &&
+            !_isTopMenuOpen &&
+            !_isFolderMenuOpen &&
+            !_isSelectMode,
         onPopInvokedWithResult: (didPop, _) {
           if (didPop) return;
           if (_isTopMenuOpen) {
             _closeTopMenu();
+            return;
+          }
+          if (_isFolderMenuOpen) {
+            _closeFolderMenu();
             return;
           }
           if (_isSelectMode) {
@@ -2335,6 +2355,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   onPageChanged: (page) {
                     if (_isTopMenuOpen) {
                       _closeTopMenu();
+                    }
+                    if (_isFolderMenuOpen) {
+                      _closeFolderMenu();
                     }
                     // Закрываем клавиатуру при уходе с поиска (свайпом)
                     if (_currentIndex == 2 && page != 2) {
@@ -2382,44 +2405,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                               _getUnreadCountForFilter(3),
                             ];
                             // === Glass-режим ===
-                            // Фильтры плавают поверх списка чатов ниже стационарного бара
+                            // Фильтры выбираются через центральный выпадающий LiquidGlassMorph
                             if (glassEnabled) {
                               final statusBarHeight =
                                    MediaQuery.of(context).padding.top;
                               final topBarHeight = statusBarHeight + 52.0;
-                              const filterAreaHeight = 48.0;
-                              // Отступ внутри ListView чтобы первые чаты
-                              // были видны ниже стеклянных элементов
-                              final chatList = _buildChatList(
-                                topPadding: topBarHeight + filterAreaHeight,
-                              );
-
-                              return Stack(
-                                children: [
-                                  // Список чатов заполняет весь экран —
-                                  // стеклянный бар и фильтры преломляют контент
-                                  Positioned.fill(
-                                    child: chatList,
-                                  ),
-                                  // Фильтры плавают ниже стационарного бара
-                                  Positioned(
-                                    top: topBarHeight,
-                                    left: 0,
-                                    right: 0,
-                                    child: LiquidGlassFilterChips(
-                                      enabled: true,
-                                      isLite: glassProvider.isLite,
-                                      lightAngle: glassProvider.getEffectiveLightAngle(
-                                        reduceMotion: MediaQuery.disableAnimationsOf(context),
-                                      ),
-                                      filters: filters,
-                                      activeFilter: _activeFilter,
-                                      onFilterSelected: (i) =>
-                                          setState(() => _activeFilter = i),
-                                      unreadCounts: unreadCounts,
-                                    ),
-                                  ),
-                                ],
+                              return _buildChatList(
+                                topPadding: topBarHeight + 8.0,
                               );
                             }
 
@@ -2650,10 +2642,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     : _buildTopGlassBar(context, glassProvider),
                 appBarTopMargin: 8.0,
                 lenses: [
-                  if (_isTopMenuOpen)
+                  if (_isTopMenuOpen || _isFolderMenuOpen)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: _closeTopMenu,
+                      onTap: () {
+                        if (_isTopMenuOpen) _closeTopMenu();
+                        if (_isFolderMenuOpen) _closeFolderMenu();
+                      },
                     ),
                 ],
                 body: Scaffold(
@@ -3201,5 +3196,310 @@ class _MorphMenuRow extends StatelessWidget {
     );
   }
 }
+
+class _TitlePillContent extends StatelessWidget {
+  final String title;
+  final String titleKey;
+  final bool isConnected;
+  final bool isFolderMenuOpen;
+  final bool canOpenMenu;
+  final VoidCallback? onTap;
+
+  const _TitlePillContent({
+    super.key,
+    required this.title,
+    required this.titleKey,
+    required this.isConnected,
+    required this.isFolderMenuOpen,
+    required this.canOpenMenu,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isConnected
+        ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
+        : Colors.grey;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        height: 44.0,
+        padding: const EdgeInsets.symmetric(horizontal: 18.0),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 280),
+              transitionBuilder: (child, animation) {
+                final inAnimation = Tween<Offset>(
+                  begin: const Offset(0.0, -1.0),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOutCubic,
+                ));
+                final outAnimation = Tween<Offset>(
+                  begin: const Offset(0.0, 1.0),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeInCubic,
+                ));
+                final isIncoming = child.key == ValueKey<String>(titleKey);
+                return ClipRect(
+                  child: SlideTransition(
+                    position: isIncoming ? inAnimation : outAnimation,
+                    child: FadeTransition(
+                      opacity: animation,
+                      child: child,
+                    ),
+                  ),
+                );
+              },
+              layoutBuilder: (currentChild, previousChildren) {
+                return Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    ...previousChildren.map(
+                      (w) => Positioned.fill(
+                        child: Center(
+                          child: OverflowBox(
+                            minWidth: 0,
+                            maxWidth: double.infinity,
+                            minHeight: 0,
+                            maxHeight: double.infinity,
+                            child: w,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (currentChild != null) currentChild,
+                  ],
+                );
+              },
+              child: Text(
+                title,
+                key: ValueKey<String>(titleKey),
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: textColor,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+            if (canOpenMenu) ...[
+              const SizedBox(width: 4),
+              AnimatedRotation(
+                turns: isFolderMenuOpen ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 20,
+                  color: textColor.withValues(alpha: 0.7),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FolderMorphMenu extends StatelessWidget {
+  final double width;
+  final int activeFilter;
+  final List<int> unreadCounts;
+  final ValueChanged<int> onSelectFolder;
+
+  const _FolderMorphMenu({
+    super.key,
+    required this.width,
+    required this.activeFilter,
+    required this.unreadCounts,
+    required this.onSelectFolder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final folderItems = [
+      _FolderMenuItemData(
+        index: 0,
+        label: l10n.translate('filter_all').isNotEmpty
+            ? l10n.translate('filter_all')
+            : 'Все',
+        icon: Icons.chat_bubble_outline_rounded,
+      ),
+      _FolderMenuItemData(
+        index: 1,
+        label: l10n.translate('filter_personal').isNotEmpty
+            ? l10n.translate('filter_personal')
+            : 'Личные',
+        icon: Icons.person_outline_rounded,
+      ),
+      _FolderMenuItemData(
+        index: 2,
+        label: l10n.translate('filter_groups').isNotEmpty
+            ? l10n.translate('filter_groups')
+            : 'Группы',
+        icon: Icons.group_outlined,
+      ),
+      _FolderMenuItemData(
+        index: 3,
+        label: l10n.translate('filter_channels').isNotEmpty
+            ? l10n.translate('filter_channels')
+            : 'Каналы',
+        icon: Icons.campaign_outlined,
+      ),
+    ];
+
+    return SizedBox(
+      width: width,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (int i = 0; i < folderItems.length; i++)
+              _FolderMenuRow(
+                key: ValueKey('folder_${folderItems[i].index}'),
+                item: folderItems[i],
+                isSelected: activeFilter == folderItems[i].index,
+                unreadCount: folderItems[i].index < unreadCounts.length
+                    ? unreadCounts[folderItems[i].index]
+                    : 0,
+                isLast: i == folderItems.length - 1,
+                onTap: () => onSelectFolder(folderItems[i].index),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FolderMenuItemData {
+  final int index;
+  final String label;
+  final IconData icon;
+
+  const _FolderMenuItemData({
+    required this.index,
+    required this.label,
+    required this.icon,
+  });
+}
+
+class _FolderMenuRow extends StatelessWidget {
+  final _FolderMenuItemData item;
+  final bool isSelected;
+  final int unreadCount;
+  final bool isLast;
+  final VoidCallback onTap;
+
+  const _FolderMenuRow({
+    super.key,
+    required this.item,
+    required this.isSelected,
+    required this.unreadCount,
+    required this.isLast,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final defaultColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    const accentColor = Color(0xFF0088CC);
+    final itemColor = isSelected ? accentColor : defaultColor;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        height: 44.0,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: isLast
+                ? null
+                : Border(
+                    bottom: BorderSide(
+                      color: (isDark ? Colors.white : Colors.black)
+                          .withValues(alpha: 0.08),
+                      width: 0.6,
+                    ),
+                  ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14.0),
+            child: Row(
+              children: [
+                Icon(item.icon, size: 20.0, color: itemColor),
+                const SizedBox(width: 10.0),
+                Expanded(
+                  child: Text(
+                    item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15.0,
+                      fontWeight:
+                          isSelected ? FontWeight.w600 : FontWeight.w500,
+                      color: itemColor,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+                if (unreadCount > 0) ...[
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? accentColor
+                          : (isDark
+                              ? Colors.white.withValues(alpha: 0.16)
+                              : Colors.black.withValues(alpha: 0.08)),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    constraints: const BoxConstraints(minWidth: 18),
+                    child: Text(
+                      '$unreadCount',
+                      style: TextStyle(
+                        color: isSelected
+                            ? Colors.white
+                            : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  const SizedBox(width: 8.0),
+                ],
+                if (isSelected)
+                  const Icon(Icons.check_rounded, size: 18.0, color: accentColor)
+                else
+                  const SizedBox(width: 18.0),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 
