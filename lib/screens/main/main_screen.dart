@@ -3122,7 +3122,6 @@ class _TopMorphMenu extends StatelessWidget {
               _MorphMenuRow(
                 key: ValueKey(items[i].id),
                 item: items[i],
-                isLast: i == items.length - 1,
                 onTap: () => onItemTap(items[i].id),
               ),
           ],
@@ -3134,13 +3133,11 @@ class _TopMorphMenu extends StatelessWidget {
 
 class _MorphMenuRow extends StatelessWidget {
   final _MorphMenuItemData item;
-  final bool isLast;
   final VoidCallback onTap;
 
   const _MorphMenuRow({
     super.key,
     required this.item,
-    required this.isLast,
     required this.onTap,
   });
 
@@ -3155,21 +3152,9 @@ class _MorphMenuRow extends StatelessWidget {
       onTap: onTap,
       child: SizedBox(
         height: 44.0,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            border: isLast
-                ? null
-                : Border(
-                    bottom: BorderSide(
-                      color: (isDark ? Colors.white : Colors.black)
-                          .withValues(alpha: 0.08),
-                      width: 0.6,
-                    ),
-                  ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14.0),
-            child: Row(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14.0),
+          child: Row(
               children: [
                 Icon(item.icon, size: 20.0, color: itemColor),
                 const SizedBox(width: 10.0),
@@ -3190,8 +3175,7 @@ class _MorphMenuRow extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
+      );
   }
 }
 
@@ -3360,7 +3344,6 @@ class _FolderMorphMenu extends StatelessWidget {
                 unreadCount: folderItems[i].index < unreadCounts.length
                     ? unreadCounts[folderItems[i].index]
                     : 0,
-                isLast: i == folderItems.length - 1,
                 onTap: () => onSelectFolder(folderItems[i].index),
               ),
           ],
@@ -3386,7 +3369,6 @@ class _FolderMenuRow extends StatelessWidget {
   final _FolderMenuItemData item;
   final bool isSelected;
   final int unreadCount;
-  final bool isLast;
   final VoidCallback onTap;
 
   const _FolderMenuRow({
@@ -3394,7 +3376,6 @@ class _FolderMenuRow extends StatelessWidget {
     required this.item,
     required this.isSelected,
     required this.unreadCount,
-    required this.isLast,
     required this.onTap,
   });
 
@@ -3410,71 +3391,58 @@ class _FolderMenuRow extends StatelessWidget {
       onTap: onTap,
       child: SizedBox(
         height: 44.0,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            border: isLast
-                ? null
-                : Border(
-                    bottom: BorderSide(
-                      color: (isDark ? Colors.white : Colors.black)
-                          .withValues(alpha: 0.08),
-                      width: 0.6,
-                    ),
-                  ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14.0),
-            child: Row(
-              children: [
-                Icon(item.icon, size: 20.0, color: itemColor),
-                const SizedBox(width: 10.0),
-                Expanded(
-                  child: Text(
-                    item.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15.0,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.w500,
-                      color: itemColor,
-                      letterSpacing: -0.2,
-                    ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14.0),
+          child: Row(
+            children: [
+              Icon(item.icon, size: 20.0, color: itemColor),
+              const SizedBox(width: 10.0),
+              Expanded(
+                child: Text(
+                  item.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15.0,
+                    fontWeight:
+                        isSelected ? FontWeight.w600 : FontWeight.w500,
+                    color: itemColor,
+                    letterSpacing: -0.2,
                   ),
                 ),
-                if (unreadCount > 0) ...[
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? accentColor
-                          : (isDark
-                              ? Colors.white.withValues(alpha: 0.16)
-                              : Colors.black.withValues(alpha: 0.08)),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    constraints: const BoxConstraints(minWidth: 18),
-                    child: Text(
-                      '$unreadCount',
-                      style: TextStyle(
-                        color: isSelected
-                            ? Colors.white
-                            : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+              ),
+              if (unreadCount > 0) ...[
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? accentColor
+                        : (isDark
+                            ? Colors.white.withValues(alpha: 0.16)
+                            : Colors.black.withValues(alpha: 0.08)),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  const SizedBox(width: 8.0),
-                ],
-                if (isSelected)
-                  const Icon(Icons.check_rounded, size: 18.0, color: accentColor)
-                else
-                  const SizedBox(width: 18.0),
+                  constraints: const BoxConstraints(minWidth: 18),
+                  child: Text(
+                    '$unreadCount',
+                    style: TextStyle(
+                      color: isSelected
+                          ? Colors.white
+                          : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                const SizedBox(width: 8.0),
               ],
-            ),
+              if (isSelected)
+                const Icon(Icons.check_rounded, size: 18.0, color: accentColor)
+              else
+                const SizedBox(width: 18.0),
+            ],
           ),
         ),
       ),
