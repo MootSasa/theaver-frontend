@@ -21,6 +21,7 @@ class ChatScaffold extends StatelessWidget {
   final void Function(bool didPop, dynamic result)? onPopInvoked;
   final bool enableStatusBarBlur;
   final bool enableBottomScrollEdge;
+  final double? bottomScrollEdgeHeight;
 
   const ChatScaffold({
     Key? key,
@@ -34,6 +35,7 @@ class ChatScaffold extends StatelessWidget {
     this.onPopInvoked,
     this.enableStatusBarBlur = true,
     this.enableBottomScrollEdge = true,
+    this.bottomScrollEdgeHeight,
   }) : super(key: key);
 
   /// Helper to calculate standard top padding for chat message lists
@@ -120,6 +122,7 @@ class ChatScaffold extends StatelessWidget {
     if (statusBarHeight <= 0) return const SizedBox.shrink();
 
     final isGlass = glassProvider?.enabled ?? false;
+    final effectiveBlur = math.max(glassProvider?.blur ?? 8.0, 8.0);
     if (isGlass) {
       return Positioned(
         top: 0,
@@ -129,7 +132,7 @@ class ChatScaffold extends StatelessWidget {
         child: LiquidGlassScrollEdge(
           edge: LiquidGlassEdge.top,
           style: LiquidGlassScrollEdgeStyle.soft,
-          blur: glassProvider?.blur ?? 8.0,
+          blur: effectiveBlur,
           color: Colors.transparent,
         ),
       );
@@ -166,7 +169,8 @@ class ChatScaffold extends StatelessWidget {
     if (bottomInset > 0) return const SizedBox.shrink();
 
     final safeBottom = MediaQuery.paddingOf(context).bottom;
-    final height = math.max(safeBottom + 8.0, 24.0);
+    final height = bottomScrollEdgeHeight ?? (safeBottom + 52.0);
+    final effectiveBlur = math.max(glassProvider?.blur ?? 8.0, 8.0);
 
     return Positioned(
       bottom: 0,
@@ -176,7 +180,7 @@ class ChatScaffold extends StatelessWidget {
       child: LiquidGlassScrollEdge(
         edge: LiquidGlassEdge.bottom,
         style: LiquidGlassScrollEdgeStyle.soft,
-        blur: glassProvider?.blur ?? 8.0,
+        blur: effectiveBlur,
         color: Colors.transparent,
       ),
     );
