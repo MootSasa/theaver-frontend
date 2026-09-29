@@ -2291,6 +2291,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       fit: StackFit.expand,
       children: [
         Positioned.fill(child: messageList),
+        // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
+        ChatBottomScrollEdge(
+          height: math.max(safeBottom + 52.0, 52.0),
+        ),
         Positioned(
           left: 0,
           right: 0,

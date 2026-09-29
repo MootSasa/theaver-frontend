@@ -89,10 +89,7 @@ class ChatScaffold extends StatelessWidget {
             // 3. Top scroll edge / status bar blur
             _buildTopScrollEdge(context, glassProvider),
 
-            // 4. Bottom scroll edge
-            _buildBottomScrollEdge(context, glassProvider),
-
-            // 5. Floating AppBar layer
+            // 4. Floating AppBar layer
             if (appBar != null)
               Positioned(
                 top: 0,
@@ -101,7 +98,7 @@ class ChatScaffold extends StatelessWidget {
                 child: appBar!,
               ),
 
-            // 6. Floating Action Button layer
+            // 5. Floating Action Button layer
             if (floatingActionButton != null)
               Positioned(
                 right: 16,
@@ -158,34 +155,6 @@ class ChatScaffold extends StatelessWidget {
     );
   }
 
-  Widget _buildBottomScrollEdge(BuildContext context, LiquidGlassProvider? glassProvider) {
-    if (!enableBottomScrollEdge) return const SizedBox.shrink();
-
-    final isGlass = glassProvider?.enabled ?? false;
-    if (!isGlass) return const SizedBox.shrink();
-
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    // Hide bottom scroll edge when virtual keyboard is visible
-    if (bottomInset > 0) return const SizedBox.shrink();
-
-    final safeBottom = MediaQuery.paddingOf(context).bottom;
-    final height = bottomScrollEdgeHeight ?? (safeBottom + 52.0);
-    final effectiveBlur = math.max(glassProvider?.blur ?? 8.0, 8.0);
-
-    return Positioned(
-      bottom: 0,
-      left: 0,
-      right: 0,
-      height: height,
-      child: LiquidGlassScrollEdge(
-        edge: LiquidGlassEdge.bottom,
-        style: LiquidGlassScrollEdgeStyle.soft,
-        blur: effectiveBlur,
-        color: Colors.transparent,
-      ),
-    );
-  }
-
   Widget _buildBackground(BuildContext context) {
     if (customBackground != null) {
       return customBackground!;
@@ -205,5 +174,40 @@ class ChatScaffold extends StatelessWidget {
     }
 
     return const SizedBox.shrink();
+  }
+}
+
+/// Fading bottom scroll edge blur placed under the input field (above messages, below input).
+class ChatBottomScrollEdge extends StatelessWidget {
+  final double? height;
+
+  const ChatBottomScrollEdge({Key? key, this.height}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final isGlass = glassProvider?.enabled ?? false;
+    if (!isGlass) return const SizedBox.shrink();
+
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    // Hide bottom scroll edge when virtual keyboard is visible
+    if (bottomInset > 0) return const SizedBox.shrink();
+
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final edgeHeight = height ?? math.max(safeBottom + 52.0, 52.0);
+    final effectiveBlur = math.max(glassProvider?.blur ?? 8.0, 8.0);
+
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: edgeHeight,
+      child: LiquidGlassScrollEdge(
+        edge: LiquidGlassEdge.bottom,
+        style: LiquidGlassScrollEdgeStyle.soft,
+        blur: effectiveBlur,
+        color: Colors.transparent,
+      ),
+    );
   }
 }

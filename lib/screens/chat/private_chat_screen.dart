@@ -2377,6 +2377,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     ],
                   ),
                 ),
+                // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
+                ChatBottomScrollEdge(
+                  height: math.max(safeBottom + 52.0, 52.0),
+                ),
                 // Кнопка прокрутки вниз (теперь здесь, в главном Stack чата)
                 Positioned(
                   right: 14,
