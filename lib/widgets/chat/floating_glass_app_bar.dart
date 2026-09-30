@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
@@ -50,20 +49,18 @@ const double _kActionIconSize = 20.0;
 
 /// Конфигурация физики морфинга меню (плавный Apple-style fluid pop).
 const LiquidGlassMorphMotion _kMenuMorphMotion = LiquidGlassMorphMotion(
-  stiffness: 150,
-  damping: 19,
-  stretch: 0.35,
-  anchor: null,
+  stiffness: 175,
+  damping: 18,
+  stretch: 0.55,
+  blended: false,
   advanced: LiquidGlassMorphAdvanced(
-    leadBounce: 0.05,
-    followDelay: 0.02,
-    seedScale: 0.95,
-    linger: 0.02,
-    drainSpeed: 1.2,
-    sourceFollows: true,
-    contentInStart: 0.15,
-    contentInEnd: 0.70,
-    newScaleFrom: 0.90,
+    leadBounce: 0.08,
+    followDelay: 0.03,
+    contentInStart: 0.20,
+    contentInEnd: 0.75,
+    newScaleFrom: 0.88,
+    oldScaleTo: 0.92,
+    contentBlur: 6,
   ),
 );
 // ------------------------------
@@ -279,19 +276,13 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               Positioned(
                 top: statusBarHeight + _kAppBarVerticalPadding,
                 right: _kAppBarHorizontalPadding,
-                width: _kMenuWidth,
-                height: _kMenuHeight,
-                child: _MorphHitTestBoundary(
-                  isMenuOpen: _isMenuOpen,
-                  isMorphing: _isMorphing,
-                  collapsedWidth: rightCollapsedWidth,
-                  collapsedHeight: _kAppBarHeight,
+                width: _isMenuOpen || _isMorphing ? _kMenuWidth : rightCollapsedWidth,
+                height: _isMenuOpen || _isMorphing ? _kMenuHeight : _kAppBarHeight,
+                child: ClipRect(
                   child: LiquidGlassMorph(
-                    width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
-                    height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
                     alignment: Alignment.topRight,
                     motion: _kMenuMorphMotion,
-                    smoothness: 28,
+                    smoothness: 0,
                     style: morphStyle,
                     onEnd: () {
                       if (_isMorphing) {
@@ -488,99 +479,6 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   }
 }
 
-/// Bounding widget that restricts touch hit testing to ONLY the collapsed pill area
-/// when the menu is closed and settled, and allows full menu hit testing when the menu is open or animating.
-/// This allows the parent [Positioned] to stay at a constant size (_kMenuWidth x _kMenuHeight)
-/// so that LiquidGlassMorph never snaps or jerks upon opening or closing.
-class _MorphHitTestBoundary extends SingleChildRenderObjectWidget {
-  final bool isMenuOpen;
-  final bool isMorphing;
-  final double collapsedWidth;
-  final double collapsedHeight;
-
-  const _MorphHitTestBoundary({
-    required this.isMenuOpen,
-    required this.isMorphing,
-    required this.collapsedWidth,
-    required this.collapsedHeight,
-    required super.child,
-  });
-
-  @override
-  RenderObject createRenderObject(BuildContext context) {
-    return _RenderMorphHitTestBoundary(
-      isMenuOpen: isMenuOpen,
-      isMorphing: isMorphing,
-      collapsedWidth: collapsedWidth,
-      collapsedHeight: collapsedHeight,
-    );
-  }
-
-  @override
-  void updateRenderObject(
-    BuildContext context,
-    _RenderMorphHitTestBoundary renderObject,
-  ) {
-    renderObject
-      ..isMenuOpen = isMenuOpen
-      ..isMorphing = isMorphing
-      ..collapsedWidth = collapsedWidth
-      ..collapsedHeight = collapsedHeight;
-  }
-}
-
-class _RenderMorphHitTestBoundary extends RenderProxyBox {
-  bool _isMenuOpen;
-  bool _isMorphing;
-  double _collapsedWidth;
-  double _collapsedHeight;
-
-  _RenderMorphHitTestBoundary({
-    required bool isMenuOpen,
-    required bool isMorphing,
-    required double collapsedWidth,
-    required double collapsedHeight,
-  })  : _isMenuOpen = isMenuOpen,
-        _isMorphing = isMorphing,
-        _collapsedWidth = collapsedWidth,
-        _collapsedHeight = collapsedHeight;
-
-  set isMenuOpen(bool value) {
-    if (_isMenuOpen == value) return;
-    _isMenuOpen = value;
-  }
-
-  set isMorphing(bool value) {
-    if (_isMorphing == value) return;
-    _isMorphing = value;
-  }
-
-  set collapsedWidth(double value) {
-    if (_collapsedWidth == value) return;
-    _collapsedWidth = value;
-  }
-
-  set collapsedHeight(double value) {
-    if (_collapsedHeight == value) return;
-    _collapsedHeight = value;
-  }
-
-  @override
-  bool hitTest(BoxHitTestResult result, {required Offset position}) {
-    if (!_isMenuOpen && !_isMorphing) {
-      final pillRect = Rect.fromLTWH(
-        size.width - _collapsedWidth,
-        0,
-        _collapsedWidth,
-        _collapsedHeight,
-      );
-      if (!pillRect.contains(position)) {
-        return false;
-      }
-    }
-    return super.hitTest(result, position: position);
-  }
-}
 
 /// Content of the collapsed right pill:
 /// - In channel: only avatar centered
