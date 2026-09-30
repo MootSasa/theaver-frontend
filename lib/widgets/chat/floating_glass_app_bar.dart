@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
@@ -29,8 +30,8 @@ const double _kBackPillWidth = 54.0;
 
 /// Ширина правой плашки в канале (только аватарка).
 const double _kRightPillChannelWidth = 54.0;
-/// Ширина правой плашки в чате (звонок + видеозвонок + аватарка).
-const double _kRightPillChatWidth = 128.0;
+/// Ширина правой плашки в чате (звонок + аватарка).
+const double _kRightPillChatWidth = 94.0;
 
 /// Ширина выпадающего морф-меню действий.
 const double _kMenuWidth = 250.0;
@@ -44,7 +45,7 @@ const double _kStatusFontSize = 12.0;
 
 /// Радиус аватарки.
 const double _kAvatarRadius = 22.0;
-/// Размер иконок действий (звонок, видеозвонок).
+/// Размер иконок действий (звонок).
 const double _kActionIconSize = 20.0;
 // ------------------------------
 
@@ -106,16 +107,14 @@ class FloatingGlassAppBar extends StatefulWidget {
 
 class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   bool _isMenuOpen = false;
-  bool _isMenuWide = false;
-  bool _isMorphing = false;
+  bool _isMenuClosing = false;
 
   void _openMenu() {
-    if (_isMorphing || _isMenuOpen) return;
+    if (_isMenuOpen) return;
     HapticUtils.tap();
     setState(() {
-      _isMenuWide = true;
       _isMenuOpen = true;
-      _isMorphing = true;
+      _isMenuClosing = false;
     });
   }
 
@@ -123,7 +122,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     if (!_isMenuOpen) return;
     setState(() {
       _isMenuOpen = false;
-      _isMorphing = true;
+      _isMenuClosing = true;
     });
   }
 
@@ -197,7 +196,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     );
 
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
-    final currentHeight = _isMenuWide ? screenSize.height : normalHeight;
+    final isExpanded = _isMenuOpen || _isMenuClosing;
+    final currentHeight = isExpanded ? screenSize.height : normalHeight;
 
     return PopScope(
       canPop: !_isMenuOpen,
@@ -213,7 +213,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
           clipBehavior: Clip.none,
           children: [
             // Fullscreen backdrop to dismiss menu on outside tap
-            if (_isMenuWide)
+            if (_isMenuOpen)
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
@@ -260,40 +260,43 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               Positioned(
                 top: statusBarHeight + _kAppBarVerticalPadding,
                 right: _kAppBarHorizontalPadding,
-                width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
-                height: _isMenuWide ? _kMenuHeight : _kAppBarHeight,
-                child: LiquidGlassMorph(
-                  alignment: Alignment.topRight,
-                  motion: LiquidGlassMorphMotion.fluid,
-                  smoothness: 28,
-                  style: morphStyle,
-                  onEnd: () {
-                    if (_isMenuWide != _isMenuOpen) {
-                      setState(() => _isMenuWide = _isMenuOpen);
-                    }
-                    _isMorphing = false;
-                  },
-                  child: _isMenuOpen
-                      ? _ChatActionsMorphMenu(
-                          key: const ValueKey<String>('chat_actions_menu'),
-                          isMuted: widget.isMuted,
-                          onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
-                          onSearch: () { _closeMenu(); widget.onSearch?.call(); },
-                          onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
-                          onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                          onReport: () { _closeMenu(); widget.onReport?.call(); },
-                        )
-                      : _RightPillContent(
-                          key: const ValueKey<String>('chat_right_pill'),
-                          isChannel: widget.isChannel,
-                          name: widget.name,
-                          avatarUrl: widget.avatarUrl,
-                          isOnline: widget.isOnline,
-                          avatarWidget: widget.avatarWidget,
-                          onVoiceCall: widget.onVoiceCall,
-                          onVideoCall: widget.onVideoCall,
-                          onAvatarTap: _handleAvatarTap,
-                        ),
+                width: _kMenuWidth,
+                height: _kMenuHeight,
+                child: _MorphHitTestBoundary(
+                  isMenuOpen: _isMenuOpen || _isMenuClosing,
+                  collapsedWidth: rightCollapsedWidth,
+                  collapsedHeight: _kAppBarHeight,
+                  child: LiquidGlassMorph(
+                    alignment: Alignment.topRight,
+                    motion: LiquidGlassMorphMotion.fluid,
+                    smoothness: 28,
+                    style: morphStyle,
+                    onEnd: () {
+                      if (_isMenuClosing) {
+                        setState(() => _isMenuClosing = false);
+                      }
+                    },
+                    child: _isMenuOpen
+                        ? _ChatActionsMorphMenu(
+                            key: const ValueKey<String>('chat_actions_menu'),
+                            isMuted: widget.isMuted,
+                            onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
+                            onSearch: () { _closeMenu(); widget.onSearch?.call(); },
+                            onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
+                            onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
+                            onReport: () { _closeMenu(); widget.onReport?.call(); },
+                          )
+                        : _RightPillContent(
+                            key: const ValueKey<String>('chat_right_pill'),
+                            isChannel: widget.isChannel,
+                            name: widget.name,
+                            avatarUrl: widget.avatarUrl,
+                            isOnline: widget.isOnline,
+                            avatarWidget: widget.avatarWidget,
+                            onVoiceCall: widget.onVoiceCall,
+                            onAvatarTap: _handleAvatarTap,
+                          ),
+                  ),
                 ),
               )
             else
@@ -306,10 +309,9 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                   width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
                   height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
                   onEnd: () {
-                    if (_isMenuWide != _isMenuOpen) {
-                      setState(() => _isMenuWide = _isMenuOpen);
+                    if (_isMenuClosing) {
+                      setState(() => _isMenuClosing = false);
                     }
-                    _isMorphing = false;
                   },
                   child: _buildMattePill(
                     isDark: isDark,
@@ -333,7 +335,6 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                               isOnline: widget.isOnline,
                               avatarWidget: widget.avatarWidget,
                               onVoiceCall: widget.onVoiceCall,
-                              onVideoCall: widget.onVideoCall,
                               onAvatarTap: _handleAvatarTap,
                             ),
                     ),
@@ -461,9 +462,91 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   }
 }
 
+/// Bounding widget that restricts touch hit testing to ONLY the collapsed pill area
+/// when the menu is closed, and allows full menu hit testing when the menu is open/animating.
+/// This allows the parent [Positioned] to stay at a constant size (_kMenuWidth x _kMenuHeight)
+/// so that LiquidGlassMorph never snaps or jerks upon opening or closing.
+class _MorphHitTestBoundary extends SingleChildRenderObjectWidget {
+  final bool isMenuOpen;
+  final double collapsedWidth;
+  final double collapsedHeight;
+
+  const _MorphHitTestBoundary({
+    required this.isMenuOpen,
+    required this.collapsedWidth,
+    required this.collapsedHeight,
+    required super.child,
+  });
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderMorphHitTestBoundary(
+      isMenuOpen: isMenuOpen,
+      collapsedWidth: collapsedWidth,
+      collapsedHeight: collapsedHeight,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderMorphHitTestBoundary renderObject,
+  ) {
+    renderObject
+      ..isMenuOpen = isMenuOpen
+      ..collapsedWidth = collapsedWidth
+      ..collapsedHeight = collapsedHeight;
+  }
+}
+
+class _RenderMorphHitTestBoundary extends RenderProxyBox {
+  bool _isMenuOpen;
+  double _collapsedWidth;
+  double _collapsedHeight;
+
+  _RenderMorphHitTestBoundary({
+    required bool isMenuOpen,
+    required double collapsedWidth,
+    required double collapsedHeight,
+  })  : _isMenuOpen = isMenuOpen,
+        _collapsedWidth = collapsedWidth,
+        _collapsedHeight = collapsedHeight;
+
+  set isMenuOpen(bool value) {
+    if (_isMenuOpen == value) return;
+    _isMenuOpen = value;
+  }
+
+  set collapsedWidth(double value) {
+    if (_collapsedWidth == value) return;
+    _collapsedWidth = value;
+  }
+
+  set collapsedHeight(double value) {
+    if (_collapsedHeight == value) return;
+    _collapsedHeight = value;
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (!_isMenuOpen) {
+      final pillRect = Rect.fromLTWH(
+        size.width - _collapsedWidth,
+        0,
+        _collapsedWidth,
+        _collapsedHeight,
+      );
+      if (!pillRect.contains(position)) {
+        return false;
+      }
+    }
+    return super.hitTest(result, position: position);
+  }
+}
+
 /// Content of the collapsed right pill:
 /// - In channel: only avatar centered
-/// - In private / group chat: [ Phone | VideoCamera | Avatar ]
+/// - In private / group chat: [ Phone | Avatar ]
 class _RightPillContent extends StatelessWidget {
   final bool isChannel;
   final String name;
@@ -471,7 +554,6 @@ class _RightPillContent extends StatelessWidget {
   final bool isOnline;
   final Widget? avatarWidget;
   final VoidCallback? onVoiceCall;
-  final VoidCallback? onVideoCall;
   final VoidCallback onAvatarTap;
 
   const _RightPillContent({
@@ -482,7 +564,6 @@ class _RightPillContent extends StatelessWidget {
     required this.isOnline,
     this.avatarWidget,
     this.onVoiceCall,
-    this.onVideoCall,
     required this.onAvatarTap,
   });
 
@@ -512,7 +593,7 @@ class _RightPillContent extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        const SizedBox(width: 6),
+        const SizedBox(width: 7),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
@@ -520,7 +601,7 @@ class _RightPillContent extends StatelessWidget {
             onVoiceCall?.call();
           },
           child: SizedBox(
-            width: 32,
+            width: 34,
             height: _kAppBarHeight,
             child: Center(
               child: iconoir.Phone(
@@ -531,31 +612,12 @@ class _RightPillContent extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(width: 2),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            HapticUtils.tap();
-            onVideoCall?.call();
-          },
-          child: SizedBox(
-            width: 32,
-            height: _kAppBarHeight,
-            child: Center(
-              child: iconoir.VideoCamera(
-                width: _kActionIconSize,
-                height: _kActionIconSize,
-                color: primaryTextColor,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 4),
+        const SizedBox(width: 3),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onAvatarTap,
           child: Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.only(right: 6),
             child: avatarWidget ??
                 AvatarWithStatus(
                   avatarUrl: avatarUrl,
