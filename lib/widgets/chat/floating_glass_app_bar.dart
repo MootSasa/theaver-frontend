@@ -47,6 +47,25 @@ const double _kStatusFontSize = 12.0;
 const double _kAvatarRadius = 22.0;
 /// Размер иконок действий (звонок).
 const double _kActionIconSize = 20.0;
+
+/// Конфигурация физики морфинга меню (плавный Apple-style fluid pop).
+const LiquidGlassMorphMotion _kMenuMorphMotion = LiquidGlassMorphMotion(
+  stiffness: 150,
+  damping: 19,
+  stretch: 0.35,
+  anchor: null,
+  advanced: LiquidGlassMorphAdvanced(
+    leadBounce: 0.05,
+    followDelay: 0.02,
+    seedScale: 0.95,
+    linger: 0.02,
+    drainSpeed: 1.2,
+    sourceFollows: true,
+    contentInStart: 0.15,
+    contentInEnd: 0.70,
+    newScaleFrom: 0.90,
+  ),
+);
 // ------------------------------
 
 /// Floating AppBar split into 3 distinct glass/matte pills:
@@ -107,14 +126,14 @@ class FloatingGlassAppBar extends StatefulWidget {
 
 class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   bool _isMenuOpen = false;
-  bool _isMenuClosing = false;
+  bool _isMorphing = false;
 
   void _openMenu() {
     if (_isMenuOpen) return;
     HapticUtils.tap();
     setState(() {
       _isMenuOpen = true;
-      _isMenuClosing = false;
+      _isMorphing = true;
     });
   }
 
@@ -122,7 +141,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     if (!_isMenuOpen) return;
     setState(() {
       _isMenuOpen = false;
-      _isMenuClosing = true;
+      _isMorphing = true;
     });
   }
 
@@ -196,7 +215,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     );
 
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
-    final isExpanded = _isMenuOpen || _isMenuClosing;
+    final isExpanded = _isMenuOpen || _isMorphing;
     final currentHeight = isExpanded ? screenSize.height : normalHeight;
 
     return PopScope(
@@ -263,22 +282,26 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                 width: _kMenuWidth,
                 height: _kMenuHeight,
                 child: _MorphHitTestBoundary(
-                  isMenuOpen: _isMenuOpen || _isMenuClosing,
+                  isMenuOpen: _isMenuOpen,
+                  isMorphing: _isMorphing,
                   collapsedWidth: rightCollapsedWidth,
                   collapsedHeight: _kAppBarHeight,
                   child: LiquidGlassMorph(
+                    width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
+                    height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
                     alignment: Alignment.topRight,
-                    motion: LiquidGlassMorphMotion.fluid,
+                    motion: _kMenuMorphMotion,
                     smoothness: 28,
                     style: morphStyle,
                     onEnd: () {
-                      if (_isMenuClosing) {
-                        setState(() => _isMenuClosing = false);
+                      if (_isMorphing) {
+                        setState(() => _isMorphing = false);
                       }
                     },
                     child: _isMenuOpen
                         ? _ChatActionsMorphMenu(
                             key: const ValueKey<String>('chat_actions_menu'),
+                            width: _kMenuWidth,
                             isMuted: widget.isMuted,
                             onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                             onSearch: () { _closeMenu(); widget.onSearch?.call(); },
@@ -288,6 +311,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                           )
                         : _RightPillContent(
                             key: const ValueKey<String>('chat_right_pill'),
+                            width: rightCollapsedWidth,
                             isChannel: widget.isChannel,
                             name: widget.name,
                             avatarUrl: widget.avatarUrl,
@@ -309,8 +333,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                   width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
                   height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
                   onEnd: () {
-                    if (_isMenuClosing) {
-                      setState(() => _isMenuClosing = false);
+                    if (_isMorphing) {
+                      setState(() => _isMorphing = false);
                     }
                   },
                   child: _buildMattePill(
@@ -320,6 +344,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                       child: _isMenuOpen
                           ? _ChatActionsMorphMenu(
                               key: const ValueKey<String>('chat_actions_menu_matte'),
+                              width: _kMenuWidth,
                               isMuted: widget.isMuted,
                               onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                               onSearch: () { _closeMenu(); widget.onSearch?.call(); },
@@ -329,6 +354,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                             )
                           : _RightPillContent(
                               key: const ValueKey<String>('chat_right_pill_matte'),
+                              width: rightCollapsedWidth,
                               isChannel: widget.isChannel,
                               name: widget.name,
                               avatarUrl: widget.avatarUrl,
@@ -463,16 +489,18 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 }
 
 /// Bounding widget that restricts touch hit testing to ONLY the collapsed pill area
-/// when the menu is closed, and allows full menu hit testing when the menu is open/animating.
+/// when the menu is closed and settled, and allows full menu hit testing when the menu is open or animating.
 /// This allows the parent [Positioned] to stay at a constant size (_kMenuWidth x _kMenuHeight)
 /// so that LiquidGlassMorph never snaps or jerks upon opening or closing.
 class _MorphHitTestBoundary extends SingleChildRenderObjectWidget {
   final bool isMenuOpen;
+  final bool isMorphing;
   final double collapsedWidth;
   final double collapsedHeight;
 
   const _MorphHitTestBoundary({
     required this.isMenuOpen,
+    required this.isMorphing,
     required this.collapsedWidth,
     required this.collapsedHeight,
     required super.child,
@@ -482,6 +510,7 @@ class _MorphHitTestBoundary extends SingleChildRenderObjectWidget {
   RenderObject createRenderObject(BuildContext context) {
     return _RenderMorphHitTestBoundary(
       isMenuOpen: isMenuOpen,
+      isMorphing: isMorphing,
       collapsedWidth: collapsedWidth,
       collapsedHeight: collapsedHeight,
     );
@@ -494,6 +523,7 @@ class _MorphHitTestBoundary extends SingleChildRenderObjectWidget {
   ) {
     renderObject
       ..isMenuOpen = isMenuOpen
+      ..isMorphing = isMorphing
       ..collapsedWidth = collapsedWidth
       ..collapsedHeight = collapsedHeight;
   }
@@ -501,20 +531,28 @@ class _MorphHitTestBoundary extends SingleChildRenderObjectWidget {
 
 class _RenderMorphHitTestBoundary extends RenderProxyBox {
   bool _isMenuOpen;
+  bool _isMorphing;
   double _collapsedWidth;
   double _collapsedHeight;
 
   _RenderMorphHitTestBoundary({
     required bool isMenuOpen,
+    required bool isMorphing,
     required double collapsedWidth,
     required double collapsedHeight,
   })  : _isMenuOpen = isMenuOpen,
+        _isMorphing = isMorphing,
         _collapsedWidth = collapsedWidth,
         _collapsedHeight = collapsedHeight;
 
   set isMenuOpen(bool value) {
     if (_isMenuOpen == value) return;
     _isMenuOpen = value;
+  }
+
+  set isMorphing(bool value) {
+    if (_isMorphing == value) return;
+    _isMorphing = value;
   }
 
   set collapsedWidth(double value) {
@@ -529,7 +567,7 @@ class _RenderMorphHitTestBoundary extends RenderProxyBox {
 
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
-    if (!_isMenuOpen) {
+    if (!_isMenuOpen && !_isMorphing) {
       final pillRect = Rect.fromLTWH(
         size.width - _collapsedWidth,
         0,
@@ -548,6 +586,7 @@ class _RenderMorphHitTestBoundary extends RenderProxyBox {
 /// - In channel: only avatar centered
 /// - In private / group chat: [ Phone | Avatar ]
 class _RightPillContent extends StatelessWidget {
+  final double width;
   final bool isChannel;
   final String name;
   final String? avatarUrl;
@@ -558,6 +597,7 @@ class _RightPillContent extends StatelessWidget {
 
   const _RightPillContent({
     super.key,
+    required this.width,
     required this.isChannel,
     required this.name,
     this.avatarUrl,
@@ -574,50 +614,13 @@ class _RightPillContent extends StatelessWidget {
     final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
 
     if (isChannel) {
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onAvatarTap,
-        child: Center(
-          child: avatarWidget ??
-              AvatarWithStatus(
-                avatarUrl: avatarUrl,
-                name: name,
-                radius: _kAvatarRadius,
-                isOnline: isOnline,
-              ),
-        ),
-      );
-    }
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        const SizedBox(width: 7),
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            HapticUtils.tap();
-            onVoiceCall?.call();
-          },
-          child: SizedBox(
-            width: 34,
-            height: _kAppBarHeight,
-            child: Center(
-              child: iconoir.Phone(
-                width: _kActionIconSize,
-                height: _kActionIconSize,
-                color: primaryTextColor,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 3),
-        GestureDetector(
+      return SizedBox(
+        width: width,
+        height: _kAppBarHeight,
+        child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: onAvatarTap,
-          child: Padding(
-            padding: const EdgeInsets.only(right: 6),
+          child: Center(
             child: avatarWidget ??
                 AvatarWithStatus(
                   avatarUrl: avatarUrl,
@@ -627,13 +630,59 @@ class _RightPillContent extends StatelessWidget {
                 ),
           ),
         ),
-      ],
+      );
+    }
+
+    return SizedBox(
+      width: width,
+      height: _kAppBarHeight,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const SizedBox(width: 7),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              HapticUtils.tap();
+              onVoiceCall?.call();
+            },
+            child: SizedBox(
+              width: 34,
+              height: _kAppBarHeight,
+              child: Center(
+                child: iconoir.Phone(
+                  width: _kActionIconSize,
+                  height: _kActionIconSize,
+                  color: primaryTextColor,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 3),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onAvatarTap,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: avatarWidget ??
+                  AvatarWithStatus(
+                    avatarUrl: avatarUrl,
+                    name: name,
+                    radius: _kAvatarRadius,
+                    isOnline: isOnline,
+                  ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 /// Content of the expanded actions menu morphed from the right pill.
 class _ChatActionsMorphMenu extends StatelessWidget {
+  final double width;
   final bool isMuted;
   final VoidCallback onViewProfile;
   final VoidCallback onSearch;
@@ -643,6 +692,7 @@ class _ChatActionsMorphMenu extends StatelessWidget {
 
   const _ChatActionsMorphMenu({
     super.key,
+    required this.width,
     required this.isMuted,
     required this.onViewProfile,
     required this.onSearch,
@@ -655,49 +705,52 @@ class _ChatActionsMorphMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
 
-    return Material(
-      color: Colors.transparent,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _menuItem(
-              context,
-              l10n.translate('chat_menu_profile'),
-              onViewProfile,
-              iconBuilder: (c) => iconoir.User(color: c, width: 20, height: 20),
-            ),
-            _menuItem(
-              context,
-              l10n.translate('chat_menu_search_messages'),
-              onSearch,
-              iconBuilder: (c) => iconoir.Search(color: c, width: 20, height: 20),
-            ),
-            _menuItem(
-              context,
-              isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),
-              onToggleMute,
-              iconBuilder: (c) => isMuted
-                  ? iconoir.BellOff(color: c, width: 20, height: 20)
-                  : iconoir.Bell(color: c, width: 20, height: 20),
-            ),
-            _menuItem(
-              context,
-              l10n.translate('chat_menu_clear_history'),
-              onClearHistory,
-              iconBuilder: (c) => iconoir.Trash(color: c, width: 20, height: 20),
-              isDestructive: true,
-            ),
-            _menuItem(
-              context,
-              l10n.translate('chat_menu_report'),
-              onReport,
-              iconBuilder: (c) => iconoir.WarningTriangle(color: c, width: 20, height: 20),
-              isDestructive: true,
-            ),
-          ],
+    return SizedBox(
+      width: width,
+      child: Material(
+        color: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _menuItem(
+                context,
+                l10n.translate('chat_menu_profile'),
+                onViewProfile,
+                iconBuilder: (c) => iconoir.User(color: c, width: 20, height: 20),
+              ),
+              _menuItem(
+                context,
+                l10n.translate('chat_menu_search_messages'),
+                onSearch,
+                iconBuilder: (c) => iconoir.Search(color: c, width: 20, height: 20),
+              ),
+              _menuItem(
+                context,
+                isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),
+                onToggleMute,
+                iconBuilder: (c) => isMuted
+                    ? iconoir.BellOff(color: c, width: 20, height: 20)
+                    : iconoir.Bell(color: c, width: 20, height: 20),
+              ),
+              _menuItem(
+                context,
+                l10n.translate('chat_menu_clear_history'),
+                onClearHistory,
+                iconBuilder: (c) => iconoir.Trash(color: c, width: 20, height: 20),
+                isDestructive: true,
+              ),
+              _menuItem(
+                context,
+                l10n.translate('chat_menu_report'),
+                onReport,
+                iconBuilder: (c) => iconoir.WarningTriangle(color: c, width: 20, height: 20),
+                isDestructive: true,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -732,32 +785,35 @@ class _ChatActionsMorphMenu extends StatelessWidget {
       splashColor: isDark
           ? Colors.white.withValues(alpha: 0.12)
           : Colors.black.withValues(alpha: 0.08),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 22,
-              height: 22,
-              child: Center(
-                child: iconBuilder(color),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  color: color,
-                  fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+      child: SizedBox(
+        height: 42,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 22,
+                height: 22,
+                child: Center(
+                  child: iconBuilder(color),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: color,
+                    fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

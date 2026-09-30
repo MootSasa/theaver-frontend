@@ -26,6 +26,8 @@ import 'services/profile_theme_provider.dart';
 import 'utils/emoji_utils.dart';
 import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'screens/call/voice_call_screen.dart';
+import 'screens/call/video_call_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -132,6 +134,31 @@ class TheaverApp extends StatelessWidget {
             ],
             navigatorKey: DeepLinkService().navigatorKey,
             home: const SplashScreen(),
+            onGenerateRoute: (settings) {
+              if (settings.name == '/voice-call') {
+                final args = settings.arguments as Map<String, dynamic>? ?? {};
+                final chatId = args['chatId']?.toString() ?? '0';
+                return MaterialPageRoute(
+                  builder: (_) => VoiceCallScreen(
+                    callId: chatId,
+                    isCaller: true,
+                  ),
+                  settings: settings,
+                );
+              }
+              if (settings.name == '/video-call') {
+                final args = settings.arguments as Map<String, dynamic>? ?? {};
+                final chatId = args['chatId']?.toString() ?? '0';
+                return MaterialPageRoute(
+                  builder: (_) => VideoCallScreen(
+                    callId: chatId,
+                    isCaller: true,
+                  ),
+                  settings: settings,
+                );
+              }
+              return null;
+            },
           );
         },
       ),
