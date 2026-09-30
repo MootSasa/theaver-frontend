@@ -2168,6 +2168,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     ? const Color(0xFF5CB8E6)
                     : Theme.of(context).colorScheme.primary)
                 : null,
+            isChannel: false,
+            isMuted: _isMuted,
             onBack: () => Navigator.pop(context),
             onTitleTap: () => Navigator.push(
                 context,
@@ -2178,40 +2180,34 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     groupAvatar: widget.groupAvatar ?? _groupAvatar,
                   ),
                 )),
-            onAvatarTap: () {
-              GlassChatMenu.show(
+            onViewProfile: () => Navigator.push(
                 context,
-                isMuted: _isMuted,
-                onVoiceCall: () {
-                  /* TODO: Voice call */
-                },
-                onVideoCall: () {
-                  /* TODO: Video call */
-                },
-                onSearch: () {
-                  /* TODO: Search */
-                },
-                onToggleMute: () {
-                  setState(() => _isMuted = !_isMuted);
-                  ChatService.setMuteNotifications(
-                      chatId: widget.chatId, muted: _isMuted);
-                },
-                onClearHistory: () {
-                  // TODO: Clear history dialog
-                },
-                onReport: () {
-                  // TODO: Report dialog
-                },
-                onViewProfile: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => GroupInfoScreen(
-                        chatId: widget.chatId,
-                        groupName: displayName,
-                        groupAvatar: widget.groupAvatar ?? _groupAvatar,
-                      ),
-                    )),
-              );
+                MaterialPageRoute(
+                  builder: (_) => GroupInfoScreen(
+                    chatId: widget.chatId,
+                    groupName: displayName,
+                    groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                  ),
+                )),
+            onVoiceCall: () {
+              /* TODO: Voice call */
+            },
+            onVideoCall: () {
+              /* TODO: Video call */
+            },
+            onSearch: () {
+              /* TODO: Search */
+            },
+            onToggleMute: () {
+              setState(() => _isMuted = !_isMuted);
+              ChatService.setMuteNotifications(
+                  chatId: widget.chatId, muted: _isMuted);
+            },
+            onClearHistory: () {
+              // TODO: Clear history dialog
+            },
+            onReport: () {
+              // TODO: Report dialog
             },
           ),
           MediaNotePlayerHeader(

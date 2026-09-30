@@ -1015,36 +1015,26 @@ class _ChannelScreenState extends State<ChannelScreen> {
         avatarUrl: widget.channelAvatar ?? _channelAvatar,
         isOnline: false, // Channel doesn't have online status
         statusText: subscriberText,
+        isChannel: true, // Calls hidden in channel
+        isMuted: false, // TODO: Get muted state
         onBack: () => Navigator.pop(context),
         onTitleTap: () {
           // TODO: Open channel info
         },
-        onAvatarTap: () {
-          GlassChatMenu.show(
-            context,
-            isMuted: false, // TODO: Get muted state
-            onVoiceCall: () {
-              /* Not supported for channels usually */
-            },
-            onVideoCall: () {
-              /* Not supported for channels usually */
-            },
-            onSearch: () {
-              /* TODO: Search */
-            },
-            onToggleMute: () {
-              // TODO: Toggle notifications
-            },
-            onClearHistory: () {
-              // TODO: Clear history
-            },
-            onReport: () {
-              // TODO: Report
-            },
-            onViewProfile: () {
-              // TODO: View channel info
-            },
-          );
+        onViewProfile: () {
+          // TODO: View channel info
+        },
+        onSearch: () {
+          // TODO: Search
+        },
+        onToggleMute: () {
+          // TODO: Toggle notifications
+        },
+        onClearHistory: () {
+          // TODO: Clear history
+        },
+        onReport: () {
+          // TODO: Report
         },
       ),
       floatingActionButton: ScrollDownFab(

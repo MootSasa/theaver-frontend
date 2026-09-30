@@ -265,6 +265,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
               titleWidget: _buildAppBarTitle(theme, chatTitle),
               statusText: chatSubtitle,
               avatarWidget: _buildServiceAvatar(theme),
+              isChannel: true,
               onBack: () => Navigator.pop(context),
               onTitleTap: () => _showChatInfoDialog(context, l10n),
               onAvatarTap: () => _showChatInfoDialog(context, l10n),

@@ -2112,23 +2112,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 isOnline: _isOtherUserOnline,
                 lastSeen: _otherUserLastSeen,
                 statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
+                isChannel: false,
+                isMuted: _isMuted,
                 onBack: () => Navigator.pop(context),
                 onTitleTap: _viewUserProfile,
-                onAvatarTap: () {
-                  GlassChatMenu.show(
-                    context,
-                    isMuted: _isMuted,
-                    onVoiceCall: _startVoiceCall,
-                    onVideoCall: _startVideoCall,
-                    onSearch: () {
-                      _searchMessages();
-                    },
-                    onToggleMute: _toggleMuteNotifications,
-                    onClearHistory: _showClearHistoryDialog,
-                    onReport: _showBlockUserDialog,
-                    onViewProfile: _viewUserProfile,
-                  );
-                },
+                onViewProfile: _viewUserProfile,
+                onVoiceCall: _startVoiceCall,
+                onVideoCall: _startVideoCall,
+                onSearch: _searchMessages,
+                onToggleMute: _toggleMuteNotifications,
+                onClearHistory: _showClearHistoryDialog,
+                onReport: _showBlockUserDialog,
               ),
               MediaNotePlayerHeader(
                 onScrollToActive: () {
