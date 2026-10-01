@@ -2157,7 +2157,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       },
       appBar: Builder(
         builder: (context) {
-          final topBarHeight = MediaQuery.paddingOf(context).top + 62.0;
+          final topBarHeight = MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight;
           return Stack(
             clipBehavior: Clip.none,
             children: [

@@ -14,9 +14,9 @@ import 'animated_ellipsis_text.dart';
 
 // --- НАСТРОЙКИ СТИЛЯ ПАНЕЛИ ---
 /// Высота панели без учета отступов и статус-бара (Apple HIG standard).
-const double _kAppBarHeight = 54.0;
-/// Радиус скругления капсул панели (54 / 2 = 27) — идеальный стадион / круг.
-const double _kAppBarBorderRadius = 27.0;
+const double _kAppBarHeight = 44.0;
+/// Радиус скругления капсул панели (44 / 2 = 22) — идеальный стадион / круг.
+const double _kAppBarBorderRadius = 22.0;
 /// Внешний горизонтальный отступ панели от краев экрана.
 const double _kAppBarHorizontalPadding = 12.0;
 /// Внешний вертикальный отступ панели от статус-бара.
@@ -25,12 +25,15 @@ const double _kAppBarVerticalPadding = 8.0;
 const double _kPillSpacing = 8.0;
 
 /// Ширина левой плашки (кнопка "Назад").
-const double _kBackPillWidth = 54.0;
+const double _kBackPillWidth = 44.0;
 
 /// Ширина правой плашки в канале (только три точки).
-const double _kRightPillChannelWidth = 54.0;
+const double _kRightPillChannelWidth = 44.0;
 /// Ширина правой плашки в чате (звонок + три точки).
 const double _kRightPillChatWidth = 88.0;
+
+/// Полная высота плавающей панели со стандартным верхним отступом: 44.0 + 8.0 = 52.0.
+const double kFloatingAppBarTotalHeight = _kAppBarHeight + _kAppBarVerticalPadding;
 
 /// Ширина выпадающего морф-меню действий.
 const double _kMenuWidth = 250.0;
@@ -53,19 +56,19 @@ const LiquidGlassMorphMotion _kChatMenuMotion = LiquidGlassMorphMotion(
 );
 
 /// Размер шрифта имени в заголовке.
-const double _kTitleFontSize = 16.0;
+const double _kTitleFontSize = 15.0;
 /// Размер шрифта статуса (в сети / был недавно).
-const double _kStatusFontSize = 12.0;
+const double _kStatusFontSize = 11.5;
 
 /// Радиус аватарки в центральной плашке (Telegram-стиль: аватарка слева от имени).
-const double _kCenterAvatarRadius = 19.0;
+const double _kCenterAvatarRadius = 16.0;
 /// Размер иконок действий (звонок, меню).
 const double _kActionIconSize = 20.0;
 
 // ------------------------------
 
 /// Floating AppBar split into 3 distinct glass/matte pills:
-/// 1. Left circular pill: Back button (54x54).
+/// 1. Left circular pill: Back button (44x44).
 /// 2. Center capsule pill: Chat name & status text.
 /// 3. Right capsule pill: Calls & avatar, which fluidly morphs into the actions menu.
 class FloatingGlassAppBar extends StatefulWidget {
@@ -427,7 +430,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       },
       behavior: HitTestBehavior.opaque,
       child: Padding(
-        padding: const EdgeInsets.only(left: 7.0, right: 12.0),
+        padding: const EdgeInsets.only(left: 6.0, right: 12.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -450,7 +453,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                     isOnline: widget.isOnline,
                   ),
             ),
-            const SizedBox(width: 9.0),
+            const SizedBox(width: 8.0),
             Expanded(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -598,7 +601,7 @@ class _RightPillContent extends StatelessWidget {
                 onVoiceCall?.call();
               },
               child: SizedBox(
-                width: 38,
+                width: 44,
                 height: _kAppBarHeight,
                 child: Center(
                   child: iconoir.Phone(
@@ -613,7 +616,7 @@ class _RightPillContent extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap: onThreeDotsTap,
               child: SizedBox(
-                width: 38,
+                width: 44,
                 height: _kAppBarHeight,
                 child: Center(
                   child: iconoir.MoreVert(
