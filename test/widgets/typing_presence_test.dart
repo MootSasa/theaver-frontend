@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
@@ -548,7 +549,7 @@ void main() {
       expect(find.text('1250 подписчиков'), findsOneWidget);
     });
 
-    testWidgets('Opens actions menu on avatar tap, dismisses on backdrop tap, and reopens smoothly',
+    testWidgets('Opens actions menu on three dots tap, dismisses on backdrop tap, and reopens smoothly',
         (WidgetTester tester) async {
       bool viewProfileCalled = false;
       await tester.pumpWidget(
@@ -569,12 +570,16 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Avatar is present
+      // Avatar is present in the center pill (Telegram style)
       final avatarFinder = find.byType(AvatarWithStatus);
       expect(avatarFinder, findsOneWidget);
 
-      // 1. Open menu: tap avatar
-      await tester.tap(avatarFinder);
+      // Three dots button is present in the right pill
+      final moreButtonFinder = find.byType(iconoir.MoreVert);
+      expect(moreButtonFinder, findsOneWidget);
+
+      // 1. Open menu: tap three dots
+      await tester.tap(moreButtonFinder);
       await tester.pumpAndSettle();
 
       // Menu options should be visible
@@ -596,8 +601,8 @@ void main() {
       expect(find.text('Профиль'), findsNothing);
       expect(find.text('Поиск сообщений'), findsNothing);
 
-      // 3. Reopen menu: tap avatar again
-      await tester.tap(find.byType(AvatarWithStatus));
+      // 3. Reopen menu: tap three dots again
+      await tester.tap(find.byType(iconoir.MoreVert));
       await tester.pumpAndSettle();
       expect(find.text('Профиль'), findsOneWidget);
 
@@ -608,7 +613,7 @@ void main() {
       expect(find.text('Профиль'), findsNothing);
     });
 
-    testWidgets('Renders separate voice call pill when onVoiceCall is provided, and hides in channel',
+    testWidgets('Renders call button in right pill when onVoiceCall is provided, and hides in channel',
         (WidgetTester tester) async {
       bool callCalled = false;
       await tester.pumpWidget(
@@ -625,14 +630,14 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final callPillFinder = find.byKey(const ValueKey<String>('chat_appbar_call_pill'));
-      expect(callPillFinder, findsOneWidget);
+      final callButtonFinder = find.byType(iconoir.Phone);
+      expect(callButtonFinder, findsOneWidget);
 
-      await tester.tap(callPillFinder);
+      await tester.tap(callButtonFinder);
       await tester.pumpAndSettle();
       expect(callCalled, isTrue);
 
-      // In channel mode, call pill must not be rendered
+      // In channel mode, call button must not be rendered
       await tester.pumpWidget(
         createTestApp(
           FloatingGlassAppBar(
@@ -648,7 +653,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey<String>('chat_appbar_call_pill')), findsNothing);
+      expect(find.byType(iconoir.Phone), findsNothing);
     });
   });
 
