@@ -109,10 +109,30 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   bool _isMenuWide = false;
   bool _isMenuOpen = false;
   bool _isMorphing = false;
+  Timer? _morphSafetyTimer;
+
+  @override
+  void dispose() {
+    _morphSafetyTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startMorphSafetyTimer() {
+    _morphSafetyTimer?.cancel();
+    _morphSafetyTimer = Timer(const Duration(milliseconds: 600), () {
+      if (mounted && _isMorphing) {
+        setState(() {
+          _isMorphing = false;
+          _isMenuWide = _isMenuOpen;
+        });
+      }
+    });
+  }
 
   void _openMenu() {
     if (_isMorphing || _isMenuOpen) return;
     HapticUtils.tap();
+    _startMorphSafetyTimer();
     setState(() {
       _isMenuWide = true;
       _isMenuOpen = true;
@@ -122,6 +142,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
   void _closeMenu() {
     if (!_isMenuOpen) return;
+    _startMorphSafetyTimer();
     setState(() {
       _isMenuOpen = false;
       _isMorphing = true;
@@ -216,17 +237,21 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            // Fullscreen backdrop to dismiss menu on outside tap
-            if (_isMenuOpen)
-              Positioned.fill(
+            // Fullscreen backdrop to dismiss menu on outside tap (always present, ignores pointer when closed)
+            Positioned.fill(
+              key: const ValueKey<String>('chat_appbar_backdrop'),
+              child: IgnorePointer(
+                ignoring: !_isMenuOpen,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: _closeMenu,
                 ),
               ),
+            ),
 
             // 1. Left Pill: Circular Back Button (54x54)
             Positioned(
+              key: const ValueKey<String>('chat_appbar_left_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
               left: _kAppBarHorizontalPadding,
               width: _kBackPillWidth,
@@ -244,6 +269,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
             // 2. Center Pill: Name & Status Pill
             Positioned(
+              key: const ValueKey<String>('chat_appbar_center_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
               left: _kAppBarHorizontalPadding + _kBackPillWidth + _kPillSpacing,
               right: _kAppBarHorizontalPadding + rightCollapsedWidth + _kPillSpacing,
@@ -261,6 +287,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
             // 3. Right Pill: Actions + Avatar, morphing to Menu
             Positioned(
+              key: const ValueKey<String>('chat_appbar_right_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
               right: _kAppBarHorizontalPadding,
               width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
@@ -274,9 +301,10 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
                         if (!isRouteSettled && !_isMenuOpen && !_isMorphing) {
                           return LiquidGlassLens(
+                            key: const ValueKey<String>('chat_right_pill_lens'),
                             style: morphStyle,
                             child: _RightPillContent(
-                              key: const ValueKey<String>('chat_right_pill_lens'),
+                              key: const ValueKey<String>('chat_right_pill_lens_content'),
                               width: rightCollapsedWidth,
                               isChannel: widget.isChannel,
                               name: widget.name,
@@ -290,15 +318,21 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                         }
 
                         return LiquidGlassMorph(
+                          key: const ValueKey<String>('chat_right_morph'),
                           alignment: Alignment.topRight,
                           motion: LiquidGlassMorphMotion.fluid,
                           smoothness: 28,
                           style: morphStyle,
                           onEnd: () {
-                            if (_isMenuWide != _isMenuOpen) {
-                              setState(() => _isMenuWide = _isMenuOpen);
+                            _morphSafetyTimer?.cancel();
+                            if (mounted) {
+                              setState(() {
+                                if (_isMenuWide != _isMenuOpen) {
+                                  _isMenuWide = _isMenuOpen;
+                                }
+                                _isMorphing = false;
+                              });
                             }
-                            _isMorphing = false;
                           },
                           child: _isMenuOpen
                               ? _ChatActionsMorphMenu(
@@ -312,7 +346,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                   onReport: () { _closeMenu(); widget.onReport?.call(); },
                                 )
                               : _RightPillContent(
-                                  key: const ValueKey<String>('chat_right_pill'),
+                                  key: const ValueKey<String>('chat_right_pill_morph_content'),
                                   width: rightCollapsedWidth,
                                   isChannel: widget.isChannel,
                                   name: widget.name,
@@ -326,15 +360,21 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                       },
                     )
                   : AnimatedContainer(
+                      key: const ValueKey<String>('chat_right_matte_container'),
                       duration: const Duration(milliseconds: 250),
                       curve: Curves.easeOutCubic,
                       width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
                       height: _isMenuWide ? _kMenuHeight : _kAppBarHeight,
                       onEnd: () {
-                        if (_isMenuWide != _isMenuOpen) {
-                          setState(() => _isMenuWide = _isMenuOpen);
+                        _morphSafetyTimer?.cancel();
+                        if (mounted) {
+                          setState(() {
+                            if (_isMenuWide != _isMenuOpen) {
+                              _isMenuWide = _isMenuOpen;
+                            }
+                            _isMorphing = false;
+                          });
                         }
-                        _isMorphing = false;
                       },
                       child: _buildMattePill(
                         isDark: isDark,
@@ -378,7 +418,11 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       behavior: HitTestBehavior.opaque,
       onTap: () {
         HapticUtils.tap();
-        widget.onBack();
+        if (_isMenuOpen) {
+          _closeMenu();
+        } else {
+          widget.onBack();
+        }
       },
       child: Center(
         child: iconoir.NavArrowLeft(
@@ -397,7 +441,13 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
         : const Color(0xFF4A4A4C);
 
     return GestureDetector(
-      onTap: widget.onTitleTap,
+      onTap: () {
+        if (_isMenuOpen) {
+          _closeMenu();
+        } else {
+          widget.onTitleTap();
+        }
+      },
       behavior: HitTestBehavior.opaque,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12.0),
