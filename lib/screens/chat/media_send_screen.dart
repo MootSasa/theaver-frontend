@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/common/adaptive_switch.dart';
 
 enum MediaQuality {
   sd,
@@ -358,7 +359,7 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                 }),
                 const Divider(height: 24),
                 // Send as document switch
-                SwitchListTile.adaptive(
+                AdaptiveSwitchListTile.adaptive(
                   value: _asDocument,
                   onChanged: (val) {
                     setState(() => _asDocument = val);

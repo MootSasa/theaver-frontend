@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import 'channel_screen.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/swipe_back_route.dart';
 
 class CreateChannelScreen extends StatefulWidget {
@@ -276,10 +277,10 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       leading: Icon(icon, color: const Color(0xFF0088CC)),
       title: Text(title),
       subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-      trailing: Switch(
+      trailing: AdaptiveSwitch(
         value: value,
         onChanged: onChanged,
-        activeThumbColor: const Color(0xFF0088CC),
+        activeColor: const Color(0xFF0088CC),
       ),
     );
   }

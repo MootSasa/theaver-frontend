@@ -5,6 +5,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 
 class BadgeSettingsScreen extends StatelessWidget {
@@ -29,7 +30,7 @@ class BadgeSettingsScreen extends StatelessWidget {
                 SettingsGroup(
                   title: 'Значок приложения',
                   children: [
-                    SwitchListTile(
+                    AdaptiveSwitchListTile(
                       secondary: const Icon(Icons.badge, color: Color(0xFF0088CC)),
                       title: const Text('Показывать значок'),
                       subtitle: const Text('Отображать количество непрочитанных на иконке приложения'),
@@ -76,7 +77,7 @@ class BadgeSettingsScreen extends StatelessWidget {
                   SettingsGroup(
                     title: 'Беззвучные чаты',
                     children: [
-                      SwitchListTile(
+                      AdaptiveSwitchListTile(
                         secondary: const Icon(Icons.notifications_off_outlined, color: Color(0xFF0088CC)),
                         title: const Text('Включать беззвучные чаты'),
                         subtitle: const Text('Учитывать заглушённые чаты и каналы в счётчике значка'),

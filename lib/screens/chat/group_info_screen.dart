@@ -4,6 +4,7 @@ import '../../services/auth_service.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/user/avatar_with_status.dart';
+import '../../widgets/common/adaptive_switch.dart';
 
 /// Экран информации о группе — фото, имя, описание, ссылка, участники, настройки
 class GroupInfoScreen extends StatefulWidget {
@@ -135,7 +136,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
               ),
 
               // History for new members
-              SwitchListTile(
+              AdaptiveSwitchListTile(
                 secondary: const Icon(Icons.history),
                 title: Text(l10n.translate('group_info_history_for_new')),
                 value: _historyForNew,

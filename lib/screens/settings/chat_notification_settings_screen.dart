@@ -5,6 +5,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 
 /// Экран настроек уведомлений для конкретного чата.
@@ -124,7 +125,7 @@ class _ChatNotificationSettingsScreenState
 
             // === Предпросмотр ===
             _buildSectionHeader(l10n.translate('chat_notif_preview_section')),
-            SwitchListTile(
+            AdaptiveSwitchListTile(
               secondary: const Icon(Icons.visibility,
                   color: Color(0xFF0088CC)),
               title: Text(l10n.translate('chat_notif_preview')),
@@ -184,7 +185,7 @@ class _ChatNotificationSettingsScreenState
 
             // === Только упоминания ===
             _buildSectionHeader(l10n.translate('chat_notif_mentions_section')),
-            SwitchListTile(
+            AdaptiveSwitchListTile(
               secondary: const Icon(Icons.alternate_email,
                   color: Color(0xFF0088CC)),
               title: Text(l10n.translate('chat_notif_mentions_only')),
@@ -201,7 +202,7 @@ class _ChatNotificationSettingsScreenState
 
             // === Ключевые слова ===
             _buildSectionHeader(l10n.translate('chat_notif_keywords_section')),
-            SwitchListTile(
+            AdaptiveSwitchListTile(
               secondary: const Icon(Icons.label,
                   color: Color(0xFF0088CC)),
               title: Text(l10n.translate('chat_notif_keywords')),

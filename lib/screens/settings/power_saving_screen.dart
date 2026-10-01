@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/common/adaptive_switch.dart';
 
 class PowerSavingScreen extends StatefulWidget {
   const PowerSavingScreen({Key? key}) : super(key: key);
@@ -59,7 +60,7 @@ class _PowerSavingScreenState extends State<PowerSavingScreen> {
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
-                SwitchListTile(
+                AdaptiveSwitchListTile(
                   title: Text(l10n.translate('power_saving_enable')),
                   subtitle: Text(l10n.translate('power_saving_enable_desc')),
                   value: _settings.powerSavingEnabled,
@@ -98,7 +99,7 @@ class _PowerSavingScreenState extends State<PowerSavingScreen> {
                   },
                 ),
                 const Divider(),
-                SwitchListTile(
+                AdaptiveSwitchListTile(
                   title: Text(l10n.translate('power_saving_reduce_background')),
                   subtitle: Text(l10n.translate('power_saving_reduce_background_desc')),
                   value: _settings.reduceBackgroundActivity,
@@ -106,7 +107,7 @@ class _PowerSavingScreenState extends State<PowerSavingScreen> {
                     _updateSettings(reduceBackgroundActivity: value);
                   },
                 ),
-                SwitchListTile(
+                AdaptiveSwitchListTile(
                   title: Text(l10n.translate('power_saving_lower_brightness')),
                   subtitle: Text(l10n.translate('power_saving_lower_brightness_desc')),
                   value: _settings.lowerScreenBrightness,
@@ -114,7 +115,7 @@ class _PowerSavingScreenState extends State<PowerSavingScreen> {
                     _updateSettings(lowerScreenBrightness: value);
                   },
                 ),
-                SwitchListTile(
+                AdaptiveSwitchListTile(
                   title: Text(l10n.translate('power_saving_limit_fps')),
                   subtitle: Text(l10n.translate('power_saving_limit_fps_desc')),
                   value: _settings.limitFrameRate,
@@ -122,7 +123,7 @@ class _PowerSavingScreenState extends State<PowerSavingScreen> {
                     _updateSettings(limitFrameRate: value);
                   },
                 ),
-                SwitchListTile(
+                AdaptiveSwitchListTile(
                   title: Text(l10n.translate('power_saving_disable_vibration')),
                   subtitle: Text(l10n.translate('power_saving_disable_vibration_desc')),
                   value: _settings.disableVibrations,
@@ -130,7 +131,7 @@ class _PowerSavingScreenState extends State<PowerSavingScreen> {
                     _updateSettings(disableVibrations: value);
                   },
                 ),
-                SwitchListTile(
+                AdaptiveSwitchListTile(
                   title: Text(l10n.translate('power_saving_disable_location')),
                   subtitle: Text(l10n.translate('power_saving_disable_location_desc')),
                   value: _settings.disableLocationServices,

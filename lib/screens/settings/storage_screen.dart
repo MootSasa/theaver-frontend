@@ -12,6 +12,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 
 /// Экран «Данные и хранилище» — полный пункт 3.6 плана.
@@ -1036,7 +1037,7 @@ class _StorageScreenState extends State<StorageScreen> {
         ListTile(
           contentPadding: const EdgeInsets.only(left: 12),
           title: Text(l10n.translate('storage_photos')),
-          trailing: Switch(
+          trailing: AdaptiveSwitch(
             value: wifi
                 ? _autoDownloadSettings.autoDownloadPhotosOnWifi
                 : cellular
@@ -1052,7 +1053,7 @@ class _StorageScreenState extends State<StorageScreen> {
         ListTile(
           contentPadding: const EdgeInsets.only(left: 12),
           title: Text(l10n.translate('storage_videos')),
-          trailing: Switch(
+          trailing: AdaptiveSwitch(
             value: wifi
                 ? _autoDownloadSettings.autoDownloadVideosOnWifi
                 : cellular
@@ -1068,7 +1069,7 @@ class _StorageScreenState extends State<StorageScreen> {
         ListTile(
           contentPadding: const EdgeInsets.only(left: 12),
           title: Text(l10n.translate('storage_files')),
-          trailing: Switch(
+          trailing: AdaptiveSwitch(
             value: wifi
                 ? _autoDownloadSettings.autoDownloadFilesOnWifi
                 : cellular
@@ -1084,7 +1085,7 @@ class _StorageScreenState extends State<StorageScreen> {
         ListTile(
           contentPadding: const EdgeInsets.only(left: 12),
           title: Text(l10n.translate('storage_audio')),
-          trailing: Switch(
+          trailing: AdaptiveSwitch(
             value: wifi
                 ? _autoDownloadSettings.autoDownloadAudioOnWifi
                 : cellular
@@ -1111,7 +1112,7 @@ class _StorageScreenState extends State<StorageScreen> {
   }) {
     final child = Column(
       children: [
-        SwitchListTile(
+        AdaptiveSwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(l10n.translate('storage_compress_images')),
           subtitle: Text(l10n.translate('storage_compress_images_desc')),
@@ -1121,7 +1122,7 @@ class _StorageScreenState extends State<StorageScreen> {
           ),
         ),
         const Divider(height: 1),
-        SwitchListTile(
+        AdaptiveSwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(l10n.translate('storage_auto_download_stickers')),
           value: _storageSettings.autoDownloadStickers,
@@ -1130,7 +1131,7 @@ class _StorageScreenState extends State<StorageScreen> {
           ),
         ),
         const Divider(height: 1),
-        SwitchListTile(
+        AdaptiveSwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(l10n.translate('storage_suggest_stickers')),
           value: _storageSettings.suggestStickers,
@@ -1139,7 +1140,7 @@ class _StorageScreenState extends State<StorageScreen> {
           ),
         ),
         const Divider(height: 1),
-        SwitchListTile(
+        AdaptiveSwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: Text(l10n.translate('storage_suggest_emoji')),
           value: _storageSettings.suggestEmoji,

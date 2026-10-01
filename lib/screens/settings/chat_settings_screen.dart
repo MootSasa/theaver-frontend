@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../theme/theme_provider.dart';
 import '../../l10n/app_localizations.dart';
 import 'wallpaper_screen.dart';
@@ -62,6 +63,14 @@ class ChatSettingsScreen extends StatelessWidget {
                         color: isSupported ? Colors.grey[600] : Colors.grey,
                       ),
                     ),
+                    trailing: isSupported
+                        ? AdaptiveSwitch(
+                            value: provider.enabled,
+                            onChanged: (val) => provider.setMode(
+                              val ? GlassMode.full : GlassMode.disabled,
+                            ),
+                          )
+                        : null,
                   ),
                   if (isSupported)
                     Padding(
@@ -92,85 +101,27 @@ class ChatSettingsScreen extends StatelessWidget {
                       ),
                     ),
                   if (isSupported && mode != GlassMode.disabled) ...[
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 16),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          _GlassModeButton(
-                            icon: Icons.screen_rotation,
-                            label: 'Гироскоп',
-                            isSelected:
-                                provider.lightAngleMode == LightAngleMode.gyroscope,
-                            onTap: () =>
-                                provider.setLightAngleMode(LightAngleMode.gyroscope),
-                          ),
-                          const SizedBox(width: 8),
-                          _GlassModeButton(
-                            icon: Icons.tune,
-                            label: 'Вручную',
-                            isSelected:
-                                provider.lightAngleMode == LightAngleMode.manual,
-                            onTap: () =>
-                                provider.setLightAngleMode(LightAngleMode.manual),
+                          Text(
+                            'Угол освещения: ${provider.manualLightAngle.round()}°',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[700],
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    if (provider.lightAngleMode == LightAngleMode.gyroscope)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Builder(
-                          builder: (context) {
-                            final reduceMotion =
-                                MediaQuery.disableAnimationsOf(context);
-                            if (reduceMotion) {
-                              return Row(
-                                children: [
-                                  Icon(Icons.info_outline,
-                                      size: 16, color: Colors.orange[700]),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      'В системе включено «Уменьшение движения»: гироскоп отключён (фиксированный угол 62°)',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.orange[700],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            }
-                            return Text(
-                              'Блики плавно адаптируются при наклоне устройства',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                              ),
-                            );
-                          },
-                        ),
-                      )
-                    else ...[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Угол освещения: ${provider.manualLightAngle.round()}°',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey[700],
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Slider(
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: AdaptiveSlider(
                         value: provider.manualLightAngle,
                         min: 0,
                         max: 360,
@@ -179,42 +130,43 @@ class ChatSettingsScreen extends StatelessWidget {
                         label: '${provider.manualLightAngle.round()}°',
                         onChanged: (val) => provider.setManualLightAngle(val),
                       ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 4,
-                          children: [
-                            ActionChip(
-                              label: const Text('По умолчанию (62°)',
-                                  style: TextStyle(fontSize: 11)),
-                              onPressed: () => provider.setManualLightAngle(62),
-                            ),
-                            ActionChip(
-                              label: const Text('Сверху (90°)',
-                                  style: TextStyle(fontSize: 11)),
-                              onPressed: () => provider.setManualLightAngle(90),
-                            ),
-                            ActionChip(
-                              label: const Text('Слева (180°)',
-                                  style: TextStyle(fontSize: 11)),
-                              onPressed: () => provider.setManualLightAngle(180),
-                            ),
-                            ActionChip(
-                              label: const Text('Снизу (270°)',
-                                  style: TextStyle(fontSize: 11)),
-                              onPressed: () => provider.setManualLightAngle(270),
-                            ),
-                            ActionChip(
-                              label: const Text('Справа (0°)',
-                                  style: TextStyle(fontSize: 11)),
-                              onPressed: () => provider.setManualLightAngle(0),
-                            ),
-                          ],
-                        ),
+                    ),
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          ActionChip(
+                            label: const Text('По умолчанию (62°)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setManualLightAngle(62),
+                          ),
+                          ActionChip(
+                            label: const Text('Сверху (90°)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setManualLightAngle(90),
+                          ),
+                          ActionChip(
+                            label: const Text('Слева (180°)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setManualLightAngle(180),
+                          ),
+                          ActionChip(
+                            label: const Text('Снизу (270°)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setManualLightAngle(270),
+                          ),
+                          ActionChip(
+                            label: const Text('Справа (0°)',
+                                style: TextStyle(fontSize: 11)),
+                            onPressed: () => provider.setManualLightAngle(0),
+                          ),
+                        ],
                       ),
-                    ],
-                    const SizedBox(height: 12),
+                    ),
+                    const SizedBox(height: 16),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
@@ -231,15 +183,20 @@ class ChatSettingsScreen extends StatelessWidget {
                         ],
                       ),
                     ),
-                    Slider(
-                      value: provider.blur,
-                      min: 0,
-                      max: 30,
-                      divisions: 60,
-                      activeColor: const Color(0xFF0088CC),
-                      label: provider.blur.toStringAsFixed(1),
-                      onChanged: (val) => provider.setBlur(val),
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: AdaptiveSlider(
+                        value: provider.blur,
+                        min: 0,
+                        max: 30,
+                        divisions: 60,
+                        activeColor: const Color(0xFF0088CC),
+                        label: provider.blur.toStringAsFixed(1),
+                        onChanged: (val) => provider.setBlur(val),
+                      ),
                     ),
+                    const SizedBox(height: 6),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Wrap(

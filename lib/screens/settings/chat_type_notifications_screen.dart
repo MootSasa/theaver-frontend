@@ -6,6 +6,7 @@ import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 import 'widgets/sound_picker_sheet.dart';
 import 'chat_notification_settings_screen.dart';
@@ -164,7 +165,7 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                 SettingsGroup(
                   title: 'Основные',
                   children: [
-                    SwitchListTile(
+                    AdaptiveSwitchListTile(
                       secondary: Icon(
                         category == ChatCategory.privateChats
                             ? Icons.person
@@ -186,7 +187,7 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                       },
                     ),
                     if (isEnabled) ...[
-                      SwitchListTile(
+                      AdaptiveSwitchListTile(
                         title: Text(l10n.translate('notifications_preview')),
                         subtitle: Text(l10n.translate('notifications_preview_desc')),
                         value: isPreview,
@@ -204,7 +205,7 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                       ListTile(
                         title: Text(l10n.translate('notifications_sound')),
                         subtitle: Text(_soundLabel(soundUri)),
-                        trailing: Switch(
+                        trailing: AdaptiveSwitch(
                           value: isSound,
                           onChanged: (val) {
                             HapticUtils.selection();
@@ -260,7 +261,7 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                         ),
                       ),
                       if (category == ChatCategory.groupChats)
-                        SwitchListTile(
+                        AdaptiveSwitchListTile(
                           title: Text(l10n.translate('notifications_mentions')),
                           subtitle: Text(l10n.translate('notifications_mentions_desc')),
                           value: s.mentionsNotifications,

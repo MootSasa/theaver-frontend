@@ -8,6 +8,7 @@ import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 import 'chat_type_notifications_screen.dart';
 import 'in_app_notifications_screen.dart';
@@ -189,7 +190,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 SettingsGroup(
                   title: 'Служба уведомлений',
                   children: [
-                    SwitchListTile(
+                    AdaptiveSwitchListTile(
                       secondary: const Icon(Icons.notifications_active, color: Color(0xFF0088CC)),
                       title: Text(l10n.translate('notifications_enabled')),
                       subtitle: Text(l10n.translate('notifications_enabled_desc')),
@@ -269,7 +270,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Switch(
+                            AdaptiveSwitch(
                               value: s.privateChatNotifications,
                               onChanged: (val) {
                                 HapticUtils.selection();
@@ -301,7 +302,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Switch(
+                            AdaptiveSwitch(
                               value: s.groupChatNotifications,
                               onChanged: (val) {
                                 HapticUtils.selection();
@@ -333,7 +334,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Switch(
+                            AdaptiveSwitch(
                               value: s.channelNotifications,
                               onChanged: (val) {
                                 HapticUtils.selection();
@@ -362,7 +363,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   SettingsGroup(
                     title: l10n.translate('notifications_calls'),
                     children: [
-                      SwitchListTile(
+                      AdaptiveSwitchListTile(
                         secondary: const Icon(Icons.call, color: Color(0xFF0088CC)),
                         title: Text(l10n.translate('notifications_call_notifications')),
                         value: s.callNotifications,
@@ -390,7 +391,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                             );
                           },
                         ),
-                        SwitchListTile(
+                        AdaptiveSwitchListTile(
                           title: Text(l10n.translate('notifications_vibration')),
                           value: s.callVibration,
                           onChanged: (val) {
@@ -457,7 +458,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   SettingsGroup(
                     title: 'Фоновые службы',
                     children: [
-                      SwitchListTile(
+                      AdaptiveSwitchListTile(
                         secondary: const Icon(Icons.wifi_tethering, color: Color(0xFF0088CC)),
                         title: const Text('Фоновое подключение'),
                         subtitle: const Text(

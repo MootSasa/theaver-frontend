@@ -16,6 +16,7 @@ import '../../l10n/app_localizations.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import 'passcode_screen.dart';
 import 'blocked_users_screen.dart';
 import 'devices_screen.dart';
@@ -77,7 +78,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                     subtitle: Text(tfa.enabled
                         ? l10n.translate('security_2fa_enabled')
                         : l10n.translate('security_2fa_disabled')),
-                    trailing: Switch(
+                    trailing: AdaptiveSwitch(
                       value: tfa.enabled,
                       onChanged: (v) async {
                         HapticFeedback.lightImpact();
@@ -182,7 +183,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       ),
                     ),
                     title: Text(l10n.translate('security_biometrics')),
-                    trailing: Switch(
+                    trailing: AdaptiveSwitch(
                       value: lock.biometricsEnabled,
                       onChanged: (v) {
                         HapticFeedback.lightImpact();

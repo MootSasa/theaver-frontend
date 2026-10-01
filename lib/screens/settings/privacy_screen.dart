@@ -4,6 +4,7 @@ import '../../l10n/app_localizations.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import 'privacy_detail_screen.dart';
 import 'security_screen.dart';
 
@@ -49,7 +50,7 @@ class PrivacyScreen extends StatelessWidget {
               SettingsGroup(
                 children: [
                   // Пересланные сообщения
-                  SwitchListTile(
+                  AdaptiveSwitchListTile(
                     title: Text(l10n.translate('privacy_forwarded_messages')),
                     subtitle: Text(p.forwardedMessages == PrivacyVisibility.nobody
                         ? l10n.translate('privacy_forward_anonymous')
@@ -66,13 +67,13 @@ class PrivacyScreen extends StatelessWidget {
               SettingsGroup(
                 title: l10n.translate('privacy_section_toggles'),
                 children: [
-                  SwitchListTile(
+                  AdaptiveSwitchListTile(
                     title: Text(l10n.translate('privacy_show_online_status')),
                     value: p.showOnlineStatus,
                     onChanged: (v) =>
                         provider.updatePrivacyField('show_online_status', v),
                   ),
-                  SwitchListTile(
+                  AdaptiveSwitchListTile(
                     title: Text(l10n.translate('privacy_show_read_receipts')),
                     value: p.showReadReceipts,
                     onChanged: (v) =>
@@ -99,17 +100,6 @@ class PrivacyScreen extends StatelessWidget {
           );
         },
       ),
-    );
-  }
-
-  Widget _sectionHeader(BuildContext context, String title) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(title,
-          style: TextStyle(
-              color: Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.w600,
-              fontSize: 13)),
     );
   }
 

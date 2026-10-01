@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../services/auth_service.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/common/adaptive_switch.dart';
 
 /// Экран создания опроса — вопрос + варианты + настройки
 class PollCreateScreen extends StatefulWidget {
@@ -168,18 +169,18 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
           const SizedBox(height: 16),
 
           // Settings
-          SwitchListTile(
+          AdaptiveSwitchListTile(
             title: Text(l10n.translate('poll_create_anonymous')),
             subtitle: Text(l10n.translate('poll_create_anonymous_desc')),
             value: _isAnonymous,
             onChanged: (v) => setState(() => _isAnonymous = v),
           ),
-          SwitchListTile(
+          AdaptiveSwitchListTile(
             title: Text(l10n.translate('poll_create_multiple')),
             value: _isMultipleChoice,
             onChanged: (v) => setState(() => _isMultipleChoice = v),
           ),
-          SwitchListTile(
+          AdaptiveSwitchListTile(
             title: Text(l10n.translate('poll_create_quiz')),
             subtitle: Text(l10n.translate('poll_create_quiz_desc')),
             value: _isQuiz,

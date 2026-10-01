@@ -3,6 +3,7 @@ import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
 import '../../l10n/app_localizations.dart';
 import 'group_chat_screen.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/swipe_back_route.dart';
 
 class CreateGroupScreen extends StatefulWidget {
@@ -357,10 +358,10 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       leading: Icon(icon, color: const Color(0xFF0088CC)),
       title: Text(title),
       subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-      trailing: Switch(
+      trailing: AdaptiveSwitch(
         value: value,
         onChanged: onChanged,
-        activeThumbColor: const Color(0xFF0088CC),
+        activeColor: const Color(0xFF0088CC),
       ),
     );
   }

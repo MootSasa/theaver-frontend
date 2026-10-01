@@ -4,6 +4,7 @@ import '../../services/notification_settings_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 
 class InAppNotificationsScreen extends StatelessWidget {
@@ -28,7 +29,7 @@ class InAppNotificationsScreen extends StatelessWidget {
                 SettingsGroup(
                   title: 'В приложении',
                   children: [
-                    SwitchListTile(
+                    AdaptiveSwitchListTile(
                       secondary: const Icon(Icons.volume_up, color: Color(0xFF0088CC)),
                       title: const Text('Звуки в приложении'),
                       subtitle: const Text('Воспроизводить звуки при получении новых сообщений'),
@@ -38,7 +39,7 @@ class InAppNotificationsScreen extends StatelessWidget {
                         provider.updateGlobalSettings(inAppSounds: val);
                       },
                     ),
-                    SwitchListTile(
+                    AdaptiveSwitchListTile(
                       secondary: const Icon(Icons.vibration, color: Color(0xFF0088CC)),
                       title: const Text('Вибрация в приложении'),
                       subtitle: const Text('Вибрировать при получении сообщений'),
@@ -48,7 +49,7 @@ class InAppNotificationsScreen extends StatelessWidget {
                         provider.updateGlobalSettings(inAppVibrate: val);
                       },
                     ),
-                    SwitchListTile(
+                    AdaptiveSwitchListTile(
                       secondary: const Icon(Icons.picture_in_picture, color: Color(0xFF0088CC)),
                       title: const Text('Предпросмотр в приложении'),
                       subtitle: const Text('Показывать всплывающий баннер вверху экрана'),
@@ -58,7 +59,7 @@ class InAppNotificationsScreen extends StatelessWidget {
                         provider.updateGlobalSettings(inAppPreview: val);
                       },
                     ),
-                    SwitchListTile(
+                    AdaptiveSwitchListTile(
                       secondary: const Icon(Icons.chat_bubble_outline, color: Color(0xFF0088CC)),
                       title: const Text('Звуки в чатах'),
                       subtitle: const Text('Звуки отправки и получения сообщений в активном чате'),

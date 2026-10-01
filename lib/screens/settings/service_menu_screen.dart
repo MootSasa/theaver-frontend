@@ -7,6 +7,7 @@ import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../auth/login_screen.dart';
+import '../../widgets/common/adaptive_switch.dart';
 
 /// Экран сервисного меню (скрытый раздел для отладки и сервисных функций).
 class ServiceMenuScreen extends StatefulWidget {
@@ -24,7 +25,6 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
   String? _connectionTestResult;
   bool? _connectionTestSuccess;
   String? _currentUserToken;
-  String? _currentUserId;
 
   @override
   void initState() {
@@ -35,11 +35,9 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
 
   Future<void> _loadCurrentUserInfo() async {
     final token = await AuthService.getToken();
-    final userId = await AuthService.getUserId();
     if (mounted) {
       setState(() {
         _currentUserToken = token;
-        _currentUserId = userId;
       });
     }
   }
@@ -436,7 +434,7 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
               ),
             ),
           ),
-          SwitchListTile(
+          AdaptiveSwitchListTile(
             secondary: Icon(
               Icons.highlight_outlined,
               color: _isCutoutHighlighted ? Colors.red : const Color(0xFF0088CC),
