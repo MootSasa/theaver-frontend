@@ -278,12 +278,11 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                 right: _kAppBarHorizontalPadding,
                 width: _isMenuOpen || _isMorphing ? _kMenuWidth : rightCollapsedWidth,
                 height: _isMenuOpen || _isMorphing ? _kMenuHeight : _kAppBarHeight,
-                child: ClipRect(
-                  child: LiquidGlassMorph(
-                    alignment: Alignment.topRight,
-                    motion: _kMenuMorphMotion,
-                    smoothness: 0,
-                    style: morphStyle,
+                child: LiquidGlassMorph(
+                  alignment: Alignment.topRight,
+                  motion: _kMenuMorphMotion,
+                  smoothness: 0,
+                  style: morphStyle,
                     onEnd: () {
                       if (_isMorphing) {
                         setState(() => _isMorphing = false);
@@ -312,7 +311,6 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                             onAvatarTap: _handleAvatarTap,
                           ),
                   ),
-                ),
               )
             else
               Positioned(
@@ -538,7 +536,7 @@ class _RightPillContent extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const SizedBox(width: 7),
+          const SizedBox(width: 4),
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {
@@ -546,7 +544,7 @@ class _RightPillContent extends StatelessWidget {
               onVoiceCall?.call();
             },
             child: SizedBox(
-              width: 34,
+              width: 36,
               height: _kAppBarHeight,
               child: Center(
                 child: iconoir.Phone(
@@ -557,19 +555,26 @@ class _RightPillContent extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 3),
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onAvatarTap,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: avatarWidget ??
-                  AvatarWithStatus(
-                    avatarUrl: avatarUrl,
-                    name: name,
-                    radius: _kAvatarRadius,
-                    isOnline: isOnline,
+          const SizedBox(width: 2),
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onAvatarTap,
+              child: SizedBox(
+                height: _kAppBarHeight,
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: avatarWidget ??
+                        AvatarWithStatus(
+                          avatarUrl: avatarUrl,
+                          name: name,
+                          radius: _kAvatarRadius,
+                          isOnline: isOnline,
+                        ),
                   ),
+                ),
+              ),
             ),
           ),
         ],

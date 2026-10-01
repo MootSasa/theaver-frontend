@@ -306,6 +306,9 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
   });
 
   bool _isPointInExcludedArea(Offset position) {
+    // Top app bar / header area (status bar + floating glass bar) is reserved for buttons
+    if (position.dy < 110.0) return true;
+
     // When keyboard is open, exclude the keyboard + input field area.
     // When keyboard is closed, exclude the bottom 120px where the input field is located.
     final double bottomThreshold =
@@ -332,11 +335,13 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
   void handleEvent(PointerEvent event) {
     if (!canPop || _isPointInExcludedArea(event.position)) {
       resolve(GestureDisposition.rejected);
+      stopTrackingPointer(event.pointer);
       return;
     }
 
     if (isPopBlocked && event.position.dy > screenHeight * 0.5) {
       resolve(GestureDisposition.rejected);
+      stopTrackingPointer(event.pointer);
       return;
     }
 
@@ -347,6 +352,8 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
       // Отклоняем при движении влево или диагональном/вертикальном свайпе
       if (dx < -0.1 || dy.abs() > dx.abs() * 0.8) {
         resolve(GestureDisposition.rejected);
+        stopTrackingPointer(event.pointer);
+        return;
       }
       // При движении вправо НЕ вызываем принудительный resolve(accepted),
       // чтобы дать внутренним виджетам (PageView) возможность обработать свой скролл.
