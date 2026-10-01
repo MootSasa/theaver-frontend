@@ -630,7 +630,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final callButtonFinder = find.byType(iconoir.Phone);
+      final callButtonFinder = find.byType(iconoir.PhoneSolid);
       expect(callButtonFinder, findsOneWidget);
 
       await tester.tap(callButtonFinder);
@@ -653,7 +653,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byType(iconoir.Phone), findsNothing);
+      expect(find.byType(iconoir.PhoneSolid), findsNothing);
     });
 
     testWidgets('Wraps long name and status in marquee horizontal scroll without RenderFlex overflow',
@@ -672,18 +672,15 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Verify that widgets render and can scroll horizontally
-      expect(find.text('A Very Long Group Channel Name That Exceeds Screen Boundary Significantly'), findsOneWidget);
-      expect(find.text('12500 участников, 4200 в сети прямо сейчас, обсуждение очень активное'), findsOneWidget);
+      // Verify that widgets render without overflowing
+      expect(find.text('A Very Long Group Channel Name That Exceeds Screen Boundary Significantly'), findsWidgets);
+      expect(find.text('12500 участников, 4200 в сети прямо сейчас, обсуждение очень активное'), findsWidgets);
 
-      // Verify scrollability
+      // Verify scrollable physics is NeverScrollableScrollPhysics (manual touch scroll disabled)
       final scrollableFinders = find.byType(SingleChildScrollView);
       expect(scrollableFinders, findsWidgets);
-
-      // Drag the long name horizontally
-      await tester.drag(find.text('A Very Long Group Channel Name That Exceeds Screen Boundary Significantly'), const Offset(-50, 0));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
+      final firstScrollable = tester.widget<SingleChildScrollView>(scrollableFinders.first);
+      expect(firstScrollable.physics, isA<NeverScrollableScrollPhysics>());
     });
   });
 

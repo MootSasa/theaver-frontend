@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
@@ -186,6 +187,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final bool hasCall = !widget.isChannel && widget.onVoiceCall != null;
     final double rightCollapsedWidth =
         hasCall ? _kRightPillChatWidth : _kRightPillChannelWidth;
+    final double adaptiveMenuWidth = _calculateAdaptiveMenuWidth(context);
 
     final morphShape = LiquidGlassShape.continuousRoundedRectangle(
       cornerRadius: _kAppBarBorderRadius,
@@ -248,7 +250,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               ),
             ),
 
-            // 1. Left Pill: Circular Back Button (54x54)
+            // 1. Left Pill: Circular Back Button (44x44)
             Positioned(
               key: const ValueKey<String>('chat_appbar_left_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
@@ -258,6 +260,12 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               child: isGlassEnabled
                   ? LiquidGlassLens(
                       style: morphStyle,
+                      touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
+                        stretch: 6,
+                        squeeze: 0.65,
+                        lean: 0.3,
+                        grip: 0.5,
+                      )),
                       child: _buildBackButton(context, isDark),
                     )
                   : _buildMattePill(
@@ -289,7 +297,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               key: const ValueKey<String>('chat_appbar_right_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
               right: _kAppBarHorizontalPadding,
-              width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
+              width: _isMenuWide ? adaptiveMenuWidth : rightCollapsedWidth,
               height: _isMenuWide ? _kMenuHeight : _kAppBarHeight,
               child: Align(
                 alignment: Alignment.topRight,
@@ -314,7 +322,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                         child: _isMenuOpen
                             ? _ChatActionsMorphMenu(
                                 key: const ValueKey<String>('chat_actions_menu'),
-                                width: _kMenuWidth,
+                                width: adaptiveMenuWidth,
                                 isMuted: widget.isMuted,
                                 onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                                 onSearch: () { _closeMenu(); widget.onSearch?.call(); },
@@ -334,7 +342,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                         key: const ValueKey<String>('chat_right_matte_container'),
                         duration: const Duration(milliseconds: 250),
                         curve: Curves.easeOutCubic,
-                        width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
+                        width: _isMenuOpen ? adaptiveMenuWidth : rightCollapsedWidth,
                         height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
                         alignment: Alignment.topRight,
                         onEnd: () {
@@ -355,7 +363,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                             child: _isMenuOpen
                                 ? _ChatActionsMorphMenu(
                                     key: const ValueKey<String>('chat_actions_menu_matte'),
-                                    width: _kMenuWidth,
+                                    width: adaptiveMenuWidth,
                                     isMuted: widget.isMuted,
                                     onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                                     onSearch: () { _closeMenu(); widget.onSearch?.call(); },
@@ -379,6 +387,44 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
         ),
       ),
     );
+  }
+
+  double _calculateAdaptiveMenuWidth(BuildContext context) {
+    final l10n = context.l10n;
+    final theme = Theme.of(context);
+    final textStyle = TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w500,
+      fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+    );
+
+    final labels = [
+      l10n.translate('chat_menu_profile'),
+      l10n.translate('chat_menu_search_messages'),
+      widget.isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),
+      l10n.translate('chat_menu_clear_history'),
+      l10n.translate('chat_menu_report'),
+    ];
+
+    double maxTextWidth = 0.0;
+    final textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
+    for (final label in labels) {
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: textStyle),
+        textDirection: textDirection,
+        maxLines: 1,
+      )..layout();
+      if (painter.width > maxTextWidth) {
+        maxTextWidth = painter.width;
+      }
+    }
+
+    // 16 (left padding) + 22 (icon) + 12 (gap) + 16 (right padding) + 18 (safe curve margin) = 84.0
+    final computedWidth = (maxTextWidth + 84.0).ceilToDouble();
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final maxAvailableWidth = screenWidth - (_kAppBarHorizontalPadding * 2);
+
+    return computedWidth.clamp(200.0, maxAvailableWidth);
   }
 
   Widget _buildBackButton(BuildContext context, bool isDark) {
@@ -595,7 +641,7 @@ class _RightPillContent extends StatelessWidget {
                 width: 40,
                 height: _kAppBarHeight,
                 child: Center(
-                  child: iconoir.Phone(
+                  child: iconoir.PhoneSolid(
                     width: _kActionIconSize,
                     height: _kActionIconSize,
                     color: primaryTextColor,
@@ -892,8 +938,48 @@ class _AutoRefreshingLastSeenTextState
   }
 }
 
-/// Горизонтальная обёртка с плавной автопрокруткой и возможностью ручного скролла
-/// для текста заголовка и статуса, если они не помещаются в плашку.
+class _MeasureSizeRenderObject extends RenderProxyBox {
+  Size? _oldSize;
+  ValueChanged<Size> onChange;
+
+  _MeasureSizeRenderObject(this.onChange);
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final newSize = child?.size ?? Size.zero;
+    if (_oldSize != newSize) {
+      _oldSize = newSize;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onChange(newSize);
+      });
+    }
+  }
+}
+
+class _MeasureSize extends SingleChildRenderObjectWidget {
+  final ValueChanged<Size> onChange;
+
+  const _MeasureSize({
+    Key? key,
+    required this.onChange,
+    required Widget child,
+  }) : super(key: key, child: child);
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _MeasureSizeRenderObject(onChange);
+
+  @override
+  void updateRenderObject(
+      BuildContext context, covariant _MeasureSizeRenderObject renderObject) {
+    renderObject.onChange = onChange;
+  }
+}
+
+/// Горизонтальная обёртка с плавной бесконечной циклической автопрокруткой (бегущая строка)
+/// для текста заголовка и статуса. Ручная прокрутка отключена, строки независимы,
+/// прокрутка происходит слева направо (в направлении чтения) с паузой только после полного круга.
 class _MarqueeScrollWrapper extends StatefulWidget {
   final Widget child;
 
@@ -907,9 +993,13 @@ class _MarqueeScrollWrapper extends StatefulWidget {
 }
 
 class _MarqueeScrollWrapperState extends State<_MarqueeScrollWrapper> {
+  static const double _kMarqueeGap = 36.0;
   final ScrollController _controller = ScrollController();
   Timer? _timer;
-  bool _animating = false;
+  bool _loopRunning = false;
+  bool _shouldScroll = false;
+  double _childWidth = 0.0;
+  double _viewportWidth = 0.0;
 
   @override
   void dispose() {
@@ -918,76 +1008,117 @@ class _MarqueeScrollWrapperState extends State<_MarqueeScrollWrapper> {
     super.dispose();
   }
 
-  void _checkScroll() {
-    if (!mounted || !_controller.hasClients) return;
-    final maxScroll = _controller.position.maxScrollExtent;
-    if (maxScroll <= 0) {
-      _timer?.cancel();
-      _timer = null;
-      _animating = false;
-      return;
+  void _onChildSizeChanged(Size size) {
+    if (!mounted) return;
+    final width = size.width;
+    if ((width - _childWidth).abs() > 0.5) {
+      _childWidth = width;
+      _evaluateScroll();
     }
-    if (_animating) return;
-    _animating = true;
-    _startLoop(maxScroll);
   }
 
-  void _startLoop(double maxScroll) {
+  void _evaluateScroll() {
+    if (!mounted) return;
+    final needsScroll = _childWidth > _viewportWidth && _viewportWidth > 0;
+    if (needsScroll != _shouldScroll) {
+      setState(() {
+        _shouldScroll = needsScroll;
+      });
+    }
+    if (!needsScroll) {
+      _stopLoop();
+    } else if (!_loopRunning) {
+      _startLoop();
+    }
+  }
+
+  void _stopLoop() {
     _timer?.cancel();
-    _timer = Timer(const Duration(milliseconds: 1600), () async {
-      if (!mounted || !_controller.hasClients) {
-        _animating = false;
+    _timer = null;
+    _loopRunning = false;
+    if (_controller.hasClients && _controller.offset != 0.0) {
+      _controller.jumpTo(0.0);
+    }
+  }
+
+  void _startLoop() {
+    if (_loopRunning || !mounted || !_controller.hasClients || !_shouldScroll) return;
+    _loopRunning = true;
+    _runLoopIteration();
+  }
+
+  void _runLoopIteration() {
+    _timer?.cancel();
+    // Останавливаться они могут только после полного круга (на позиции 0.0)
+    _timer = Timer(const Duration(milliseconds: 2000), () async {
+      if (!mounted || !_controller.hasClients || !_shouldScroll) {
+        _loopRunning = false;
         return;
       }
-      final duration = Duration(milliseconds: (maxScroll * 40).clamp(1500, 8000).toInt());
+      final loopDistance = _childWidth + _kMarqueeGap;
+      // Скорость чтения ~32 px/сек
+      final durationMs = ((loopDistance / 32.0) * 1000).clamp(2500, 15000).round();
+
       try {
         await _controller.animateTo(
-          maxScroll,
-          duration: duration,
-          curve: Curves.easeInOut,
+          loopDistance,
+          duration: Duration(milliseconds: durationMs),
+          curve: Curves.linear,
         );
-        if (!mounted || !_controller.hasClients) {
-          _animating = false;
+        if (!mounted || !_controller.hasClients || !_shouldScroll) {
+          _loopRunning = false;
           return;
         }
-        _timer = Timer(const Duration(milliseconds: 1600), () async {
-          if (!mounted || !_controller.hasClients) {
-            _animating = false;
-            return;
-          }
-          try {
-            await _controller.animateTo(
-              0.0,
-              duration: Duration(milliseconds: duration.inMilliseconds ~/ 2),
-              curve: Curves.easeInOut,
-            );
-            if (!mounted || !_controller.hasClients) {
-              _animating = false;
-              return;
-            }
-            _startLoop(maxScroll);
-          } catch (_) {
-            _animating = false;
-          }
-        });
+        // Бесшовный возврат на исходную позицию (копия в loopDistance визуально идентична 0.0)
+        _controller.jumpTo(0.0);
+        // Запускаем следующий цикл с паузой только в начале полного круга
+        _runLoopIteration();
       } catch (_) {
-        _animating = false;
+        _loopRunning = false;
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _MarqueeScrollWrapper oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.child != widget.child) {
+      _stopLoop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _evaluateScroll();
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _checkScroll();
-        });
+        final newViewportWidth = constraints.maxWidth;
+        if ((newViewportWidth - _viewportWidth).abs() > 0.5) {
+          _viewportWidth = newViewportWidth;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _evaluateScroll();
+          });
+        }
+
         return SingleChildScrollView(
           controller: _controller,
           scrollDirection: Axis.horizontal,
-          physics: const BouncingScrollPhysics(),
-          child: widget.child,
+          physics: const NeverScrollableScrollPhysics(),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _MeasureSize(
+                onChange: _onChildSizeChanged,
+                child: widget.child,
+              ),
+              if (_shouldScroll) ...[
+                const SizedBox(width: _kMarqueeGap),
+                widget.child,
+              ],
+            ],
+          ),
         );
       },
     );
