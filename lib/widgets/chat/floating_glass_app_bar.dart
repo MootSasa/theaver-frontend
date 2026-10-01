@@ -38,19 +38,20 @@ const double _kMenuWidth = 250.0;
 const double _kMenuHeight = 234.0;
 
 /// Кинематика морфинга меню действий чата.
-/// Зафиксирована в верхнем правом углу (anchor: null = Alignment.topRight),
-/// устраняет паразитный диагональный перелет и вибрацию при сворачивании (leadBounce: 0),
-/// deflates directly into destination (sourceFollows: true)
-/// и математически предотвращает floating-point underflow в double.clamp (seedScale: 0.95).
+/// Зафиксирована в верхнем правом углу (anchor: null -> Alignment.topRight).
+/// Использует single-lens outline motion (blended: false) без вторичных метабол,
+/// что удерживает правый край строго неподвижным на каждом кадре и полностью
+/// устраняет паразитный визуальный скачок вправо при сворачивании меню.
 const LiquidGlassMorphMotion _kChatMenuMotion = LiquidGlassMorphMotion(
   stiffness: 240,
   damping: 28,
-  stretch: 0.24,
+  stretch: 0.15,
   anchor: null,
+  blended: false,
   advanced: LiquidGlassMorphAdvanced(
     leadBounce: 0,
-    followDelay: 0.02,
-    linger: 0.04,
+    followDelay: 0,
+    linger: 0,
     sourceFollows: true,
     seedScale: 0.95,
     newScaleFrom: 0.85,
