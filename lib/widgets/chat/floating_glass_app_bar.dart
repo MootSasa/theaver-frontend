@@ -27,10 +27,11 @@ const double _kPillSpacing = 8.0;
 /// Ширина левой плашки (кнопка "Назад").
 const double _kBackPillWidth = 54.0;
 
-/// Ширина правой плашки в канале (только аватарка).
-const double _kRightPillChannelWidth = 54.0;
-/// Ширина правой плашки в чате (звонок + аватарка).
-const double _kRightPillChatWidth = 94.0;
+/// Размер правой круглой плашки (кнопка аватара / морф-меню).
+const double _kAvatarPillSize = 54.0;
+
+/// Размер отдельной круглой плашки звонка.
+const double _kCallPillSize = 54.0;
 
 /// Ширина выпадающего морф-меню действий.
 const double _kMenuWidth = 250.0;
@@ -38,24 +39,14 @@ const double _kMenuWidth = 250.0;
 const double _kMenuHeight = 234.0;
 
 /// Кинематика морфинга меню действий чата.
-/// Зафиксирована в верхнем правом углу (anchor: null -> Alignment.topRight).
-/// Использует single-lens outline motion (blended: false) без вторичных метабол,
-/// что удерживает правый край строго неподвижным на каждом кадре и полностью
-/// устраняет паразитный визуальный скачок вправо при сворачивании меню.
+/// Полностью совпадает с архитектурой главного экрана (_ThreeDotsGlyph):
+/// fluid-кинематика жидкого стекла с seedScale 0.95 для предотвращения ArgumentError: clamp
+/// при сохранении мягкой органической физики. В сочетании с симметричной круглой
+/// плашкой аватара 54x54 и Alignment.topRight обеспечивает идеально плавное
+/// сворачивание без малейших скачков вправо.
 const LiquidGlassMorphMotion _kChatMenuMotion = LiquidGlassMorphMotion(
-  stiffness: 240,
-  damping: 28,
-  stretch: 0.15,
-  anchor: null,
-  blended: false,
   advanced: LiquidGlassMorphAdvanced(
-    leadBounce: 0,
-    followDelay: 0,
-    linger: 0,
-    sourceFollows: true,
     seedScale: 0.95,
-    newScaleFrom: 0.85,
-    oldScaleTo: 0.90,
   ),
 );
 
@@ -212,8 +203,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final statusBarHeight = MediaQuery.of(context).padding.top;
     final screenSize = MediaQuery.sizeOf(context);
 
-    final rightCollapsedWidth =
-        widget.isChannel ? _kRightPillChannelWidth : _kRightPillChatWidth;
+    final bool hasCallButton = !widget.isChannel && widget.onVoiceCall != null;
 
     final morphShape = LiquidGlassShape.continuousRoundedRectangle(
       cornerRadius: _kAppBarBorderRadius,
@@ -250,8 +240,6 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
     final isExpanded = _isMenuOpen || _isMorphing;
     final currentHeight = isExpanded ? screenSize.height : normalHeight;
-    final route = ModalRoute.of(context);
-    final routeAnimation = route?.animation;
 
     return PopScope(
       canPop: !_isMenuOpen,
@@ -301,7 +289,9 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               key: const ValueKey<String>('chat_appbar_center_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
               left: _kAppBarHorizontalPadding + _kBackPillWidth + _kPillSpacing,
-              right: _kAppBarHorizontalPadding + rightCollapsedWidth + _kPillSpacing,
+              right: hasCallButton
+                  ? _kAppBarHorizontalPadding + _kAvatarPillSize + _kPillSpacing + _kCallPillSize + _kPillSpacing
+                  : _kAppBarHorizontalPadding + _kAvatarPillSize + _kPillSpacing,
               height: _kAppBarHeight,
               child: isGlassEnabled
                   ? LiquidGlassLens(
@@ -314,85 +304,76 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                     ),
             ),
 
-            // 3. Right Pill: Actions + Avatar, morphing to Menu
+            // 3. Call Pill: Circular Voice Call Button (54x54), rendered only when call is available
+            if (hasCallButton)
+              Positioned(
+                key: const ValueKey<String>('chat_appbar_call_pill'),
+                top: statusBarHeight + _kAppBarVerticalPadding,
+                right: _kAppBarHorizontalPadding + _kAvatarPillSize + _kPillSpacing,
+                width: _kCallPillSize,
+                height: _kAppBarHeight,
+                child: isGlassEnabled
+                    ? LiquidGlassLens(
+                        style: morphStyle,
+                        child: _buildCallButton(context, isDark),
+                      )
+                    : _buildMattePill(
+                        isDark: isDark,
+                        child: _buildCallButton(context, isDark),
+                      ),
+              ),
+
+            // 4. Right Pill: Avatar, fluidly morphing into the actions menu
             Positioned(
               key: const ValueKey<String>('chat_appbar_right_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
               right: _kAppBarHorizontalPadding,
-              width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
+              width: _isMenuWide ? _kMenuWidth : _kAvatarPillSize,
               height: _isMenuWide ? _kMenuHeight : _kAppBarHeight,
               child: isGlassEnabled
-                  ? AnimatedBuilder(
-                      animation: routeAnimation ?? const AlwaysStoppedAnimation<double>(1.0),
-                      builder: (context, _) {
-                        final bool isRouteSettled = routeAnimation == null ||
-                            routeAnimation.status == AnimationStatus.completed;
-
-                        if (!isRouteSettled && !_isMenuOpen && !_isMorphing) {
-                          return LiquidGlassLens(
-                            key: const ValueKey<String>('chat_right_pill_lens'),
-                            style: morphStyle,
-                            child: _RightPillContent(
-                              key: const ValueKey<String>('chat_right_pill_lens_content'),
-                              width: rightCollapsedWidth,
-                              isChannel: widget.isChannel,
-                              name: widget.name,
+                  ? LiquidGlassMorph(
+                      key: const ValueKey<String>('chat_right_morph'),
+                      alignment: Alignment.topRight,
+                      motion: _kChatMenuMotion,
+                      smoothness: 28,
+                      style: morphStyle,
+                      onEnd: () {
+                        _morphSafetyTimer?.cancel();
+                        if (mounted) {
+                          setState(() {
+                            if (_isMenuWide != _isMenuOpen) {
+                              _isMenuWide = _isMenuOpen;
+                            }
+                            _isMorphing = false;
+                          });
+                        }
+                      },
+                      child: _isMenuOpen
+                          ? _ChatActionsMorphMenu(
+                              key: const ValueKey<String>('chat_actions_menu'),
+                              width: _kMenuWidth,
+                              isMuted: widget.isMuted,
+                              onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
+                              onSearch: () { _closeMenu(); widget.onSearch?.call(); },
+                              onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
+                              onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
+                              onReport: () { _closeMenu(); widget.onReport?.call(); },
+                            )
+                          : _AvatarGlyph(
+                              key: const ValueKey<String>('chat_avatar_glyph'),
+                              size: _kAvatarPillSize,
                               avatarUrl: widget.avatarUrl,
+                              name: widget.name,
                               isOnline: widget.isOnline,
                               avatarWidget: widget.avatarWidget,
-                              onVoiceCall: widget.onVoiceCall,
-                              onAvatarTap: _handleAvatarTap,
+                              onTap: _handleAvatarTap,
                             ),
-                          );
-                        }
-
-                        return LiquidGlassMorph(
-                          key: const ValueKey<String>('chat_right_morph'),
-                          alignment: Alignment.topRight,
-                          motion: _kChatMenuMotion,
-                          smoothness: 24,
-                          style: morphStyle,
-                          onEnd: () {
-                            _morphSafetyTimer?.cancel();
-                            if (mounted) {
-                              setState(() {
-                                if (_isMenuWide != _isMenuOpen) {
-                                  _isMenuWide = _isMenuOpen;
-                                }
-                                _isMorphing = false;
-                              });
-                            }
-                          },
-                          child: _isMenuOpen
-                              ? _ChatActionsMorphMenu(
-                                  key: const ValueKey<String>('chat_actions_menu'),
-                                  width: _kMenuWidth,
-                                  isMuted: widget.isMuted,
-                                  onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
-                                  onSearch: () { _closeMenu(); widget.onSearch?.call(); },
-                                  onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
-                                  onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                                  onReport: () { _closeMenu(); widget.onReport?.call(); },
-                                )
-                              : _RightPillContent(
-                                  key: const ValueKey<String>('chat_right_pill_morph_content'),
-                                  width: rightCollapsedWidth,
-                                  isChannel: widget.isChannel,
-                                  name: widget.name,
-                                  avatarUrl: widget.avatarUrl,
-                                  isOnline: widget.isOnline,
-                                  avatarWidget: widget.avatarWidget,
-                                  onVoiceCall: widget.onVoiceCall,
-                                  onAvatarTap: _handleAvatarTap,
-                                ),
-                        );
-                      },
                     )
                   : AnimatedContainer(
                       key: const ValueKey<String>('chat_right_matte_container'),
                       duration: const Duration(milliseconds: 250),
                       curve: Curves.easeOutCubic,
-                      width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
+                      width: _isMenuOpen ? _kMenuWidth : _kAvatarPillSize,
                       height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
                       onEnd: () {
                         _morphSafetyTimer?.cancel();
@@ -420,16 +401,14 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                   onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
                                   onReport: () { _closeMenu(); widget.onReport?.call(); },
                                 )
-                              : _RightPillContent(
-                                  key: const ValueKey<String>('chat_right_pill_matte'),
-                                  width: rightCollapsedWidth,
-                                  isChannel: widget.isChannel,
-                                  name: widget.name,
+                              : _AvatarGlyph(
+                                  key: const ValueKey<String>('chat_avatar_glyph_matte'),
+                                  size: _kAvatarPillSize,
                                   avatarUrl: widget.avatarUrl,
+                                  name: widget.name,
                                   isOnline: widget.isOnline,
                                   avatarWidget: widget.avatarWidget,
-                                  onVoiceCall: widget.onVoiceCall,
-                                  onAvatarTap: _handleAvatarTap,
+                                  onTap: _handleAvatarTap,
                                 ),
                         ),
                       ),
@@ -457,6 +436,28 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
         child: iconoir.NavArrowLeft(
           width: 22.0,
           height: 22.0,
+          color: primaryTextColor,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCallButton(BuildContext context, bool isDark) {
+    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticUtils.tap();
+        if (_isMenuOpen) {
+          _closeMenu();
+        } else {
+          widget.onVoiceCall?.call();
+        }
+      },
+      child: Center(
+        child: iconoir.Phone(
+          width: _kActionIconSize,
+          height: _kActionIconSize,
           color: primaryTextColor,
         ),
       ),
@@ -567,106 +568,44 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 }
 
 
-/// Content of the collapsed right pill:
-/// - In channel: only avatar centered
-/// - In private / group chat: [ Phone | Avatar ]
-class _RightPillContent extends StatelessWidget {
-  final double width;
-  final bool isChannel;
-  final String name;
+/// Content of the collapsed right pill (avatar glyph):
+/// Symmetrical 54x54 circle containing only the avatar, matching
+/// the architecture of _ThreeDotsGlyph on the main screen.
+class _AvatarGlyph extends StatelessWidget {
+  final double size;
   final String? avatarUrl;
+  final String name;
   final bool isOnline;
   final Widget? avatarWidget;
-  final VoidCallback? onVoiceCall;
-  final VoidCallback onAvatarTap;
+  final VoidCallback onTap;
 
-  const _RightPillContent({
+  const _AvatarGlyph({
     super.key,
-    required this.width,
-    required this.isChannel,
-    required this.name,
+    required this.size,
     this.avatarUrl,
+    required this.name,
     required this.isOnline,
     this.avatarWidget,
-    this.onVoiceCall,
-    required this.onAvatarTap,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-
-    if (isChannel) {
-      return SizedBox(
-        width: width,
-        height: _kAppBarHeight,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onAvatarTap,
-          child: Center(
-            child: avatarWidget ??
-                AvatarWithStatus(
-                  avatarUrl: avatarUrl,
-                  name: name,
-                  radius: _kAvatarRadius,
-                  isOnline: isOnline,
-                ),
-          ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Center(
+          child: avatarWidget ??
+              AvatarWithStatus(
+                avatarUrl: avatarUrl,
+                name: name,
+                radius: _kAvatarRadius,
+                isOnline: isOnline,
+              ),
         ),
-      );
-    }
-
-    return SizedBox(
-      width: width,
-      height: _kAppBarHeight,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const SizedBox(width: 4),
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              HapticUtils.tap();
-              onVoiceCall?.call();
-            },
-            child: SizedBox(
-              width: 36,
-              height: _kAppBarHeight,
-              child: Center(
-                child: iconoir.Phone(
-                  width: _kActionIconSize,
-                  height: _kActionIconSize,
-                  color: primaryTextColor,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 2),
-          Expanded(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onAvatarTap,
-              child: SizedBox(
-                height: _kAppBarHeight,
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: avatarWidget ??
-                        AvatarWithStatus(
-                          avatarUrl: avatarUrl,
-                          name: name,
-                          radius: _kAvatarRadius,
-                          isOnline: isOnline,
-                        ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -607,6 +607,49 @@ void main() {
       expect(viewProfileCalled, isTrue);
       expect(find.text('Профиль'), findsNothing);
     });
+
+    testWidgets('Renders separate voice call pill when onVoiceCall is provided, and hides in channel',
+        (WidgetTester tester) async {
+      bool callCalled = false;
+      await tester.pumpWidget(
+        createTestApp(
+          FloatingGlassAppBar(
+            name: 'Bob',
+            isOnline: true,
+            isConnected: true,
+            onBack: () {},
+            onTitleTap: () {},
+            onVoiceCall: () => callCalled = true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final callPillFinder = find.byKey(const ValueKey<String>('chat_appbar_call_pill'));
+      expect(callPillFinder, findsOneWidget);
+
+      await tester.tap(callPillFinder);
+      await tester.pumpAndSettle();
+      expect(callCalled, isTrue);
+
+      // In channel mode, call pill must not be rendered
+      await tester.pumpWidget(
+        createTestApp(
+          FloatingGlassAppBar(
+            name: 'Channel',
+            isOnline: true,
+            isChannel: true,
+            isConnected: true,
+            onBack: () {},
+            onTitleTap: () {},
+            onVoiceCall: () {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey<String>('chat_appbar_call_pill')), findsNothing);
+    });
   });
 
   group('Localization Files Verification (10 languages)', () {
