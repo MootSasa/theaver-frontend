@@ -21,9 +21,9 @@ export 'rich_text_editing_controller.dart';
 /// Радиус скругления контейнера поля ввода (в классическом и стеклянном режимах).
 const double _kInputFillBorderRadius = 24.0;
 /// Внешний горизонтальный отступ всего блока ввода от краев экрана.
-const double _kInputHorizontalPadding = 12.0;
+const double _kInputHorizontalPadding = 8.0;
 /// Внешний вертикальный отступ всего блока ввода от краев экрана.
-const double _kInputVerticalPadding = 12.0;
+const double _kInputVerticalPadding = 8.0;
 
 /// Размер круглых кнопок действий (скрепка, микрофон/отправить).
 const double _kActionButtonSize = 38.0;

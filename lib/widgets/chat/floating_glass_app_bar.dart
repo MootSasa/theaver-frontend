@@ -18,7 +18,7 @@ const double _kAppBarHeight = 44.0;
 /// Радиус скругления капсул панели (44 / 2 = 22) — идеальный стадион / круг.
 const double _kAppBarBorderRadius = 22.0;
 /// Внешний горизонтальный отступ панели от краев экрана.
-const double _kAppBarHorizontalPadding = 12.0;
+const double _kAppBarHorizontalPadding = 8.0;
 /// Внешний вертикальный отступ панели от статус-бара.
 const double _kAppBarVerticalPadding = 8.0;
 /// Расстояние между частями панели.
@@ -29,8 +29,8 @@ const double _kBackPillWidth = 44.0;
 
 /// Ширина правой плашки в канале (только три точки).
 const double _kRightPillChannelWidth = 44.0;
-/// Ширина правой плашки в чате (звонок + три точки).
-const double _kRightPillChatWidth = 88.0;
+/// Ширина правой плашки в чате (звонок + три точки, сближены на пару пикселей).
+const double _kRightPillChatWidth = 80.0;
 
 /// Полная высота плавающей панели со стандартным верхним отступом: 44.0 + 8.0 = 52.0.
 const double kFloatingAppBarTotalHeight = _kAppBarHeight + _kAppBarVerticalPadding;
@@ -41,27 +41,16 @@ const double _kMenuWidth = 250.0;
 const double _kMenuHeight = 234.0;
 
 /// Кинематика морфинга меню действий чата.
-/// Зафиксирована в верхнем правом углу (anchor: null -> Alignment.topRight).
-/// Использует seedScale 0.95 для предотвращения ArgumentError: clamp при расчетах плавающей точки
-/// и leadBounce: 0 для исключения паразитных колебаний на финише сворачивания.
-const LiquidGlassMorphMotion _kChatMenuMotion = LiquidGlassMorphMotion(
-  stiffness: 220,
-  damping: 24,
-  stretch: 0.25,
-  anchor: null,
-  advanced: LiquidGlassMorphAdvanced(
-    leadBounce: 0,
-    seedScale: 0.95,
-  ),
-);
+/// Использует plain-режим (единая линза без разделения на два блоба, исключающая любые прыжки).
+const LiquidGlassMorphMotion _kChatMenuMotion = LiquidGlassMorphMotion.plain;
 
 /// Размер шрифта имени в заголовке.
-const double _kTitleFontSize = 15.0;
+const double _kTitleFontSize = 16.0;
 /// Размер шрифта статуса (в сети / был недавно).
-const double _kStatusFontSize = 11.5;
+const double _kStatusFontSize = 12.5;
 
-/// Радиус аватарки в центральной плашке (Telegram-стиль: аватарка слева от имени).
-const double _kCenterAvatarRadius = 16.0;
+/// Радиус аватарки в центральной плашке (диаметр 40px).
+const double _kCenterAvatarRadius = 20.0;
 /// Размер иконок действий (звонок, меню).
 const double _kActionIconSize = 20.0;
 
@@ -430,7 +419,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       },
       behavior: HitTestBehavior.opaque,
       child: Padding(
-        padding: const EdgeInsets.only(left: 6.0, right: 12.0),
+        padding: const EdgeInsets.only(left: 2.0, right: 10.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -458,60 +447,62 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (widget.titleWidget != null)
-                    widget.titleWidget!
-                  else
-                    Text(
-                      widget.name,
-                      style: TextStyle(
-                        fontSize: _kTitleFontSize,
-                        fontWeight: FontWeight.w600,
-                        color: primaryTextColor,
-                        fontFamily: theme.textTheme.bodyMedium?.fontFamily,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.left,
-                    ),
+                  _MarqueeScrollWrapper(
+                    child: widget.titleWidget ??
+                        Text(
+                          widget.name,
+                          style: TextStyle(
+                            fontSize: _kTitleFontSize,
+                            fontWeight: FontWeight.w600,
+                            color: primaryTextColor,
+                            fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+                          ),
+                          maxLines: 1,
+                          textAlign: TextAlign.left,
+                        ),
+                  ),
                   const SizedBox(height: 1.0),
-                  ValueListenableBuilder<bool>(
-                    valueListenable: WebSocketService().isConnectedNotifier,
-                    builder: (context, wsConnected, _) {
-                      final bool serverAvailable = widget.isConnected ?? wsConnected;
-                      if (!serverAvailable) {
-                        return AnimatedEllipsisText(
-                          text: context.l10n.translate('chat_status_connecting'),
-                          style: TextStyle(
-                            fontSize: _kStatusFontSize,
-                            color: secondaryTextColor,
-                            fontWeight: FontWeight.w500,
-                          ),
+                  _MarqueeScrollWrapper(
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: WebSocketService().isConnectedNotifier,
+                      builder: (context, wsConnected, _) {
+                        final bool serverAvailable = widget.isConnected ?? wsConnected;
+                        if (!serverAvailable) {
+                          return AnimatedEllipsisText(
+                            text: context.l10n.translate('chat_status_connecting'),
+                            style: TextStyle(
+                              fontSize: _kStatusFontSize,
+                              color: secondaryTextColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          );
+                        }
+                        if (widget.statusText != null) {
+                          final isHardcodedGrey = widget.statusColor == Colors.grey[600] ||
+                              widget.statusColor == Colors.grey;
+                          final defaultAccent = isDark
+                              ? const Color(0xFF5CB8E6)
+                              : theme.colorScheme.primary;
+                          final effectiveColor = (widget.statusColor == null || isHardcodedGrey)
+                              ? secondaryTextColor
+                              : (widget.statusColor == theme.colorScheme.primary ? defaultAccent : widget.statusColor);
+                          return AnimatedEllipsisText(
+                            text: widget.statusText!,
+                            style: TextStyle(
+                              fontSize: _kStatusFontSize,
+                              color: effectiveColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          );
+                        }
+                        return _AutoRefreshingLastSeenText(
+                          isOnline: widget.isOnline,
+                          lastSeen: widget.lastSeen,
                         );
-                      }
-                      if (widget.statusText != null) {
-                        final isHardcodedGrey = widget.statusColor == Colors.grey[600] ||
-                            widget.statusColor == Colors.grey;
-                        final defaultAccent = isDark
-                            ? const Color(0xFF5CB8E6)
-                            : theme.colorScheme.primary;
-                        final effectiveColor = (widget.statusColor == null || isHardcodedGrey)
-                            ? secondaryTextColor
-                            : (widget.statusColor == theme.colorScheme.primary ? defaultAccent : widget.statusColor);
-                        return AnimatedEllipsisText(
-                          text: widget.statusText!,
-                          style: TextStyle(
-                            fontSize: _kStatusFontSize,
-                            color: effectiveColor,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        );
-                      }
-                      return _AutoRefreshingLastSeenText(
-                        isOnline: widget.isOnline,
-                        lastSeen: widget.lastSeen,
-                      );
-                    },
+                      },
+                    ),
                   ),
                 ],
               ),
@@ -601,7 +592,7 @@ class _RightPillContent extends StatelessWidget {
                 onVoiceCall?.call();
               },
               child: SizedBox(
-                width: 44,
+                width: 40,
                 height: _kAppBarHeight,
                 child: Center(
                   child: iconoir.Phone(
@@ -616,7 +607,7 @@ class _RightPillContent extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap: onThreeDotsTap,
               child: SizedBox(
-                width: 44,
+                width: 40,
                 height: _kAppBarHeight,
                 child: Center(
                   child: iconoir.MoreVert(
@@ -897,6 +888,108 @@ class _AutoRefreshingLastSeenTextState
         color: widget.isOnline ? onlineColor : offlineColor,
         fontWeight: FontWeight.w500,
       ),
+    );
+  }
+}
+
+/// Горизонтальная обёртка с плавной автопрокруткой и возможностью ручного скролла
+/// для текста заголовка и статуса, если они не помещаются в плашку.
+class _MarqueeScrollWrapper extends StatefulWidget {
+  final Widget child;
+
+  const _MarqueeScrollWrapper({
+    Key? key,
+    required this.child,
+  }) : super(key: key);
+
+  @override
+  State<_MarqueeScrollWrapper> createState() => _MarqueeScrollWrapperState();
+}
+
+class _MarqueeScrollWrapperState extends State<_MarqueeScrollWrapper> {
+  final ScrollController _controller = ScrollController();
+  Timer? _timer;
+  bool _animating = false;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _checkScroll() {
+    if (!mounted || !_controller.hasClients) return;
+    final maxScroll = _controller.position.maxScrollExtent;
+    if (maxScroll <= 0) {
+      _timer?.cancel();
+      _timer = null;
+      _animating = false;
+      return;
+    }
+    if (_animating) return;
+    _animating = true;
+    _startLoop(maxScroll);
+  }
+
+  void _startLoop(double maxScroll) {
+    _timer?.cancel();
+    _timer = Timer(const Duration(milliseconds: 1600), () async {
+      if (!mounted || !_controller.hasClients) {
+        _animating = false;
+        return;
+      }
+      final duration = Duration(milliseconds: (maxScroll * 40).clamp(1500, 8000).toInt());
+      try {
+        await _controller.animateTo(
+          maxScroll,
+          duration: duration,
+          curve: Curves.easeInOut,
+        );
+        if (!mounted || !_controller.hasClients) {
+          _animating = false;
+          return;
+        }
+        _timer = Timer(const Duration(milliseconds: 1600), () async {
+          if (!mounted || !_controller.hasClients) {
+            _animating = false;
+            return;
+          }
+          try {
+            await _controller.animateTo(
+              0.0,
+              duration: Duration(milliseconds: duration.inMilliseconds ~/ 2),
+              curve: Curves.easeInOut,
+            );
+            if (!mounted || !_controller.hasClients) {
+              _animating = false;
+              return;
+            }
+            _startLoop(maxScroll);
+          } catch (_) {
+            _animating = false;
+          }
+        });
+      } catch (_) {
+        _animating = false;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _checkScroll();
+        });
+        return SingleChildScrollView(
+          controller: _controller,
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: widget.child,
+        );
+      },
     );
   }
 }

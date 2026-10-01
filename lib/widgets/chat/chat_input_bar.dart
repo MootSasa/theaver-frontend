@@ -331,7 +331,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
         if (widget.attachedFiles.isNotEmpty)
           Container(
             height: 80,
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: widget.attachedFiles.length,

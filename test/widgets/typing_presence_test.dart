@@ -655,6 +655,36 @@ void main() {
 
       expect(find.byType(iconoir.Phone), findsNothing);
     });
+
+    testWidgets('Wraps long name and status in marquee horizontal scroll without RenderFlex overflow',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          FloatingGlassAppBar(
+            name: 'A Very Long Group Channel Name That Exceeds Screen Boundary Significantly',
+            statusText: '12500 участников, 4200 в сети прямо сейчас, обсуждение очень активное',
+            isOnline: true,
+            isConnected: true,
+            onBack: () {},
+            onTitleTap: () {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verify that widgets render and can scroll horizontally
+      expect(find.text('A Very Long Group Channel Name That Exceeds Screen Boundary Significantly'), findsOneWidget);
+      expect(find.text('12500 участников, 4200 в сети прямо сейчас, обсуждение очень активное'), findsOneWidget);
+
+      // Verify scrollability
+      final scrollableFinders = find.byType(SingleChildScrollView);
+      expect(scrollableFinders, findsWidgets);
+
+      // Drag the long name horizontally
+      await tester.drag(find.text('A Very Long Group Channel Name That Exceeds Screen Boundary Significantly'), const Offset(-50, 0));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    });
   });
 
   group('Localization Files Verification (10 languages)', () {
