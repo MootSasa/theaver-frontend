@@ -8,6 +8,7 @@ import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/widgets/chat/floating_glass_app_bar.dart';
 import 'package:theaver/widgets/chat/animated_ellipsis_text.dart';
+import 'package:theaver/widgets/user/avatar_with_status.dart';
 import 'package:theaver/utils/date_time_utils.dart';
 import 'package:theaver/l10n/app_localizations.dart';
 
@@ -545,6 +546,66 @@ void main() {
 
       expect(find.text('MIPT News Channel'), findsOneWidget);
       expect(find.text('1250 подписчиков'), findsOneWidget);
+    });
+
+    testWidgets('Opens actions menu on avatar tap, dismisses on backdrop tap, and reopens smoothly',
+        (WidgetTester tester) async {
+      bool viewProfileCalled = false;
+      await tester.pumpWidget(
+        createTestApp(
+          FloatingGlassAppBar(
+            name: 'Alice',
+            isOnline: true,
+            isConnected: true,
+            onBack: () {},
+            onTitleTap: () {},
+            onViewProfile: () => viewProfileCalled = true,
+            onSearch: () {},
+            onToggleMute: () {},
+            onClearHistory: () {},
+            onReport: () {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Avatar is present
+      final avatarFinder = find.byType(AvatarWithStatus);
+      expect(avatarFinder, findsOneWidget);
+
+      // 1. Open menu: tap avatar
+      await tester.tap(avatarFinder);
+      await tester.pumpAndSettle();
+
+      // Menu options should be visible
+      expect(find.text('Профиль'), findsOneWidget);
+      expect(find.text('Поиск сообщений'), findsOneWidget);
+      expect(find.text('Без звука'), findsOneWidget);
+      expect(find.text('Очистить историю'), findsOneWidget);
+      expect(find.text('Пожаловаться'), findsOneWidget);
+
+      // 2. Dismiss menu: tap backdrop
+      final backdropFinder = find.byKey(const ValueKey<String>('chat_appbar_backdrop'));
+      expect(backdropFinder, findsOneWidget);
+      await tester.tap(backdropFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      // Menu options should be gone
+      expect(find.text('Профиль'), findsNothing);
+      expect(find.text('Поиск сообщений'), findsNothing);
+
+      // 3. Reopen menu: tap avatar again
+      await tester.tap(find.byType(AvatarWithStatus));
+      await tester.pumpAndSettle();
+      expect(find.text('Профиль'), findsOneWidget);
+
+      // 4. Tap menu action: "Профиль"
+      await tester.tap(find.text('Профиль'));
+      await tester.pumpAndSettle();
+      expect(viewProfileCalled, isTrue);
+      expect(find.text('Профиль'), findsNothing);
     });
   });
 

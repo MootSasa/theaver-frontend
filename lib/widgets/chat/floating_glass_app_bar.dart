@@ -37,6 +37,27 @@ const double _kMenuWidth = 250.0;
 /// Высота выпадающего морф-меню действий (5 пунктов по 42pt + padding 24pt = 234pt).
 const double _kMenuHeight = 234.0;
 
+/// Кинематика морфинга меню действий чата.
+/// Зафиксирована в верхнем правом углу (anchor: null = Alignment.topRight),
+/// устраняет паразитный диагональный перелет и вибрацию при сворачивании (leadBounce: 0),
+/// deflates directly into destination (sourceFollows: true)
+/// и математически предотвращает floating-point underflow в double.clamp (seedScale: 0.95).
+const LiquidGlassMorphMotion _kChatMenuMotion = LiquidGlassMorphMotion(
+  stiffness: 240,
+  damping: 28,
+  stretch: 0.24,
+  anchor: null,
+  advanced: LiquidGlassMorphAdvanced(
+    leadBounce: 0,
+    followDelay: 0.02,
+    linger: 0.04,
+    sourceFollows: true,
+    seedScale: 0.95,
+    newScaleFrom: 0.85,
+    oldScaleTo: 0.90,
+  ),
+);
+
 /// Размер шрифта имени в заголовке.
 const double _kTitleFontSize = 16.0;
 /// Размер шрифта статуса (в сети / был недавно).
@@ -110,6 +131,13 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   bool _isMenuOpen = false;
   bool _isMorphing = false;
   Timer? _morphSafetyTimer;
+
+  @visibleForTesting
+  bool get isMenuOpen => _isMenuOpen;
+  @visibleForTesting
+  bool get isMorphing => _isMorphing;
+  @visibleForTesting
+  bool get isMenuWide => _isMenuWide;
 
   @override
   void dispose() {
@@ -320,8 +348,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                         return LiquidGlassMorph(
                           key: const ValueKey<String>('chat_right_morph'),
                           alignment: Alignment.topRight,
-                          motion: LiquidGlassMorphMotion.fluid,
-                          smoothness: 28,
+                          motion: _kChatMenuMotion,
+                          smoothness: 24,
                           style: morphStyle,
                           onEnd: () {
                             _morphSafetyTimer?.cancel();
@@ -363,8 +391,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                       key: const ValueKey<String>('chat_right_matte_container'),
                       duration: const Duration(milliseconds: 250),
                       curve: Curves.easeOutCubic,
-                      width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
-                      height: _isMenuWide ? _kMenuHeight : _kAppBarHeight,
+                      width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
+                      height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
                       onEnd: () {
                         _morphSafetyTimer?.cancel();
                         if (mounted) {
@@ -673,7 +701,7 @@ class _ChatActionsMorphMenu extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
