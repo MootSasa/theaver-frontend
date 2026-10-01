@@ -2155,86 +2155,101 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           FocusScope.of(context).unfocus();
         }
       },
-      appBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FloatingGlassAppBar(
-            name: displayName,
-            avatarUrl: widget.groupAvatar ?? _groupAvatar,
-            isOnline: false, // Group itself doesn't have online status
-            statusText: statusSubtitle,
-            statusColor: _isTyping
-                ? (Theme.of(context).brightness == Brightness.dark
-                    ? const Color(0xFF5CB8E6)
-                    : Theme.of(context).colorScheme.primary)
-                : null,
-            isChannel: false,
-            isMuted: _isMuted,
-            onBack: () => Navigator.pop(context),
-            onTitleTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => GroupInfoScreen(
-                    chatId: widget.chatId,
-                    groupName: displayName,
-                    groupAvatar: widget.groupAvatar ?? _groupAvatar,
-                  ),
-                )),
-            onViewProfile: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => GroupInfoScreen(
-                    chatId: widget.chatId,
-                    groupName: displayName,
-                    groupAvatar: widget.groupAvatar ?? _groupAvatar,
-                  ),
-                )),
-            onVoiceCall: () {
-              /* TODO: Voice call */
-            },
-            onVideoCall: () {
-              /* TODO: Video call */
-            },
-            onSearch: () {
-              /* TODO: Search */
-            },
-            onToggleMute: () {
-              setState(() => _isMuted = !_isMuted);
-              ChatService.setMuteNotifications(
-                  chatId: widget.chatId, muted: _isMuted);
-            },
-            onClearHistory: () {
-              // TODO: Clear history dialog
-            },
-            onReport: () {
-              // TODO: Report dialog
-            },
-          ),
-          MediaNotePlayerHeader(
-            onScrollToActive: () {
-              final activeId = VoicePlaybackService().activeMessageId ??
-                  VideoNotePlaybackService().activeMessageId;
-              if (activeId != null) {
-                _scrollToMessage(activeId);
-              }
-            },
-          ),
-          const SizedBox(height: 8),
-          Center(
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .surface
-                    .withValues(alpha: 0.8),
-                borderRadius: BorderRadius.circular(20),
+      appBar: Builder(
+        builder: (context) {
+          final topBarHeight = MediaQuery.paddingOf(context).top + 62.0;
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned(
+                top: topBarHeight,
+                left: 0,
+                right: 0,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    MediaNotePlayerHeader(
+                      onScrollToActive: () {
+                        final activeId = VoicePlaybackService().activeMessageId ??
+                            VideoNotePlaybackService().activeMessageId;
+                        if (activeId != null) {
+                          _scrollToMessage(activeId);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Center(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surface
+                              .withValues(alpha: 0.8),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: tabBar,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              child: tabBar,
-            ),
-          ),
-        ],
+              FloatingGlassAppBar(
+                name: displayName,
+                avatarUrl: widget.groupAvatar ?? _groupAvatar,
+                isOnline: false, // Group itself doesn't have online status
+                statusText: statusSubtitle,
+                statusColor: _isTyping
+                    ? (Theme.of(context).brightness == Brightness.dark
+                        ? const Color(0xFF5CB8E6)
+                        : Theme.of(context).colorScheme.primary)
+                    : null,
+                isChannel: false,
+                isMuted: _isMuted,
+                onBack: () => Navigator.pop(context),
+                onTitleTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => GroupInfoScreen(
+                        chatId: widget.chatId,
+                        groupName: displayName,
+                        groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                      ),
+                    )),
+                onViewProfile: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => GroupInfoScreen(
+                        chatId: widget.chatId,
+                        groupName: displayName,
+                        groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                      ),
+                    )),
+                onVoiceCall: () {
+                  /* TODO: Voice call */
+                },
+                onVideoCall: () {
+                  /* TODO: Video call */
+                },
+                onSearch: () {
+                  /* TODO: Search */
+                },
+                onToggleMute: () {
+                  setState(() => _isMuted = !_isMuted);
+                  ChatService.setMuteNotifications(
+                      chatId: widget.chatId, muted: _isMuted);
+                },
+                onClearHistory: () {
+                  // TODO: Clear history dialog
+                },
+                onReport: () {
+                  // TODO: Report dialog
+                },
+              ),
+            ],
+          );
+        },
       ),
       body: tabBarView,
     );

@@ -47,22 +47,6 @@ const double _kAvatarRadius = 22.0;
 /// Размер иконок действий (звонок).
 const double _kActionIconSize = 20.0;
 
-/// Конфигурация физики морфинга меню (плавный Apple-style fluid pop).
-const LiquidGlassMorphMotion _kMenuMorphMotion = LiquidGlassMorphMotion(
-  stiffness: 175,
-  damping: 18,
-  stretch: 0.55,
-  blended: false,
-  advanced: LiquidGlassMorphAdvanced(
-    leadBounce: 0.08,
-    followDelay: 0.03,
-    contentInStart: 0.20,
-    contentInEnd: 0.75,
-    newScaleFrom: 0.88,
-    oldScaleTo: 0.92,
-    contentBlur: 6,
-  ),
-);
 // ------------------------------
 
 /// Floating AppBar split into 3 distinct glass/matte pills:
@@ -122,13 +106,15 @@ class FloatingGlassAppBar extends StatefulWidget {
 }
 
 class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
+  bool _isMenuWide = false;
   bool _isMenuOpen = false;
   bool _isMorphing = false;
 
   void _openMenu() {
-    if (_isMenuOpen) return;
+    if (_isMorphing || _isMenuOpen) return;
     HapticUtils.tap();
     setState(() {
+      _isMenuWide = true;
       _isMenuOpen = true;
       _isMorphing = true;
     });
@@ -214,6 +200,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
     final isExpanded = _isMenuOpen || _isMorphing;
     final currentHeight = isExpanded ? screenSize.height : normalHeight;
+    final route = ModalRoute.of(context);
+    final routeAnimation = route?.animation;
 
     return PopScope(
       canPop: !_isMenuOpen,
@@ -272,77 +260,23 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
             ),
 
             // 3. Right Pill: Actions + Avatar, morphing to Menu
-            if (isGlassEnabled)
-              Positioned(
-                top: statusBarHeight + _kAppBarVerticalPadding,
-                right: _kAppBarHorizontalPadding,
-                width: _isMenuOpen || _isMorphing ? _kMenuWidth : rightCollapsedWidth,
-                height: _isMenuOpen || _isMorphing ? _kMenuHeight : _kAppBarHeight,
-                child: LiquidGlassMorph(
-                  alignment: Alignment.topRight,
-                  motion: _kMenuMorphMotion,
-                  smoothness: 0,
-                  style: morphStyle,
-                    onEnd: () {
-                      if (_isMorphing) {
-                        setState(() => _isMorphing = false);
-                      }
-                    },
-                    child: _isMenuOpen
-                        ? _ChatActionsMorphMenu(
-                            key: const ValueKey<String>('chat_actions_menu'),
-                            width: _kMenuWidth,
-                            isMuted: widget.isMuted,
-                            onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
-                            onSearch: () { _closeMenu(); widget.onSearch?.call(); },
-                            onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
-                            onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                            onReport: () { _closeMenu(); widget.onReport?.call(); },
-                          )
-                        : _RightPillContent(
-                            key: const ValueKey<String>('chat_right_pill'),
-                            width: rightCollapsedWidth,
-                            isChannel: widget.isChannel,
-                            name: widget.name,
-                            avatarUrl: widget.avatarUrl,
-                            isOnline: widget.isOnline,
-                            avatarWidget: widget.avatarWidget,
-                            onVoiceCall: widget.onVoiceCall,
-                            onAvatarTap: _handleAvatarTap,
-                          ),
-                  ),
-              )
-            else
-              Positioned(
-                top: statusBarHeight + _kAppBarVerticalPadding,
-                right: _kAppBarHorizontalPadding,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOutCubic,
-                  width: _isMenuOpen ? _kMenuWidth : rightCollapsedWidth,
-                  height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
-                  onEnd: () {
-                    if (_isMorphing) {
-                      setState(() => _isMorphing = false);
-                    }
-                  },
-                  child: _buildMattePill(
-                    isDark: isDark,
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      child: _isMenuOpen
-                          ? _ChatActionsMorphMenu(
-                              key: const ValueKey<String>('chat_actions_menu_matte'),
-                              width: _kMenuWidth,
-                              isMuted: widget.isMuted,
-                              onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
-                              onSearch: () { _closeMenu(); widget.onSearch?.call(); },
-                              onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
-                              onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                              onReport: () { _closeMenu(); widget.onReport?.call(); },
-                            )
-                          : _RightPillContent(
-                              key: const ValueKey<String>('chat_right_pill_matte'),
+            Positioned(
+              top: statusBarHeight + _kAppBarVerticalPadding,
+              right: _kAppBarHorizontalPadding,
+              width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
+              height: _isMenuWide ? _kMenuHeight : _kAppBarHeight,
+              child: isGlassEnabled
+                  ? AnimatedBuilder(
+                      animation: routeAnimation ?? const AlwaysStoppedAnimation<double>(1.0),
+                      builder: (context, _) {
+                        final bool isRouteSettled = routeAnimation == null ||
+                            routeAnimation.status == AnimationStatus.completed;
+
+                        if (!isRouteSettled && !_isMenuOpen && !_isMorphing) {
+                          return LiquidGlassLens(
+                            style: morphStyle,
+                            child: _RightPillContent(
+                              key: const ValueKey<String>('chat_right_pill_lens'),
                               width: rightCollapsedWidth,
                               isChannel: widget.isChannel,
                               name: widget.name,
@@ -352,10 +286,86 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                               onVoiceCall: widget.onVoiceCall,
                               onAvatarTap: _handleAvatarTap,
                             ),
+                          );
+                        }
+
+                        return LiquidGlassMorph(
+                          alignment: Alignment.topRight,
+                          motion: LiquidGlassMorphMotion.fluid,
+                          smoothness: 28,
+                          style: morphStyle,
+                          onEnd: () {
+                            if (_isMenuWide != _isMenuOpen) {
+                              setState(() => _isMenuWide = _isMenuOpen);
+                            }
+                            _isMorphing = false;
+                          },
+                          child: _isMenuOpen
+                              ? _ChatActionsMorphMenu(
+                                  key: const ValueKey<String>('chat_actions_menu'),
+                                  width: _kMenuWidth,
+                                  isMuted: widget.isMuted,
+                                  onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
+                                  onSearch: () { _closeMenu(); widget.onSearch?.call(); },
+                                  onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
+                                  onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
+                                  onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                )
+                              : _RightPillContent(
+                                  key: const ValueKey<String>('chat_right_pill'),
+                                  width: rightCollapsedWidth,
+                                  isChannel: widget.isChannel,
+                                  name: widget.name,
+                                  avatarUrl: widget.avatarUrl,
+                                  isOnline: widget.isOnline,
+                                  avatarWidget: widget.avatarWidget,
+                                  onVoiceCall: widget.onVoiceCall,
+                                  onAvatarTap: _handleAvatarTap,
+                                ),
+                        );
+                      },
+                    )
+                  : AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOutCubic,
+                      width: _isMenuWide ? _kMenuWidth : rightCollapsedWidth,
+                      height: _isMenuWide ? _kMenuHeight : _kAppBarHeight,
+                      onEnd: () {
+                        if (_isMenuWide != _isMenuOpen) {
+                          setState(() => _isMenuWide = _isMenuOpen);
+                        }
+                        _isMorphing = false;
+                      },
+                      child: _buildMattePill(
+                        isDark: isDark,
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          child: _isMenuOpen
+                              ? _ChatActionsMorphMenu(
+                                  key: const ValueKey<String>('chat_actions_menu_matte'),
+                                  width: _kMenuWidth,
+                                  isMuted: widget.isMuted,
+                                  onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
+                                  onSearch: () { _closeMenu(); widget.onSearch?.call(); },
+                                  onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
+                                  onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
+                                  onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                )
+                              : _RightPillContent(
+                                  key: const ValueKey<String>('chat_right_pill_matte'),
+                                  width: rightCollapsedWidth,
+                                  isChannel: widget.isChannel,
+                                  name: widget.name,
+                                  avatarUrl: widget.avatarUrl,
+                                  isOnline: widget.isOnline,
+                                  avatarWidget: widget.avatarWidget,
+                                  onVoiceCall: widget.onVoiceCall,
+                                  onAvatarTap: _handleAvatarTap,
+                                ),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-              ),
+            ),
           ],
         ),
       ),

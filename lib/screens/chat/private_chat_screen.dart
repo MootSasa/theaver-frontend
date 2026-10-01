@@ -2103,37 +2103,47 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               }
             }
           },
-          appBar: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              FloatingGlassAppBar(
-                name: displayName,
-                avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
-                isOnline: _isOtherUserOnline,
-                lastSeen: _otherUserLastSeen,
-                statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
-                isChannel: false,
-                isMuted: _isMuted,
-                onBack: () => Navigator.pop(context),
-                onTitleTap: _viewUserProfile,
-                onViewProfile: _viewUserProfile,
-                onVoiceCall: _startVoiceCall,
-                onVideoCall: _startVideoCall,
-                onSearch: _searchMessages,
-                onToggleMute: _toggleMuteNotifications,
-                onClearHistory: _showClearHistoryDialog,
-                onReport: _showBlockUserDialog,
-              ),
-              MediaNotePlayerHeader(
-                onScrollToActive: () {
-                  final activeId = VoicePlaybackService().activeMessageId ??
-                      VideoNotePlaybackService().activeMessageId;
-                  if (activeId != null) {
-                    _scrollToMessage(activeId);
-                  }
-                },
-              ),
-            ],
+          appBar: Builder(
+            builder: (context) {
+              final topBarHeight = MediaQuery.paddingOf(context).top + 62.0;
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    top: topBarHeight,
+                    left: 0,
+                    right: 0,
+                    child: MediaNotePlayerHeader(
+                      onScrollToActive: () {
+                        final activeId = VoicePlaybackService().activeMessageId ??
+                            VideoNotePlaybackService().activeMessageId;
+                        if (activeId != null) {
+                          _scrollToMessage(activeId);
+                        }
+                      },
+                    ),
+                  ),
+                  FloatingGlassAppBar(
+                    name: displayName,
+                    avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+                    isOnline: _isOtherUserOnline,
+                    lastSeen: _otherUserLastSeen,
+                    statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
+                    isChannel: false,
+                    isMuted: _isMuted,
+                    onBack: () => Navigator.pop(context),
+                    onTitleTap: _viewUserProfile,
+                    onViewProfile: _viewUserProfile,
+                    onVoiceCall: _startVoiceCall,
+                    onVideoCall: _startVideoCall,
+                    onSearch: _searchMessages,
+                    onToggleMute: _toggleMuteNotifications,
+                    onClearHistory: _showClearHistoryDialog,
+                    onReport: _showBlockUserDialog,
+                  ),
+                ],
+              );
+            },
           ),
           body: _buildChatContent(glassEnabled),
         );
