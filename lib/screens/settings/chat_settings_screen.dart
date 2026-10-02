@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
+import '../../services/wallpaper_provider.dart';
 import '../../theme/theme_provider.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
