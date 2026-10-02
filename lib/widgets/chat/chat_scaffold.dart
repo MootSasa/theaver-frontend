@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:inspire_blur/inspire_blur.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
@@ -11,6 +10,9 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/wallpaper_provider.dart';
 import '../theme/four_corner_gradient.dart';
 import '../theme/motion_wallpaper_wrapper.dart';
+import '../theme/tiled_wallpaper_pattern.dart';
+
+export '../theme/tiled_wallpaper_pattern.dart';
 
 /// Unified scaffold for all chat screens (private chat, group chat, channel).
 /// Supports custom wallpapers, floating glass AppBar, bottom input bars,
@@ -224,18 +226,16 @@ class ChatScaffold extends StatelessWidget {
         Widget patternWidget = const SizedBox.shrink();
 
         if (svgPath != null && wp.patternOpacity > 0) {
-          patternWidget = SvgPicture.asset(
-            svgPath,
-            fit: BoxFit.cover,
+          patternWidget = TiledWallpaperPattern(
+            assetPath: svgPath,
             colorFilter: ColorFilter.mode(
               wp.patternColor.withValues(alpha: wp.patternOpacity),
               BlendMode.srcIn,
             ),
           );
         } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
-          patternWidget = SvgPicture.file(
-            File(wp.customSvgPath!),
-            fit: BoxFit.cover,
+          patternWidget = TiledWallpaperPattern(
+            filePath: wp.customSvgPath!,
             colorFilter: ColorFilter.mode(
               wp.patternColor.withValues(alpha: wp.patternOpacity),
               BlendMode.srcIn,
@@ -315,3 +315,4 @@ class ChatBottomScrollEdge extends StatelessWidget {
     );
   }
 }
+

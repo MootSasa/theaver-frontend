@@ -1,8 +1,8 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../../models/theav_theme.dart';
 import '../../l10n/app_localizations.dart';
+import 'tiled_wallpaper_pattern.dart';
 
 /// GPU-accelerated 4-corner mesh gradient painter using Canvas.drawVertices.
 class FourCornerGradientPainter extends CustomPainter {
@@ -112,9 +112,8 @@ class FourCornerGradientSelector extends StatelessWidget {
                 if (patternSvgPath != null && patternOpacity > 0)
                   Positioned.fill(
                     child: IgnorePointer(
-                      child: SvgPicture.asset(
-                        patternSvgPath!,
-                        fit: BoxFit.cover,
+                      child: TiledWallpaperPattern(
+                        assetPath: patternSvgPath!,
                         colorFilter: ColorFilter.mode(
                           (patternColor ?? Colors.white).withValues(alpha: patternOpacity),
                           BlendMode.srcIn,

@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../../models/theav_theme.dart';
 import '../../l10n/app_localizations.dart';
+import '../chat/chat_scaffold.dart';
 import 'four_corner_gradient.dart';
 import 'motion_wallpaper_wrapper.dart';
 
@@ -248,18 +248,16 @@ class ChatPreviewCard extends StatelessWidget {
       Widget patternWidget = const SizedBox.shrink();
 
       if (svgPath != null && wp.patternOpacity > 0) {
-        patternWidget = SvgPicture.asset(
-          svgPath,
-          fit: BoxFit.cover,
+        patternWidget = TiledWallpaperPattern(
+          assetPath: svgPath,
           colorFilter: ColorFilter.mode(
             wp.patternColor.withValues(alpha: wp.patternOpacity),
             BlendMode.srcIn,
           ),
         );
       } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
-        patternWidget = SvgPicture.file(
-          File(wp.customSvgPath!),
-          fit: BoxFit.cover,
+        patternWidget = TiledWallpaperPattern(
+          filePath: wp.customSvgPath!,
           colorFilter: ColorFilter.mode(
             wp.patternColor.withValues(alpha: wp.patternOpacity),
             BlendMode.srcIn,
