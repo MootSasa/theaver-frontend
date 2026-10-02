@@ -40,27 +40,43 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
     _isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
     final activeTheme = TheavThemeService().activeLightTheme;
-    _currentWallpaper = widget.initialWallpaper ?? activeTheme.wallpaper;
+    var wp = widget.initialWallpaper ?? activeTheme.wallpaper;
 
-    _tabController = TabController(length: 4, vsync: this);
-    _syncTabWithWallpaperType();
-  }
-
-  void _syncTabWithWallpaperType() {
-    switch (_currentWallpaper.type) {
-      case 'pattern':
-        _tabController.index = 0;
-        break;
-      case 'gradient4':
-        _tabController.index = 1;
-        break;
-      case 'color':
-        _tabController.index = 2;
-        break;
-      case 'image':
-        _tabController.index = 3;
-        break;
+    // Normalize: ensure gradient and pattern are unified
+    if (wp.type != 'image') {
+      final grad = wp.fourCornerGradient ??
+          (wp.type == 'color'
+              ? FourCornerGradient.fromSingleColor(wp.backgroundColor)
+              : FourCornerGradient.defaultClassic);
+      wp = wp.copyWith(
+        type: 'pattern',
+        fourCornerGradient: grad,
+        patternName: wp.type == 'gradient4' || wp.type == 'color' ? 'none' : (wp.patternName ?? 'flowers'),
+        patternColor: wp.patternColor ?? const Color(0xFF5A8FB8),
+        patternOpacity: wp.patternOpacity > 0 ? wp.patternOpacity : 0.15,
+      );
     }
+    _currentWallpaper = wp;
+
+    _tabController = TabController(length: 2, vsync: this);
+    if (_currentWallpaper.type == 'image') {
+      _tabController.index = 1;
+    } else {
+      _tabController.index = 0;
+    }
+
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging) return;
+      if (_tabController.index == 0 && _currentWallpaper.type == 'image') {
+        setState(() {
+          _currentWallpaper = _currentWallpaper.copyWith(type: 'pattern');
+        });
+      } else if (_tabController.index == 1 && _currentWallpaper.type != 'image') {
+        setState(() {
+          _currentWallpaper = _currentWallpaper.copyWith(type: 'image');
+        });
+      }
+    });
   }
 
   @override
@@ -102,18 +118,16 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
       }
 
       final themeProvider = context.read<ThemeProvider>();
-      final isDark = themeProvider.themeMode == ThemeMode.dark;
+      final isDark = themeProvider.themeMode == ThemeMode.dark ||
+          (themeProvider.themeMode == ThemeMode.system &&
+              MediaQuery.platformBrightnessOf(context) == Brightness.dark);
       final currentTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
 
       final updatedTheme = currentTheme.copyWith(wallpaper: _currentWallpaper);
       await themeProvider.setActiveTheme(updatedTheme);
+      await TheavThemeService().saveTheme(updatedTheme, saveToCloud: false);
 
-      // If user theme, save it
-      if (!updatedTheme.isBuiltIn) {
-        await TheavThemeService().saveTheme(updatedTheme);
-      }
-
-      // Also notify WallpaperProvider
+      // Also notify WallpaperProvider if image
       if (_currentWallpaper.type == 'image' && _currentWallpaper.imagePath != null) {
         await context.read<WallpaperProvider>().setWallpaper(_currentWallpaper.imagePath!);
       }
@@ -171,7 +185,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
             ),
           ),
 
-          // 2. Segmented Mode Tabs
+          // 2. Segmented Mode Tabs: [ Pattern & Gradient | Gallery Photo ]
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             decoration: BoxDecoration(
@@ -185,28 +199,20 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
               indicatorColor: const Color(0xFF0088CC),
               indicatorSize: TabBarIndicatorSize.tab,
               tabs: [
-                Tab(text: l10n.translate('wallpaper_mode_pattern')),
-                Tab(text: l10n.translate('wallpaper_mode_gradient')),
-                Tab(text: l10n.translate('wallpaper_mode_colors')),
-                Tab(text: l10n.translate('wallpaper_mode_gallery')),
+                Tab(
+                  icon: const Icon(Icons.palette_outlined, size: 20),
+                  text: l10n.translate('wallpaper_mode_pattern'),
+                ),
+                Tab(
+                  icon: const Icon(Icons.photo_library_outlined, size: 20),
+                  text: l10n.translate('wallpaper_mode_gallery'),
+                ),
               ],
               onTap: (index) {
-                switch (index) {
-                  case 0:
-                    setState(() => _currentWallpaper = _currentWallpaper.copyWith(type: 'pattern'));
-                    break;
-                  case 1:
-                    setState(() => _currentWallpaper = _currentWallpaper.copyWith(
-                          type: 'gradient4',
-                          fourCornerGradient: _currentWallpaper.fourCornerGradient ?? FourCornerGradient.defaultSunset,
-                        ));
-                    break;
-                  case 2:
-                    setState(() => _currentWallpaper = _currentWallpaper.copyWith(type: 'color'));
-                    break;
-                  case 3:
-                    setState(() => _currentWallpaper = _currentWallpaper.copyWith(type: 'image'));
-                    break;
+                if (index == 0) {
+                  setState(() => _currentWallpaper = _currentWallpaper.copyWith(type: 'pattern'));
+                } else {
+                  setState(() => _currentWallpaper = _currentWallpaper.copyWith(type: 'image'));
                 }
               },
             ),
@@ -218,43 +224,10 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
             child: ListView(
               padding: const EdgeInsets.only(bottom: 24),
               children: [
-                // Motion Toggle (Mobile platforms only)
-                if (_isMobile) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).cardColor,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: SwitchListTile(
-                        title: Text(
-                          l10n.translate('wallpaper_motion'),
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                        ),
-                        subtitle: Text(
-                          l10n.translate('wallpaper_motion_desc'),
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                        secondary: const Icon(Icons.screen_rotation, color: Color(0xFF0088CC)),
-                        value: _currentWallpaper.motionEnabled,
-                        activeColor: const Color(0xFF0088CC),
-                        onChanged: (val) {
-                          setState(() {
-                            _currentWallpaper = _currentWallpaper.copyWith(motionEnabled: val);
-                          });
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                // Dynamic controls based on active tab
-                if (_currentWallpaper.type == 'pattern') _buildPatternControls(l10n),
-                if (_currentWallpaper.type == 'gradient4') _buildGradientControls(),
-                if (_currentWallpaper.type == 'color') _buildColorControls(l10n),
-                if (_currentWallpaper.type == 'image') _buildImageControls(l10n),
+                if (_currentWallpaper.type != 'image')
+                  _buildPatternAndGradientControls(context, l10n)
+                else
+                  _buildImageControls(l10n),
               ],
             ),
           ),
@@ -263,9 +236,10 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
     );
   }
 
-  // === 1. Pattern Controls ===
-  Widget _buildPatternControls(AppLocalizations l10n) {
+  // === Unified Pattern & 4-Corner Mesh Gradient Controls ===
+  Widget _buildPatternAndGradientControls(BuildContext context, AppLocalizations l10n) {
     final patterns = [
+      {'id': 'none', 'name': 'Без узора', 'icon': Icons.texture},
       {'id': 'space', 'name': l10n.translate('wallpaper_pattern_space'), 'icon': Icons.public},
       {'id': 'science', 'name': l10n.translate('wallpaper_pattern_science'), 'icon': Icons.science},
       {'id': 'flowers', 'name': l10n.translate('wallpaper_pattern_flowers'), 'icon': Icons.local_florist},
@@ -273,13 +247,52 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
       {'id': 'christmas', 'name': l10n.translate('wallpaper_pattern_christmas'), 'icon': Icons.ac_unit},
     ];
 
+    final isPatternActive = _currentWallpaper.patternName != null &&
+        _currentWallpaper.patternName != 'none';
+
+    final effectiveGradient = _currentWallpaper.fourCornerGradient ??
+        FourCornerGradient.defaultClassic;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Motion Toggle (Mobile platforms only)
+        if (_isMobile) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: SwitchListTile(
+                title: Text(
+                  l10n.translate('wallpaper_motion'),
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                subtitle: Text(
+                  l10n.translate('wallpaper_motion_desc'),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                secondary: const Icon(Icons.screen_rotation, color: Color(0xFF0088CC)),
+                value: _currentWallpaper.motionEnabled,
+                activeColor: const Color(0xFF0088CC),
+                onChanged: (val) {
+                  setState(() {
+                    _currentWallpaper = _currentWallpaper.copyWith(motionEnabled: val);
+                  });
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+
+        // 1. Pattern selector
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Text(
-            'Выберите узор',
+            'Узор фона',
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[700]),
           ),
         ),
@@ -293,17 +306,20 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
             separatorBuilder: (_, __) => const SizedBox(width: 10),
             itemBuilder: (context, index) {
               final p = patterns[index];
-              final isSel = _currentWallpaper.patternName == p['id'];
+              final isSel = (_currentWallpaper.patternName ?? 'none') == p['id'];
 
               return GestureDetector(
                 onTap: () {
                   setState(() {
-                    _currentWallpaper = _currentWallpaper.copyWith(patternName: p['id'] as String);
+                    _currentWallpaper = _currentWallpaper.copyWith(
+                      type: 'pattern',
+                      patternName: p['id'] as String,
+                    );
                   });
                 },
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  width: 76,
+                  width: 78,
                   decoration: BoxDecoration(
                     color: Theme.of(context).cardColor,
                     borderRadius: BorderRadius.circular(14),
@@ -328,6 +344,8 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
                           fontWeight: isSel ? FontWeight.w600 : FontWeight.normal,
                           color: isSel ? const Color(0xFF0088CC) : null,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
@@ -336,96 +354,95 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
             },
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
 
-        // Color & Tint row
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: _ColorSelectTile(
-                  label: l10n.translate('wallpaper_bg_color'),
-                  color: _currentWallpaper.backgroundColor,
-                  onChanged: (c) => setState(() => _currentWallpaper = _currentWallpaper.copyWith(backgroundColor: c)),
+        // Pattern Color & Opacity (only if pattern chosen)
+        if (isPatternActive) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _ColorSelectTile(
+                    label: l10n.translate('wallpaper_pattern_color'),
+                    color: _currentWallpaper.patternColor ?? const Color(0xFF5A8FB8),
+                    onChanged: (c) => setState(() => _currentWallpaper = _currentWallpaper.copyWith(patternColor: c)),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _ColorSelectTile(
-                  label: l10n.translate('wallpaper_pattern_color'),
-                  color: _currentWallpaper.patternColor,
-                  onChanged: (c) => setState(() => _currentWallpaper = _currentWallpaper.copyWith(patternColor: c)),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 16),
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      l10n.translate('wallpaper_pattern_opacity'),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[700]),
+                    ),
+                    Text('${(_currentWallpaper.patternOpacity * 100).round()}%'),
+                  ],
+                ),
+                Slider(
+                  value: _currentWallpaper.patternOpacity.clamp(0.04, 0.50),
+                  min: 0.04,
+                  max: 0.50,
+                  divisions: 46,
+                  activeColor: const Color(0xFF0088CC),
+                  onChanged: (val) {
+                    setState(() => _currentWallpaper = _currentWallpaper.copyWith(patternOpacity: val));
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
 
-        // Opacity Slider
+        // 2. 4-Corner Mesh Gradient (bound underneath pattern)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    l10n.translate('wallpaper_pattern_opacity'),
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[700]),
-                  ),
-                  Text('${(_currentWallpaper.patternOpacity * 100).round()}%'),
-                ],
+              Text(
+                'Градиент фона (4 угла)',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[700]),
               ),
-              Slider(
-                value: _currentWallpaper.patternOpacity,
-                min: 0.04,
-                max: 0.40,
-                divisions: 36,
-                activeColor: const Color(0xFF0088CC),
-                onChanged: (val) {
-                  setState(() => _currentWallpaper = _currentWallpaper.copyWith(patternOpacity: val));
-                },
+              const SizedBox(height: 2),
+              Text(
+                'Настройте цвета 4 углов или выберите готовый пресет',
+                style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
               ),
             ],
           ),
+        ),
+        const SizedBox(height: 10),
+        FourCornerGradientSelector(
+          gradient: effectiveGradient,
+          patternSvgPath: _currentWallpaper.assetSvgPath,
+          patternColor: _currentWallpaper.patternColor,
+          patternOpacity: _currentWallpaper.patternOpacity,
+          onChanged: (newGrad) {
+            setState(() {
+              _currentWallpaper = _currentWallpaper.copyWith(
+                type: 'pattern',
+                fourCornerGradient: newGrad,
+                backgroundColor: newGrad.topLeft,
+              );
+            });
+          },
         ),
       ],
     );
   }
 
-  // === 2. 4-Corner Gradient Controls ===
-  Widget _buildGradientControls() {
-    final gradient = _currentWallpaper.fourCornerGradient ?? FourCornerGradient.defaultSunset;
-
-    return FourCornerGradientSelector(
-      gradient: gradient,
-      onChanged: (newGrad) {
-        setState(() {
-          _currentWallpaper = _currentWallpaper.copyWith(
-            type: 'gradient4',
-            fourCornerGradient: newGrad,
-          );
-        });
-      },
-    );
-  }
-
-  // === 3. Solid Color Controls ===
-  Widget _buildColorControls(AppLocalizations l10n) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: _ColorSelectTile(
-        label: l10n.translate('wallpaper_bg_color'),
-        color: _currentWallpaper.backgroundColor,
-        onChanged: (c) => setState(() => _currentWallpaper = _currentWallpaper.copyWith(backgroundColor: c)),
-      ),
-    );
-  }
-
-  // === 4. Gallery Image Controls ===
+  // === Gallery Image Controls ===
   Widget _buildImageControls(AppLocalizations l10n) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),

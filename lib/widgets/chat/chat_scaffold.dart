@@ -169,91 +169,87 @@ class ChatScaffold extends StatelessWidget {
     final wp = themeExt?.wallpaper;
 
     if (wp != null) {
+      // 1. Base 4-corner gradient or background color
+      Widget baseBackground;
+      if (wp.fourCornerGradient != null) {
+        final grad = wp.fourCornerGradient!;
+        baseBackground = CustomPaint(
+          painter: FourCornerGradientPainter(
+            topLeft: grad.topLeft,
+            topRight: grad.topRight,
+            bottomLeft: grad.bottomLeft,
+            bottomRight: grad.bottomRight,
+          ),
+          child: const SizedBox.expand(),
+        );
+      } else {
+        baseBackground = Container(color: wp.backgroundColor);
+      }
+
       Widget content;
-      switch (wp.type) {
-        case 'gradient4':
-          final grad = wp.fourCornerGradient ?? FourCornerGradient.defaultSunset;
-          content = CustomPaint(
-            painter: FourCornerGradientPainter(
-              topLeft: grad.topLeft,
-              topRight: grad.topRight,
-              bottomLeft: grad.bottomLeft,
-              bottomRight: grad.bottomRight,
-            ),
-            child: const SizedBox.expand(),
+      if (wp.type == 'image') {
+        final imgPath = wp.imagePath ?? context.watch<WallpaperProvider?>()?.wallpaperPath;
+        if (imgPath != null && imgPath.isNotEmpty && File(imgPath).existsSync()) {
+          Widget img = Image.file(
+            File(imgPath),
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
           );
-          break;
-
-        case 'image':
-          final imgPath = wp.imagePath ?? context.watch<WallpaperProvider?>()?.wallpaperPath;
-          if (imgPath != null && imgPath.isNotEmpty && File(imgPath).existsSync()) {
-            Widget img = Image.file(
-              File(imgPath),
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: double.infinity,
-            );
-            if (wp.blurRadius > 0) {
-              img = ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(
-                  sigmaX: wp.blurRadius,
-                  sigmaY: wp.blurRadius,
-                ),
-                child: img,
-              );
-            }
-            content = Stack(
-              fit: StackFit.expand,
-              children: [
-                img,
-                if (wp.dimming > 0)
-                  Container(
-                    color: Colors.black.withValues(alpha: wp.dimming),
-                  ),
-              ],
-            );
-          } else {
-            content = Container(color: wp.backgroundColor);
-          }
-          break;
-
-        case 'color':
-          content = Container(color: wp.backgroundColor);
-          break;
-
-        case 'pattern':
-        default:
-          final svgPath = wp.assetSvgPath;
-          Widget patternWidget = const SizedBox.shrink();
-
-          if (svgPath != null) {
-            patternWidget = SvgPicture.asset(
-              svgPath,
-              fit: BoxFit.cover,
-              colorFilter: ColorFilter.mode(
-                wp.patternColor.withValues(alpha: wp.patternOpacity),
-                BlendMode.srcIn,
+          if (wp.blurRadius > 0) {
+            img = ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(
+                sigmaX: wp.blurRadius,
+                sigmaY: wp.blurRadius,
               ),
-            );
-          } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
-            patternWidget = SvgPicture.file(
-              File(wp.customSvgPath!),
-              fit: BoxFit.cover,
-              colorFilter: ColorFilter.mode(
-                wp.patternColor.withValues(alpha: wp.patternOpacity),
-                BlendMode.srcIn,
-              ),
+              child: img,
             );
           }
-
           content = Stack(
             fit: StackFit.expand,
             children: [
-              Container(color: wp.backgroundColor),
-              patternWidget,
+              img,
+              if (wp.dimming > 0)
+                Container(
+                  color: Colors.black.withValues(alpha: wp.dimming),
+                ),
             ],
           );
-          break;
+        } else {
+          content = baseBackground;
+        }
+      } else {
+        // Pattern over 4-corner gradient
+        final svgPath = wp.assetSvgPath;
+        Widget patternWidget = const SizedBox.shrink();
+
+        if (svgPath != null && wp.patternOpacity > 0) {
+          patternWidget = SvgPicture.asset(
+            svgPath,
+            fit: BoxFit.cover,
+            colorFilter: ColorFilter.mode(
+              wp.patternColor.withValues(alpha: wp.patternOpacity),
+              BlendMode.srcIn,
+            ),
+          );
+        } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
+          patternWidget = SvgPicture.file(
+            File(wp.customSvgPath!),
+            fit: BoxFit.cover,
+            colorFilter: ColorFilter.mode(
+              wp.patternColor.withValues(alpha: wp.patternOpacity),
+              BlendMode.srcIn,
+            ),
+          );
+        }
+
+        content = Stack(
+          fit: StackFit.expand,
+          children: [
+            baseBackground,
+            patternWidget,
+          ],
+        );
       }
 
       if (wp.motionEnabled) {

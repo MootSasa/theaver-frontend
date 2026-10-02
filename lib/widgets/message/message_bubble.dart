@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
+import '../../models/theav_theme.dart';
 import '../../models/name_color_preset.dart';
 import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
@@ -726,21 +727,32 @@ class MessageBubble extends StatelessWidget {
     final bool isBigEmoji = !hasMedia && _isSingleEmoji;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final double effectiveBubbleRadius = themeExt?.bubbleRadius ?? kMessageBorderRadius;
+
+    final Color bubbleColor = isMe
+        ? (themeExt?.palette.chatBubbleOutgoing ?? Theme.of(context).colorScheme.primary)
+        : (themeExt?.palette.chatBubbleIncoming ?? Theme.of(context).colorScheme.secondaryContainer);
+
+    final Color bubbleTextColor = isMe
+        ? (themeExt?.palette.chatBubbleOutgoingText ?? Theme.of(context).colorScheme.onPrimary)
+        : (themeExt?.palette.chatBubbleIncomingText ?? Theme.of(context).colorScheme.onSecondaryContainer);
+
+    final Color bubbleSubtextColor = isMe
+        ? (themeExt?.palette.chatBubbleOutgoingSubtext ?? bubbleTextColor.withValues(alpha: 0.7))
+        : (themeExt?.palette.chatBubbleIncomingSubtext ?? bubbleTextColor.withValues(alpha: 0.7));
+
     final bool isPureMedia = hasMedia && !hasCaption && !_isAudio && !_isVoice;
     final Color backgroundColor = (isBigEmoji || _isRoundVideo || isPureMedia)
         ? Colors.transparent
-        : (isMe
-            ? Theme.of(context).colorScheme.primary
-            : Theme.of(context).colorScheme.secondaryContainer);
+        : bubbleColor;
 
     final TextStyle textStyle = TextStyle(
       fontSize: 16.0,
       height: 1.4,
       color: isBigEmoji
           ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black)
-          : (isMe
-              ? Theme.of(context).colorScheme.onPrimary
-              : Theme.of(context).colorScheme.onSecondaryContainer),
+          : bubbleTextColor,
     );
 
     final String trimmedContent = message.content.trim();
@@ -856,7 +868,7 @@ class MessageBubble extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 10,
                       fontStyle: FontStyle.italic,
-                      color: textStyle.color?.withValues(alpha: 0.6),
+                      color: bubbleSubtextColor.withValues(alpha: 0.8),
                     ),
                   ),
                   const SizedBox(width: 4),
@@ -865,17 +877,17 @@ class MessageBubble extends StatelessWidget {
                   formatTime(message.createdAt),
                   style: TextStyle(
                     fontSize: 11,
-                    color: textStyle.color?.withValues(alpha: 0.7),
+                    color: bubbleSubtextColor,
                     fontWeight: FontWeight.w400,
                   ),
                 ),
                 if (isMe) ...[
                   const SizedBox(width: 4),
                   if (message.sendStatus == 0)
-                    const SizedBox(
+                    SizedBox(
                       width: 10,
                       height: 10,
-                      child: CircularProgressIndicator(strokeWidth: 1.2),
+                      child: CircularProgressIndicator(strokeWidth: 1.2, color: bubbleSubtextColor),
                     )
                   else if (message.sendStatus == 2)
                     GestureDetector(
@@ -886,6 +898,7 @@ class MessageBubble extends StatelessWidget {
                     MessageStatusWidget(
                       isRead: message.isRead,
                       isOutgoing: isMe,
+                      colorOverride: bubbleSubtextColor,
                     ),
                 ],
               ],
@@ -1155,7 +1168,7 @@ class MessageBubble extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(kMessageBorderRadius),
+        borderRadius: BorderRadius.circular(effectiveBubbleRadius),
       ),
       child: hasMedia
           ? mediaContentWidget!
@@ -1514,6 +1527,9 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
         ? (AppConfig.resolveMediaUrl(widget.thumbUrl!) ?? widget.thumbUrl!)
         : null;
 
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final double effectiveRadius = math.max(4.0, (themeExt?.bubbleRadius ?? 16.0) - 2.0);
+
     // If video is cached or auto-download allowed, and user tapped play inline:
     if (widget.isVideo &&
         (_isPlayingInline || (isCached && widget.autoDownload))) {
@@ -1523,7 +1539,7 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
           maxHeight: 280,
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(effectiveRadius),
           child: InlineVideoPlayer(
             url: _cachedFile != null ? _cachedFile!.path : widget.url,
           ),
@@ -1544,7 +1560,7 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
         }
       },
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(12.0),
+        borderRadius: BorderRadius.circular(effectiveRadius),
         child: Container(
           width: widget.maxWidth,
           height: 220,

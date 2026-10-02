@@ -50,7 +50,13 @@ class ThemeProvider extends ChangeNotifier {
 
   Future<void> setActiveTheme(TheavTheme theme) async {
     await _service.setActiveTheme(theme);
-    notifyListeners();
+    if (theme.isDark && _themeMode != ThemeMode.dark) {
+      await setThemeMode(ThemeMode.dark);
+    } else if (!theme.isDark && _themeMode != ThemeMode.light) {
+      await setThemeMode(ThemeMode.light);
+    } else {
+      notifyListeners();
+    }
   }
 
   // Convenience methods for UI

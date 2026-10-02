@@ -299,9 +299,11 @@ class ChatSettingsScreen extends StatelessWidget {
             title: Text(l10n.translate('wallpaper_title')),
             subtitle: Text(
               activeTheme.wallpaper.type == 'pattern'
-                  ? 'Узор: ${activeTheme.wallpaper.patternName ?? "space"}'
-                  : activeTheme.wallpaper.type == 'gradient4'
-                      ? '4-точечный градиент'
+                  ? (activeTheme.wallpaper.patternName != null && activeTheme.wallpaper.patternName != 'none'
+                      ? 'Узор: ${activeTheme.wallpaper.patternName}, 4-точечный градиент'
+                      : '4-точечный градиент фона')
+                  : activeTheme.wallpaper.type == 'image'
+                      ? 'Фото из галереи'
                       : 'Обои чата',
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
@@ -345,9 +347,7 @@ class ChatSettingsScreen extends StatelessWidget {
                     onChanged: (val) {
                       final updated = activeTheme.copyWith(bubbleRadius: val);
                       themeProvider.setActiveTheme(updated);
-                      if (!updated.isBuiltIn) {
-                        TheavThemeService().saveTheme(updated);
-                      }
+                      TheavThemeService().saveTheme(updated, saveToCloud: false);
                     },
                   ),
                 ],

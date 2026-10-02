@@ -19,10 +19,16 @@ class TheavThemeService extends ChangeNotifier {
 
   static const String _keyActiveLightId = 'device_active_light_theme_id';
   static const String _keyActiveDarkId = 'device_active_dark_theme_id';
+  static const String _keyActiveLightThemeJson = 'device_active_light_theme_json';
+  static const String _keyActiveDarkThemeJson = 'device_active_dark_theme_json';
   static const String _keyCachedCustomThemes = 'device_cached_custom_themes';
+  static const String _keyThemeOverrides = 'device_theme_overrides_json';
 
   String _activeLightThemeId = 'theaver_classic';
   String _activeDarkThemeId = 'dark_slate';
+  TheavTheme? _activeLightTheme;
+  TheavTheme? _activeDarkTheme;
+  Map<String, TheavTheme> _themeOverrides = {};
   List<TheavTheme> _customThemes = [];
   bool _isSyncing = false;
 
@@ -64,6 +70,12 @@ class TheavThemeService extends ChangeNotifier {
         backgroundColor: Color(0xFFEAF2F8),
         patternColor: Color(0xFF0088CC),
         patternOpacity: 0.14,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFFD4EBF8),
+          topRight: Color(0xFFE8EEF5),
+          bottomLeft: Color(0xFFCCE4F6),
+          bottomRight: Color(0xFFDCEAF5),
+        ),
         motionEnabled: true,
       ),
     ),
@@ -99,6 +111,12 @@ class TheavThemeService extends ChangeNotifier {
         backgroundColor: Color(0xFF14181E),
         patternColor: Color(0xFF5CB8E6),
         patternOpacity: 0.12,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFF14181E),
+          topRight: Color(0xFF1C222B),
+          bottomLeft: Color(0xFF101318),
+          bottomRight: Color(0xFF1A2433),
+        ),
         motionEnabled: true,
       ),
     ),
@@ -130,10 +148,16 @@ class TheavThemeService extends ChangeNotifier {
       ),
       wallpaper: TheavWallpaper(
         type: 'pattern',
-        patternName: 'christmas',
-        backgroundColor: Color(0xFFE1F5FE),
+        patternName: 'flowers',
+        backgroundColor: Color(0xFFF1F8FB),
         patternColor: Color(0xFF0288D1),
         patternOpacity: 0.16,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFFE1F5FE),
+          topRight: Color(0xFFE0F2F1),
+          bottomLeft: Color(0xFFB3E5FC),
+          bottomRight: Color(0xFFE8EAF6),
+        ),
         motionEnabled: true,
       ),
     ),
@@ -169,6 +193,12 @@ class TheavThemeService extends ChangeNotifier {
         backgroundColor: Color(0xFFE8F5E9),
         patternColor: Color(0xFF2E7D32),
         patternOpacity: 0.15,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFFE8F5E9),
+          topRight: Color(0xFFF1F8E9),
+          bottomLeft: Color(0xFFC8E6C9),
+          bottomRight: Color(0xFFDCEDC8),
+        ),
         motionEnabled: true,
       ),
     ),
@@ -199,7 +229,11 @@ class TheavThemeService extends ChangeNotifier {
         chatDateBadgeText: Colors.white,
       ),
       wallpaper: TheavWallpaper(
-        type: 'gradient4',
+        type: 'pattern',
+        patternName: 'science',
+        backgroundColor: Color(0xFF000000),
+        patternColor: Color(0xFF00E5FF),
+        patternOpacity: 0.15,
         fourCornerGradient: FourCornerGradient(
           topLeft: Color(0xFF120024),
           topRight: Color(0xFF001224),
@@ -241,6 +275,12 @@ class TheavThemeService extends ChangeNotifier {
         backgroundColor: Color(0xFFFCE4EC),
         patternColor: Color(0xFFE91E63),
         patternOpacity: 0.15,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFFFCE4EC),
+          topRight: Color(0xFFFFF3E0),
+          bottomLeft: Color(0xFFF8BBD0),
+          bottomRight: Color(0xFFFFEBEE),
+        ),
         motionEnabled: true,
       ),
     ),
@@ -252,6 +292,17 @@ class TheavThemeService extends ChangeNotifier {
     _activeLightThemeId = prefs.getString(_keyActiveLightId) ?? 'theaver_classic';
     _activeDarkThemeId = prefs.getString(_keyActiveDarkId) ?? 'dark_slate';
 
+    // Load theme overrides (customized wallpapers, bubble radiuses, etc.)
+    final overridesJson = prefs.getString(_keyThemeOverrides);
+    if (overridesJson != null && overridesJson.isNotEmpty) {
+      try {
+        final Map<String, dynamic> map = jsonDecode(overridesJson);
+        _themeOverrides = map.map((k, v) => MapEntry(k, TheavTheme.fromJson(v as Map<String, dynamic>)));
+      } catch (e) {
+        debugPrint('TheavThemeService: Error loading theme overrides: $e');
+      }
+    }
+
     // Load cached custom themes
     final cachedJson = prefs.getString(_keyCachedCustomThemes);
     if (cachedJson != null && cachedJson.isNotEmpty) {
@@ -262,19 +313,43 @@ class TheavThemeService extends ChangeNotifier {
         debugPrint('TheavThemeService: Error loading cached custom themes: $e');
       }
     }
+
+    // Load active light theme
+    final activeLightJson = prefs.getString(_keyActiveLightThemeJson);
+    if (activeLightJson != null && activeLightJson.isNotEmpty) {
+      try {
+        _activeLightTheme = TheavTheme.fromJson(jsonDecode(activeLightJson));
+      } catch (e) {
+        debugPrint('TheavThemeService: Error loading active light theme: $e');
+      }
+    }
+
+    // Load active dark theme
+    final activeDarkJson = prefs.getString(_keyActiveDarkThemeJson);
+    if (activeDarkJson != null && activeDarkJson.isNotEmpty) {
+      try {
+        _activeDarkTheme = TheavTheme.fromJson(jsonDecode(activeDarkJson));
+      } catch (e) {
+        debugPrint('TheavThemeService: Error loading active dark theme: $e');
+      }
+    }
+
     notifyListeners();
 
     // Background sync from server
     syncCloudThemes();
   }
 
-  /// Get all available themes (built-ins + custom/cloud)
+  /// Get all available themes (built-ins with overrides + custom/cloud)
   List<TheavTheme> getAllThemes() {
-    return [...builtInThemes, ..._customThemes];
+    final builtInsWithOverrides = builtInThemes.map((b) => _themeOverrides[b.id] ?? b).toList();
+    final customList = _customThemes.where((c) => !builtInThemes.any((b) => b.id == c.id)).toList();
+    return [...builtInsWithOverrides, ...customList];
   }
 
   /// Get active theme for light mode
   TheavTheme get activeLightTheme {
+    if (_activeLightTheme != null) return _activeLightTheme!;
     return getAllThemes().firstWhere(
       (t) => t.id == _activeLightThemeId,
       orElse: () => builtInThemes[0],
@@ -283,6 +358,7 @@ class TheavThemeService extends ChangeNotifier {
 
   /// Get active theme for dark mode
   TheavTheme get activeDarkTheme {
+    if (_activeDarkTheme != null) return _activeDarkTheme!;
     return getAllThemes().firstWhere(
       (t) => t.id == _activeDarkThemeId,
       orElse: () => builtInThemes[1],
@@ -294,12 +370,36 @@ class TheavThemeService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     if (theme.isDark) {
       _activeDarkThemeId = theme.id;
+      _activeDarkTheme = theme;
       await prefs.setString(_keyActiveDarkId, theme.id);
+      await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(theme.toJson()));
     } else {
       _activeLightThemeId = theme.id;
+      _activeLightTheme = theme;
       await prefs.setString(_keyActiveLightId, theme.id);
+      await prefs.setString(_keyActiveLightThemeJson, jsonEncode(theme.toJson()));
     }
+
+    _themeOverrides[theme.id] = theme;
+    await _persistThemeOverrides();
+
+    if (!theme.isBuiltIn) {
+      final idx = _customThemes.indexWhere((t) => t.id == theme.id);
+      if (idx != -1) {
+        _customThemes[idx] = theme;
+      } else {
+        _customThemes.add(theme);
+      }
+      await _persistCustomThemes();
+    }
+
     notifyListeners();
+  }
+
+  Future<void> _persistThemeOverrides() async {
+    final prefs = await SharedPreferences.getInstance();
+    final map = _themeOverrides.map((k, v) => MapEntry(k, v.toJson()));
+    await prefs.setString(_keyThemeOverrides, jsonEncode(map));
   }
 
   /// Sync custom themes from server account
@@ -355,14 +455,29 @@ class TheavThemeService extends ChangeNotifier {
 
   /// Save or update a theme in account cloud and local list
   Future<bool> saveTheme(TheavTheme theme, {bool saveToCloud = true}) async {
-    // 1. Update local custom themes list
-    final idx = _customThemes.indexWhere((t) => t.id == theme.id);
-    if (idx != -1) {
-      _customThemes[idx] = theme.copyWith(isCloudSaved: saveToCloud || theme.isCloudSaved);
-    } else {
-      _customThemes.add(theme.copyWith(isCloudSaved: saveToCloud));
+    _themeOverrides[theme.id] = theme;
+    await _persistThemeOverrides();
+
+    final prefs = await SharedPreferences.getInstance();
+    if (theme.id == _activeLightThemeId || (!theme.isDark && _activeLightTheme?.id == theme.id)) {
+      _activeLightTheme = theme;
+      await prefs.setString(_keyActiveLightThemeJson, jsonEncode(theme.toJson()));
     }
-    await _persistCustomThemes();
+    if (theme.id == _activeDarkThemeId || (theme.isDark && _activeDarkTheme?.id == theme.id)) {
+      _activeDarkTheme = theme;
+      await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(theme.toJson()));
+    }
+
+    // 1. Update local custom themes list if custom theme
+    if (!theme.isBuiltIn) {
+      final idx = _customThemes.indexWhere((t) => t.id == theme.id);
+      if (idx != -1) {
+        _customThemes[idx] = theme.copyWith(isCloudSaved: saveToCloud || theme.isCloudSaved);
+      } else {
+        _customThemes.add(theme.copyWith(isCloudSaved: saveToCloud));
+      }
+      await _persistCustomThemes();
+    }
     notifyListeners();
 
     // 2. Upload to server if requested
@@ -398,14 +513,23 @@ class TheavThemeService extends ChangeNotifier {
   /// Delete a theme locally and from server
   Future<void> deleteTheme(String themeId) async {
     _customThemes.removeWhere((t) => t.id == themeId);
+    _themeOverrides.remove(themeId);
     await _persistCustomThemes();
+    await _persistThemeOverrides();
 
+    final prefs = await SharedPreferences.getInstance();
     // If active theme was deleted, reset to default
     if (_activeLightThemeId == themeId) {
       _activeLightThemeId = builtInThemes[0].id;
+      _activeLightTheme = builtInThemes[0];
+      await prefs.setString(_keyActiveLightId, _activeLightThemeId);
+      await prefs.setString(_keyActiveLightThemeJson, jsonEncode(_activeLightTheme!.toJson()));
     }
     if (_activeDarkThemeId == themeId) {
       _activeDarkThemeId = builtInThemes[1].id;
+      _activeDarkTheme = builtInThemes[1];
+      await prefs.setString(_keyActiveDarkId, _activeDarkThemeId);
+      await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(_activeDarkTheme!.toJson()));
     }
     notifyListeners();
 

@@ -74,6 +74,29 @@ class FourCornerGradient {
     );
   }
 
+  factory FourCornerGradient.fromSingleColor(Color color) {
+    return FourCornerGradient(
+      topLeft: color,
+      topRight: color,
+      bottomLeft: color,
+      bottomRight: color,
+    );
+  }
+
+  static FourCornerGradient get defaultClassic => const FourCornerGradient(
+        topLeft: Color(0xFFD4EBF8),
+        topRight: Color(0xFFE8EEF5),
+        bottomLeft: Color(0xFFCCE4F6),
+        bottomRight: Color(0xFFDCEAF5),
+      );
+
+  static FourCornerGradient get defaultDark => const FourCornerGradient(
+        topLeft: Color(0xFF14181E),
+        topRight: Color(0xFF1C222B),
+        bottomLeft: Color(0xFF101318),
+        bottomRight: Color(0xFF1A2433),
+      );
+
   static FourCornerGradient get defaultSunset => const FourCornerGradient(
         topLeft: Color(0xFF7B1FA2),
         topRight: Color(0xFFFF7043),
@@ -228,8 +251,8 @@ class TheavWallpaper {
 
   /// Helper to get asset path for built-in SVG patterns
   String? get assetSvgPath {
-    if (type != 'pattern') return null;
-    final name = patternName ?? 'space';
+    if (type != 'pattern' || patternName == 'none' || patternName == null) return null;
+    final name = patternName!;
     switch (name) {
       case 'christmas':
         return 'assets/wallpapers/christmas/christmas_1.svg';
@@ -240,8 +263,9 @@ class TheavWallpaper {
       case 'science':
         return 'assets/wallpapers/science/science_1.svg';
       case 'space':
-      default:
         return 'assets/wallpapers/space/space_1.svg';
+      default:
+        return null;
     }
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../../models/theav_theme.dart';
 import '../../l10n/app_localizations.dart';
 
@@ -58,11 +59,17 @@ class FourCornerGradientPainter extends CustomPainter {
 class FourCornerGradientSelector extends StatelessWidget {
   final FourCornerGradient gradient;
   final ValueChanged<FourCornerGradient> onChanged;
+  final String? patternSvgPath;
+  final Color? patternColor;
+  final double patternOpacity;
 
   const FourCornerGradientSelector({
     Key? key,
     required this.gradient,
     required this.onChanged,
+    this.patternSvgPath,
+    this.patternColor,
+    this.patternOpacity = 0.15,
   }) : super(key: key);
 
   @override
@@ -101,6 +108,20 @@ class FourCornerGradientSelector extends StatelessWidget {
                     ),
                   ),
                 ),
+                // Pattern overlay (if active)
+                if (patternSvgPath != null && patternOpacity > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: SvgPicture.asset(
+                        patternSvgPath!,
+                        fit: BoxFit.cover,
+                        colorFilter: ColorFilter.mode(
+                          (patternColor ?? Colors.white).withValues(alpha: patternOpacity),
+                          BlendMode.srcIn,
+                        ),
+                      ),
+                    ),
+                  ),
                 // Top-Left corner handle
                 Positioned(
                   top: 12,
@@ -165,6 +186,20 @@ class FourCornerGradientSelector extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
+              _PresetChip(
+                name: 'Classic',
+                gradient: FourCornerGradient.defaultClassic,
+                isSelected: gradient == FourCornerGradient.defaultClassic,
+                onTap: () => onChanged(FourCornerGradient.defaultClassic),
+              ),
+              const SizedBox(width: 8),
+              _PresetChip(
+                name: 'Dark',
+                gradient: FourCornerGradient.defaultDark,
+                isSelected: gradient == FourCornerGradient.defaultDark,
+                onTap: () => onChanged(FourCornerGradient.defaultDark),
+              ),
+              const SizedBox(width: 8),
               _PresetChip(
                 name: 'Sunset',
                 gradient: FourCornerGradient.defaultSunset,
