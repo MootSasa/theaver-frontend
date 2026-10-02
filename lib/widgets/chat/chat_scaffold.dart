@@ -1,11 +1,16 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:inspire_blur/inspire_blur.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/wallpaper_provider.dart';
+import '../theme/four_corner_gradient.dart';
+import '../theme/motion_wallpaper_wrapper.dart';
 
 /// Unified scaffold for all chat screens (private chat, group chat, channel).
 /// Supports custom wallpapers, floating glass AppBar, bottom input bars,
@@ -158,6 +163,109 @@ class ChatScaffold extends StatelessWidget {
   Widget _buildBackground(BuildContext context) {
     if (customBackground != null) {
       return customBackground!;
+    }
+
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final wp = themeExt?.wallpaper;
+
+    if (wp != null) {
+      Widget content;
+      switch (wp.type) {
+        case 'gradient4':
+          final grad = wp.fourCornerGradient ?? FourCornerGradient.defaultSunset;
+          content = CustomPaint(
+            painter: FourCornerGradientPainter(
+              topLeft: grad.topLeft,
+              topRight: grad.topRight,
+              bottomLeft: grad.bottomLeft,
+              bottomRight: grad.bottomRight,
+            ),
+            child: const SizedBox.expand(),
+          );
+          break;
+
+        case 'image':
+          final imgPath = wp.imagePath ?? context.watch<WallpaperProvider?>()?.wallpaperPath;
+          if (imgPath != null && imgPath.isNotEmpty && File(imgPath).existsSync()) {
+            Widget img = Image.file(
+              File(imgPath),
+              fit: BoxFit.cover,
+              width: double.infinity,
+              height: double.infinity,
+            );
+            if (wp.blurRadius > 0) {
+              img = ImageFiltered(
+                imageFilter: ui.ImageFilter.blur(
+                  sigmaX: wp.blurRadius,
+                  sigmaY: wp.blurRadius,
+                ),
+                child: img,
+              );
+            }
+            content = Stack(
+              fit: StackFit.expand,
+              children: [
+                img,
+                if (wp.dimming > 0)
+                  Container(
+                    color: Colors.black.withValues(alpha: wp.dimming),
+                  ),
+              ],
+            );
+          } else {
+            content = Container(color: wp.backgroundColor);
+          }
+          break;
+
+        case 'color':
+          content = Container(color: wp.backgroundColor);
+          break;
+
+        case 'pattern':
+        default:
+          final svgPath = wp.assetSvgPath;
+          Widget patternWidget = const SizedBox.shrink();
+
+          if (svgPath != null) {
+            patternWidget = SvgPicture.asset(
+              svgPath,
+              fit: BoxFit.cover,
+              colorFilter: ColorFilter.mode(
+                wp.patternColor.withValues(alpha: wp.patternOpacity),
+                BlendMode.srcIn,
+              ),
+            );
+          } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
+            patternWidget = SvgPicture.file(
+              File(wp.customSvgPath!),
+              fit: BoxFit.cover,
+              colorFilter: ColorFilter.mode(
+                wp.patternColor.withValues(alpha: wp.patternOpacity),
+                BlendMode.srcIn,
+              ),
+            );
+          }
+
+          content = Stack(
+            fit: StackFit.expand,
+            children: [
+              Container(color: wp.backgroundColor),
+              patternWidget,
+            ],
+          );
+          break;
+      }
+
+      if (wp.motionEnabled) {
+        return Positioned.fill(
+          child: MotionWallpaperWrapper(
+            enabled: true,
+            child: content,
+          ),
+        );
+      }
+
+      return Positioned.fill(child: content);
     }
 
     final wallpaperPath = context.watch<WallpaperProvider?>()?.wallpaperPath;

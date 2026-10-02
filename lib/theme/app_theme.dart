@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../animations/screen_transitions.dart';
+import '../models/theav_theme.dart';
 
 class AppTheme {
   // === Цвета бренда ===
@@ -233,6 +234,51 @@ class AppTheme {
         selectionColor: Color(0x597BE5DA),
         selectionHandleColor: Color(0xFF7BE5DA),
       ),
+    );
+  }
+
+  // === Dynamic TheavTheme application ===
+  static ThemeData fromTheavTheme(TheavTheme theme) {
+    final base = theme.isDark ? dark() : light();
+    final p = theme.palette;
+    final colorScheme = theme.isDark
+        ? ColorScheme.dark(
+            primary: p.primary,
+            secondary: p.primary,
+            surface: p.surface,
+            error: const Color(0xFFEF5350),
+            onPrimary: p.onPrimary,
+            onSecondary: p.onPrimary,
+            onSurface: p.onSurface,
+            onError: Colors.white,
+          )
+        : ColorScheme.light(
+            primary: p.primary,
+            secondary: p.primary,
+            surface: p.surface,
+            error: const Color(0xFFD32F2F),
+            onPrimary: p.onPrimary,
+            onSecondary: p.onPrimary,
+            onSurface: p.onSurface,
+            onError: Colors.white,
+          );
+
+    return base.copyWith(
+      primaryColor: p.primary,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: p.background,
+      cardColor: p.surface,
+      appBarTheme: base.appBarTheme.copyWith(
+        backgroundColor: p.appBarBackground,
+        foregroundColor: p.appBarForeground,
+      ),
+      extensions: [
+        TheavThemeExtension(
+          palette: p,
+          wallpaper: theme.wallpaper,
+          bubbleRadius: theme.bubbleRadius,
+        ),
+      ],
     );
   }
 }

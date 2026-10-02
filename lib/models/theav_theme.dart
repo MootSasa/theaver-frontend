@@ -1,0 +1,513 @@
+import 'package:flutter/material.dart';
+
+/// Helper for parsing and formatting hex colors.
+class TheavColorUtils {
+  static Color fromHex(String hexString) {
+    var hex = hexString.replaceAll('#', '').trim();
+    if (hex.startsWith('rgba')) {
+      // Parse rgba(r, g, b, a) format if present
+      final match = RegExp(r'rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)').firstMatch(hexString);
+      if (match != null) {
+        final r = int.parse(match.group(1)!);
+        final g = int.parse(match.group(2)!);
+        final b = int.parse(match.group(3)!);
+        final a = match.group(4) != null ? (double.parse(match.group(4)!) * 255).round() : 255;
+        return Color.fromARGB(a, r, g, b);
+      }
+    }
+    if (hex.length == 6) {
+      hex = 'FF$hex';
+    }
+    final intVal = int.tryParse(hex, radix: 16);
+    return Color(intVal ?? 0xFF0088CC);
+  }
+
+  static String toHex(Color color, {bool includeAlpha = true}) {
+    if (includeAlpha && color.alpha != 255) {
+      return '#${color.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase()}';
+    }
+    return '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  }
+}
+
+/// Represents a 4-point corner gradient.
+class FourCornerGradient {
+  final Color topLeft;
+  final Color topRight;
+  final Color bottomLeft;
+  final Color bottomRight;
+
+  const FourCornerGradient({
+    required this.topLeft,
+    required this.topRight,
+    required this.bottomLeft,
+    required this.bottomRight,
+  });
+
+  FourCornerGradient copyWith({
+    Color? topLeft,
+    Color? topRight,
+    Color? bottomLeft,
+    Color? bottomRight,
+  }) {
+    return FourCornerGradient(
+      topLeft: topLeft ?? this.topLeft,
+      topRight: topRight ?? this.topRight,
+      bottomLeft: bottomLeft ?? this.bottomLeft,
+      bottomRight: bottomRight ?? this.bottomRight,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'topLeft': TheavColorUtils.toHex(topLeft),
+        'topRight': TheavColorUtils.toHex(topRight),
+        'bottomLeft': TheavColorUtils.toHex(bottomLeft),
+        'bottomRight': TheavColorUtils.toHex(bottomRight),
+      };
+
+  factory FourCornerGradient.fromJson(Map<String, dynamic> json) {
+    return FourCornerGradient(
+      topLeft: TheavColorUtils.fromHex(json['topLeft'] ?? '#0088CC'),
+      topRight: TheavColorUtils.fromHex(json['topRight'] ?? '#5CB8E6'),
+      bottomLeft: TheavColorUtils.fromHex(json['bottomLeft'] ?? '#005580'),
+      bottomRight: TheavColorUtils.fromHex(json['bottomRight'] ?? '#00A3E0'),
+    );
+  }
+
+  static FourCornerGradient get defaultSunset => const FourCornerGradient(
+        topLeft: Color(0xFF7B1FA2),
+        topRight: Color(0xFFFF7043),
+        bottomLeft: Color(0xFFE91E63),
+        bottomRight: Color(0xFFFFD54F),
+      );
+
+  static FourCornerGradient get defaultOcean => const FourCornerGradient(
+        topLeft: Color(0xFF0D47A1),
+        topRight: Color(0xFF00897B),
+        bottomLeft: Color(0xFF00ACC1),
+        bottomRight: Color(0xFF3F51B5),
+      );
+
+  static FourCornerGradient get defaultAurora => const FourCornerGradient(
+        topLeft: Color(0xFF311B92),
+        topRight: Color(0xFF00BFA5),
+        bottomLeft: Color(0xFF1A237E),
+        bottomRight: Color(0xFF69F0AE),
+      );
+
+  static FourCornerGradient get defaultPastel => const FourCornerGradient(
+        topLeft: Color(0xFFE0F7FA),
+        topRight: Color(0xFFFFF3E0),
+        bottomLeft: Color(0xFFF3E5F5),
+        bottomRight: Color(0xFFE8F5E9),
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FourCornerGradient &&
+          runtimeType == other.runtimeType &&
+          topLeft == other.topLeft &&
+          topRight == other.topRight &&
+          bottomLeft == other.bottomLeft &&
+          bottomRight == other.bottomRight;
+
+  @override
+  int get hashCode =>
+      topLeft.hashCode ^ topRight.hashCode ^ bottomLeft.hashCode ^ bottomRight.hashCode;
+}
+
+/// Wallpaper configuration for a theme or chat screen.
+class TheavWallpaper {
+  /// 'pattern', 'gradient4', 'color', 'image'
+  final String type;
+
+  /// Built-in pattern name: 'christmas', 'flowers', 'love', 'science', 'space'
+  final String? patternName;
+
+  /// Optional relative path or identifier for custom SVG
+  final String? customSvgPath;
+
+  /// Solid background or base color behind pattern
+  final Color backgroundColor;
+
+  /// Pattern tint color
+  final Color patternColor;
+
+  /// Pattern opacity [0.0 - 1.0]
+  final double patternOpacity;
+
+  /// 4-point corner gradient configuration
+  final FourCornerGradient? fourCornerGradient;
+
+  /// Path or URL to photo wallpaper
+  final String? imagePath;
+
+  /// Image blur radius [0.0 - 30.0]
+  final double blurRadius;
+
+  /// Dark overlay dimming factor [0.0 - 0.8]
+  final double dimming;
+
+  /// Gyroscope motion parallax effect (active on mobile platforms)
+  final bool motionEnabled;
+
+  const TheavWallpaper({
+    this.type = 'pattern',
+    this.patternName = 'space',
+    this.customSvgPath,
+    this.backgroundColor = const Color(0xFFEAF2F8),
+    this.patternColor = const Color(0xFF0088CC),
+    this.patternOpacity = 0.15,
+    this.fourCornerGradient,
+    this.imagePath,
+    this.blurRadius = 0.0,
+    this.dimming = 0.0,
+    this.motionEnabled = false,
+  });
+
+  TheavWallpaper copyWith({
+    String? type,
+    String? patternName,
+    String? customSvgPath,
+    Color? backgroundColor,
+    Color? patternColor,
+    double? patternOpacity,
+    FourCornerGradient? fourCornerGradient,
+    String? imagePath,
+    double? blurRadius,
+    double? dimming,
+    bool? motionEnabled,
+  }) {
+    return TheavWallpaper(
+      type: type ?? this.type,
+      patternName: patternName ?? this.patternName,
+      customSvgPath: customSvgPath ?? this.customSvgPath,
+      backgroundColor: backgroundColor ?? this.backgroundColor,
+      patternColor: patternColor ?? this.patternColor,
+      patternOpacity: patternOpacity ?? this.patternOpacity,
+      fourCornerGradient: fourCornerGradient ?? this.fourCornerGradient,
+      imagePath: imagePath ?? this.imagePath,
+      blurRadius: blurRadius ?? this.blurRadius,
+      dimming: dimming ?? this.dimming,
+      motionEnabled: motionEnabled ?? this.motionEnabled,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        if (patternName != null) 'patternName': patternName,
+        if (customSvgPath != null) 'customSvgPath': customSvgPath,
+        'backgroundColor': TheavColorUtils.toHex(backgroundColor),
+        'patternColor': TheavColorUtils.toHex(patternColor),
+        'patternOpacity': patternOpacity,
+        if (fourCornerGradient != null) 'fourCornerGradient': fourCornerGradient!.toJson(),
+        if (imagePath != null) 'imagePath': imagePath,
+        'blurRadius': blurRadius,
+        'dimming': dimming,
+        'motionEnabled': motionEnabled,
+      };
+
+  factory TheavWallpaper.fromJson(Map<String, dynamic> json) {
+    return TheavWallpaper(
+      type: json['type'] ?? 'pattern',
+      patternName: json['patternName'],
+      customSvgPath: json['customSvgPath'],
+      backgroundColor: TheavColorUtils.fromHex(json['backgroundColor'] ?? '#EAF2F8'),
+      patternColor: TheavColorUtils.fromHex(json['patternColor'] ?? '#0088CC'),
+      patternOpacity: (json['patternOpacity'] as num?)?.toDouble() ?? 0.15,
+      fourCornerGradient: json['fourCornerGradient'] != null
+          ? FourCornerGradient.fromJson(json['fourCornerGradient'] as Map<String, dynamic>)
+          : null,
+      imagePath: json['imagePath'],
+      blurRadius: (json['blurRadius'] as num?)?.toDouble() ?? 0.0,
+      dimming: (json['dimming'] as num?)?.toDouble() ?? 0.0,
+      motionEnabled: json['motionEnabled'] == true,
+    );
+  }
+
+  /// Helper to get asset path for built-in SVG patterns
+  String? get assetSvgPath {
+    if (type != 'pattern') return null;
+    final name = patternName ?? 'space';
+    switch (name) {
+      case 'christmas':
+        return 'assets/wallpapers/christmas/christmas_1.svg';
+      case 'flowers':
+        return 'assets/wallpapers/flowers/flowers_1.svg';
+      case 'love':
+        return 'assets/wallpapers/love/love_1.svg';
+      case 'science':
+        return 'assets/wallpapers/science/science_1.svg';
+      case 'space':
+      default:
+        return 'assets/wallpapers/space/space_1.svg';
+    }
+  }
+}
+
+/// Color palette definition for a TheavTheme.
+class TheavPalette {
+  final Color primary;
+  final Color onPrimary;
+  final Color background;
+  final Color surface;
+  final Color onSurface;
+  final Color appBarBackground;
+  final Color appBarForeground;
+  final Color chatBubbleOutgoing;
+  final Color chatBubbleOutgoingText;
+  final Color chatBubbleOutgoingSubtext;
+  final Color chatBubbleIncoming;
+  final Color chatBubbleIncomingText;
+  final Color chatBubbleIncomingSubtext;
+  final Color chatDateBadge;
+  final Color chatDateBadgeText;
+
+  const TheavPalette({
+    required this.primary,
+    required this.onPrimary,
+    required this.background,
+    required this.surface,
+    required this.onSurface,
+    required this.appBarBackground,
+    required this.appBarForeground,
+    required this.chatBubbleOutgoing,
+    required this.chatBubbleOutgoingText,
+    required this.chatBubbleOutgoingSubtext,
+    required this.chatBubbleIncoming,
+    required this.chatBubbleIncomingText,
+    required this.chatBubbleIncomingSubtext,
+    required this.chatDateBadge,
+    required this.chatDateBadgeText,
+  });
+
+  TheavPalette copyWith({
+    Color? primary,
+    Color? onPrimary,
+    Color? background,
+    Color? surface,
+    Color? onSurface,
+    Color? appBarBackground,
+    Color? appBarForeground,
+    Color? chatBubbleOutgoing,
+    Color? chatBubbleOutgoingText,
+    Color? chatBubbleOutgoingSubtext,
+    Color? chatBubbleIncoming,
+    Color? chatBubbleIncomingText,
+    Color? chatBubbleIncomingSubtext,
+    Color? chatDateBadge,
+    Color? chatDateBadgeText,
+  }) {
+    return TheavPalette(
+      primary: primary ?? this.primary,
+      onPrimary: onPrimary ?? this.onPrimary,
+      background: background ?? this.background,
+      surface: surface ?? this.surface,
+      onSurface: onSurface ?? this.onSurface,
+      appBarBackground: appBarBackground ?? this.appBarBackground,
+      appBarForeground: appBarForeground ?? this.appBarForeground,
+      chatBubbleOutgoing: chatBubbleOutgoing ?? this.chatBubbleOutgoing,
+      chatBubbleOutgoingText: chatBubbleOutgoingText ?? this.chatBubbleOutgoingText,
+      chatBubbleOutgoingSubtext: chatBubbleOutgoingSubtext ?? this.chatBubbleOutgoingSubtext,
+      chatBubbleIncoming: chatBubbleIncoming ?? this.chatBubbleIncoming,
+      chatBubbleIncomingText: chatBubbleIncomingText ?? this.chatBubbleIncomingText,
+      chatBubbleIncomingSubtext: chatBubbleIncomingSubtext ?? this.chatBubbleIncomingSubtext,
+      chatDateBadge: chatDateBadge ?? this.chatDateBadge,
+      chatDateBadgeText: chatDateBadgeText ?? this.chatDateBadgeText,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'primary': TheavColorUtils.toHex(primary),
+        'onPrimary': TheavColorUtils.toHex(onPrimary),
+        'background': TheavColorUtils.toHex(background),
+        'surface': TheavColorUtils.toHex(surface),
+        'onSurface': TheavColorUtils.toHex(onSurface),
+        'appBarBackground': TheavColorUtils.toHex(appBarBackground),
+        'appBarForeground': TheavColorUtils.toHex(appBarForeground),
+        'chatBubbleOutgoing': TheavColorUtils.toHex(chatBubbleOutgoing),
+        'chatBubbleOutgoingText': TheavColorUtils.toHex(chatBubbleOutgoingText),
+        'chatBubbleOutgoingSubtext': TheavColorUtils.toHex(chatBubbleOutgoingSubtext),
+        'chatBubbleIncoming': TheavColorUtils.toHex(chatBubbleIncoming),
+        'chatBubbleIncomingText': TheavColorUtils.toHex(chatBubbleIncomingText),
+        'chatBubbleIncomingSubtext': TheavColorUtils.toHex(chatBubbleIncomingSubtext),
+        'chatDateBadge': TheavColorUtils.toHex(chatDateBadge),
+        'chatDateBadgeText': TheavColorUtils.toHex(chatDateBadgeText),
+      };
+
+  factory TheavPalette.fromJson(Map<String, dynamic> json) {
+    return TheavPalette(
+      primary: TheavColorUtils.fromHex(json['primary'] ?? '#0088CC'),
+      onPrimary: TheavColorUtils.fromHex(json['onPrimary'] ?? '#FFFFFF'),
+      background: TheavColorUtils.fromHex(json['background'] ?? '#FFFFFF'),
+      surface: TheavColorUtils.fromHex(json['surface'] ?? '#F5F5F5'),
+      onSurface: TheavColorUtils.fromHex(json['onSurface'] ?? '#1C1C1E'),
+      appBarBackground: TheavColorUtils.fromHex(json['appBarBackground'] ?? '#FFFFFF'),
+      appBarForeground: TheavColorUtils.fromHex(json['appBarForeground'] ?? '#1C1C1E'),
+      chatBubbleOutgoing: TheavColorUtils.fromHex(json['chatBubbleOutgoing'] ?? '#0088CC'),
+      chatBubbleOutgoingText: TheavColorUtils.fromHex(json['chatBubbleOutgoingText'] ?? '#FFFFFF'),
+      chatBubbleOutgoingSubtext:
+          TheavColorUtils.fromHex(json['chatBubbleOutgoingSubtext'] ?? '#B3E5FC'),
+      chatBubbleIncoming: TheavColorUtils.fromHex(json['chatBubbleIncoming'] ?? '#F2F2F7'),
+      chatBubbleIncomingText: TheavColorUtils.fromHex(json['chatBubbleIncomingText'] ?? '#1C1C1E'),
+      chatBubbleIncomingSubtext:
+          TheavColorUtils.fromHex(json['chatBubbleIncomingSubtext'] ?? '#8E8E93'),
+      chatDateBadge: TheavColorUtils.fromHex(json['chatDateBadge'] ?? '#4D000000'),
+      chatDateBadgeText: TheavColorUtils.fromHex(json['chatDateBadgeText'] ?? '#FFFFFF'),
+    );
+  }
+}
+
+/// Flutter ThemeExtension for accessing theme colors inside chat components.
+class TheavThemeExtension extends ThemeExtension<TheavThemeExtension> {
+  final TheavPalette palette;
+  final TheavWallpaper wallpaper;
+  final double bubbleRadius;
+
+  const TheavThemeExtension({
+    required this.palette,
+    required this.wallpaper,
+    required this.bubbleRadius,
+  });
+
+  @override
+  ThemeExtension<TheavThemeExtension> copyWith({
+    TheavPalette? palette,
+    TheavWallpaper? wallpaper,
+    double? bubbleRadius,
+  }) {
+    return TheavThemeExtension(
+      palette: palette ?? this.palette,
+      wallpaper: wallpaper ?? this.wallpaper,
+      bubbleRadius: bubbleRadius ?? this.bubbleRadius,
+    );
+  }
+
+  @override
+  ThemeExtension<TheavThemeExtension> lerp(
+    covariant ThemeExtension<TheavThemeExtension>? other,
+    double t,
+  ) {
+    if (other is! TheavThemeExtension) return this;
+    return TheavThemeExtension(
+      palette: t < 0.5 ? palette : other.palette,
+      wallpaper: t < 0.5 ? wallpaper : other.wallpaper,
+      bubbleRadius: bubbleRadius + (other.bubbleRadius - bubbleRadius) * t,
+    );
+  }
+}
+
+/// Complete theme definition for Theaver.
+class TheavTheme {
+  final String id;
+  final String name;
+  final String author;
+  final bool isDark;
+  final double bubbleRadius;
+  final TheavPalette palette;
+  final TheavWallpaper wallpaper;
+  final bool isCloudSaved;
+  final bool isBuiltIn;
+
+  const TheavTheme({
+    required this.id,
+    required this.name,
+    required this.author,
+    required this.isDark,
+    this.bubbleRadius = 16.0,
+    required this.palette,
+    required this.wallpaper,
+    this.isCloudSaved = false,
+    this.isBuiltIn = false,
+  });
+
+  TheavTheme copyWith({
+    String? id,
+    String? name,
+    String? author,
+    bool? isDark,
+    double? bubbleRadius,
+    TheavPalette? palette,
+    TheavWallpaper? wallpaper,
+    bool? isCloudSaved,
+    bool? isBuiltIn,
+  }) {
+    return TheavTheme(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      author: author ?? this.author,
+      isDark: isDark ?? this.isDark,
+      bubbleRadius: bubbleRadius ?? this.bubbleRadius,
+      palette: palette ?? this.palette,
+      wallpaper: wallpaper ?? this.wallpaper,
+      isCloudSaved: isCloudSaved ?? this.isCloudSaved,
+      isBuiltIn: isBuiltIn ?? this.isBuiltIn,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'version': 1,
+        'id': id,
+        'name': name,
+        'author': author,
+        'isDark': isDark,
+        'bubbleRadius': bubbleRadius,
+        'palette': palette.toJson(),
+        'wallpaper': wallpaper.toJson(),
+      };
+
+  factory TheavTheme.fromJson(Map<String, dynamic> json, {bool isCloudSaved = false, bool isBuiltIn = false}) {
+    return TheavTheme(
+      id: json['id'] ?? 'custom_${DateTime.now().millisecondsSinceEpoch}',
+      name: json['name'] ?? 'Custom Theme',
+      author: json['author'] ?? 'Theaver User',
+      isDark: json['isDark'] == true,
+      bubbleRadius: (json['bubbleRadius'] as num?)?.toDouble() ?? 16.0,
+      palette: TheavPalette.fromJson(json['palette'] as Map<String, dynamic>? ?? {}),
+      wallpaper: TheavWallpaper.fromJson(json['wallpaper'] as Map<String, dynamic>? ?? {}),
+      isCloudSaved: isCloudSaved,
+      isBuiltIn: isBuiltIn,
+    );
+  }
+
+  /// Converts this TheavTheme into a full Material ThemeData.
+  ThemeData toThemeData() {
+    final brightness = isDark ? Brightness.dark : Brightness.light;
+    final colorScheme = isDark
+        ? ColorScheme.dark(
+            primary: palette.primary,
+            secondary: palette.primary,
+            surface: palette.surface,
+            onSurface: palette.onSurface,
+            onPrimary: palette.onPrimary,
+          )
+        : ColorScheme.light(
+            primary: palette.primary,
+            secondary: palette.primary,
+            surface: palette.surface,
+            onSurface: palette.onSurface,
+            onPrimary: palette.onPrimary,
+          );
+
+    return ThemeData(
+      brightness: brightness,
+      primaryColor: palette.primary,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: palette.background,
+      cardColor: palette.surface,
+      appBarTheme: AppBarTheme(
+        backgroundColor: palette.appBarBackground,
+        foregroundColor: palette.appBarForeground,
+        elevation: 0,
+      ),
+      extensions: [
+        TheavThemeExtension(
+          palette: palette,
+          wallpaper: wallpaper,
+          bubbleRadius: bubbleRadius,
+        ),
+      ],
+    );
+  }
+}
