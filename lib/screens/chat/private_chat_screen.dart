@@ -37,7 +37,6 @@ import '../../widgets/message/fullscreen_photo_viewer.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../services/message_context_menu_service.dart';
 import '../../services/glass_toast_service.dart';
-import '../../services/wallpaper_provider.dart';
 import '../../widgets/message/message_bubble.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/media_album.dart';
@@ -2153,7 +2152,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
   // Выделен метод для построения контента чата (сообщения + поле ввода)
   Widget _buildChatContent(bool glassEnabled) {
-    final wallpaperPath = context.watch<WallpaperProvider>().wallpaperPath;
     final mediaQuery = MediaQuery.of(context);
     final screenHeight = mediaQuery.size.height;
 
@@ -2364,14 +2362,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // Background wallpaper
-                if (wallpaperPath != null)
-                  Positioned.fill(
-                    child: Image.file(
-                      File(wallpaperPath),
-                      fit: BoxFit.cover,
-                    ),
-                  ),
                 // Сообщения на весь экран (с верхним отступом через ListView.padding)
                 Positioned.fill(
                   child: Column(

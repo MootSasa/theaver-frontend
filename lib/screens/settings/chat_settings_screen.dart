@@ -209,7 +209,14 @@ class ChatSettingsScreen extends StatelessWidget {
                 final isSelected = t.id == activeTheme.id;
 
                 return GestureDetector(
-                  onTap: () => themeProvider.setActiveTheme(t),
+                  onTap: () {
+                    themeProvider.setActiveTheme(t);
+                    if (t.wallpaper.type != 'image') {
+                      context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
+                    } else if (t.wallpaper.imagePath != null) {
+                      context.read<WallpaperProvider>().setWallpaper(t.wallpaper.imagePath!);
+                    }
+                  },
                   onLongPress: () {
                     if (!t.isBuiltIn) {
                       Navigator.push(

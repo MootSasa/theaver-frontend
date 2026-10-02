@@ -127,9 +127,11 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
       await themeProvider.setActiveTheme(updatedTheme);
       await TheavThemeService().saveTheme(updatedTheme, saveToCloud: false);
 
-      // Also notify WallpaperProvider if image
+      // Also sync WallpaperProvider
       if (_currentWallpaper.type == 'image' && _currentWallpaper.imagePath != null) {
         await context.read<WallpaperProvider>().setWallpaper(_currentWallpaper.imagePath!);
+      } else {
+        await context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
       }
 
       if (mounted) {
