@@ -254,14 +254,18 @@ class ChatScaffold extends StatelessWidget {
 
       if (wp.motionEnabled) {
         return Positioned.fill(
-          child: MotionWallpaperWrapper(
-            enabled: true,
-            child: content,
+          child: RepaintBoundary(
+            child: MotionWallpaperWrapper(
+              enabled: true,
+              child: content,
+            ),
           ),
         );
       }
 
-      return Positioned.fill(child: content);
+      return Positioned.fill(
+        child: RepaintBoundary(child: content),
+      );
     }
 
     final wallpaperPath = context.watch<WallpaperProvider?>()?.wallpaperPath;
@@ -269,9 +273,11 @@ class ChatScaffold extends StatelessWidget {
       final file = File(wallpaperPath);
       if (file.existsSync()) {
         return Positioned.fill(
-          child: Image.file(
-            file,
-            fit: BoxFit.cover,
+          child: RepaintBoundary(
+            child: Image.file(
+              file,
+              fit: BoxFit.cover,
+            ),
           ),
         );
       }

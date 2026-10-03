@@ -275,13 +275,18 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
           ),
 
           _buildSectionHeader('Исходящие сообщения'),
-          _buildColorTile(
-            title: l10n.translate('theme_bubble_outgoing'),
-            color: _currentTheme.palette.chatBubbleOutgoing,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoing: c),
-                )),
-          ),
+          _buildBubbleFillTypeToggle(),
+          if (_isOutgoingGradient) ...[
+            _buildGradientEditor(),
+          ] else ...[
+            _buildColorTile(
+              title: l10n.translate('theme_bubble_outgoing'),
+              color: _currentTheme.palette.chatBubbleOutgoing,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoing: c),
+                  )),
+            ),
+          ],
           _buildColorTile(
             title: '${l10n.translate('theme_bubble_outgoing')} — ${l10n.translate('theme_bubble_text')}',
             color: _currentTheme.palette.chatBubbleOutgoingText,
@@ -545,12 +550,363 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     );
   }
 
-  void _pickColor(BuildContext context, String title, Color currentColor, ValueChanged<Color> onChanged) {
+  bool get _isOutgoingGradient =>
+      _currentTheme.palette.chatBubbleOutgoingGradient != null &&
+      _currentTheme.palette.chatBubbleOutgoingGradient!.length >= 2;
+
+  Widget _buildBubbleFillTypeToggle() {
+    final isGrad = _isOutgoingGradient;
+    final primary = _currentTheme.palette.primary;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.all(4),
+        child: Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  if (isGrad) {
+                    setState(() {
+                      _currentTheme = _currentTheme.copyWith(
+                        palette: _currentTheme.palette.copyWith(clearOutgoingGradient: true),
+                      );
+                    });
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  decoration: BoxDecoration(
+                    color: !isGrad ? primary : Colors.transparent,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Сплошной цвет',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: !isGrad ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  if (!isGrad) {
+                    setState(() {
+                      _currentTheme = _currentTheme.copyWith(
+                        palette: _currentTheme.palette.copyWith(
+                          chatBubbleOutgoingGradient: [
+                            _currentTheme.palette.chatBubbleOutgoing,
+                            _currentTheme.palette.primary.withValues(alpha: 0.85),
+                          ],
+                        ),
+                      );
+                    });
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  decoration: BoxDecoration(
+                    color: isGrad ? primary : Colors.transparent,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Градиент (экранный)',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: isGrad ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGradientEditor() {
+    final colors = List<Color>.from(_currentTheme.palette.chatBubbleOutgoingGradient ?? []);
+    if (colors.length < 2) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+            child: Text(
+              'Градиент растягивается по всей высоте чата. Облачка открывают его часть при скролле. Прозрачность позволяет фону просвечивать.',
+              style: TextStyle(
+                fontSize: 11.5,
+                color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.7),
+              ),
+            ),
+          ),
+          Container(
+            height: 36,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              gradient: LinearGradient(
+                colors: colors,
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+              border: Border.all(color: Colors.white24, width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 34,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                _buildPresetPill('Синий океан', const [Color(0xFF2A75D3), Color(0xFF00C6FF)]),
+                _buildPresetPill('Закат', const [Color(0xFFFF5E36), Color(0xFF9013FE), Color(0xFF2C3E50)]),
+                _buildPresetPill('Киберпанк', const [Color(0xFFFF007F), Color(0xFF7928CA), Color(0xFF00DFD8)]),
+                _buildPresetPill('Изумруд', const [Color(0xFF0BA360), Color(0xFF3CBA92)]),
+                _buildPresetPill('Стекло 80%', const [Color(0xCC0088CC), Color(0x995CB8E6)]),
+                _buildPresetPill('Фиолет', const [Color(0xFF8E2DE2), Color(0xFF4A00E0)]),
+                _buildPresetPill('Пастель', const [Color(0xFFFFAFBD), Color(0xFFFFC3A0)]),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          for (int i = 0; i < colors.length; i++)
+            _buildGradientStopTile(i, colors[i], colors),
+          if (colors.length < 4)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  onPressed: () {
+                    final newColors = List<Color>.from(colors);
+                    final last = newColors.last;
+                    newColors.add(last.withValues(alpha: (last.a * 0.85).clamp(0.2, 1.0)));
+                    setState(() {
+                      _currentTheme = _currentTheme.copyWith(
+                        palette: _currentTheme.palette.copyWith(
+                          chatBubbleOutgoingGradient: newColors,
+                        ),
+                      );
+                    });
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Добавить точку цвета', style: TextStyle(fontSize: 12.5)),
+                ),
+              ),
+            ),
+          const SizedBox(height: 6),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPresetPill(String name, List<Color> presetColors) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          setState(() {
+            _currentTheme = _currentTheme.copyWith(
+              palette: _currentTheme.palette.copyWith(
+                chatBubbleOutgoingGradient: presetColors,
+              ),
+            );
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: presetColors,
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                name,
+                style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGradientStopTile(int index, Color stopColor, List<Color> allColors) {
+    final String label = index == 0
+        ? 'Цвет 1 (вверху экрана)'
+        : (index == allColors.length - 1
+            ? 'Цвет ${index + 1} (внизу экрана)'
+            : 'Цвет ${index + 1} (середина)');
+
+    final int opacityPercent = (stopColor.a * 100).round();
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          ListTile(
+            dense: true,
+            title: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+            subtitle: Text(
+              'Непрозрачность: $opacityPercent%',
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+              ),
+            ),
+            leading: GestureDetector(
+              onTap: () => _pickColor(context, label, stopColor, (c) {
+                final newColors = List<Color>.from(allColors);
+                newColors[index] = c;
+                setState(() {
+                  _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoingGradient: newColors),
+                  );
+                });
+              }, allowOpacity: true),
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: stopColor,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4),
+                  ],
+                ),
+              ),
+            ),
+            trailing: allColors.length > 2
+                ? IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () {
+                      final newColors = List<Color>.from(allColors);
+                      newColors.removeAt(index);
+                      setState(() {
+                        _currentTheme = _currentTheme.copyWith(
+                          palette: _currentTheme.palette.copyWith(
+                            chatBubbleOutgoingGradient: newColors,
+                          ),
+                        );
+                      });
+                    },
+                  )
+                : null,
+            onTap: () => _pickColor(context, label, stopColor, (c) {
+              final newColors = List<Color>.from(allColors);
+              newColors[index] = c;
+              setState(() {
+                _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoingGradient: newColors),
+                );
+              });
+            }, allowOpacity: true),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+            child: Row(
+              children: [
+                const Icon(Icons.opacity, size: 16, color: Colors.grey),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 2,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                    ),
+                    child: Slider(
+                      value: stopColor.a,
+                      min: 0.1,
+                      max: 1.0,
+                      divisions: 18,
+                      onChanged: (val) {
+                        final newColors = List<Color>.from(allColors);
+                        newColors[index] = stopColor.withValues(alpha: val);
+                        setState(() {
+                          _currentTheme = _currentTheme.copyWith(
+                            palette: _currentTheme.palette.copyWith(
+                              chatBubbleOutgoingGradient: newColors,
+                            ),
+                          );
+                        });
+                      },
+                    ),
+                  ),
+                ),
+                Text(
+                  '$opacityPercent%',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _pickColor(
+    BuildContext context,
+    String title,
+    Color currentColor,
+    ValueChanged<Color> onChanged, {
+    bool allowOpacity = false,
+  }) {
     _colorPickerController.showIOSCustomColorPicker(
       context: context,
-      startingColor: currentColor.withValues(alpha: 1.0),
+      startingColor: allowOpacity ? currentColor : currentColor.withValues(alpha: 1.0),
       onColorChanged: (c) {
-        onChanged(c.withValues(alpha: 1.0));
+        onChanged(allowOpacity ? c : c.withValues(alpha: 1.0));
       },
     );
   }

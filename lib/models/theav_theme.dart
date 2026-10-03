@@ -23,7 +23,8 @@ class TheavColorUtils {
   }
 
   static String toHex(Color color, {bool includeAlpha = true}) {
-    if (includeAlpha && color.alpha != 255) {
+    final int alphaVal = (color.a * 255.0).round().clamp(0, 255);
+    if (includeAlpha && alphaVal != 255) {
       return '#${color.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase()}';
     }
     return '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
@@ -316,6 +317,11 @@ class TheavPalette {
   Color get divider => _divider ?? onSurface.withValues(alpha: 0.12);
   Color get accent => primary;
 
+  /// Optional multi-color vertical gradient for outgoing message bubbles
+  /// (viewport-anchored continuous mask). If null or < 2 colors, solid
+  /// [chatBubbleOutgoing] is used.
+  final List<Color>? chatBubbleOutgoingGradient;
+
   const TheavPalette({
     required this.primary,
     required this.onPrimary,
@@ -332,6 +338,7 @@ class TheavPalette {
     required this.chatBubbleIncomingSubtext,
     required this.chatDateBadge,
     required this.chatDateBadgeText,
+    this.chatBubbleOutgoingGradient,
     Color? chatBubbleOutgoingLink,
     Color? chatBubbleIncomingLink,
     Color? chatBubbleIncomingAuthor,
@@ -373,6 +380,8 @@ class TheavPalette {
     Color? chatBubbleIncomingSubtext,
     Color? chatDateBadge,
     Color? chatDateBadgeText,
+    List<Color>? chatBubbleOutgoingGradient,
+    bool clearOutgoingGradient = false,
     Color? chatBubbleOutgoingLink,
     Color? chatBubbleIncomingLink,
     Color? chatBubbleIncomingAuthor,
@@ -402,6 +411,9 @@ class TheavPalette {
       chatBubbleIncomingSubtext: chatBubbleIncomingSubtext ?? this.chatBubbleIncomingSubtext,
       chatDateBadge: chatDateBadge ?? this.chatDateBadge,
       chatDateBadgeText: chatDateBadgeText ?? this.chatDateBadgeText,
+      chatBubbleOutgoingGradient: clearOutgoingGradient
+          ? null
+          : (chatBubbleOutgoingGradient ?? this.chatBubbleOutgoingGradient),
       chatBubbleOutgoingLink: chatBubbleOutgoingLink ?? _chatBubbleOutgoingLink,
       chatBubbleIncomingLink: chatBubbleIncomingLink ?? _chatBubbleIncomingLink,
       chatBubbleIncomingAuthor: chatBubbleIncomingAuthor ?? _chatBubbleIncomingAuthor,
@@ -433,6 +445,9 @@ class TheavPalette {
         'chatBubbleIncomingSubtext': TheavColorUtils.toHex(chatBubbleIncomingSubtext),
         'chatDateBadge': TheavColorUtils.toHex(chatDateBadge),
         'chatDateBadgeText': TheavColorUtils.toHex(chatDateBadgeText),
+        if (chatBubbleOutgoingGradient != null && chatBubbleOutgoingGradient!.isNotEmpty)
+          'chatBubbleOutgoingGradient':
+              chatBubbleOutgoingGradient!.map((c) => TheavColorUtils.toHex(c)).toList(),
         if (_chatBubbleOutgoingLink != null)
           'chatBubbleOutgoingLink': TheavColorUtils.toHex(_chatBubbleOutgoingLink!),
         if (_chatBubbleIncomingLink != null)
@@ -478,6 +493,11 @@ class TheavPalette {
           TheavColorUtils.fromHex(json['chatBubbleIncomingSubtext'] ?? '#8E8E93'),
       chatDateBadge: TheavColorUtils.fromHex(json['chatDateBadge'] ?? '#4D000000'),
       chatDateBadgeText: TheavColorUtils.fromHex(json['chatDateBadgeText'] ?? '#FFFFFF'),
+      chatBubbleOutgoingGradient: json['chatBubbleOutgoingGradient'] != null
+          ? (json['chatBubbleOutgoingGradient'] as List)
+              .map((c) => TheavColorUtils.fromHex(c.toString()))
+              .toList()
+          : null,
       chatBubbleOutgoingLink: json['chatBubbleOutgoingLink'] != null
           ? TheavColorUtils.fromHex(json['chatBubbleOutgoingLink'])
           : null,

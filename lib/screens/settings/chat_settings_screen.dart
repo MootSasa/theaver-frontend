@@ -14,7 +14,6 @@ import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
 import '../../widgets/theme/theme_preview_sheet.dart';
-import '../../widgets/theme/tiled_wallpaper_pattern.dart';
 import '../../l10n/app_localizations.dart';
 import 'theme_editor_screen.dart';
 import 'wallpaper_screen.dart';
@@ -737,7 +736,18 @@ class _ThemeItemBubble extends StatelessWidget {
                               width: 38,
                               height: 14,
                               decoration: BoxDecoration(
-                                color: theme.palette.chatBubbleOutgoing,
+                                color: (theme.palette.chatBubbleOutgoingGradient != null &&
+                                        theme.palette.chatBubbleOutgoingGradient!.length >= 2)
+                                    ? null
+                                    : theme.palette.chatBubbleOutgoing,
+                                gradient: (theme.palette.chatBubbleOutgoingGradient != null &&
+                                        theme.palette.chatBubbleOutgoingGradient!.length >= 2)
+                                    ? LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: theme.palette.chatBubbleOutgoingGradient!,
+                                      )
+                                    : null,
                                 borderRadius: BorderRadius.circular(7),
                                 boxShadow: [
                                   BoxShadow(

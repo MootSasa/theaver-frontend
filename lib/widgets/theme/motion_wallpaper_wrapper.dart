@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 /// Wraps wallpaper background with smooth gyroscope-driven parallax motion on mobile devices.
+///
+/// Uses [ValueNotifier] and [RepaintBoundary] to avoid widget tree rebuilds and expensive
+/// wallpaper/SVG re-rasterization on every frame, eliminating FPS drops and lag.
 class MotionWallpaperWrapper extends StatefulWidget {
   final Widget child;
   final bool enabled;
@@ -29,6 +32,7 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
   double _currentX = 0.0;
   double _currentY = 0.0;
   late AnimationController _animController;
+  final ValueNotifier<Offset> _offsetNotifier = ValueNotifier<Offset>(Offset.zero);
   bool _isMobile = false;
 
   @override
@@ -58,12 +62,11 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
       } else {
         _stopListening();
         _animController.stop();
-        setState(() {
-          _targetX = 0.0;
-          _targetY = 0.0;
-          _currentX = 0.0;
-          _currentY = 0.0;
-        });
+        _targetX = 0.0;
+        _targetY = 0.0;
+        _currentX = 0.0;
+        _currentY = 0.0;
+        _offsetNotifier.value = Offset.zero;
       }
     }
   }
@@ -80,6 +83,11 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
 
           _targetX = (_targetX + dx).clamp(-widget.maxOffset, widget.maxOffset);
           _targetY = (_targetY + dy).clamp(-widget.maxOffset, widget.maxOffset);
+
+          // Resume ticker if stopped due to idle
+          if (!_animController.isAnimating && mounted) {
+            _animController.repeat();
+          }
         },
         onError: (_) {},
         cancelOnError: false,
@@ -102,11 +110,19 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
     final newX = _currentX + (_targetX - _currentX) * 0.12;
     final newY = _currentY + (_targetY - _currentY) * 0.12;
 
-    if ((newX - _currentX).abs() > 0.01 || (newY - _currentY).abs() > 0.01) {
-      setState(() {
-        _currentX = newX;
-        _currentY = newY;
-      });
+    final diffX = (newX - _currentX).abs();
+    final diffY = (newY - _currentY).abs();
+
+    _currentX = newX;
+    _currentY = newY;
+    _offsetNotifier.value = Offset(newX, newY);
+
+    // If movement has settled below visual perception and target is near center,
+    // pause the animation loop to conserve CPU/GPU cycles.
+    if (diffX < 0.005 && diffY < 0.005 && _targetX.abs() < 0.01 && _targetY.abs() < 0.01) {
+      if (_animController.isAnimating) {
+        _animController.stop();
+      }
     }
   }
 
@@ -126,6 +142,7 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
     WidgetsBinding.instance.removeObserver(this);
     _stopListening();
     _animController.dispose();
+    _offsetNotifier.dispose();
     super.dispose();
   }
 
@@ -136,12 +153,18 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
     }
 
     return ClipRect(
-      child: Transform.scale(
-        scale: 1.15,
-        child: Transform.translate(
-          offset: Offset(_currentX, _currentY),
-          child: widget.child,
-        ),
+      child: ValueListenableBuilder<Offset>(
+        valueListenable: _offsetNotifier,
+        child: RepaintBoundary(child: widget.child),
+        builder: (context, offset, staticChild) {
+          return Transform.scale(
+            scale: 1.15,
+            child: Transform.translate(
+              offset: offset,
+              child: staticChild,
+            ),
+          );
+        },
       ),
     );
   }

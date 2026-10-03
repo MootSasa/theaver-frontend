@@ -40,32 +40,34 @@ class TiledWallpaperPattern extends StatelessWidget {
           child: SizedBox(
             width: w,
             height: h,
-            child: Stack(
-              children: [
-                for (int r = 0; r < rows; r++)
-                  for (int c = 0; c < cols; c++)
-                    Positioned(
-                      left: c * tileSize,
-                      top: r * tileSize,
-                      width: tileSize,
-                      height: tileSize,
-                      child: assetPath != null
-                          ? SvgPicture.asset(
-                              assetPath!,
-                              width: tileSize,
-                              height: tileSize,
-                              fit: BoxFit.fill,
-                              colorFilter: colorFilter,
-                            )
-                          : SvgPicture.file(
-                              File(filePath!),
-                              width: tileSize,
-                              height: tileSize,
-                              fit: BoxFit.fill,
-                              colorFilter: colorFilter,
-                            ),
-                    ),
-              ],
+            child: RepaintBoundary(
+              child: Stack(
+                children: [
+                  for (int r = 0; r < rows; r++)
+                    for (int c = 0; c < cols; c++)
+                      Positioned(
+                        left: c * tileSize,
+                        top: r * tileSize,
+                        width: tileSize,
+                        height: tileSize,
+                        child: assetPath != null
+                            ? SvgPicture.asset(
+                                assetPath!,
+                                width: tileSize,
+                                height: tileSize,
+                                fit: BoxFit.fill,
+                                colorFilter: colorFilter,
+                              )
+                            : SvgPicture.file(
+                                File(filePath!),
+                                width: tileSize,
+                                height: tileSize,
+                                fit: BoxFit.fill,
+                                colorFilter: colorFilter,
+                              ),
+                      ),
+                ],
+              ),
             ),
           ),
         );

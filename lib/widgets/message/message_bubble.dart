@@ -28,6 +28,7 @@ import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
 import '../../services/media_cache_manager.dart';
 import '../../l10n/app_localizations.dart';
+import '../theme/viewport_gradient_box.dart';
 
 /// Радиус скругления "облачка" сообщения.
 const double kMessageBorderRadius = 18.0;
@@ -1160,31 +1161,43 @@ class MessageBubble extends StatelessWidget {
                 ? const EdgeInsets.all(4.0)
                 : const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0);
 
+    final bool useOutgoingGradient = isMe &&
+        (themeExt?.palette.chatBubbleOutgoingGradient != null &&
+            themeExt!.palette.chatBubbleOutgoingGradient!.length >= 2) &&
+        !isPureMedia &&
+        !isBigEmoji &&
+        !_isRoundVideo;
+
+    final Widget bubbleContent = hasMedia
+        ? mediaContentWidget!
+        : MessageBubbleLayout(
+            content: textBodyWidget,
+            metadata: metadataWidget,
+            text: message.content,
+            textStyle: textStyle,
+            hasBlockElement: endsWithBlock,
+            isBigEmoji: isBigEmoji,
+            replyWidget: replyWidget,
+            replyWidth: replyWidthEstimate,
+            senderNameWidget: senderNameWidget,
+            senderNameWidth: senderNameWidthEstimate,
+            metadataWidth: metadataWidthEstimate,
+          );
+
     Widget bubbleCore = Container(
       margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
-      padding: bubblePadding,
       constraints: BoxConstraints(
         maxWidth: MediaQuery.of(context).size.width * 0.76,
       ),
-      decoration: BoxDecoration(
-        color: backgroundColor,
+      child: ViewportGradientBox(
         borderRadius: BorderRadius.circular(effectiveBubbleRadius),
+        gradientColors: useOutgoingGradient ? themeExt.palette.chatBubbleOutgoingGradient : null,
+        solidColor: backgroundColor,
+        child: Padding(
+          padding: bubblePadding,
+          child: bubbleContent,
+        ),
       ),
-      child: hasMedia
-          ? mediaContentWidget!
-          : MessageBubbleLayout(
-              content: textBodyWidget,
-              metadata: metadataWidget,
-              text: message.content,
-              textStyle: textStyle,
-              hasBlockElement: endsWithBlock,
-              isBigEmoji: isBigEmoji,
-              replyWidget: replyWidget,
-              replyWidth: replyWidthEstimate,
-              senderNameWidget: senderNameWidget,
-              senderNameWidth: senderNameWidthEstimate,
-              metadataWidth: metadataWidthEstimate,
-            ),
     );
 
     Widget result = Align(

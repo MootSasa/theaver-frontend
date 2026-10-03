@@ -6,10 +6,11 @@ import '../../l10n/app_localizations.dart';
 import '../chat/chat_scaffold.dart';
 import 'four_corner_gradient.dart';
 import 'motion_wallpaper_wrapper.dart';
+import 'viewport_gradient_box.dart';
 
 /// Interactive simulated chat card demonstrating active wallpaper,
 /// message bubble colors, corner radius, and timestamps.
-class ChatPreviewCard extends StatelessWidget {
+class ChatPreviewCard extends StatefulWidget {
   final TheavTheme theme;
   final double height;
   final bool enableMotion;
@@ -22,14 +23,23 @@ class ChatPreviewCard extends StatelessWidget {
   }) : super(key: key);
 
   @override
+  State<ChatPreviewCard> createState() => _ChatPreviewCardState();
+}
+
+class _ChatPreviewCardState extends State<ChatPreviewCard> {
+  final GlobalKey _previewScopeKey = GlobalKey();
+
+  @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
+    final theme = widget.theme;
     final palette = theme.palette;
     final wp = theme.wallpaper;
     final radius = theme.bubbleRadius;
 
     return Container(
-      height: height,
+      key: _previewScopeKey,
+      height: widget.height,
       margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
@@ -157,19 +167,17 @@ class ChatPreviewCard extends StatelessWidget {
                             child: Container(
                               constraints: BoxConstraints(maxWidth: maxBubbleWidth),
                               margin: const EdgeInsets.symmetric(vertical: 3.0),
-                              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-                              decoration: BoxDecoration(
-                                color: palette.chatBubbleOutgoing,
+                              child: ViewportGradientBox(
                                 borderRadius: BorderRadius.circular(radius),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.08),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 1.5),
-                                  ),
-                                ],
-                              ),
-                              child: Wrap(
+                                viewportScopeKey: _previewScopeKey,
+                                gradientColors: (palette.chatBubbleOutgoingGradient != null &&
+                                        palette.chatBubbleOutgoingGradient!.length >= 2)
+                                    ? palette.chatBubbleOutgoingGradient
+                                    : null,
+                                solidColor: palette.chatBubbleOutgoing,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                                  child: Wrap(
                                 alignment: WrapAlignment.end,
                                 crossAxisAlignment: WrapCrossAlignment.end,
                                 spacing: 8,
@@ -206,7 +214,9 @@ class ChatPreviewCard extends StatelessWidget {
                               ),
                             ),
                           ),
-                        ],
+                        ),
+                      ),
+                    ],
                       ),
                     ),
                   );
@@ -301,7 +311,7 @@ class ChatPreviewCard extends StatelessWidget {
       );
     }
 
-    if (enableMotion && wp.motionEnabled) {
+    if (widget.enableMotion && wp.motionEnabled) {
       return MotionWallpaperWrapper(
         enabled: true,
         child: content,
