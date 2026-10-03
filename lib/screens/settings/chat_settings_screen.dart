@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -647,12 +648,21 @@ class _ThemeItemBubble extends StatelessWidget {
 
     Widget? patternOverlay;
     if (wp.assetSvgPath != null && wp.patternOpacity > 0) {
-      patternOverlay = TiledWallpaperPattern(
-        assetPath: wp.assetSvgPath!,
-        baseTileWidth: 160.0,
-        colorFilter: ColorFilter.mode(
-          wp.patternColor.withValues(alpha: wp.patternOpacity),
-          BlendMode.srcIn,
+      final double buttonPatternOpacity = (wp.patternOpacity * 1.6).clamp(0.24, 0.60);
+      patternOverlay = OverflowBox(
+        minWidth: 0.0,
+        maxWidth: 210.0,
+        minHeight: 0.0,
+        maxHeight: 210.0,
+        child: SvgPicture.asset(
+          wp.assetSvgPath!,
+          width: 210.0,
+          height: 210.0,
+          fit: BoxFit.cover,
+          colorFilter: ColorFilter.mode(
+            wp.patternColor.withValues(alpha: buttonPatternOpacity),
+            BlendMode.srcIn,
+          ),
         ),
       );
     }
