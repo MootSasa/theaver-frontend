@@ -9,6 +9,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../theme/app_theme.dart';

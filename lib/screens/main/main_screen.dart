@@ -3478,7 +3478,7 @@ class _FolderMenuRow extends StatelessWidget {
                 const SizedBox(width: 8.0),
               ],
               if (isSelected)
-                const iconoir.Check(width: 18.0, height: 18.0, color: accentColor)
+                iconoir.Check(width: 18.0, height: 18.0, color: accentColor)
               else
                 const SizedBox(width: 18.0),
             ],
