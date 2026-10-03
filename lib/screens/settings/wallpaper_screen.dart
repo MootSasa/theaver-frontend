@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:ios_color_picker/show_ios_color_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
@@ -395,7 +396,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
                   min: 0.04,
                   max: 0.50,
                   divisions: 46,
-                  activeColor: const Color(0xFF0088CC),
+                  activeColor: Theme.of(context).colorScheme.primary,
                   onChanged: (val) {
                     setState(() => _currentWallpaper = _currentWallpaper.copyWith(patternOpacity: val));
                   },
@@ -565,88 +566,11 @@ class _ColorSelectTile extends StatelessWidget {
   }
 
   void _showColorPicker(BuildContext context) {
-    final palette = [
-      const Color(0xFF0088CC),
-      const Color(0xFF5CB8E6),
-      const Color(0xFF0288D1),
-      const Color(0xFF0D47A1),
-      const Color(0xFF2E7D32),
-      const Color(0xFF4CAF50),
-      const Color(0xFF8BC34A),
-      const Color(0xFFE91E63),
-      const Color(0xFF9C27B0),
-      const Color(0xFF673AB7),
-      const Color(0xFF7C4DFF),
-      const Color(0xFFFF9800),
-      const Color(0xFFFF5722),
-      const Color(0xFFEAF2F8),
-      const Color(0xFFF1F8FB),
-      const Color(0xFFE8F5E9),
-      const Color(0xFFFCE4EC),
-      const Color(0xFF14181E),
-      const Color(0xFF1C1C1E),
-      const Color(0xFFFFFFFF),
-    ];
-
-    showModalBottomSheet(
+    IOSColorPickerController().showIOSCustomColorPicker(
       context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: palette.map((c) {
-                    final isSel = c.toARGB32() == color.toARGB32();
-                    return GestureDetector(
-                      onTap: () {
-                        onChanged(c);
-                        Navigator.pop(ctx);
-                      },
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: c,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: isSel ? const Color(0xFF0088CC) : Colors.grey.withValues(alpha: 0.3),
-                            width: isSel ? 3 : 1,
-                          ),
-                          boxShadow: [
-                            BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4),
-                          ],
-                        ),
-                        child: isSel
-                            ? Icon(
-                                Icons.check,
-                                size: 20,
-                                color: c.computeLuminance() > 0.5 ? Colors.black : Colors.white,
-                              )
-                            : null,
-                      ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
-        );
+      startingColor: color.withValues(alpha: 1.0),
+      onColorChanged: (c) {
+        onChanged(c.withValues(alpha: 1.0));
       },
     );
   }

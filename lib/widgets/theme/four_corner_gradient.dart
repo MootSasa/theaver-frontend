@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:ios_color_picker/show_ios_color_picker.dart';
 import '../../models/theav_theme.dart';
 import '../../l10n/app_localizations.dart';
 import 'tiled_wallpaper_pattern.dart';
@@ -349,91 +350,11 @@ class _CornerColorChip extends StatelessWidget {
   }
 
   void _pickColor(BuildContext context) {
-    final curatedColors = [
-      const Color(0xFF0088CC),
-      const Color(0xFF5CB8E6),
-      const Color(0xFF0D47A1),
-      const Color(0xFF00BFA5),
-      const Color(0xFF69F0AE),
-      const Color(0xFF4CAF50),
-      const Color(0xFF8BC34A),
-      const Color(0xFFFFD54F),
-      const Color(0xFFFF9800),
-      const Color(0xFFFF5722),
-      const Color(0xFFE91E63),
-      const Color(0xFF9C27B0),
-      const Color(0xFF673AB7),
-      const Color(0xFF3F51B5),
-      const Color(0xFF607D8B),
-      const Color(0xFF263238),
-      const Color(0xFF1C1C1E),
-      const Color(0xFFE0F7FA),
-      const Color(0xFFF3E5F5),
-      const Color(0xFFFFFFFF),
-    ];
-
-    showModalBottomSheet(
+    IOSColorPickerController().showIOSCustomColorPicker(
       context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: curatedColors.map((c) {
-                    final isSel = c.toARGB32() == color.toARGB32();
-                    return GestureDetector(
-                      onTap: () {
-                        onColorChanged(c);
-                        Navigator.pop(ctx);
-                      },
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: c,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: isSel ? const Color(0xFF0088CC) : Colors.grey.withValues(alpha: 0.3),
-                            width: isSel ? 3 : 1,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 4,
-                            ),
-                          ],
-                        ),
-                        child: isSel
-                            ? Icon(
-                                Icons.check,
-                                size: 20,
-                                color: c.computeLuminance() > 0.5 ? Colors.black : Colors.white,
-                              )
-                            : null,
-                      ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
-        );
+      startingColor: color.withValues(alpha: 1.0),
+      onColorChanged: (c) {
+        onColorChanged(c.withValues(alpha: 1.0));
       },
     );
   }

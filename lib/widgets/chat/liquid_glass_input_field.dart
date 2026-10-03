@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../theme/app_theme.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
 import '../message/spoiler_text_widget.dart';
@@ -309,7 +310,12 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
 
   Widget _buildClassicInput(BuildContext context) {
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
+    final defaultBg = isDark
+        ? Colors.black.withValues(alpha: 0.65)
+        : Colors.white.withValues(alpha: 0.65);
+    final inputBg = themeExt?.palette.chatInputBackground ?? defaultBg;
 
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -322,9 +328,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
           filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
             decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.65)
-                  : Colors.white.withValues(alpha: 0.65),
+              color: inputBg,
               borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
               border: Border.all(
                 color: isDark ? Colors.white10 : Colors.black12,
@@ -390,7 +394,9 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
 
   Widget _buildInputRow(BuildContext context) {
     final theme = Theme.of(context);
-    const rightButtonBg = Color(0xFF0088CC);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final rightButtonBg = themeExt?.palette.chatSendButton ?? theme.colorScheme.primary;
+    final iconColor = themeExt?.palette.chatInputButtons ?? theme.colorScheme.onSurface.withValues(alpha: 0.5);
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -407,7 +413,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                     child: iconoir.Emoji(
                       width: _kEmojiIconSize,
                       height: _kEmojiIconSize,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                      color: iconColor,
                     ),
                   ),
                 )
@@ -432,18 +438,18 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                             ? iconoir.PlusCircle(
                                 width: _kActionIconSize,
                                 height: _kActionIconSize,
-                                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                                color: iconColor,
                               )
                             : (widget.attachIcon != Icons.attach_file
                                 ? Icon(
                                     widget.attachIcon,
                                     size: _kActionIconSize,
-                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                                    color: iconColor,
                                   )
                                 : iconoir.Attachment(
                                     width: _kActionIconSize,
                                     height: _kActionIconSize,
-                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                                    color: iconColor,
                                   ))),
                   ),
                 )
@@ -472,12 +478,10 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final hasSpoilers = richCtrl?.spans.any((s) => s.type == 'spoiler') ?? false;
     final spoilerColor = isDark ? Colors.white70 : Colors.black87;
 
-    final cursorColor = theme.colorScheme.primary;
-    final selectionHandleColor =
-        isDark ? const Color(0xFF7BE5DA) : const Color(0xFF0088CC);
-    final selectionColor = isDark
-        ? const Color(0x597BE5DA)
-        : const Color(0x470088CC);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final cursorColor = themeExt?.palette.primary ?? theme.colorScheme.primary;
+    final selectionHandleColor = themeExt?.palette.primary ?? theme.colorScheme.primary;
+    final selectionColor = (themeExt?.palette.primary ?? theme.colorScheme.primary).withValues(alpha: 0.28);
 
     final textSelectionTheme = theme.textSelectionTheme.copyWith(
       cursorColor: cursorColor,
@@ -573,7 +577,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                       ),
                     ),
                     style: TextStyle(
-                      color: theme.colorScheme.onSurface,
+                      color: themeExt?.palette.chatInputText ?? theme.colorScheme.onSurface,
                       fontSize: _kInputFontSize,
                       height: 1.2,
                     ),

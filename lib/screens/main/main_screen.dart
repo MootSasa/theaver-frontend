@@ -901,8 +901,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const iconoir.UserPlus(
-                color: Color(0xFF0088CC),
+              leading: iconoir.UserPlus(
+                color: Theme.of(context).colorScheme.primary,
                 width: 24,
                 height: 24,
               ),
@@ -918,8 +918,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: const iconoir.Group(
-                color: Color(0xFF0088CC),
+              leading: iconoir.Group(
+                color: Theme.of(context).colorScheme.primary,
                 width: 24,
                 height: 24,
               ),
@@ -934,8 +934,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: const iconoir.Megaphone(
-                color: Color(0xFF0088CC),
+              leading: iconoir.Megaphone(
+                color: Theme.of(context).colorScheme.primary,
                 width: 24,
                 height: 24,
               ),
@@ -1457,16 +1457,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildSelectModeBar(BuildContext context) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
     return Container(
       height: 44,
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF0088CC),
+        color: primaryColor,
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF0088CC).withValues(alpha: 0.35),
+            color: primaryColor.withValues(alpha: 0.35),
             blurRadius: 10,
             offset: const Offset(0, 3),
           ),
@@ -1751,7 +1752,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       leadingWidget = Checkbox(
         value: isSelected,
         onChanged: (_) => _toggleChatSelection(chat.id),
-        activeColor: const Color(0xFF0088CC),
+        activeColor: Theme.of(context).colorScheme.primary,
       );
     } else {
       leadingWidget = Stack(
@@ -1765,7 +1766,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             )
           else
             CircleAvatar(
-              backgroundColor: const Color(0xFF0088CC),
+              backgroundColor: Theme.of(context).colorScheme.primary,
               backgroundImage:
                   chat.avatarUrl != null && chat.avatarUrl!.isNotEmpty
                       ? avatarImageProvider(chat.avatarUrl)
@@ -1802,7 +1803,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     return Container(
       color:
-          isSelected ? const Color(0xFF0088CC).withValues(alpha: 0.08) : null,
+          isSelected ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.08) : null,
       child: ListTile(
         onLongPress: () {
           HapticUtils.impact();
@@ -1855,7 +1856,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   ),
                   if (chat.chatType == 'system') ...[
                     const SizedBox(width: 4),
-                    const iconoir.CheckCircle(width: 16, height: 16, color: Color(0xFF0088CC)),
+                    iconoir.CheckCircle(width: 16, height: 16, color: Theme.of(context).colorScheme.primary),
                   ],
                 ],
               ),
@@ -1865,7 +1866,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         subtitle: _buildChatSubtitle(chat, hasUnread),
         trailing: _isSelectMode
             ? (isSelected
-                ? const iconoir.CheckCircle(color: Color(0xFF0088CC), width: 22, height: 22)
+                ? iconoir.CheckCircle(color: Theme.of(context).colorScheme.primary, width: 22, height: 22)
                 : iconoir.Circle(color: Colors.grey[400], width: 22, height: 22))
             : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2040,8 +2041,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             if (!hasSavedChat || selectedChats.length > 1)
               ListTile(
                 leading: allPinned
-                    ? const iconoir.PinSlash(color: Color(0xFF0088CC), width: 22, height: 22)
-                    : const iconoir.Pin(color: Color(0xFF0088CC), width: 22, height: 22),
+                    ? iconoir.PinSlash(color: Theme.of(context).colorScheme.primary, width: 22, height: 22)
+                    : iconoir.Pin(color: Theme.of(context).colorScheme.primary, width: 22, height: 22),
                 title: Text(allPinned ? 'Открепить чаты' : 'Закрепить чаты'),
                 onTap: () {
                   Navigator.pop(context);
@@ -2051,7 +2052,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             // Mark as read
             if (anyUnread)
               ListTile(
-                leading: const iconoir.DoubleCheck(color: Color(0xFF0088CC), width: 22, height: 22),
+                leading: iconoir.DoubleCheck(color: Theme.of(context).colorScheme.primary, width: 22, height: 22),
                 title: const Text('Отметить как прочитанные'),
                 onTap: () {
                   Navigator.pop(context);
@@ -2441,10 +2442,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 12, vertical: 8),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF0088CC),
+                                        color: Theme.of(context).colorScheme.primary,
                                         boxShadow: [
                                           BoxShadow(
-                                            color: const Color(0xFF0088CC)
+                                            color: Theme.of(context).colorScheme.primary
                                                 .withValues(alpha: 0.3),
                                             blurRadius: 8,
                                             offset: const Offset(0, 2),
@@ -2725,7 +2726,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   itemPadding: 3,
                   style: barStyle,
                   itemStyle: LiquidGlassTabItemStyle(
-                    selectedColor: const Color(0xFF0088CC),
+                    selectedColor: Theme.of(context).colorScheme.primary,
                     unselectedColor: isDark
                         ? const Color(0xFF8E8E93)
                         : const Color(0xFF636366),
@@ -3421,7 +3422,7 @@ class _FolderMenuRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final defaultColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    const accentColor = Color(0xFF0088CC);
+    final accentColor = Theme.of(context).colorScheme.primary;
     final itemColor = isSelected ? accentColor : defaultColor;
 
     return GestureDetector(

@@ -288,6 +288,34 @@ class TheavPalette {
   final Color chatDateBadge;
   final Color chatDateBadgeText;
 
+  // Extended customizable colors
+  final Color? _chatBubbleOutgoingLink;
+  final Color? _chatBubbleIncomingLink;
+  final Color? _chatBubbleIncomingAuthor;
+  final Color? _chatInputBackground;
+  final Color? _chatInputText;
+  final Color? _chatInputButtons;
+  final Color? _chatSendButton;
+  final Color? _unreadBadge;
+  final Color? _unreadBadgeText;
+  final Color? _onlineIndicator;
+  final Color? _subtext;
+  final Color? _divider;
+
+  Color get chatBubbleOutgoingLink => _chatBubbleOutgoingLink ?? chatBubbleOutgoingText;
+  Color get chatBubbleIncomingLink => _chatBubbleIncomingLink ?? primary;
+  Color get chatBubbleIncomingAuthor => _chatBubbleIncomingAuthor ?? primary;
+  Color get chatInputBackground => _chatInputBackground ?? surface;
+  Color get chatInputText => _chatInputText ?? onSurface;
+  Color get chatInputButtons => _chatInputButtons ?? onSurface.withValues(alpha: 0.6);
+  Color get chatSendButton => _chatSendButton ?? primary;
+  Color get unreadBadge => _unreadBadge ?? primary;
+  Color get unreadBadgeText => _unreadBadgeText ?? onPrimary;
+  Color get onlineIndicator => _onlineIndicator ?? const Color(0xFF4CAF50);
+  Color get subtext => _subtext ?? onSurface.withValues(alpha: 0.6);
+  Color get divider => _divider ?? onSurface.withValues(alpha: 0.12);
+  Color get accent => primary;
+
   const TheavPalette({
     required this.primary,
     required this.onPrimary,
@@ -304,7 +332,30 @@ class TheavPalette {
     required this.chatBubbleIncomingSubtext,
     required this.chatDateBadge,
     required this.chatDateBadgeText,
-  });
+    Color? chatBubbleOutgoingLink,
+    Color? chatBubbleIncomingLink,
+    Color? chatBubbleIncomingAuthor,
+    Color? chatInputBackground,
+    Color? chatInputText,
+    Color? chatInputButtons,
+    Color? chatSendButton,
+    Color? unreadBadge,
+    Color? unreadBadgeText,
+    Color? onlineIndicator,
+    Color? subtext,
+    Color? divider,
+  })  : _chatBubbleOutgoingLink = chatBubbleOutgoingLink,
+        _chatBubbleIncomingLink = chatBubbleIncomingLink,
+        _chatBubbleIncomingAuthor = chatBubbleIncomingAuthor,
+        _chatInputBackground = chatInputBackground,
+        _chatInputText = chatInputText,
+        _chatInputButtons = chatInputButtons,
+        _chatSendButton = chatSendButton,
+        _unreadBadge = unreadBadge,
+        _unreadBadgeText = unreadBadgeText,
+        _onlineIndicator = onlineIndicator,
+        _subtext = subtext,
+        _divider = divider;
 
   TheavPalette copyWith({
     Color? primary,
@@ -322,6 +373,18 @@ class TheavPalette {
     Color? chatBubbleIncomingSubtext,
     Color? chatDateBadge,
     Color? chatDateBadgeText,
+    Color? chatBubbleOutgoingLink,
+    Color? chatBubbleIncomingLink,
+    Color? chatBubbleIncomingAuthor,
+    Color? chatInputBackground,
+    Color? chatInputText,
+    Color? chatInputButtons,
+    Color? chatSendButton,
+    Color? unreadBadge,
+    Color? unreadBadgeText,
+    Color? onlineIndicator,
+    Color? subtext,
+    Color? divider,
   }) {
     return TheavPalette(
       primary: primary ?? this.primary,
@@ -339,6 +402,18 @@ class TheavPalette {
       chatBubbleIncomingSubtext: chatBubbleIncomingSubtext ?? this.chatBubbleIncomingSubtext,
       chatDateBadge: chatDateBadge ?? this.chatDateBadge,
       chatDateBadgeText: chatDateBadgeText ?? this.chatDateBadgeText,
+      chatBubbleOutgoingLink: chatBubbleOutgoingLink ?? _chatBubbleOutgoingLink,
+      chatBubbleIncomingLink: chatBubbleIncomingLink ?? _chatBubbleIncomingLink,
+      chatBubbleIncomingAuthor: chatBubbleIncomingAuthor ?? _chatBubbleIncomingAuthor,
+      chatInputBackground: chatInputBackground ?? _chatInputBackground,
+      chatInputText: chatInputText ?? _chatInputText,
+      chatInputButtons: chatInputButtons ?? _chatInputButtons,
+      chatSendButton: chatSendButton ?? _chatSendButton,
+      unreadBadge: unreadBadge ?? _unreadBadge,
+      unreadBadgeText: unreadBadgeText ?? _unreadBadgeText,
+      onlineIndicator: onlineIndicator ?? _onlineIndicator,
+      subtext: subtext ?? _subtext,
+      divider: divider ?? _divider,
     );
   }
 
@@ -358,6 +433,30 @@ class TheavPalette {
         'chatBubbleIncomingSubtext': TheavColorUtils.toHex(chatBubbleIncomingSubtext),
         'chatDateBadge': TheavColorUtils.toHex(chatDateBadge),
         'chatDateBadgeText': TheavColorUtils.toHex(chatDateBadgeText),
+        if (_chatBubbleOutgoingLink != null)
+          'chatBubbleOutgoingLink': TheavColorUtils.toHex(_chatBubbleOutgoingLink!),
+        if (_chatBubbleIncomingLink != null)
+          'chatBubbleIncomingLink': TheavColorUtils.toHex(_chatBubbleIncomingLink!),
+        if (_chatBubbleIncomingAuthor != null)
+          'chatBubbleIncomingAuthor': TheavColorUtils.toHex(_chatBubbleIncomingAuthor!),
+        if (_chatInputBackground != null)
+          'chatInputBackground': TheavColorUtils.toHex(_chatInputBackground!),
+        if (_chatInputText != null)
+          'chatInputText': TheavColorUtils.toHex(_chatInputText!),
+        if (_chatInputButtons != null)
+          'chatInputButtons': TheavColorUtils.toHex(_chatInputButtons!),
+        if (_chatSendButton != null)
+          'chatSendButton': TheavColorUtils.toHex(_chatSendButton!),
+        if (_unreadBadge != null)
+          'unreadBadge': TheavColorUtils.toHex(_unreadBadge!),
+        if (_unreadBadgeText != null)
+          'unreadBadgeText': TheavColorUtils.toHex(_unreadBadgeText!),
+        if (_onlineIndicator != null)
+          'onlineIndicator': TheavColorUtils.toHex(_onlineIndicator!),
+        if (_subtext != null)
+          'subtext': TheavColorUtils.toHex(_subtext!),
+        if (_divider != null)
+          'divider': TheavColorUtils.toHex(_divider!),
       };
 
   factory TheavPalette.fromJson(Map<String, dynamic> json) {
@@ -379,6 +478,38 @@ class TheavPalette {
           TheavColorUtils.fromHex(json['chatBubbleIncomingSubtext'] ?? '#8E8E93'),
       chatDateBadge: TheavColorUtils.fromHex(json['chatDateBadge'] ?? '#4D000000'),
       chatDateBadgeText: TheavColorUtils.fromHex(json['chatDateBadgeText'] ?? '#FFFFFF'),
+      chatBubbleOutgoingLink: json['chatBubbleOutgoingLink'] != null
+          ? TheavColorUtils.fromHex(json['chatBubbleOutgoingLink'])
+          : null,
+      chatBubbleIncomingLink: json['chatBubbleIncomingLink'] != null
+          ? TheavColorUtils.fromHex(json['chatBubbleIncomingLink'])
+          : null,
+      chatBubbleIncomingAuthor: json['chatBubbleIncomingAuthor'] != null
+          ? TheavColorUtils.fromHex(json['chatBubbleIncomingAuthor'])
+          : null,
+      chatInputBackground: json['chatInputBackground'] != null
+          ? TheavColorUtils.fromHex(json['chatInputBackground'])
+          : null,
+      chatInputText: json['chatInputText'] != null
+          ? TheavColorUtils.fromHex(json['chatInputText'])
+          : null,
+      chatInputButtons: json['chatInputButtons'] != null
+          ? TheavColorUtils.fromHex(json['chatInputButtons'])
+          : null,
+      chatSendButton: json['chatSendButton'] != null
+          ? TheavColorUtils.fromHex(json['chatSendButton'])
+          : null,
+      unreadBadge: json['unreadBadge'] != null
+          ? TheavColorUtils.fromHex(json['unreadBadge'])
+          : null,
+      unreadBadgeText: json['unreadBadgeText'] != null
+          ? TheavColorUtils.fromHex(json['unreadBadgeText'])
+          : null,
+      onlineIndicator: json['onlineIndicator'] != null
+          ? TheavColorUtils.fromHex(json['onlineIndicator'])
+          : null,
+      subtext: json['subtext'] != null ? TheavColorUtils.fromHex(json['subtext']) : null,
+      divider: json['divider'] != null ? TheavColorUtils.fromHex(json['divider']) : null,
     );
   }
 }

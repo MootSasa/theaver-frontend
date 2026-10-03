@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:ios_color_picker/show_ios_color_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -26,6 +27,7 @@ class ThemeEditorScreen extends StatefulWidget {
 class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
   late TextEditingController _nameController;
   late TheavTheme _currentTheme;
+  final IOSColorPickerController _colorPickerController = IOSColorPickerController();
   bool _isSaving = false;
 
   @override
@@ -50,6 +52,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _colorPickerController.dispose();
     super.dispose();
   }
 
@@ -137,7 +140,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
             padding: const EdgeInsets.symmetric(vertical: 12),
             child: ChatPreviewCard(
               theme: _currentTheme,
-              height: 220,
+              height: 230,
             ),
           ),
 
@@ -173,10 +176,10 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 ),
                 secondary: Icon(
                   _currentTheme.isDark ? Icons.dark_mode : Icons.light_mode,
-                  color: const Color(0xFF0088CC),
+                  color: _currentTheme.palette.primary,
                 ),
                 value: _currentTheme.isDark,
-                activeColor: const Color(0xFF0088CC),
+                activeColor: _currentTheme.palette.primary,
                 onChanged: (val) {
                   setState(() {
                     _currentTheme = _currentTheme.copyWith(
@@ -223,7 +226,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                     min: 0,
                     max: 24,
                     divisions: 24,
-                    activeColor: const Color(0xFF0088CC),
+                    activeColor: _currentTheme.palette.primary,
                     onChanged: (val) {
                       setState(() => _currentTheme = _currentTheme.copyWith(bubbleRadius: val));
                     },
@@ -232,18 +235,9 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
 
-          // 5. Palette Colors Section
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Цвета оформления',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[700]),
-            ),
-          ),
-          const SizedBox(height: 8),
-
+          // 5. Palette Colors Section (Categorized)
+          _buildSectionHeader('Основные цвета'),
           _buildColorTile(
             title: l10n.translate('theme_primary_color'),
             color: _currentTheme.palette.primary,
@@ -251,6 +245,36 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                   palette: _currentTheme.palette.copyWith(primary: c),
                 )),
           ),
+          _buildColorTile(
+            title: 'Фон экрана',
+            color: _currentTheme.palette.background,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(background: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Фон карточек и списков',
+            color: _currentTheme.palette.surface,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(surface: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Основной текст',
+            color: _currentTheme.palette.onSurface,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(onSurface: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Шапка экрана (AppBar)',
+            color: _currentTheme.palette.appBarBackground,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(appBarBackground: c),
+                )),
+          ),
+
+          _buildSectionHeader('Исходящие сообщения'),
           _buildColorTile(
             title: l10n.translate('theme_bubble_outgoing'),
             color: _currentTheme.palette.chatBubbleOutgoing,
@@ -266,6 +290,22 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 )),
           ),
           _buildColorTile(
+            title: 'Время и галочки статуса',
+            color: _currentTheme.palette.chatBubbleOutgoingSubtext,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoingSubtext: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Цвет ссылок в сообщении',
+            color: _currentTheme.palette.chatBubbleOutgoingLink,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoingLink: c),
+                )),
+          ),
+
+          _buildSectionHeader('Входящие сообщения'),
+          _buildColorTile(
             title: l10n.translate('theme_bubble_incoming'),
             color: _currentTheme.palette.chatBubbleIncoming,
             onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
@@ -279,6 +319,108 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                   palette: _currentTheme.palette.copyWith(chatBubbleIncomingText: c),
                 )),
           ),
+          _buildColorTile(
+            title: 'Время сообщения',
+            color: _currentTheme.palette.chatBubbleIncomingSubtext,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatBubbleIncomingSubtext: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Имя отправителя',
+            color: _currentTheme.palette.chatBubbleIncomingAuthor,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatBubbleIncomingAuthor: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Цвет ссылок в сообщении',
+            color: _currentTheme.palette.chatBubbleIncomingLink,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatBubbleIncomingLink: c),
+                )),
+          ),
+
+          _buildSectionHeader('Панель ввода'),
+          _buildColorTile(
+            title: 'Фон поля ввода',
+            color: _currentTheme.palette.chatInputBackground,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatInputBackground: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Цвет вводимого текста',
+            color: _currentTheme.palette.chatInputText,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatInputText: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Иконки и кнопки панели',
+            color: _currentTheme.palette.chatInputButtons,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatInputButtons: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Кнопка отправки',
+            color: _currentTheme.palette.chatSendButton,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatSendButton: c),
+                )),
+          ),
+
+          _buildSectionHeader('Служебные элементы'),
+          _buildColorTile(
+            title: 'Плашка даты в чате',
+            color: _currentTheme.palette.chatDateBadge,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatDateBadge: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Текст даты в чате',
+            color: _currentTheme.palette.chatDateBadgeText,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(chatDateBadgeText: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Бейдж непрочитанных',
+            color: _currentTheme.palette.unreadBadge,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(unreadBadge: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Текст бейджа непрочитанных',
+            color: _currentTheme.palette.unreadBadgeText,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(unreadBadgeText: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Индикатор «в сети»',
+            color: _currentTheme.palette.onlineIndicator,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(onlineIndicator: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Второстепенный текст',
+            color: _currentTheme.palette.subtext,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(subtext: c),
+                )),
+          ),
+          _buildColorTile(
+            title: 'Разделители строк',
+            color: _currentTheme.palette.divider,
+            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                  palette: _currentTheme.palette.copyWith(divider: c),
+                )),
+          ),
 
           const SizedBox(height: 16),
 
@@ -288,7 +430,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
             child: ListTile(
               tileColor: Theme.of(context).cardColor,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              leading: const Icon(Icons.wallpaper, color: Color(0xFF0088CC)),
+              leading: Icon(Icons.wallpaper, color: _currentTheme.palette.primary),
               title: Text(l10n.translate('wallpaper_title')),
               subtitle: Text(
                 _currentTheme.wallpaper.type == 'pattern'
@@ -354,13 +496,30 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     );
   }
 
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, right: 16, top: 18, bottom: 6),
+      child: Text(
+        title.toUpperCase(),
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.5,
+          color: Theme.of(context).brightness == Brightness.dark
+              ? Colors.grey[400]
+              : Colors.grey[700],
+        ),
+      ),
+    );
+  }
+
   Widget _buildColorTile({
     required String title,
     required Color color,
     required ValueChanged<Color> onChanged,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
       child: Container(
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
@@ -376,7 +535,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
               shape: BoxShape.circle,
               border: Border.all(color: Colors.white, width: 2),
               boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4),
+                BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 4),
               ],
             ),
           ),
@@ -387,86 +546,11 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
   }
 
   void _pickColor(BuildContext context, String title, Color currentColor, ValueChanged<Color> onChanged) {
-    final palette = [
-      const Color(0xFF0088CC),
-      const Color(0xFF5CB8E6),
-      const Color(0xFF0288D1),
-      const Color(0xFF0D47A1),
-      const Color(0xFF2E7D32),
-      const Color(0xFF4CAF50),
-      const Color(0xFF8BC34A),
-      const Color(0xFFE91E63),
-      const Color(0xFF9C27B0),
-      const Color(0xFF673AB7),
-      const Color(0xFF7C4DFF),
-      const Color(0xFFFF9800),
-      const Color(0xFFFF5722),
-      const Color(0xFFF2F2F7),
-      const Color(0xFF2C2C2E),
-      const Color(0xFF1C1C1E),
-      const Color(0xFF000000),
-      const Color(0xFFFFFFFF),
-    ];
-
-    showModalBottomSheet(
+    _colorPickerController.showIOSCustomColorPicker(
       context: context,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: palette.map((c) {
-                    final isSel = c.toARGB32() == currentColor.toARGB32();
-                    return GestureDetector(
-                      onTap: () {
-                        onChanged(c);
-                        Navigator.pop(ctx);
-                      },
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: c,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: isSel ? const Color(0xFF0088CC) : Colors.grey.withValues(alpha: 0.3),
-                            width: isSel ? 3 : 1,
-                          ),
-                          boxShadow: [
-                            BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4),
-                          ],
-                        ),
-                        child: isSel
-                            ? Icon(
-                                Icons.check,
-                                size: 20,
-                                color: c.computeLuminance() > 0.5 ? Colors.black : Colors.white,
-                              )
-                            : null,
-                      ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
-        );
+      startingColor: currentColor.withValues(alpha: 1.0),
+      onColorChanged: (c) {
+        onChanged(c.withValues(alpha: 1.0));
       },
     );
   }

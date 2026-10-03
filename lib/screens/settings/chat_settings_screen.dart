@@ -11,7 +11,9 @@ import '../../services/wallpaper_provider.dart';
 import '../../theme/theme_provider.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
+import '../../widgets/theme/four_corner_gradient.dart';
 import '../../widgets/theme/theme_preview_sheet.dart';
+import '../../widgets/theme/tiled_wallpaper_pattern.dart';
 import '../../l10n/app_localizations.dart';
 import 'theme_editor_screen.dart';
 import 'wallpaper_screen.dart';
@@ -104,6 +106,7 @@ class ChatSettingsScreen extends StatelessWidget {
     final themeProvider = context.watch<ThemeProvider>();
     final isDark = themeProvider.themeMode == ThemeMode.dark;
     final activeTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
+    final activePrimary = activeTheme.palette.primary;
     final allThemes = TheavThemeService().getAllThemes();
 
     return Scaffold(
@@ -130,7 +133,7 @@ class ChatSettingsScreen extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 12),
             child: ChatPreviewCard(
               theme: activeTheme,
-              height: 210,
+              height: 230,
             ),
           ),
 
@@ -161,12 +164,12 @@ class ChatSettingsScreen extends StatelessWidget {
             ),
           ),
           SizedBox(
-            height: 110,
+            height: 104,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: allThemes.length + 1,
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
               itemBuilder: (context, index) {
                 if (index == allThemes.length) {
                   // "+ Create Theme" Card
@@ -177,28 +180,34 @@ class ChatSettingsScreen extends StatelessWidget {
                         SwipeBackPageRoute(builder: (_) => const ThemeEditorScreen()),
                       );
                     },
-                    child: Container(
-                      width: 84,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).cardColor,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: Colors.grey.withValues(alpha: 0.3),
-                          style: BorderStyle.solid,
-                        ),
-                      ),
+                    child: SizedBox(
+                      width: 80,
                       child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.add_circle_outline, color: Theme.of(context).primaryColor, size: 28),
+                          Container(
+                            width: 78,
+                            height: 68,
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).cardColor,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.grey.withValues(alpha: 0.3),
+                              ),
+                            ),
+                            child: Icon(Icons.add_rounded, color: activePrimary, size: 28),
+                          ),
                           const SizedBox(height: 6),
                           Text(
                             'Создать',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
-                              color: Theme.of(context).primaryColor,
+                              color: activePrimary,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
                           ),
                         ],
                       ),
@@ -209,7 +218,10 @@ class ChatSettingsScreen extends StatelessWidget {
                 final t = allThemes[index];
                 final isSelected = t.id == activeTheme.id;
 
-                return GestureDetector(
+                return _ThemeItemBubble(
+                  theme: t,
+                  isSelected: isSelected,
+                  activePrimary: activePrimary,
                   onTap: () {
                     themeProvider.setActiveTheme(t);
                     if (t.wallpaper.type != 'image') {
@@ -226,75 +238,6 @@ class ChatSettingsScreen extends StatelessWidget {
                       );
                     }
                   },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 86,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).cardColor,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: isSelected ? const Color(0xFF0088CC) : Colors.grey.withValues(alpha: 0.25),
-                        width: isSelected ? 2.5 : 1,
-                      ),
-                    ),
-                    padding: const EdgeInsets.all(6),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // Thumbnail of theme palette
-                        Stack(
-                          children: [
-                            Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: t.palette.primary,
-                                border: Border.all(color: Colors.white, width: 2),
-                                boxShadow: [
-                                  BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4),
-                                ],
-                              ),
-                              child: Center(
-                                child: Container(
-                                  width: 20,
-                                  height: 20,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: t.palette.chatBubbleOutgoing,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            if (t.isCloudSaved)
-                              Positioned(
-                                right: 0,
-                                bottom: 0,
-                                child: Container(
-                                  padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.white,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(Icons.cloud_done, size: 12, color: Color(0xFF0088CC)),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          t.name,
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                            color: isSelected ? const Color(0xFF0088CC) : null,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
                 );
               },
             ),
@@ -303,7 +246,7 @@ class ChatSettingsScreen extends StatelessWidget {
 
           // 3. Wallpaper constructor Tile
           ListTile(
-            leading: const Icon(Icons.wallpaper, color: Color(0xFF0088CC)),
+            leading: Icon(Icons.wallpaper, color: activePrimary),
             title: Text(l10n.translate('wallpaper_title')),
             subtitle: Text(
               activeTheme.wallpaper.type == 'pattern'
@@ -351,7 +294,7 @@ class ChatSettingsScreen extends StatelessWidget {
                     min: 0,
                     max: 24,
                     divisions: 24,
-                    activeColor: const Color(0xFF0088CC),
+                    activeColor: activePrimary,
                     onChanged: (val) {
                       final updated = activeTheme.copyWith(bubbleRadius: val);
                       themeProvider.setActiveTheme(updated);
@@ -370,9 +313,9 @@ class ChatSettingsScreen extends StatelessWidget {
                 leading: Icon(
                   Icons.dark_mode,
                   color: themeProvider.themeMode == ThemeMode.dark
-                      ? const Color(0xFF0088CC)
+                      ? activePrimary
                       : themeProvider.themeMode == ThemeMode.light
-                          ? const Color(0xFF0088CC)
+                          ? activePrimary
                           : Colors.grey,
                 ),
                 title: Text(l10n.translate('settings_theme')),
@@ -424,7 +367,7 @@ class ChatSettingsScreen extends StatelessWidget {
                   ListTile(
                     leading: Icon(
                       Icons.auto_awesome,
-                      color: isSupported ? const Color(0xFF0088CC) : Colors.grey,
+                      color: isSupported ? activePrimary : Colors.grey,
                     ),
                     title: Text(
                       l10n.translate('settings_liquid_glass'),
@@ -495,7 +438,7 @@ class ChatSettingsScreen extends StatelessWidget {
                         min: 0,
                         max: 360,
                         divisions: 72,
-                        activeColor: const Color(0xFF0088CC),
+                        activeColor: activePrimary,
                         label: '${provider.manualLightAngle.round()}°',
                         onChanged: (val) => provider.setManualLightAngle(val),
                       ),
@@ -521,7 +464,7 @@ class ChatSettingsScreen extends StatelessWidget {
                         min: 0,
                         max: 30,
                         divisions: 60,
-                        activeColor: const Color(0xFF0088CC),
+                        activeColor: activePrimary,
                         label: provider.blur.toStringAsFixed(1),
                         onChanged: (val) => provider.setBlur(val),
                       ),
@@ -564,6 +507,7 @@ class _ThemeButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final primary = theme.primaryColor;
 
     return Expanded(
       child: GestureDetector(
@@ -572,10 +516,10 @@ class _ThemeButton extends StatelessWidget {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
           decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF0088CC).withValues(alpha: 0.12) : Colors.transparent,
+            color: isSelected ? primary.withValues(alpha: 0.12) : Colors.transparent,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isSelected ? const Color(0xFF0088CC) : Colors.grey.withValues(alpha: 0.3),
+              color: isSelected ? primary : Colors.grey.withValues(alpha: 0.3),
               width: isSelected ? 1.5 : 0.5,
             ),
           ),
@@ -583,7 +527,7 @@ class _ThemeButton extends StatelessWidget {
             children: [
               Icon(
                 icon,
-                color: isSelected ? const Color(0xFF0088CC) : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                color: isSelected ? primary : theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 size: 24,
               ),
               const SizedBox(height: 4),
@@ -592,7 +536,7 @@ class _ThemeButton extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                  color: isSelected ? const Color(0xFF0088CC) : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                  color: isSelected ? primary : theme.colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
               ),
             ],
@@ -619,6 +563,7 @@ class _GlassModeButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final primary = theme.primaryColor;
 
     return Expanded(
       child: GestureDetector(
@@ -627,10 +572,10 @@ class _GlassModeButton extends StatelessWidget {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
           decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF0088CC).withValues(alpha: 0.12) : Colors.transparent,
+            color: isSelected ? primary.withValues(alpha: 0.12) : Colors.transparent,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isSelected ? const Color(0xFF0088CC) : Colors.grey.withValues(alpha: 0.3),
+              color: isSelected ? primary : Colors.grey.withValues(alpha: 0.3),
               width: isSelected ? 1.5 : 0.5,
             ),
           ),
@@ -638,7 +583,7 @@ class _GlassModeButton extends StatelessWidget {
             children: [
               Icon(
                 icon,
-                color: isSelected ? const Color(0xFF0088CC) : theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                color: isSelected ? primary : theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 size: 24,
               ),
               const SizedBox(height: 4),
@@ -647,7 +592,7 @@ class _GlassModeButton extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                  color: isSelected ? const Color(0xFF0088CC) : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                  color: isSelected ? primary : theme.colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
               ),
             ],
@@ -657,3 +602,205 @@ class _GlassModeButton extends StatelessWidget {
     );
   }
 }
+
+/// Theme carousel item: wallpaper background with 2 empty message ovals.
+class _ThemeItemBubble extends StatelessWidget {
+  final TheavTheme theme;
+  final bool isSelected;
+  final Color activePrimary;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  const _ThemeItemBubble({
+    required this.theme,
+    required this.isSelected,
+    required this.activePrimary,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final wp = theme.wallpaper;
+
+    Widget wallpaperBg;
+    if (wp.fourCornerGradient != null) {
+      wallpaperBg = CustomPaint(
+        painter: FourCornerGradientPainter(
+          topLeft: wp.fourCornerGradient!.topLeft,
+          topRight: wp.fourCornerGradient!.topRight,
+          bottomLeft: wp.fourCornerGradient!.bottomLeft,
+          bottomRight: wp.fourCornerGradient!.bottomRight,
+        ),
+        child: const SizedBox.expand(),
+      );
+    } else if (wp.type == 'image' && wp.imagePath != null && File(wp.imagePath!).existsSync()) {
+      wallpaperBg = Image.file(
+        File(wp.imagePath!),
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    } else {
+      wallpaperBg = Container(color: wp.backgroundColor);
+    }
+
+    Widget? patternOverlay;
+    if (wp.assetSvgPath != null && wp.patternOpacity > 0) {
+      patternOverlay = TiledWallpaperPattern(
+        assetPath: wp.assetSvgPath!,
+        baseTileWidth: 160.0,
+        colorFilter: ColorFilter.mode(
+          wp.patternColor.withValues(alpha: wp.patternOpacity),
+          BlendMode.srcIn,
+        ),
+      );
+    }
+
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: SizedBox(
+        width: 80,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Theme button bubble: wallpaper background + 2 empty message ovals
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 78,
+              height: 68,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isSelected ? activePrimary : (Theme.of(context).brightness == Brightness.dark ? Colors.white24 : Colors.black12),
+                  width: isSelected ? 2.5 : 1.0,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: activePrimary.withValues(alpha: 0.25),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(13.5),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Wallpaper
+                    wallpaperBg,
+                    if (patternOverlay != null) patternOverlay,
+
+                    // Two empty message ovals showing bubble colors
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Top: Incoming empty oval
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Container(
+                              width: 38,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: theme.palette.chatBubbleIncoming,
+                                borderRadius: BorderRadius.circular(7),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.08),
+                                    blurRadius: 2,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          // Bottom: Outgoing empty oval
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              width: 38,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: theme.palette.chatBubbleOutgoing,
+                                borderRadius: BorderRadius.circular(7),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.12),
+                                    blurRadius: 2,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Selected checkmark badge
+                    if (isSelected)
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: activePrimary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.check,
+                            size: 11,
+                            color: theme.palette.onPrimary,
+                          ),
+                        ),
+                      ),
+
+                    // Cloud synced indicator
+                    if (theme.isCloudSaved)
+                      Positioned(
+                        bottom: 4,
+                        left: 4,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.cloud_done,
+                            size: 10,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            // Theme Name
+            Text(
+              theme.name,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                color: isSelected ? activePrimary : null,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+

@@ -49,144 +49,171 @@ class ChatPreviewCard extends StatelessWidget {
             // 1. Wallpaper background layer
             _buildWallpaperBackground(wp),
 
-            // 2. Simulated messages overlay
+            // 2. Exact chat messages layout
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  // Date Chip
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: palette.chatDateBadge,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      l10n.translate('date_today'),
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: palette.chatDateBadgeText,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final maxBubbleWidth = constraints.maxWidth * 0.78;
 
-                  // Incoming Bubble
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.72,
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                      decoration: BoxDecoration(
-                        color: palette.chatBubbleIncoming,
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(radius),
-                          topRight: Radius.circular(radius),
-                          bottomRight: Radius.circular(radius),
-                          bottomLeft: Radius.circular(radius * 0.25),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.05),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
+                  return SingleChildScrollView(
+                    reverse: true,
+                    physics: const ClampingScrollPhysics(),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(minHeight: constraints.maxHeight),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Text(
-                            'Привет! Как тебе эта тема Theaver?',
-                            style: TextStyle(
-                              fontSize: 14.5,
-                              color: palette.chatBubbleIncomingText,
-                              height: 1.25,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Align(
-                            alignment: Alignment.bottomRight,
-                            child: Text(
-                              '11:42',
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                color: palette.chatBubbleIncomingSubtext,
+                          // Date separator chip
+                          Center(
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3.5),
+                              decoration: BoxDecoration(
+                                color: palette.chatDateBadge,
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Outgoing Bubble
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.75,
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                      decoration: BoxDecoration(
-                        color: palette.chatBubbleOutgoing,
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(radius),
-                          topRight: Radius.circular(radius),
-                          bottomLeft: Radius.circular(radius),
-                          bottomRight: Radius.circular(radius * 0.25),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.08),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Выглядит отлично! Градиент и узоры смотрятся очень стильно ✨',
-                            style: TextStyle(
-                              fontSize: 14.5,
-                              color: palette.chatBubbleOutgoingText,
-                              height: 1.25,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              Text(
-                                '11:43',
+                              child: Text(
+                                l10n.translate('date_today'),
                                 style: TextStyle(
-                                  fontSize: 10.5,
-                                  color: palette.chatBubbleOutgoingSubtext,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: palette.chatDateBadgeText,
                                 ),
                               ),
-                              const SizedBox(width: 4),
-                              Icon(
-                                Icons.done_all,
-                                size: 14,
-                                color: palette.chatBubbleOutgoingSubtext,
+                            ),
+                          ),
+
+                          // Incoming Bubble (Identical to real MessageBubble)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Container(
+                              constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+                              margin: const EdgeInsets.symmetric(vertical: 3.0),
+                              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                              decoration: BoxDecoration(
+                                color: palette.chatBubbleIncoming,
+                                borderRadius: BorderRadius.circular(radius),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.06),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 1.5),
+                                  ),
+                                ],
                               ),
-                            ],
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Author Name
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 3.0),
+                                    child: Text(
+                                      'Алексей',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                        color: palette.chatBubbleIncomingAuthor,
+                                      ),
+                                    ),
+                                  ),
+                                  // Message text & timestamp
+                                  Wrap(
+                                    alignment: WrapAlignment.end,
+                                    crossAxisAlignment: WrapCrossAlignment.end,
+                                    spacing: 8,
+                                    runSpacing: 2,
+                                    children: [
+                                      Text(
+                                        'Привет! Как тебе эта тема Theaver? 🎨',
+                                        style: TextStyle(
+                                          fontSize: 15.0,
+                                          height: 1.35,
+                                          color: palette.chatBubbleIncomingText,
+                                        ),
+                                      ),
+                                      Text(
+                                        '11:42',
+                                        style: TextStyle(
+                                          fontSize: 11.0,
+                                          fontWeight: FontWeight.w500,
+                                          color: palette.chatBubbleIncomingSubtext,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(height: 4),
+
+                          // Outgoing Bubble (Identical to real MessageBubble)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+                              margin: const EdgeInsets.symmetric(vertical: 3.0),
+                              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                              decoration: BoxDecoration(
+                                color: palette.chatBubbleOutgoing,
+                                borderRadius: BorderRadius.circular(radius),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.08),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 1.5),
+                                  ),
+                                ],
+                              ),
+                              child: Wrap(
+                                alignment: WrapAlignment.end,
+                                crossAxisAlignment: WrapCrossAlignment.end,
+                                spacing: 8,
+                                runSpacing: 2,
+                                children: [
+                                  Text(
+                                    'Выглядит отлично! Очень стильно ✨',
+                                    style: TextStyle(
+                                      fontSize: 15.0,
+                                      height: 1.35,
+                                      color: palette.chatBubbleOutgoingText,
+                                    ),
+                                  ),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '11:43',
+                                        style: TextStyle(
+                                          fontSize: 11.0,
+                                          fontWeight: FontWeight.w500,
+                                          color: palette.chatBubbleOutgoingSubtext,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Icon(
+                                        Icons.done_all,
+                                        size: 15,
+                                        color: palette.chatBubbleOutgoingSubtext,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  ),
-                ],
+                  );
+                },
               ),
             ),
+
           ],
         ),
       ),
