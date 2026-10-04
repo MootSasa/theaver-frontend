@@ -110,6 +110,21 @@ void main() {
       expect(updated.imageUrl, isNull);
     });
 
+    test('TheavWallpaper copyWith clearFourCornerGradient', () {
+      final wallpaper = TheavWallpaper(
+        type: 'color',
+        fourCornerGradient: FourCornerGradient.defaultSunset,
+      );
+      expect(wallpaper.fourCornerGradient, isNotNull);
+
+      final cleared = wallpaper.copyWith(
+        type: 'image',
+        clearFourCornerGradient: true,
+      );
+      expect(cleared.fourCornerGradient, isNull);
+      expect(cleared.type, 'image');
+    });
+
     test('TheavTheme ZIP packaging roundtrip', () async {
       TestWidgetsFlutterBinding.ensureInitialized();
       final service = TheavThemeService();

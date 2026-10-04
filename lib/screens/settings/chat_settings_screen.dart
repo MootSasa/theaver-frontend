@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -75,7 +76,6 @@ class ChatSettingsScreen extends StatelessWidget {
   }
 
   Future<void> _exportActiveTheme(BuildContext context) async {
-    final l10n = context.l10n;
     try {
       final themeProvider = context.read<ThemeProvider>();
       final isDark = themeProvider.themeMode == ThemeMode.dark;
@@ -219,7 +219,7 @@ class ChatSettingsScreen extends StatelessWidget {
                 final isSelected = t.id == activeTheme.id;
 
                 return _ThemeItemBubble(
-                  theme: t,
+                  theme: isSelected ? activeTheme : t,
                   isSelected: isSelected,
                   activePrimary: activePrimary,
                   onTap: () {
@@ -631,7 +631,43 @@ class _ThemeItemBubble extends StatelessWidget {
     final wp = theme.wallpaper;
 
     Widget wallpaperBg;
-    if (wp.fourCornerGradient != null) {
+    if (wp.type == 'image') {
+      final imgProvider = wp.getImageProvider();
+      if (imgProvider != null) {
+        Widget img = Image(
+          image: imgProvider,
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+          errorBuilder: (context, error, stackTrace) => Container(color: wp.backgroundColor),
+        );
+        if (wp.blurRadius > 0) {
+          img = ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(
+              sigmaX: (wp.blurRadius / 4).clamp(0.5, 4.0),
+              sigmaY: (wp.blurRadius / 4).clamp(0.5, 4.0),
+            ),
+            child: img,
+          );
+        }
+        if (wp.dimming > 0) {
+          img = Stack(
+            fit: StackFit.expand,
+            children: [
+              img,
+              Container(
+                color: Colors.black.withValues(alpha: wp.dimming.clamp(0.0, 1.0)),
+              ),
+            ],
+          );
+        }
+        wallpaperBg = img;
+      } else {
+        wallpaperBg = Container(color: wp.backgroundColor);
+      }
+    } else if (wp.type == 'color') {
+      wallpaperBg = Container(color: wp.backgroundColor);
+    } else if (wp.fourCornerGradient != null) {
       wallpaperBg = CustomPaint(
         painter: FourCornerGradientPainter(
           topLeft: wp.fourCornerGradient!.topLeft,
@@ -641,32 +677,27 @@ class _ThemeItemBubble extends StatelessWidget {
         ),
         child: const SizedBox.expand(),
       );
-    } else if (wp.type == 'image') {
-      final imgProvider = wp.getImageProvider();
-      if (imgProvider != null) {
-        wallpaperBg = Image(
-          image: imgProvider,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-          errorBuilder: (context, error, stackTrace) => Container(color: wp.backgroundColor),
-        );
-      } else {
-        wallpaperBg = Container(color: wp.backgroundColor);
-      }
     } else {
       wallpaperBg = Container(color: wp.backgroundColor);
     }
 
     Widget? patternOverlay;
-    if (wp.assetSvgPath != null && wp.patternOpacity > 0) {
+    if (wp.patternOpacity > 0) {
       final double buttonPatternOpacity = (wp.patternOpacity * 1.6).clamp(0.24, 0.60);
-      patternOverlay = OverflowBox(
-        minWidth: 0.0,
-        maxWidth: 210.0,
-        minHeight: 0.0,
-        maxHeight: 210.0,
-        child: SvgPicture.asset(
+      Widget? svgWidget;
+      if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
+        svgWidget = SvgPicture.file(
+          File(wp.customSvgPath!),
+          width: 210.0,
+          height: 210.0,
+          fit: BoxFit.cover,
+          colorFilter: ColorFilter.mode(
+            wp.patternColor.withValues(alpha: buttonPatternOpacity),
+            BlendMode.srcIn,
+          ),
+        );
+      } else if (wp.assetSvgPath != null && wp.assetSvgPath!.isNotEmpty) {
+        svgWidget = SvgPicture.asset(
           wp.assetSvgPath!,
           width: 210.0,
           height: 210.0,
@@ -675,8 +706,17 @@ class _ThemeItemBubble extends StatelessWidget {
             wp.patternColor.withValues(alpha: buttonPatternOpacity),
             BlendMode.srcIn,
           ),
-        ),
-      );
+        );
+      }
+      if (svgWidget != null) {
+        patternOverlay = OverflowBox(
+          minWidth: 0.0,
+          maxWidth: 210.0,
+          minHeight: 0.0,
+          maxHeight: 210.0,
+          child: svgWidget,
+        );
+      }
     }
 
     return GestureDetector(

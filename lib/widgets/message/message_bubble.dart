@@ -1191,7 +1191,7 @@ class MessageBubble extends StatelessWidget {
       ),
       child: ViewportGradientBox(
         borderRadius: BorderRadius.circular(effectiveBubbleRadius),
-        gradientColors: useOutgoingGradient ? themeExt.palette.chatBubbleOutgoingGradient : null,
+        gradientColors: useOutgoingGradient ? themeExt?.palette.chatBubbleOutgoingGradient : null,
         solidColor: backgroundColor,
         child: Padding(
           padding: bubblePadding,

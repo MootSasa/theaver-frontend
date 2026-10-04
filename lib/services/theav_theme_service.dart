@@ -432,26 +432,32 @@ class TheavThemeService extends ChangeNotifier {
             fetched.add(TheavTheme.fromJson(themeData, isCloudSaved: true));
           }
 
-          // Merge fetched cloud themes with local themes
+          // Merge fetched cloud themes with local themes and built-in overrides
           final Map<String, TheavTheme> map = {};
           for (final t in _customThemes) {
             map[t.id] = t;
           }
           for (final c in fetched) {
-            final existing = map[c.id];
-            TheavTheme toStore = c;
+            final isBuiltIn = builtInThemes.any((b) => b.id == c.id);
+            final existing = isBuiltIn ? _themeOverrides[c.id] : map[c.id];
+            TheavTheme toStore = c.copyWith(isBuiltIn: isBuiltIn);
             if (existing != null) {
               // If local existing theme has an image file that exists on disk, keep imagePath
               if (c.wallpaper.type == 'image' &&
                   (c.wallpaper.imagePath == null || !File(c.wallpaper.imagePath!).existsSync()) &&
                   existing.wallpaper.imagePath != null &&
                   File(existing.wallpaper.imagePath!).existsSync()) {
-                toStore = c.copyWith(
-                  wallpaper: c.wallpaper.copyWith(imagePath: existing.wallpaper.imagePath),
+                toStore = toStore.copyWith(
+                  wallpaper: toStore.wallpaper.copyWith(imagePath: existing.wallpaper.imagePath),
                 );
               }
             }
-            map[c.id] = toStore;
+
+            if (isBuiltIn) {
+              _themeOverrides[c.id] = toStore;
+            } else {
+              map[c.id] = toStore;
+            }
 
             // Trigger background download of cloud wallpaper image if needed
             if (toStore.wallpaper.type == 'image' &&
@@ -461,18 +467,25 @@ class TheavThemeService extends ChangeNotifier {
             }
           }
 
+          await _persistThemeOverrides();
           _customThemes = map.values.toList();
           await _persistCustomThemes();
 
-          // Update active themes if they match synced cloud custom themes
+          // Update active themes if they match synced cloud custom themes or overrides
           final prefs = await SharedPreferences.getInstance();
-          if (_activeLightTheme != null && map.containsKey(_activeLightTheme!.id)) {
-            _activeLightTheme = map[_activeLightTheme!.id]!;
-            await prefs.setString(_keyActiveLightThemeJson, jsonEncode(_activeLightTheme!.toJson()));
+          if (_activeLightTheme != null) {
+            final updatedLight = _themeOverrides[_activeLightTheme!.id] ?? map[_activeLightTheme!.id];
+            if (updatedLight != null) {
+              _activeLightTheme = updatedLight;
+              await prefs.setString(_keyActiveLightThemeJson, jsonEncode(_activeLightTheme!.toJson()));
+            }
           }
-          if (_activeDarkTheme != null && map.containsKey(_activeDarkTheme!.id)) {
-            _activeDarkTheme = map[_activeDarkTheme!.id]!;
-            await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(_activeDarkTheme!.toJson()));
+          if (_activeDarkTheme != null) {
+            final updatedDark = _themeOverrides[_activeDarkTheme!.id] ?? map[_activeDarkTheme!.id];
+            if (updatedDark != null) {
+              _activeDarkTheme = updatedDark;
+              await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(_activeDarkTheme!.toJson()));
+            }
           }
         }
       }
@@ -510,15 +523,7 @@ class TheavThemeService extends ChangeNotifier {
           bytes = base64Decode(url.substring(commaIdx + 1));
         }
       } else {
-        var fullUrl = url;
-        if (fullUrl.contains('storage.miptgram.ru')) {
-          fullUrl = fullUrl.replaceAll('storage.miptgram.ru', 'storage.theaver.app');
-        } else if (fullUrl.contains('miptgram.ru')) {
-          fullUrl = fullUrl.replaceAll('miptgram.ru', 'theaver.app');
-        }
-        if (fullUrl.startsWith('/')) {
-          fullUrl = '${AppConfig.baseUrl}$fullUrl';
-        }
+        final fullUrl = AppConfig.resolveMediaUrl(url) ?? url;
         final token = await AuthService.getToken();
         final res = await http.get(
           Uri.parse(fullUrl),
@@ -539,6 +544,12 @@ class TheavThemeService extends ChangeNotifier {
   }
 
   void _updateThemeWallpaperPath(String themeId, String path) {
+    if (_themeOverrides.containsKey(themeId)) {
+      _themeOverrides[themeId] = _themeOverrides[themeId]!.copyWith(
+        wallpaper: _themeOverrides[themeId]!.wallpaper.copyWith(imagePath: path),
+      );
+      _persistThemeOverrides();
+    }
     final idx = _customThemes.indexWhere((t) => t.id == themeId);
     if (idx != -1) {
       _customThemes[idx] = _customThemes[idx].copyWith(
@@ -562,6 +573,9 @@ class TheavThemeService extends ChangeNotifier {
   /// Save or update a theme in account cloud and local list
   Future<bool> saveTheme(TheavTheme theme, {bool saveToCloud = true}) async {
     var themeToSave = theme;
+    if (saveToCloud) {
+      themeToSave = themeToSave.copyWith(isCloudSaved: true);
+    }
 
     // If saving to cloud and wallpaper is a local image without a remote imageUrl, upload it
     if (saveToCloud && themeToSave.wallpaper.type == 'image') {

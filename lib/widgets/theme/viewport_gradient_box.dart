@@ -239,103 +239,131 @@ class RenderViewportGradientBox extends RenderProxyBox {
     final Rect rect = offset & size;
     final RRect rrect = _borderRadius.toRRect(rect);
 
-    final bool hasValidGradient = _gradientColors != null && _gradientColors!.length >= 2;
+    try {
+      final bool hasValidGradient = _gradientColors != null && _gradientColors!.length >= 2;
 
-    if (hasValidGradient) {
-      double topInCanvas = 0.0;
-      double bottomInCanvas = 0.0;
-      double centerXInCanvas = 0.0;
-
-      // 1. Check if anchored to a custom scoped ancestor (e.g. ChatPreviewCard)
-      RenderBox? scopeBox;
-      final scopeContext = _viewportScopeKey?.currentContext;
-      if (scopeContext != null && scopeContext.findRenderObject() is RenderBox) {
-        scopeBox = scopeContext.findRenderObject() as RenderBox;
-      }
-
-      if (scopeBox != null && scopeBox.attached && scopeBox.hasSize) {
-        final originInScope = localToGlobal(Offset.zero, ancestor: scopeBox);
-        topInCanvas = offset.dy - originInScope.dy;
-        bottomInCanvas = topInCanvas + scopeBox.size.height;
-        centerXInCanvas = offset.dx - originInScope.dx + scopeBox.size.width * 0.5;
-      } else {
-        // 2. Check if inside a scrolling viewport (ListView in chat screens)
-        final ancestorViewport = RenderAbstractViewport.maybeOf(this);
-        final RenderBox? viewportBox = ancestorViewport is RenderBox
-            ? (ancestorViewport as RenderBox)
-            : null;
-
-        if (viewportBox != null && viewportBox.attached && viewportBox.hasSize) {
-          final posInViewport = localToGlobal(Offset.zero, ancestor: viewportBox);
-
-          // Find sliver padding (topPadding / bottomPadding of chat list)
-          double topPadding = 0.0;
-          double bottomPadding = 0.0;
-          RenderObject? cur = parent;
-          while (cur != null && cur != viewportBox) {
-            if (cur is RenderSliverPadding) {
-              final insets = cur.resolvedPadding;
-              if (insets != null) {
-                topPadding = insets.top;
-                bottomPadding = insets.bottom;
-              }
-              break;
-            }
-            cur = cur.parent;
-          }
-
-          final effectiveHeight = viewportBox.size.height - topPadding - bottomPadding;
-          final double gradientStartInViewport = topPadding;
-          final double gradientEndInViewport = (effectiveHeight > 100.0)
-              ? (viewportBox.size.height - bottomPadding)
-              : viewportBox.size.height;
-
-          topInCanvas = offset.dy - (posInViewport.dy - gradientStartInViewport);
-          bottomInCanvas = offset.dy + (gradientEndInViewport - posInViewport.dy);
-          centerXInCanvas = offset.dx - posInViewport.dx + viewportBox.size.width * 0.5;
-        } else {
-          // 3. Fallback: Full screen dimensions
-          final globalPos = localToGlobal(Offset.zero);
-          double screenH = _fallbackScreenSize?.height ?? 0.0;
-          double screenW = _fallbackScreenSize?.width ?? 0.0;
-
-          if (screenH <= 0.0 || screenW <= 0.0) {
-            try {
-              final view = WidgetsBinding.instance.platformDispatcher.views.first;
-              screenH = view.physicalSize.height / view.devicePixelRatio;
-              screenW = view.physicalSize.width / view.devicePixelRatio;
-            } catch (_) {
-              screenH = 800.0;
-              screenW = 390.0;
-            }
-          }
-
-          topInCanvas = offset.dy - globalPos.dy;
-          bottomInCanvas = topInCanvas + screenH;
-          centerXInCanvas = offset.dx - globalPos.dx + screenW * 0.5;
+      if (hasValidGradient) {
+        // If gradient has semi-transparency and solid background color is available, paint base first
+        final bool hasAlphaInGradient = _gradientColors!.any((c) => (c.a) < 0.99);
+        if (hasAlphaInGradient && _solidColor != null && _solidColor != Colors.transparent) {
+          final basePaint = Paint()
+            ..color = _solidColor!
+            ..isAntiAlias = true;
+          canvas.drawRRect(rrect, basePaint);
         }
+
+        double topInCanvas = offset.dy;
+        double bottomInCanvas = offset.dy + size.height;
+        double centerXInCanvas = offset.dx + size.width * 0.5;
+
+        // 1. Check if anchored to a custom scoped ancestor (e.g. ChatPreviewCard)
+        RenderBox? scopeBox;
+        final scopeContext = _viewportScopeKey?.currentContext;
+        if (scopeContext != null && scopeContext.findRenderObject() is RenderBox) {
+          scopeBox = scopeContext.findRenderObject() as RenderBox;
+        }
+
+        if (scopeBox != null && scopeBox.attached && scopeBox.hasSize && scopeBox.size.height > 10.0) {
+          final originInScope = localToGlobal(Offset.zero, ancestor: scopeBox);
+          topInCanvas = offset.dy - originInScope.dy;
+          bottomInCanvas = topInCanvas + scopeBox.size.height;
+          centerXInCanvas = offset.dx - originInScope.dx + scopeBox.size.width * 0.5;
+        } else {
+          // 2. Check if inside a scrolling viewport (ListView in chat screens)
+          final ancestorViewport = RenderAbstractViewport.maybeOf(this);
+          final RenderBox? viewportBox = ancestorViewport is RenderBox
+              ? (ancestorViewport as RenderBox)
+              : null;
+
+          if (viewportBox != null && viewportBox.attached && viewportBox.hasSize && viewportBox.size.height > 10.0) {
+            final posInViewport = localToGlobal(Offset.zero, ancestor: viewportBox);
+
+            // Find sliver padding (topPadding / bottomPadding of chat list)
+            double topPadding = 0.0;
+            double bottomPadding = 0.0;
+            RenderObject? cur = parent;
+            while (cur != null && cur != viewportBox) {
+              if (cur is RenderSliverPadding) {
+                final insets = cur.resolvedPadding;
+                if (insets != null) {
+                  topPadding = insets.top;
+                  bottomPadding = insets.bottom;
+                }
+                break;
+              }
+              cur = cur.parent;
+            }
+
+            final effectiveHeight = viewportBox.size.height - topPadding - bottomPadding;
+            final double gradientStartInViewport = topPadding;
+            final double gradientEndInViewport = (effectiveHeight > 100.0)
+                ? (viewportBox.size.height - bottomPadding)
+                : viewportBox.size.height;
+
+            topInCanvas = offset.dy - (posInViewport.dy - gradientStartInViewport);
+            bottomInCanvas = offset.dy + (gradientEndInViewport - posInViewport.dy);
+            centerXInCanvas = offset.dx - posInViewport.dx + viewportBox.size.width * 0.5;
+          } else {
+            // 3. Fallback: Full screen dimensions
+            final globalPos = localToGlobal(Offset.zero);
+            double screenH = _fallbackScreenSize?.height ?? 0.0;
+            double screenW = _fallbackScreenSize?.width ?? 0.0;
+
+            if (screenH <= 0.0 || screenW <= 0.0) {
+              try {
+                final view = WidgetsBinding.instance.platformDispatcher.views.first;
+                screenH = view.physicalSize.height / view.devicePixelRatio;
+                screenW = view.physicalSize.width / view.devicePixelRatio;
+              } catch (_) {
+                screenH = 800.0;
+                screenW = 390.0;
+              }
+            }
+
+            topInCanvas = offset.dy - globalPos.dy;
+            bottomInCanvas = topInCanvas + screenH;
+            centerXInCanvas = offset.dx - globalPos.dx + screenW * 0.5;
+          }
+        }
+
+        // Safety: Ensure start and end offsets are distinct and finite
+        if (!topInCanvas.isFinite || !bottomInCanvas.isFinite || (bottomInCanvas - topInCanvas).abs() < 1.0) {
+          topInCanvas = offset.dy;
+          bottomInCanvas = offset.dy + size.height;
+          centerXInCanvas = offset.dx + size.width * 0.5;
+        }
+
+        final shader = ui.Gradient.linear(
+          Offset(centerXInCanvas, topInCanvas),
+          Offset(centerXInCanvas, bottomInCanvas),
+          _gradientColors!,
+          _gradientStops,
+        );
+
+        final paint = Paint()
+          ..shader = shader
+          ..isAntiAlias = true;
+
+        canvas.drawRRect(rrect, paint);
+      } else if (_solidColor != null && _solidColor != Colors.transparent) {
+        final paint = Paint()
+          ..color = _solidColor!
+          ..isAntiAlias = true;
+
+        canvas.drawRRect(rrect, paint);
       }
-
-      final shader = ui.Gradient.linear(
-        Offset(centerXInCanvas, topInCanvas),
-        Offset(centerXInCanvas, bottomInCanvas),
-        _gradientColors!,
-        _gradientStops,
-      );
-
-      final paint = Paint()
-        ..shader = shader
-        ..isAntiAlias = true;
-
-      canvas.drawRRect(rrect, paint);
-    } else if (_solidColor != null && _solidColor != Colors.transparent) {
-      final paint = Paint()
-        ..color = _solidColor!
-        ..isAntiAlias = true;
-
-      canvas.drawRRect(rrect, paint);
+    } catch (e) {
+      debugPrint('ViewportGradientBox.paint error: $e');
+      if (_solidColor != null && _solidColor != Colors.transparent) {
+        final fallbackPaint = Paint()
+          ..color = _solidColor!
+          ..isAntiAlias = true;
+        canvas.drawRRect(rrect, fallbackPaint);
+      }
+    } finally {
+      // Paint child content (text, timestamp, sender, icons) over the bubble background.
+      // ALWAYS GUARANTEED TO RUN SO CONTENT NEVER DISAPPEARS!
+      super.paint(context, offset);
     }
-
-    super.paint(context, offset);
   }
 }

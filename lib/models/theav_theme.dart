@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import '../utils/image_utils.dart';
+import '../config/app_config.dart';
 
 /// Helper for parsing and formatting hex colors.
 class TheavColorUtils {
@@ -206,6 +206,7 @@ class TheavWallpaper {
     Color? patternColor,
     double? patternOpacity,
     FourCornerGradient? fourCornerGradient,
+    bool clearFourCornerGradient = false,
     String? imagePath,
     String? imageUrl,
     bool clearImageUrl = false,
@@ -220,7 +221,7 @@ class TheavWallpaper {
       backgroundColor: backgroundColor ?? this.backgroundColor,
       patternColor: patternColor ?? this.patternColor,
       patternOpacity: patternOpacity ?? this.patternOpacity,
-      fourCornerGradient: fourCornerGradient ?? this.fourCornerGradient,
+      fourCornerGradient: clearFourCornerGradient ? null : (fourCornerGradient ?? this.fourCornerGradient),
       imagePath: imagePath ?? this.imagePath,
       imageUrl: clearImageUrl ? null : (imageUrl ?? this.imageUrl),
       blurRadius: blurRadius ?? this.blurRadius,
@@ -288,9 +289,13 @@ class TheavWallpaper {
           }
         } catch (_) {}
       }
-      final validUrl = getValidAvatarUrl(imageUrl);
-      if (validUrl != null && (validUrl.startsWith('http://') || validUrl.startsWith('https://'))) {
-        return CachedNetworkImageProvider(validUrl);
+      final validUrl = AppConfig.resolveMediaUrl(imageUrl);
+      if (validUrl != null && validUrl.isNotEmpty) {
+        if (validUrl.startsWith('http://') || validUrl.startsWith('https://')) {
+          return CachedNetworkImageProvider(validUrl);
+        } else if (File(validUrl).existsSync()) {
+          return FileImage(File(validUrl));
+        }
       }
     }
     return null;

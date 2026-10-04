@@ -53,7 +53,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
         type: 'pattern',
         fourCornerGradient: grad,
         patternName: wp.type == 'gradient4' || wp.type == 'color' ? 'none' : (wp.patternName ?? 'flowers'),
-        patternColor: wp.patternColor ?? const Color(0xFF5A8FB8),
+        patternColor: wp.patternColor,
         patternOpacity: wp.patternOpacity > 0 ? wp.patternOpacity : 0.15,
       );
     }
@@ -105,6 +105,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
         type: 'image',
         imagePath: localFile.path,
         clearImageUrl: true,
+        clearFourCornerGradient: true,
       );
     });
   }
@@ -128,8 +129,9 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
       final updatedTheme = currentTheme.copyWith(wallpaper: _currentWallpaper);
       await themeProvider.setActiveTheme(updatedTheme);
 
-      final bool shouldSaveToCloud = !currentTheme.isBuiltIn || currentTheme.isCloudSaved;
-      await TheavThemeService().saveTheme(updatedTheme, saveToCloud: shouldSaveToCloud);
+      await TheavThemeService().saveTheme(updatedTheme, saveToCloud: true);
+
+      if (!mounted) return;
 
       // Also sync WallpaperProvider
       if (_currentWallpaper.type == 'image' && _currentWallpaper.imagePath != null) {
@@ -371,7 +373,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
                 Expanded(
                   child: _ColorSelectTile(
                     label: l10n.translate('wallpaper_pattern_color'),
-                    color: _currentWallpaper.patternColor ?? const Color(0xFF5A8FB8),
+                    color: _currentWallpaper.patternColor,
                     onChanged: (c) => setState(() => _currentWallpaper = _currentWallpaper.copyWith(patternColor: c)),
                   ),
                 ),

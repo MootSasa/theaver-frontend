@@ -234,7 +234,9 @@ class _ChatPreviewCardState extends State<ChatPreviewCard> {
   Widget _buildWallpaperBackground(TheavWallpaper wp) {
     // 1. Base 4-corner gradient or solid color
     Widget baseBackground;
-    if (wp.fourCornerGradient != null) {
+    if (wp.type == 'color') {
+      baseBackground = Container(color: wp.backgroundColor);
+    } else if (wp.fourCornerGradient != null) {
       final grad = wp.fourCornerGradient!;
       baseBackground = CustomPaint(
         painter: FourCornerGradientPainter(
