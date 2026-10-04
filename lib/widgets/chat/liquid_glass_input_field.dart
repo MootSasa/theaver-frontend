@@ -315,7 +315,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final defaultBg = isDark
         ? Colors.black.withValues(alpha: 0.65)
         : Colors.white.withValues(alpha: 0.65);
-    final inputBg = themeExt?.palette.chatInputBackground ?? defaultBg;
+    final inputBg = themeExt?.palette.explicitChatInputBackground ?? defaultBg;
 
     return Padding(
       padding: const EdgeInsets.symmetric(

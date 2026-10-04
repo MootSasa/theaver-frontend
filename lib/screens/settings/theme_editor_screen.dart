@@ -1,14 +1,18 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:ios_color_picker/show_ios_color_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../models/theav_theme.dart';
+import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../theme/theme_provider.dart';
+import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/theme/chat_preview_card.dart';
 import '../../l10n/app_localizations.dart';
+import 'advanced_theme_colors_screen.dart';
 import 'wallpaper_screen.dart';
 
 /// Visual editor for creating or customizing Theaver themes.
@@ -39,7 +43,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     } else {
       _currentTheme = active.copyWith(
         id: 'theme_${DateTime.now().millisecondsSinceEpoch}',
-        name: 'Моя новая тема',
+        name: 'Новая тема',
         author: 'User',
         isBuiltIn: false,
         isCloudSaved: false,
@@ -57,10 +61,11 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
   }
 
   Future<void> _saveTheme() async {
+    final l10n = context.l10n;
     final name = _nameController.text.trim();
     if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Введите название темы')),
+        SnackBar(content: Text(l10n.translate('theme_enter_name'))),
       );
       return;
     }
@@ -77,14 +82,14 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
         );
         context.read<ThemeProvider>().setActiveTheme(savedTheme);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Тема сохранена и применена!')),
+          SnackBar(content: Text(l10n.translate('theme_saved_applied'))),
         );
         Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка сохранения: $e')),
+          SnackBar(content: Text(l10n.translate('theme_save_error').replaceAll('{error}', e.toString()))),
         );
       }
     } finally {
@@ -93,6 +98,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
   }
 
   Future<void> _exportTheme() async {
+    final l10n = context.l10n;
     try {
       final bytes = await TheavThemeService().exportThemePackage(_currentTheme);
       final tempDir = await getTemporaryDirectory();
@@ -107,7 +113,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка экспорта темы: $e')),
+          SnackBar(content: Text(l10n.translate('theme_export_error').replaceAll('{error}', e.toString()))),
         );
       }
     }
@@ -118,12 +124,13 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     final l10n = context.l10n;
     final isEditing = widget.themeToEdit != null;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new')),
-        actions: [
+    return Consumer<LiquidGlassProvider>(
+      builder: (context, glassProvider, _) {
+        final glassEnabled = glassProvider.enabled;
+
+        final appBarActions = [
           IconButton(
-            icon: const Icon(Icons.share_outlined),
+            icon: const iconoir.ShareAndroid(width: 22, height: 22),
             tooltip: l10n.translate('theme_export'),
             onPressed: _exportTheme,
           ),
@@ -134,414 +141,421 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
             ),
           ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.only(bottom: 30),
-        children: [
-          // 1. Live Sticky Interactive Preview Card
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: ChatPreviewCard(
-              theme: _currentTheme,
-              height: 230,
-            ),
-          ),
+        ];
 
-          // 2. Theme Name Input
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextField(
-              controller: _nameController,
-              decoration: InputDecoration(
-                labelText: l10n.translate('theme_name'),
-                prefixIcon: const Icon(Icons.palette_outlined),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              onChanged: (val) {
-                setState(() => _currentTheme = _currentTheme.copyWith(name: val));
-              },
-            ),
+        final listView = ListView(
+          padding: EdgeInsets.only(
+            top: glassEnabled ? 12 : 0,
+            bottom: 30,
           ),
-          const SizedBox(height: 16),
-
-          // 3. Brightness switch (Light / Dark base)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: SwitchListTile(
-                title: Text(
-                  _currentTheme.isDark ? l10n.translate('theme_dark') : l10n.translate('theme_light'),
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                ),
-                secondary: Icon(
-                  _currentTheme.isDark ? Icons.dark_mode : Icons.light_mode,
-                  color: _currentTheme.palette.primary,
-                ),
-                value: _currentTheme.isDark,
-                activeColor: _currentTheme.palette.primary,
-                onChanged: (val) {
-                  setState(() {
-                    _currentTheme = _currentTheme.copyWith(
-                      isDark: val,
-                      palette: _currentTheme.palette.copyWith(
-                        background: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
-                        surface: val ? const Color(0xFF2C2C2E) : const Color(0xFFF5F5F5),
-                        onSurface: val ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E),
-                        appBarBackground: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
-                        appBarForeground: val ? Colors.white : const Color(0xFF1C1C1E),
-                      ),
-                    );
-                  });
-                },
+          children: [
+            // 1. Live Sticky Interactive Preview Card
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: ChatPreviewCard(
+                theme: _currentTheme,
+                height: 230,
               ),
             ),
-          ),
-          const SizedBox(height: 16),
 
-          // 4. Bubble Corner Radius Slider
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        l10n.translate('theme_bubble_radius'),
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                      ),
-                      Text('${_currentTheme.bubbleRadius.round()} px'),
-                    ],
-                  ),
-                  Slider(
-                    value: _currentTheme.bubbleRadius,
-                    min: 0,
-                    max: 24,
-                    divisions: 24,
-                    activeColor: _currentTheme.palette.primary,
-                    onChanged: (val) {
-                      setState(() => _currentTheme = _currentTheme.copyWith(bubbleRadius: val));
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // 5. Palette Colors Section (Categorized)
-          _buildSectionHeader('Основные цвета'),
-          _buildColorTile(
-            title: l10n.translate('theme_primary_color'),
-            color: _currentTheme.palette.primary,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(primary: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Фон экрана',
-            color: _currentTheme.palette.background,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(background: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Фон карточек и списков',
-            color: _currentTheme.palette.surface,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(surface: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Основной текст',
-            color: _currentTheme.palette.onSurface,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(onSurface: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Шапка экрана (AppBar)',
-            color: _currentTheme.palette.appBarBackground,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(appBarBackground: c),
-                )),
-          ),
-
-          _buildSectionHeader('Исходящие сообщения'),
-          _buildBubbleFillTypeToggle(),
-          if (_isOutgoingGradient) ...[
-            _buildGradientEditor(),
-          ] else ...[
-            _buildColorTile(
-              title: l10n.translate('theme_bubble_outgoing'),
-              color: _currentTheme.palette.chatBubbleOutgoing,
-              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoing: c),
-                  )),
-            ),
-          ],
-          _buildColorTile(
-            title: '${l10n.translate('theme_bubble_outgoing')} — ${l10n.translate('theme_bubble_text')}',
-            color: _currentTheme.palette.chatBubbleOutgoingText,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoingText: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Время и галочки статуса',
-            color: _currentTheme.palette.chatBubbleOutgoingSubtext,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoingSubtext: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Цвет ссылок в сообщении',
-            color: _currentTheme.palette.chatBubbleOutgoingLink,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoingLink: c),
-                )),
-          ),
-
-          _buildSectionHeader('Входящие сообщения'),
-          _buildColorTile(
-            title: l10n.translate('theme_bubble_incoming'),
-            color: _currentTheme.palette.chatBubbleIncoming,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleIncoming: c),
-                )),
-          ),
-          _buildColorTile(
-            title: '${l10n.translate('theme_bubble_incoming')} — ${l10n.translate('theme_bubble_text')}',
-            color: _currentTheme.palette.chatBubbleIncomingText,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleIncomingText: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Время сообщения',
-            color: _currentTheme.palette.chatBubbleIncomingSubtext,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleIncomingSubtext: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Цвет ссылок в сообщении',
-            color: _currentTheme.palette.chatBubbleIncomingLink,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleIncomingLink: c),
-                )),
-          ),
-
-          _buildSectionHeader('Панель ввода'),
-          _buildColorTile(
-            title: 'Фон поля ввода',
-            color: _currentTheme.palette.chatInputBackground,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatInputBackground: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Цвет вводимого текста',
-            color: _currentTheme.palette.chatInputText,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatInputText: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Иконки и кнопки панели',
-            color: _currentTheme.palette.chatInputButtons,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatInputButtons: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Кнопка отправки',
-            color: _currentTheme.palette.chatSendButton,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatSendButton: c),
-                )),
-          ),
-
-          _buildSectionHeader('Служебные элементы'),
-          _buildColorTile(
-            title: 'Плашка даты в чате',
-            color: _currentTheme.palette.chatDateBadge,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatDateBadge: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Текст даты в чате',
-            color: _currentTheme.palette.chatDateBadgeText,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatDateBadgeText: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Бейдж непрочитанных',
-            color: _currentTheme.palette.unreadBadge,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(unreadBadge: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Текст бейджа непрочитанных',
-            color: _currentTheme.palette.unreadBadgeText,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(unreadBadgeText: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Индикатор «в сети»',
-            color: _currentTheme.palette.onlineIndicator,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(onlineIndicator: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Второстепенный текст',
-            color: _currentTheme.palette.subtext,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(subtext: c),
-                )),
-          ),
-          _buildColorTile(
-            title: 'Разделители строк',
-            color: _currentTheme.palette.divider,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(divider: c),
-                )),
-          ),
-
-          const SizedBox(height: 16),
-
-          // 6. Wallpaper Customization Tile
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: ListTile(
-              tileColor: Theme.of(context).cardColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              leading: Icon(Icons.wallpaper, color: _currentTheme.palette.primary),
-              title: Text(l10n.translate('wallpaper_title')),
-              subtitle: Text(
-                _currentTheme.wallpaper.type == 'pattern'
-                    ? 'Узор: ${_currentTheme.wallpaper.patternName ?? "space"}'
-                    : _currentTheme.wallpaper.type == 'gradient4'
-                        ? '4-точечный градиент'
-                        : 'Цвет/Фото',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-              ),
-              trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => WallpaperScreen(
-                      initialWallpaper: _currentTheme.wallpaper,
-                      onWallpaperConfigured: (newWp) {
-                        setState(() => _currentTheme = _currentTheme.copyWith(wallpaper: newWp));
-                      },
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // 7. Delete Theme Button (if editing existing custom theme)
-          if (isEditing && !_currentTheme.isBuiltIn) ...[
-            const SizedBox(height: 24),
+            // 2. Theme Name Input
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextButton.icon(
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.red,
+              child: TextField(
+                controller: _nameController,
+                decoration: InputDecoration(
+                  labelText: l10n.translate('theme_name'),
+                  prefixIcon: const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: iconoir.Palette(width: 20, height: 20),
+                  ),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                 ),
-                icon: const Icon(Icons.delete_outline),
-                label: Text(l10n.translate('theme_delete')),
-                onPressed: () async {
-                  final confirm = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: Text(l10n.translate('theme_delete')),
-                      content: Text(l10n.translate('theme_delete_confirm')),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('Удалить', style: TextStyle(color: Colors.red)),
+                onChanged: (val) {
+                  setState(() => _currentTheme = _currentTheme.copyWith(name: val));
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 3. Brightness switch (Light / Dark base)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: SwitchListTile(
+                  title: Text(
+                    _currentTheme.isDark ? l10n.translate('theme_dark') : l10n.translate('theme_light'),
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                  ),
+                  secondary: _currentTheme.isDark
+                      ? iconoir.HalfMoon(color: _currentTheme.palette.primary, width: 22, height: 22)
+                      : iconoir.SunLight(color: _currentTheme.palette.primary, width: 22, height: 22),
+                  value: _currentTheme.isDark,
+                  activeColor: _currentTheme.palette.primary,
+                  onChanged: (val) {
+                    setState(() {
+                      _currentTheme = _currentTheme.copyWith(
+                        isDark: val,
+                        palette: _currentTheme.palette.copyWith(
+                          background: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
+                          surface: val ? const Color(0xFF2C2C2E) : const Color(0xFFF5F5F5),
+                          onSurface: val ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E),
+                          appBarBackground: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
+                          appBarForeground: val ? Colors.white : const Color(0xFF1C1C1E),
                         ),
+                      );
+                    });
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 4. Bubble Corner Radius Slider
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          l10n.translate('theme_bubble_radius'),
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                        Text('${_currentTheme.bubbleRadius.round()} px'),
                       ],
                     ),
+                    Slider(
+                      value: _currentTheme.bubbleRadius,
+                      min: 0,
+                      max: 24,
+                      divisions: 24,
+                      activeColor: _currentTheme.palette.primary,
+                      onChanged: (val) {
+                        setState(() => _currentTheme = _currentTheme.copyWith(bubbleRadius: val));
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 5. Advanced Theme Colors Button Tile
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: ListTile(
+                tileColor: Theme.of(context).cardColor,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                leading: iconoir.Settings(color: _currentTheme.palette.primary, width: 22, height: 22),
+                title: Text(
+                  l10n.translate('theme_advanced_settings'),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  l10n.translate('theme_advanced_settings_desc'),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                trailing: const iconoir.NavArrowRight(color: Colors.grey, width: 20, height: 20),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AdvancedThemeColorsScreen(
+                        initialTheme: _currentTheme,
+                        onThemeChanged: (updated) {
+                          setState(() => _currentTheme = updated);
+                        },
+                      ),
+                    ),
                   );
-                  if (confirm == true) {
-                    await TheavThemeService().deleteTheme(_currentTheme.id);
-                    if (mounted) Navigator.pop(context);
-                  }
+                },
+              ),
+            ),
+
+            // 6. Palette Colors Section (Categorized)
+            _buildSectionHeader(l10n.translate('theme_section_interface')),
+            _buildColorTile(
+              title: l10n.translate('theme_color_primary'),
+              color: _currentTheme.palette.primary,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(primary: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_background'),
+              color: _currentTheme.palette.background,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(background: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_surface'),
+              color: _currentTheme.palette.surface,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(surface: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_on_surface'),
+              color: _currentTheme.palette.onSurface,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(onSurface: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_app_bar_bg'),
+              color: _currentTheme.palette.appBarBackground,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(appBarBackground: c),
+                  )),
+            ),
+
+            _buildSectionHeader(l10n.translate('theme_section_outgoing')),
+            _buildBubbleFillTypeToggle(l10n),
+            if (_isOutgoingGradient) ...[
+              _buildGradientEditor(l10n),
+            ] else ...[
+              _buildColorTile(
+                title: l10n.translate('theme_color_bubble_outgoing'),
+                color: _currentTheme.palette.chatBubbleOutgoing,
+                onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                      palette: _currentTheme.palette.copyWith(chatBubbleOutgoing: c),
+                    )),
+              ),
+            ],
+            _buildColorTile(
+              title: l10n.translate('theme_color_bubble_outgoing_text'),
+              color: _currentTheme.palette.chatBubbleOutgoingText,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoingText: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_bubble_outgoing_subtext'),
+              color: _currentTheme.palette.chatBubbleOutgoingSubtext,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoingSubtext: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_bubble_outgoing_link'),
+              color: _currentTheme.palette.chatBubbleOutgoingLink,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoingLink: c),
+                  )),
+            ),
+
+            _buildSectionHeader(l10n.translate('theme_section_incoming')),
+            _buildColorTile(
+              title: l10n.translate('theme_color_bubble_incoming'),
+              color: _currentTheme.palette.chatBubbleIncoming,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleIncoming: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_bubble_incoming_text'),
+              color: _currentTheme.palette.chatBubbleIncomingText,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleIncomingText: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_bubble_incoming_subtext'),
+              color: _currentTheme.palette.chatBubbleIncomingSubtext,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleIncomingSubtext: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_bubble_incoming_link'),
+              color: _currentTheme.palette.chatBubbleIncomingLink,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleIncomingLink: c),
+                  )),
+            ),
+
+            _buildSectionHeader(l10n.translate('theme_section_input')),
+            _buildColorTile(
+              title: l10n.translate('theme_color_input_bg'),
+              color: _currentTheme.palette.chatInputBackground,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatInputBackground: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_input_text'),
+              color: _currentTheme.palette.chatInputText,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatInputText: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_input_buttons'),
+              color: _currentTheme.palette.chatInputButtons,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatInputButtons: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_send_button'),
+              color: _currentTheme.palette.chatSendButton,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatSendButton: c),
+                  )),
+            ),
+
+            _buildSectionHeader(l10n.translate('theme_section_badges')),
+            _buildColorTile(
+              title: l10n.translate('theme_color_date_badge'),
+              color: _currentTheme.palette.chatDateBadge,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatDateBadge: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_date_badge_text'),
+              color: _currentTheme.palette.chatDateBadgeText,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatDateBadgeText: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_unread_badge'),
+              color: _currentTheme.palette.unreadBadge,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(unreadBadge: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_unread_badge_text'),
+              color: _currentTheme.palette.unreadBadgeText,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(unreadBadgeText: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_online'),
+              color: _currentTheme.palette.onlineIndicator,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(onlineIndicator: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_subtext'),
+              color: _currentTheme.palette.subtext,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(subtext: c),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_divider'),
+              color: _currentTheme.palette.divider,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(divider: c),
+                  )),
+            ),
+
+            const SizedBox(height: 16),
+
+            // 7. Wallpaper Customization Tile
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: ListTile(
+                tileColor: Theme.of(context).cardColor,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                leading: iconoir.MediaImage(color: _currentTheme.palette.primary, width: 22, height: 22),
+                title: Text(l10n.translate('wallpaper_title')),
+                subtitle: Text(
+                  _currentTheme.wallpaper.type == 'pattern'
+                      ? (_currentTheme.wallpaper.patternName != null && _currentTheme.wallpaper.patternName != 'none'
+                          ? l10n.translate('theme_wallpaper_pattern_desc').replaceAll('{pattern}', _currentTheme.wallpaper.patternName!)
+                          : l10n.translate('theme_wallpaper_gradient_desc'))
+                      : _currentTheme.wallpaper.type == 'image'
+                          ? l10n.translate('theme_wallpaper_photo_desc')
+                          : l10n.translate('theme_wallpaper_default_desc'),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                trailing: const iconoir.NavArrowRight(color: Colors.grey, width: 20, height: 20),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WallpaperScreen(
+                        initialWallpaper: _currentTheme.wallpaper,
+                        onWallpaperConfigured: (newWp) {
+                          setState(() => _currentTheme = _currentTheme.copyWith(wallpaper: newWp));
+                        },
+                      ),
+                    ),
+                  );
                 },
               ),
             ),
           ],
-        ],
-      ),
+        );
+
+        if (glassEnabled) {
+          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
+          return Scaffold(
+            body: Stack(
+              children: [
+                Positioned.fill(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: topPadding),
+                    child: listView,
+                  ),
+                ),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: LiquidGlassAppBar(
+                    title: Text(isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new')),
+                    actions: appBarActions,
+                    centerTitle: true,
+                    isLite: glassProvider.isLite,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new')),
+            actions: appBarActions,
+          ),
+          body: listView,
+        );
+      },
     );
   }
 
   Widget _buildSectionHeader(String title) {
     return Padding(
-      padding: const EdgeInsets.only(left: 16, right: 16, top: 18, bottom: 6),
+      padding: const EdgeInsets.only(left: 16, top: 20, bottom: 8),
       child: Text(
         title.toUpperCase(),
         style: TextStyle(
           fontSize: 12,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.bold,
+          color: _currentTheme.palette.primary,
           letterSpacing: 0.5,
-          color: Theme.of(context).brightness == Brightness.dark
-              ? Colors.grey[400]
-              : Colors.grey[700],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildColorTile({
-    required String title,
-    required Color color,
-    required ValueChanged<Color> onChanged,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: ListTile(
-          title: Text(title, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500)),
-          trailing: Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 4),
-              ],
-            ),
-          ),
-          onTap: () => _pickColor(context, title, color, onChanged),
         ),
       ),
     );
@@ -551,7 +565,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
       _currentTheme.palette.chatBubbleOutgoingGradient != null &&
       _currentTheme.palette.chatBubbleOutgoingGradient!.length >= 2;
 
-  Widget _buildBubbleFillTypeToggle() {
+  Widget _buildBubbleFillTypeToggle(AppLocalizations l10n) {
     final isGrad = _isOutgoingGradient;
     final primary = _currentTheme.palette.primary;
 
@@ -584,7 +598,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    'Сплошной цвет',
+                    l10n.translate('theme_bubble_fill_solid'),
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -600,12 +614,12 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 onTap: () {
                   if (!isGrad) {
                     setState(() {
+                      final currentSolid = _currentTheme.palette.chatBubbleOutgoing;
+                      final baseColor = currentSolid;
+                      final targetColor = baseColor.withValues(alpha: (baseColor.a * 0.85).clamp(0.2, 1.0));
                       _currentTheme = _currentTheme.copyWith(
                         palette: _currentTheme.palette.copyWith(
-                          chatBubbleOutgoingGradient: [
-                            _currentTheme.palette.chatBubbleOutgoing,
-                            _currentTheme.palette.primary.withValues(alpha: 0.85),
-                          ],
+                          chatBubbleOutgoingGradient: [baseColor, targetColor],
                         ),
                       );
                     });
@@ -619,7 +633,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    'Градиент (экранный)',
+                    l10n.translate('theme_bubble_fill_gradient'),
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -635,27 +649,16 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     );
   }
 
-  Widget _buildGradientEditor() {
-    final colors = List<Color>.from(_currentTheme.palette.chatBubbleOutgoingGradient ?? []);
-    if (colors.length < 2) return const SizedBox.shrink();
+  Widget _buildGradientEditor(AppLocalizations l10n) {
+    final colors = _currentTheme.palette.chatBubbleOutgoingGradient ?? [];
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
-            child: Text(
-              'Градиент растягивается по всей высоте чата. Облачка открывают его часть при скролле. Прозрачность позволяет фону просвечивать.',
-              style: TextStyle(
-                fontSize: 11.5,
-                color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.7),
-              ),
-            ),
-          ),
           Container(
-            height: 36,
+            height: 38,
             width: double.infinity,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
@@ -715,8 +718,8 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                       );
                     });
                   },
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Добавить точку цвета', style: TextStyle(fontSize: 12.5)),
+                  icon: const iconoir.Plus(width: 18, height: 18),
+                  label: Text(l10n.translate('theme_gradient_add_point'), style: const TextStyle(fontSize: 12.5)),
                 ),
               ),
             ),
@@ -775,12 +778,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
   }
 
   Widget _buildGradientStopTile(int index, Color stopColor, List<Color> allColors) {
-    final String label = index == 0
-        ? 'Цвет 1 (вверху экрана)'
-        : (index == allColors.length - 1
-            ? 'Цвет ${index + 1} (внизу экрана)'
-            : 'Цвет ${index + 1} (середина)');
-
+    final String label = 'Цвет ${index + 1}';
     final int opacityPercent = (stopColor.a * 100).round();
 
     return Container(
@@ -826,7 +824,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
             ),
             trailing: allColors.length > 2
                 ? IconButton(
-                    icon: const Icon(Icons.close, size: 18),
+                    icon: const iconoir.Xmark(width: 18, height: 18),
                     onPressed: () {
                       final newColors = List<Color>.from(allColors);
                       newColors.removeAt(index);
@@ -854,7 +852,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
             padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
             child: Row(
               children: [
-                const Icon(Icons.opacity, size: 16, color: Colors.grey),
+                const iconoir.ColorWheel(width: 16, height: 16, color: Colors.grey),
                 Expanded(
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
@@ -889,6 +887,48 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildColorTile({
+    required String title,
+    required Color color,
+    required ValueChanged<Color> onChanged,
+    bool allowOpacity = false,
+  }) {
+    final hexString = '#${(color.a * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}'
+        '${(color.r * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}'
+        '${(color.g * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}'
+        '${(color.b * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}';
+
+    return ListTile(
+      dense: true,
+      title: Text(title, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500)),
+      subtitle: Text(
+        hexString,
+        style: TextStyle(
+          fontSize: 11,
+          fontFamily: 'monospace',
+          color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+        ),
+      ),
+      leading: GestureDetector(
+        onTap: () => _pickColor(context, title, color, onChanged, allowOpacity: allowOpacity),
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: color,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 4, offset: const Offset(0, 1.5)),
+            ],
+          ),
+        ),
+      ),
+      trailing: const iconoir.NavArrowRight(width: 18, height: 18, color: Colors.grey),
+      onTap: () => _pickColor(context, title, color, onChanged, allowOpacity: allowOpacity),
     );
   }
 

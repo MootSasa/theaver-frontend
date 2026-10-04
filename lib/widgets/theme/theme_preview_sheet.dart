@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../models/theav_theme.dart';
 import '../../l10n/app_localizations.dart';
 import 'chat_preview_card.dart';
@@ -103,11 +104,9 @@ class ThemePreviewSheet extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          theme.isDark ? Icons.dark_mode : Icons.light_mode,
-                          size: 14,
-                          color: theme.isDark ? Colors.white : const Color(0xFF0088CC),
-                        ),
+                        theme.isDark
+                            ? const iconoir.HalfMoon(width: 14, height: 14, color: Colors.white)
+                            : const iconoir.SunLight(width: 14, height: 14, color: Color(0xFF0088CC)),
                         const SizedBox(width: 4),
                         Text(
                           theme.isDark ? l10n.translate('theme_dark') : l10n.translate('theme_light'),
@@ -172,7 +171,7 @@ class ThemePreviewSheet extends StatelessWidget {
                             borderRadius: BorderRadius.circular(14),
                           ),
                         ),
-                        icon: const Icon(Icons.cloud_upload_outlined, size: 18),
+                        icon: const iconoir.CloudUpload(width: 18, height: 18),
                         label: Text(
                           l10n.translate('theme_save_to_cloud'),
                           style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),

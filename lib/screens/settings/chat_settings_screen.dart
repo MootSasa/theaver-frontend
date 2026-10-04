@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -11,17 +12,20 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../services/wallpaper_provider.dart';
 import '../../theme/theme_provider.dart';
+import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
 import '../../widgets/theme/theme_preview_sheet.dart';
 import '../../l10n/app_localizations.dart';
+import 'advanced_theme_colors_screen.dart';
 import 'theme_editor_screen.dart';
 import 'wallpaper_screen.dart';
 import '../../utils/swipe_back_route.dart';
 
 /// Screen for chat settings: wallpaper constructor, themes carousel,
-/// in-app theme editor, .theavtheme import/export, and Liquid Glass design controls.
+/// in-app theme editor, .theavtheme import/export, advanced color customization,
+/// and Liquid Glass design controls.
 class ChatSettingsScreen extends StatelessWidget {
   const ChatSettingsScreen({Key? key}) : super(key: key);
 
@@ -39,7 +43,7 @@ class ChatSettingsScreen extends StatelessWidget {
       final file = File(result.files.single.path!);
       if (!file.path.toLowerCase().endsWith('.theavtheme')) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Пожалуйста, выберите файл с расширением .theavtheme')),
+          SnackBar(content: Text(l10n.translate('theme_select_theavtheme'))),
         );
         return;
       }
@@ -73,13 +77,14 @@ class ChatSettingsScreen extends StatelessWidget {
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка импорта темы: $e')),
+          SnackBar(content: Text(l10n.translate('theme_import_error').replaceAll('{error}', e.toString()))),
         );
       }
     }
   }
 
   Future<void> _exportActiveTheme(BuildContext context) async {
+    final l10n = context.l10n;
     try {
       final themeProvider = context.read<ThemeProvider>();
       final isDark = themeProvider.themeMode == ThemeMode.dark;
@@ -98,7 +103,7 @@ class ChatSettingsScreen extends StatelessWidget {
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка экспорта: $e')),
+          SnackBar(content: Text(l10n.translate('theme_export_error').replaceAll('{error}', e.toString()))),
         );
       }
     }
@@ -113,380 +118,445 @@ class ChatSettingsScreen extends StatelessWidget {
     final activePrimary = activeTheme.palette.primary;
     final allThemes = TheavThemeService().getAllThemes();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('settings_chat_settings')),
-        actions: [
+    return Consumer<LiquidGlassProvider>(
+      builder: (context, glassProvider, _) {
+        final glassEnabled = glassProvider.enabled;
+
+        final appBarActions = [
           IconButton(
-            icon: const Icon(Icons.file_download_outlined),
+            icon: const iconoir.Download(width: 22, height: 22),
             tooltip: l10n.translate('theme_import'),
             onPressed: () => _importTheme(context),
           ),
           IconButton(
-            icon: const Icon(Icons.share_outlined),
+            icon: const iconoir.ShareAndroid(width: 22, height: 22),
             tooltip: l10n.translate('theme_export'),
             onPressed: () => _exportActiveTheme(context),
           ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.only(bottom: 30),
-        children: [
-          // 1. Live Sticky Interactive Preview Card
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: ChatPreviewCard(
-              theme: activeTheme,
-              height: 230,
-            ),
-          ),
+        ];
 
-          // 2. Themes Selection Carousel
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  l10n.translate('theme_custom_title'),
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                ),
-                TextButton.icon(
-                  icon: const Icon(Icons.add, size: 18),
-                  label: Text(
-                    l10n.translate('theme_create_new'),
-                    style: const TextStyle(fontSize: 12.5),
-                  ),
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      SwipeBackPageRoute(builder: (_) => const ThemeEditorScreen()),
-                    );
-                  },
-                ),
-              ],
-            ),
+        final listView = ListView(
+          padding: EdgeInsets.only(
+            top: glassEnabled ? 12 : 0,
+            bottom: 30,
           ),
-          SizedBox(
-            height: 104,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
+          children: [
+            // 1. Live Sticky Interactive Preview Card
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: ChatPreviewCard(
+                theme: activeTheme,
+                height: 230,
+              ),
+            ),
+
+            // 2. Themes Selection Carousel
+            Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: allThemes.length + 1,
-              separatorBuilder: (_, __) => const SizedBox(width: 12),
-              itemBuilder: (context, index) {
-                if (index == allThemes.length) {
-                  // "+ Create Theme" Card
-                  return GestureDetector(
-                    onTap: () {
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    l10n.translate('theme_custom_title'),
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  TextButton.icon(
+                    icon: const iconoir.Plus(width: 18, height: 18),
+                    label: Text(
+                      l10n.translate('theme_create_new'),
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                    onPressed: () {
                       Navigator.push(
                         context,
                         SwipeBackPageRoute(builder: (_) => const ThemeEditorScreen()),
                       );
                     },
-                    child: SizedBox(
-                      width: 80,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 78,
-                            height: 68,
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).cardColor,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: Colors.grey.withValues(alpha: 0.3),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: 104,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: allThemes.length + 1,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (context, index) {
+                  if (index == allThemes.length) {
+                    // "+ Create Theme" Card
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          SwipeBackPageRoute(builder: (_) => const ThemeEditorScreen()),
+                        );
+                      },
+                      child: SizedBox(
+                        width: 80,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 78,
+                              height: 68,
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).cardColor,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: Colors.grey.withValues(alpha: 0.3),
+                                ),
+                              ),
+                              child: Center(
+                                child: iconoir.Plus(color: activePrimary, width: 28, height: 28),
                               ),
                             ),
-                            child: Icon(Icons.add_rounded, color: activePrimary, size: 28),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Создать',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: activePrimary,
+                            const SizedBox(height: 6),
+                            Text(
+                              l10n.translate('theme_create_button'),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: activePrimary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
+                    );
+                  }
+
+                  final t = allThemes[index];
+                  final isSelected = t.id == activeTheme.id;
+
+                  return _ThemeItemBubble(
+                    theme: isSelected ? activeTheme : t,
+                    isSelected: isSelected,
+                    activePrimary: activePrimary,
+                    onTap: () {
+                      themeProvider.setActiveTheme(t);
+                      if (t.wallpaper.type != 'image') {
+                        context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
+                      } else if (t.wallpaper.imagePath != null) {
+                        context.read<WallpaperProvider>().setWallpaper(t.wallpaper.imagePath!);
+                      }
+                    },
+                    onLongPress: () {
+                      if (!t.isBuiltIn) {
+                        Navigator.push(
+                          context,
+                          SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
+                        );
+                      }
+                    },
                   );
-                }
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
 
-                final t = allThemes[index];
-                final isSelected = t.id == activeTheme.id;
-
-                return _ThemeItemBubble(
-                  theme: isSelected ? activeTheme : t,
-                  isSelected: isSelected,
-                  activePrimary: activePrimary,
-                  onTap: () {
-                    themeProvider.setActiveTheme(t);
-                    if (t.wallpaper.type != 'image') {
-                      context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
-                    } else if (t.wallpaper.imagePath != null) {
-                      context.read<WallpaperProvider>().setWallpaper(t.wallpaper.imagePath!);
-                    }
-                  },
-                  onLongPress: () {
-                    if (!t.isBuiltIn) {
-                      Navigator.push(
-                        context,
-                        SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
-                      );
-                    }
-                  },
+            // 3. Wallpaper constructor Tile
+            ListTile(
+              leading: iconoir.MediaImage(color: activePrimary, width: 22, height: 22),
+              title: Text(l10n.translate('wallpaper_title')),
+              subtitle: Text(
+                activeTheme.wallpaper.type == 'pattern'
+                    ? (activeTheme.wallpaper.patternName != null && activeTheme.wallpaper.patternName != 'none'
+                        ? l10n.translate('theme_wallpaper_pattern_desc').replaceAll('{pattern}', activeTheme.wallpaper.patternName!)
+                        : l10n.translate('theme_wallpaper_gradient_desc'))
+                    : activeTheme.wallpaper.type == 'image'
+                        ? l10n.translate('theme_wallpaper_photo_desc')
+                        : l10n.translate('theme_wallpaper_default_desc'),
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+              trailing: const iconoir.NavArrowRight(color: Colors.grey, width: 20, height: 20),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  SwipeBackPageRoute(
+                    builder: (_) => WallpaperScreen(
+                      initialWallpaper: activeTheme.wallpaper,
+                    ),
+                  ),
                 );
               },
             ),
-          ),
-          const SizedBox(height: 14),
 
-          // 3. Wallpaper constructor Tile
-          ListTile(
-            leading: Icon(Icons.wallpaper, color: activePrimary),
-            title: Text(l10n.translate('wallpaper_title')),
-            subtitle: Text(
-              activeTheme.wallpaper.type == 'pattern'
-                  ? (activeTheme.wallpaper.patternName != null && activeTheme.wallpaper.patternName != 'none'
-                      ? 'Узор: ${activeTheme.wallpaper.patternName}, 4-точечный градиент'
-                      : '4-точечный градиент фона')
-                  : activeTheme.wallpaper.type == 'image'
-                      ? 'Фото из галереи'
-                      : 'Обои чата',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            // 4. Bubble Corner Radius Slider
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          l10n.translate('theme_bubble_radius'),
+                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                        ),
+                        Text('${activeTheme.bubbleRadius.round()} px'),
+                      ],
+                    ),
+                    Slider(
+                      value: activeTheme.bubbleRadius,
+                      min: 0,
+                      max: 24,
+                      divisions: 24,
+                      activeColor: activePrimary,
+                      onChanged: (val) {
+                        final updated = activeTheme.copyWith(bubbleRadius: val);
+                        themeProvider.setActiveTheme(updated);
+                        TheavThemeService().saveTheme(
+                          updated,
+                          saveToCloud: !activeTheme.isBuiltIn || activeTheme.isCloudSaved,
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
             ),
-            trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-            onTap: () {
-              Navigator.push(
-                context,
-                SwipeBackPageRoute(
-                  builder: (_) => WallpaperScreen(
-                    initialWallpaper: activeTheme.wallpaper,
+
+            // 5. Advanced Theme Colors Tile
+            ListTile(
+              leading: iconoir.Palette(color: activePrimary, width: 22, height: 22),
+              title: Text(l10n.translate('theme_advanced_settings')),
+              subtitle: Text(
+                l10n.translate('theme_advanced_settings_desc'),
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+              trailing: const iconoir.NavArrowRight(color: Colors.grey, width: 20, height: 20),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  SwipeBackPageRoute(
+                    builder: (_) => AdvancedThemeColorsScreen(initialTheme: activeTheme),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 6),
+
+            // 6. Light / Dark / System Switcher
+            Column(
+              children: [
+                ListTile(
+                  leading: iconoir.HalfMoon(
+                    color: themeProvider.themeMode == ThemeMode.dark
+                        ? activePrimary
+                        : themeProvider.themeMode == ThemeMode.light
+                            ? activePrimary
+                            : Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(l10n.translate('settings_theme')),
+                  subtitle: Text(
+                    _themeModeLabel(themeProvider.themeMode, l10n),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
                 ),
-              );
-            },
-          ),
-
-          // 4. Bubble Corner Radius Slider
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
                     children: [
-                      Text(
-                        l10n.translate('theme_bubble_radius'),
-                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                      _ThemeButton(
+                        icon: const iconoir.SunLight(width: 22, height: 22),
+                        label: l10n.translate('theme_light'),
+                        isSelected: themeProvider.themeMode == ThemeMode.light,
+                        onTap: () => themeProvider.setToLight(),
                       ),
-                      Text('${activeTheme.bubbleRadius.round()} px'),
+                      const SizedBox(width: 8),
+                      _ThemeButton(
+                        icon: const iconoir.HalfMoon(width: 22, height: 22),
+                        label: l10n.translate('theme_dark'),
+                        isSelected: themeProvider.themeMode == ThemeMode.dark,
+                        onTap: () => themeProvider.setToDark(),
+                      ),
+                      const SizedBox(width: 8),
+                      _ThemeButton(
+                        icon: const iconoir.Laptop(width: 22, height: 22),
+                        label: l10n.translate('theme_system'),
+                        isSelected: themeProvider.themeMode == ThemeMode.system,
+                        onTap: () => themeProvider.setToSystem(),
+                      ),
                     ],
                   ),
-                  Slider(
-                    value: activeTheme.bubbleRadius,
-                    min: 0,
-                    max: 24,
-                    divisions: 24,
-                    activeColor: activePrimary,
-                    onChanged: (val) {
-                      final updated = activeTheme.copyWith(bubbleRadius: val);
-                      themeProvider.setActiveTheme(updated);
-                      TheavThemeService().saveTheme(
-                        updated,
-                        saveToCloud: !activeTheme.isBuiltIn || activeTheme.isCloudSaved,
-                      );
-                    },
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ),
 
-          // 5. Light / Dark / System Switcher
-          Column(
-            children: [
-              ListTile(
-                leading: Icon(
-                  Icons.dark_mode,
-                  color: themeProvider.themeMode == ThemeMode.dark
-                      ? activePrimary
-                      : themeProvider.themeMode == ThemeMode.light
-                          ? activePrimary
-                          : Colors.grey,
-                ),
-                title: Text(l10n.translate('settings_theme')),
-                subtitle: Text(
-                  _themeModeLabel(themeProvider.themeMode, l10n),
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
+            const SizedBox(height: 12),
+
+            // 7. Liquid Glass Design Controls
+            Consumer<LiquidGlassProvider>(
+              builder: (context, provider, _) {
+                final isSupported = provider.isSupported;
+                final mode = provider.mode;
+
+                return Column(
                   children: [
-                    _ThemeButton(
-                      icon: Icons.light_mode,
-                      label: l10n.translate('theme_light'),
-                      isSelected: themeProvider.themeMode == ThemeMode.light,
-                      onTap: () => themeProvider.setToLight(),
+                    ListTile(
+                      leading: iconoir.Spark(
+                        color: isSupported ? activePrimary : Colors.grey,
+                        width: 22,
+                        height: 22,
+                      ),
+                      title: Text(
+                        l10n.translate('settings_liquid_glass'),
+                        style: TextStyle(color: isSupported ? null : Colors.grey),
+                      ),
+                      subtitle: Text(
+                        isSupported
+                            ? l10n.translate('settings_liquid_glass_desc')
+                            : l10n.translate('settings_liquid_glass_unsupported'),
+                        style: TextStyle(fontSize: 12, color: isSupported ? Colors.grey[600] : Colors.grey),
+                      ),
+                      trailing: isSupported
+                          ? AdaptiveSwitch(
+                              value: provider.enabled,
+                              onChanged: (val) => provider.setMode(
+                                val ? GlassMode.full : GlassMode.disabled,
+                              ),
+                            )
+                          : null,
                     ),
-                    const SizedBox(width: 8),
-                    _ThemeButton(
-                      icon: Icons.dark_mode,
-                      label: l10n.translate('theme_dark'),
-                      isSelected: themeProvider.themeMode == ThemeMode.dark,
-                      onTap: () => themeProvider.setToDark(),
-                    ),
-                    const SizedBox(width: 8),
-                    _ThemeButton(
-                      icon: Icons.brightness_auto,
-                      label: l10n.translate('theme_system'),
-                      isSelected: themeProvider.themeMode == ThemeMode.system,
-                      onTap: () => themeProvider.setToSystem(),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // 6. Liquid Glass Design Controls
-          Consumer<LiquidGlassProvider>(
-            builder: (context, provider, _) {
-              final isSupported = provider.isSupported;
-              final mode = provider.mode;
-
-              return Column(
-                children: [
-                  ListTile(
-                    leading: Icon(
-                      Icons.auto_awesome,
-                      color: isSupported ? activePrimary : Colors.grey,
-                    ),
-                    title: Text(
-                      l10n.translate('settings_liquid_glass'),
-                      style: TextStyle(color: isSupported ? null : Colors.grey),
-                    ),
-                    subtitle: Text(
-                      isSupported
-                          ? l10n.translate('settings_liquid_glass_desc')
-                          : l10n.translate('settings_liquid_glass_unsupported'),
-                      style: TextStyle(fontSize: 12, color: isSupported ? Colors.grey[600] : Colors.grey),
-                    ),
-                    trailing: isSupported
-                        ? AdaptiveSwitch(
-                            value: provider.enabled,
-                            onChanged: (val) => provider.setMode(
-                              val ? GlassMode.full : GlassMode.disabled,
+                    if (isSupported)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            _GlassModeButton(
+                              icon: const iconoir.Xmark(width: 20, height: 20),
+                              label: l10n.translate('settings_glass_off'),
+                              isSelected: mode == GlassMode.disabled,
+                              onTap: () => provider.setMode(GlassMode.disabled),
                             ),
-                          )
-                        : null,
-                  ),
-                  if (isSupported)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          _GlassModeButton(
-                            icon: Icons.block,
-                            label: l10n.translate('settings_glass_off'),
-                            isSelected: mode == GlassMode.disabled,
-                            onTap: () => provider.setMode(GlassMode.disabled),
-                          ),
-                          const SizedBox(width: 8),
-                          _GlassModeButton(
-                            icon: Icons.auto_awesome_outlined,
-                            label: l10n.translate('settings_glass_lite'),
-                            isSelected: mode == GlassMode.lite,
-                            onTap: () => provider.setMode(GlassMode.lite),
-                          ),
-                          const SizedBox(width: 8),
-                          _GlassModeButton(
-                            icon: Icons.auto_awesome,
-                            label: l10n.translate('settings_glass_full'),
-                            isSelected: mode == GlassMode.full,
-                            onTap: () => provider.setMode(GlassMode.full),
-                          ),
-                        ],
+                            const SizedBox(width: 8),
+                            _GlassModeButton(
+                              icon: const iconoir.Spark(width: 20, height: 20),
+                              label: l10n.translate('settings_glass_lite'),
+                              isSelected: mode == GlassMode.lite,
+                              onTap: () => provider.setMode(GlassMode.lite),
+                            ),
+                            const SizedBox(width: 8),
+                            _GlassModeButton(
+                              icon: const iconoir.Spark(width: 20, height: 20),
+                              label: l10n.translate('settings_glass_full'),
+                              isSelected: mode == GlassMode.full,
+                              onTap: () => provider.setMode(GlassMode.full),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  if (isSupported && mode != GlassMode.disabled) ...[
-                    const SizedBox(height: 16),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Угол освещения: ${provider.manualLightAngle.round()}°',
-                            style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500),
-                          ),
-                        ],
+                    if (isSupported && mode != GlassMode.disabled) ...[
+                      const SizedBox(height: 16),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              l10n.translate('theme_glass_light_angle').replaceAll('{value}', '${provider.manualLightAngle.round()}'),
+                              style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: AdaptiveSlider(
-                        value: provider.manualLightAngle,
-                        min: 0,
-                        max: 360,
-                        divisions: 72,
-                        activeColor: activePrimary,
-                        label: '${provider.manualLightAngle.round()}°',
-                        onChanged: (val) => provider.setManualLightAngle(val),
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: AdaptiveSlider(
+                          value: provider.manualLightAngle,
+                          min: 0,
+                          max: 360,
+                          divisions: 72,
+                          activeColor: activePrimary,
+                          label: '${provider.manualLightAngle.round()}°',
+                          onChanged: (val) => provider.setManualLightAngle(val),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Степень размытия (блюр): ${provider.blur.toStringAsFixed(1)}',
-                            style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500),
-                          ),
-                        ],
+                      const SizedBox(height: 16),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              l10n.translate('theme_glass_blur').replaceAll('{value}', provider.blur.toStringAsFixed(1)),
+                              style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: AdaptiveSlider(
-                        value: provider.blur,
-                        min: 0,
-                        max: 30,
-                        divisions: 60,
-                        activeColor: activePrimary,
-                        label: provider.blur.toStringAsFixed(1),
-                        onChanged: (val) => provider.setBlur(val),
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: AdaptiveSlider(
+                          value: provider.blur,
+                          min: 0,
+                          max: 30,
+                          divisions: 60,
+                          activeColor: activePrimary,
+                          label: provider.blur.toStringAsFixed(1),
+                          onChanged: (val) => provider.setBlur(val),
+                        ),
                       ),
-                    ),
+                    ],
                   ],
-                ],
-              );
-            },
+                );
+              },
+            ),
+          ],
+        );
+
+        if (glassEnabled) {
+          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
+          return Scaffold(
+            body: Stack(
+              children: [
+                Positioned.fill(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: topPadding),
+                    child: listView,
+                  ),
+                ),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: LiquidGlassAppBar(
+                    title: Text(l10n.translate('settings_chat_settings')),
+                    actions: appBarActions,
+                    centerTitle: true,
+                    isLite: glassProvider.isLite,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(l10n.translate('settings_chat_settings')),
+            actions: appBarActions,
           ),
-        ],
-      ),
+          body: listView,
+        );
+      },
     );
   }
 
@@ -510,7 +580,7 @@ class _ThemeButton extends StatelessWidget {
     required this.onTap,
   });
 
-  final IconData icon;
+  final Widget icon;
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
@@ -536,12 +606,8 @@ class _ThemeButton extends StatelessWidget {
           ),
           child: Column(
             children: [
-              Icon(
-                icon,
-                color: isSelected ? primary : theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                size: 24,
-              ),
-              const SizedBox(height: 4),
+              icon,
+              const SizedBox(height: 6),
               Text(
                 label,
                 style: TextStyle(
@@ -566,7 +632,7 @@ class _GlassModeButton extends StatelessWidget {
     required this.onTap,
   });
 
-  final IconData icon;
+  final Widget icon;
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
@@ -592,12 +658,8 @@ class _GlassModeButton extends StatelessWidget {
           ),
           child: Column(
             children: [
-              Icon(
-                icon,
-                color: isSelected ? primary : theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                size: 24,
-              ),
-              const SizedBox(height: 4),
+              icon,
+              const SizedBox(height: 6),
               Text(
                 label,
                 style: TextStyle(
@@ -831,9 +893,9 @@ class _ThemeItemBubble extends StatelessWidget {
                             color: activePrimary,
                             shape: BoxShape.circle,
                           ),
-                          child: Icon(
-                            Icons.check,
-                            size: 11,
+                          child: iconoir.Check(
+                            width: 11,
+                            height: 11,
                             color: theme.palette.onPrimary,
                           ),
                         ),
@@ -850,9 +912,9 @@ class _ThemeItemBubble extends StatelessWidget {
                             color: Colors.black.withValues(alpha: 0.5),
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(
-                            Icons.cloud_done,
-                            size: 10,
+                          child: const iconoir.CloudCheck(
+                            width: 10,
+                            height: 10,
                             color: Colors.white,
                           ),
                         ),
@@ -880,4 +942,3 @@ class _ThemeItemBubble extends StatelessWidget {
     );
   }
 }
-

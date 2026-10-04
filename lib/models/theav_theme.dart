@@ -355,6 +355,7 @@ class TheavPalette {
 
   Color get chatBubbleOutgoingLink => _chatBubbleOutgoingLink ?? chatBubbleOutgoingText;
   Color get chatBubbleIncomingLink => _chatBubbleIncomingLink ?? primary;
+  Color? get explicitChatInputBackground => _chatInputBackground;
   Color get chatInputBackground => _chatInputBackground ?? surface;
   Color get chatInputText => _chatInputText ?? onSurface;
   Color get chatInputButtons => _chatInputButtons ?? onSurface.withValues(alpha: 0.6);
