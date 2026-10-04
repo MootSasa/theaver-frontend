@@ -824,5 +824,7 @@
   "theme_installs_count": "설치 수: {count}",
   "theme_link_copied": "테마 링크가 클립보드에 복사되었습니다",
   "theme_share_title": "테마 공유",
-  "theme_applied_toast": "테마가 적용되었습니다"
+  "theme_applied_toast": "테마가 적용되었습니다",
+  "theme_preview_sample_in": "안녕하세요! 이 테마 어때요?",
+  "theme_preview_sample_out": "정말 멋지네요!"
 }

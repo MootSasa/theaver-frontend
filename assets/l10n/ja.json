@@ -824,5 +824,7 @@
   "theme_installs_count": "インストール数: {count}",
   "theme_link_copied": "テーマリンクがクリップボードにコピーされました",
   "theme_share_title": "テーマを共有",
-  "theme_applied_toast": "テーマを適用しました"
+  "theme_applied_toast": "テーマを適用しました",
+  "theme_preview_sample_in": "こんにちは！このテーマどう？",
+  "theme_preview_sample_out": "すごくいいね！"
 }

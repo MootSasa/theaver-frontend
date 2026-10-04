@@ -877,5 +877,7 @@
   "theme_installs_count": "Число установок: {count}",
   "theme_link_copied": "Ссылка на тему скопирована в буфер обмена",
   "theme_share_title": "Поделиться темой",
-  "theme_applied_toast": "Тема применена"
+  "theme_applied_toast": "Тема применена",
+  "theme_preview_sample_in": "Привет! Как тебе эта тема?",
+  "theme_preview_sample_out": "Отличные цвета!"
 }

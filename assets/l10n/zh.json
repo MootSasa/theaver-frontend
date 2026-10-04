@@ -824,5 +824,7 @@
   "theme_installs_count": "安装次数：{count}",
   "theme_link_copied": "主题链接已复制到剪贴板",
   "theme_share_title": "分享主题",
-  "theme_applied_toast": "主题已应用"
+  "theme_applied_toast": "主题已应用",
+  "theme_preview_sample_in": "嗨！你觉得这个主题怎么样？",
+  "theme_preview_sample_out": "看起来很棒！"
 }

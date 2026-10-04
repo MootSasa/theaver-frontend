@@ -824,5 +824,7 @@
   "theme_installs_count": "Installationen: {count}",
   "theme_link_copied": "Thema-Link in die Zwischenablage kopiert",
   "theme_share_title": "Thema teilen",
-  "theme_applied_toast": "Thema angewendet"
+  "theme_applied_toast": "Thema angewendet",
+  "theme_preview_sample_in": "Hey! Wie gefällt dir dieses Design?",
+  "theme_preview_sample_out": "Sieht super aus!"
 }

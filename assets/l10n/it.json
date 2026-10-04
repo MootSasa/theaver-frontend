@@ -824,5 +824,7 @@
   "theme_installs_count": "Installazioni: {count}",
   "theme_link_copied": "Link del tema copiato negli appunti",
   "theme_share_title": "Condividi tema",
-  "theme_applied_toast": "Tema applicato"
+  "theme_applied_toast": "Tema applicato",
+  "theme_preview_sample_in": "Ciao! Cosa ne pensi di questo tema?",
+  "theme_preview_sample_out": "Colori fantastici!"
 }
