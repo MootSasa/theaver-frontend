@@ -815,5 +815,7 @@
   "theme_color_selection_overlay": "选中高亮颜色",
   "theme_color_reaction_active": "已选反应背景",
   "theme_color_reaction_inactive": "未选反应背景",
-  "theme_color_error": "错误与删除颜色"
+  "theme_color_error": "错误与删除颜色",
+  "theme_delete": "删除主题",
+  "theme_delete_confirm": "确定要删除此主题吗？"
 }

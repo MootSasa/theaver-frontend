@@ -815,5 +815,7 @@
   "theme_color_selection_overlay": "Auswahl-Hervorhebung",
   "theme_color_reaction_active": "Aktiver Reaktionshintergrund",
   "theme_color_reaction_inactive": "Inaktiver Reaktionshintergrund",
-  "theme_color_error": "Fehler- & Löschfarbe"
+  "theme_color_error": "Fehler- & Löschfarbe",
+  "theme_delete": "Design löschen",
+  "theme_delete_confirm": "Möchten Sie dieses Design wirklich löschen?"
 }

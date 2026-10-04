@@ -815,5 +815,7 @@
   "theme_color_selection_overlay": "Surlignage de sélection",
   "theme_color_reaction_active": "Fond de réaction active",
   "theme_color_reaction_inactive": "Fond de réaction inactive",
-  "theme_color_error": "Couleur d'erreur et suppression"
+  "theme_color_error": "Couleur d'erreur et suppression",
+  "theme_delete": "Supprimer le thème",
+  "theme_delete_confirm": "Voulez-vous vraiment supprimer ce thème ?"
 }

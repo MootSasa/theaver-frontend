@@ -83,22 +83,18 @@ class ChatSettingsScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _exportActiveTheme(BuildContext context) async {
+  Future<void> _exportTheme(BuildContext context, TheavTheme themeToExport) async {
     final l10n = context.l10n;
     try {
-      final themeProvider = context.read<ThemeProvider>();
-      final isDark = themeProvider.themeMode == ThemeMode.dark;
-      final activeTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
-
-      final bytes = await TheavThemeService().exportThemePackage(activeTheme);
+      final bytes = await TheavThemeService().exportThemePackage(themeToExport);
       final tempDir = await getTemporaryDirectory();
-      final cleanName = TheavThemeService.sanitizeFileName(activeTheme.name);
+      final cleanName = TheavThemeService.sanitizeFileName(themeToExport.name);
       final file = File('${tempDir.path}/$cleanName.theavtheme');
       await file.writeAsBytes(bytes);
 
       await Share.shareXFiles(
         [XFile(file.path, name: '$cleanName.theavtheme')],
-        text: 'Тема Theaver: ${activeTheme.name}',
+        text: 'Тема Theaver: ${themeToExport.name}',
       );
     } catch (e) {
       if (context.mounted) {
@@ -107,6 +103,96 @@ class ChatSettingsScreen extends StatelessWidget {
         );
       }
     }
+  }
+
+  Future<void> _exportActiveTheme(BuildContext context) async {
+    final themeProvider = context.read<ThemeProvider>();
+    final isDark = themeProvider.themeMode == ThemeMode.dark;
+    final activeTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
+    await _exportTheme(context, activeTheme);
+  }
+
+  void _showThemeOptionsModal(BuildContext context, TheavTheme t) {
+    final l10n = context.l10n;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Theme.of(context).cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Text(
+                t.name,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const iconoir.EditPencil(width: 22, height: 22),
+              title: Text(l10n.translate('theme_edit')),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(
+                  context,
+                  SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
+                );
+              },
+            ),
+            ListTile(
+              leading: const iconoir.ShareAndroid(width: 22, height: 22),
+              title: Text(l10n.translate('theme_export')),
+              onTap: () {
+                Navigator.pop(ctx);
+                _exportTheme(context, t);
+              },
+            ),
+            ListTile(
+              leading: iconoir.Trash(
+                width: 22,
+                height: 22,
+                color: t.palette.error,
+              ),
+              title: Text(
+                l10n.translate('theme_delete'),
+                style: TextStyle(color: t.palette.error, fontWeight: FontWeight.w600),
+              ),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (dCtx) => AlertDialog(
+                    title: Text(l10n.translate('theme_delete')),
+                    content: Text(l10n.translate('theme_delete_confirm')),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dCtx, false),
+                        child: Text(l10n.translate('cancel')),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(dCtx, true),
+                        child: Text(
+                          l10n.translate('common_delete'),
+                          style: TextStyle(color: t.palette.error),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  await TheavThemeService().deleteTheme(t.id);
+                }
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -247,10 +333,7 @@ class ChatSettingsScreen extends StatelessWidget {
                     },
                     onLongPress: () {
                       if (!t.isBuiltIn) {
-                        Navigator.push(
-                          context,
-                          SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
-                        );
+                        _showThemeOptionsModal(context, t);
                       }
                     },
                   );

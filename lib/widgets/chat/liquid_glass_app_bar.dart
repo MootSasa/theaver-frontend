@@ -101,49 +101,34 @@ class LiquidGlassAppBar extends StatelessWidget
                   right: 0,
                   top: statusBarHeight,
                   height: kToolbarHeight,
-                  child: centerTitle
-                      // Истинное центрирование: title по центру всего
-                      // экрана, leading/actions поверх него
-                      ? Stack(
-                          children: [
-                            Center(child: title),
-                            Row(
-                              children: [
-                                if (leading != null)
-                                  leading!
-                                else
-                                  IconButton(
-                                    icon: iconoir.NavArrowLeft(
-                                      color: Theme.of(context).colorScheme.onSurface,
-                                      width: 24,
-                                      height: 24,
-                                    ),
-                                    onPressed: () => Navigator.maybePop(context),
-                                  ),
-                                const Spacer(),
-                                if (actions != null) ...actions!,
-                              ],
-                            ),
-                          ],
-                        )
-                      // Обычная раскладка: title между leading и actions
-                      : Row(
-                          children: [
-                            if (leading != null)
-                              leading!
-                            else
-                              IconButton(
-                                icon: iconoir.NavArrowLeft(
-                                  color: Theme.of(context).colorScheme.onSurface,
-                                  width: 24,
-                                  height: 24,
-                                ),
-                                onPressed: () => Navigator.maybePop(context),
-                              ),
-                            Expanded(child: title),
-                            if (actions != null) ...actions!,
-                          ],
+                  child: NavigationToolbar(
+                    leading: leading ??
+                        IconButton(
+                          icon: iconoir.NavArrowLeft(
+                            color: Theme.of(context).colorScheme.onSurface,
+                            width: 24,
+                            height: 24,
+                          ),
+                          onPressed: () => Navigator.maybePop(context),
                         ),
+                    middle: DefaultTextStyle.merge(
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      child: title,
+                    ),
+                    trailing: actions != null && actions!.isNotEmpty
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: actions!,
+                          )
+                        : null,
+                    centerMiddle: centerTitle,
+                  ),
                 ),
                 // Bottom widget (TabBar) если есть
                 if (bottom != null)

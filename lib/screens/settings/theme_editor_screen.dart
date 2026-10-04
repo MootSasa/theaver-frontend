@@ -119,6 +119,37 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     }
   }
 
+  Future<void> _deleteTheme() async {
+    final l10n = context.l10n;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(l10n.translate('theme_delete')),
+        content: Text(l10n.translate('theme_delete_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.translate('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              l10n.translate('common_delete'),
+              style: TextStyle(color: _currentTheme.palette.error),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await TheavThemeService().deleteTheme(_currentTheme.id);
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
@@ -505,6 +536,32 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 },
               ),
             ),
+
+            // 8. Delete Theme Button (if editing existing custom theme)
+            if (isEditing && !_currentTheme.isBuiltIn) ...[
+              const SizedBox(height: 20),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: ListTile(
+                  tileColor: Theme.of(context).cardColor,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  leading: iconoir.Trash(
+                    width: 22,
+                    height: 22,
+                    color: _currentTheme.palette.error,
+                  ),
+                  title: Text(
+                    l10n.translate('theme_delete'),
+                    style: TextStyle(
+                      color: _currentTheme.palette.error,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                    ),
+                  ),
+                  onTap: _deleteTheme,
+                ),
+              ),
+            ],
           ],
         );
 
@@ -524,9 +581,13 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                   left: 0,
                   right: 0,
                   child: LiquidGlassAppBar(
-                    title: Text(isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new')),
+                    title: Text(
+                      isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     actions: appBarActions,
-                    centerTitle: true,
+                    centerTitle: false,
                     isLite: glassProvider.isLite,
                   ),
                 ),
@@ -537,7 +598,12 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: Text(isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new')),
+            title: Text(
+              isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            centerTitle: false,
             actions: appBarActions,
           ),
           body: listView,

@@ -815,5 +815,7 @@
   "theme_color_selection_overlay": "選択ハイライト",
   "theme_color_reaction_active": "自分のリアクション背景",
   "theme_color_reaction_inactive": "他のリアクション背景",
-  "theme_color_error": "エラー・削除カラー"
+  "theme_color_error": "エラー・削除カラー",
+  "theme_delete": "テーマを削除",
+  "theme_delete_confirm": "このテーマを削除してもよろしいですか？"
 }

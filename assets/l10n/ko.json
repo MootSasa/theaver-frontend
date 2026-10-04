@@ -815,5 +815,7 @@
   "theme_color_selection_overlay": "선택 강조 색상",
   "theme_color_reaction_active": "내 반응 배경",
   "theme_color_reaction_inactive": "다른 반응 배경",
-  "theme_color_error": "오류 및 삭제 색상"
+  "theme_color_error": "오류 및 삭제 색상",
+  "theme_delete": "테마 삭제",
+  "theme_delete_confirm": "이 테마를 삭제하시겠습니까?"
 }
