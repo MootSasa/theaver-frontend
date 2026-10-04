@@ -59,6 +59,8 @@ class ChatListItem extends StatelessWidget {
     final unreadBg = p?.unreadBadge ?? primaryColor;
     final unreadText = p?.unreadBadgeText ?? onPrimaryColor;
     
+    final imageProvider = avatarImageProvider(avatarUrl);
+    
     return ListTile(
       onTap: onTap,
       leading: Stack(
@@ -66,9 +68,9 @@ class ChatListItem extends StatelessWidget {
           CircleAvatar(
             radius: 22,
             backgroundColor: primaryColor,
-            backgroundImage: avatarImageProvider(avatarUrl),
-            onBackgroundImageError: (_, __) {},
-            child: avatarImageProvider(avatarUrl) == null
+            backgroundImage: imageProvider,
+            onBackgroundImageError: imageProvider != null ? (_, __) {} : null,
+            child: imageProvider == null
                 ? Text(
                     chatName.isNotEmpty ? chatName[0].toUpperCase() : '?',
                     style: TextStyle(color: onPrimaryColor, fontWeight: FontWeight.bold),

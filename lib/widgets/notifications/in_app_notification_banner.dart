@@ -283,24 +283,25 @@ class _InAppNotificationBannerState extends State<InAppNotificationBanner>
 
   Widget _buildBannerContent(BuildContext context) {
     final theme = Theme.of(context);
+    final imageProvider = avatarImageProvider(widget.data.avatarUrl);
     return Row(
       children: [
         // Аватар
         CircleAvatar(
-          radius: 20,
-          backgroundColor: const Color(0xFF0088CC),
-          backgroundImage: avatarImageProvider(widget.data.avatarUrl),
-          onBackgroundImageError: (_, __) {},
-          child: widget.data.avatarUrl == null
-              ? Text(
-                  widget.data.chatName.isNotEmpty
-                      ? widget.data.chatName[0].toUpperCase()
-                      : '?',
-                  style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.bold),
-                )
-              : null,
-        ),
+              radius: 20,
+              backgroundColor: const Color(0xFF0088CC),
+              backgroundImage: imageProvider,
+              onBackgroundImageError: imageProvider != null ? (_, __) {} : null,
+              child: imageProvider == null
+                  ? Text(
+                      widget.data.chatName.isNotEmpty
+                          ? widget.data.chatName[0].toUpperCase()
+                          : '?',
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold),
+                    )
+                  : null,
+            ),
         const SizedBox(width: 12),
 
         // Текст

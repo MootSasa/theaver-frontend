@@ -3,14 +3,18 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/chat/chat_list_item.dart';
+import '../../widgets/chat/liquid_glass_filter_chips.dart';
+import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
 
@@ -33,7 +37,9 @@ class ThemePreviewScreen extends StatefulWidget {
 
 class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
   final PageController _pageController = PageController();
+  final TextEditingController _mockInputController = TextEditingController();
   int _currentPage = 0;
+  int _activeMainFilter = 0;
   bool _isLoading = true;
   String? _errorMessage;
   TheavTheme? _theme;
@@ -59,6 +65,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
   @override
   void dispose() {
     _pageController.dispose();
+    _mockInputController.dispose();
     super.dispose();
   }
 
@@ -287,7 +294,6 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
   // --- PAGE 0: REALISTIC CHAT PREVIEW ---
   Widget _buildChatPreviewPage(BuildContext context, TheavTheme theme) {
     final l10n = context.l10n;
-    final isDark = theme.isDark;
     final p = theme.palette;
     final statusBarHeight = MediaQuery.of(context).padding.top;
 
@@ -456,43 +462,20 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                 ),
               ),
 
-              // Mock Chat Input Field
-              Padding(
-                padding: const EdgeInsets.only(left: 12, right: 12, bottom: 64),
-                child: Container(
-                  height: 46,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    color: p.surface,
-                    borderRadius: BorderRadius.circular(23),
-                    border: Border.all(
-                      color: isDark ? Colors.white12 : Colors.black12,
-                      width: 0.5,
-                    ),
+              // Exact Chat Input Bar from actual app component
+              IgnorePointer(
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    bottom: 54.0 + MediaQuery.of(context).padding.bottom + 4.0,
                   ),
-                  child: Row(
-                    children: [
-                      iconoir.Attachment(
-                        width: 20,
-                        height: 20,
-                        color: p.subtext,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          l10n.translate('chat_input_hint'),
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: p.subtext,
-                          ),
-                        ),
-                      ),
-                      iconoir.Microphone(
-                        width: 20,
-                        height: 20,
-                        color: p.subtext,
-                      ),
-                    ],
+                  child: LiquidGlassInputField(
+                    enabled: context.watch<LiquidGlassProvider?>()?.enabled ?? false,
+                    isLite: context.watch<LiquidGlassProvider?>()?.isLite ?? false,
+                    controller: _mockInputController,
+                    hintText: l10n.translate('chat_type_message'),
+                    onEmoji: () {},
+                    onAttach: () {},
+                    onVoice: () {},
                   ),
                 ),
               ),
@@ -506,8 +489,19 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
   // --- PAGE 1: REALISTIC MAIN SCREEN (CHAT LIST) PREVIEW ---
   Widget _buildMainScreenPreviewPage(BuildContext context, TheavTheme theme) {
     final l10n = context.l10n;
+    final isDark = theme.isDark;
     final p = theme.palette;
     final statusBarHeight = MediaQuery.of(context).padding.top;
+    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassEnabled = glassProvider?.enabled ?? false;
+    final isLite = glassProvider?.isLite ?? false;
+
+    final filters = [
+      l10n.translate('filter_all'),
+      l10n.translate('filter_personal'),
+      l10n.translate('filter_groups'),
+      l10n.translate('filter_channels'),
+    ];
 
     return Stack(
       children: [
@@ -516,46 +510,59 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
           child: Container(color: p.background),
         ),
 
-        // Main App Bar + Chat List
+        // Main App Bar + Filter Chips + Chat List
         Positioned.fill(
           child: Column(
             children: [
-              // Main Screen App Bar
+              // Main Screen App Bar matching actual main screen
               Container(
                 color: p.appBarBackground,
                 padding: EdgeInsets.only(
                   top: statusBarHeight + 4,
                   bottom: 8,
                   left: 6,
-                  right: 6,
+                  right: 12,
                 ),
                 child: Row(
                   children: [
                     IconButton(
-                      icon: iconoir.Menu(
+                      icon: iconoir.NavArrowLeft(
                         width: 22,
                         height: 22,
                         color: p.appBarForeground,
                       ),
-                      onPressed: () {},
+                      onPressed: () {
+                        HapticUtils.tap();
+                        Navigator.of(context).pop();
+                      },
                     ),
-                    const SizedBox(width: 4),
                     Expanded(
-                      child: Text(
-                        l10n.translate('theme_preview_title'),
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: p.appBarForeground,
+                      child: Center(
+                        child: Container(
+                          height: 38,
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF2C2C2E)
+                                : const Color(0xFFF2F2F7),
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'Theaver',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: p.appBarForeground,
+                            ),
+                          ),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     IconButton(
-                      icon: iconoir.Search(
-                        width: 20,
-                        height: 20,
+                      icon: iconoir.MoreVert(
+                        width: 22,
+                        height: 22,
                         color: p.appBarForeground,
                       ),
                       onPressed: () {},
@@ -564,10 +571,27 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                 ),
               ),
 
+              // Filter chips (matching real main_screen)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 4),
+                child: LiquidGlassFilterChips(
+                  enabled: glassEnabled,
+                  isLite: isLite,
+                  filters: filters,
+                  activeFilter: _activeMainFilter,
+                  unreadCounts: const [3, 2, 1, 0],
+                  onFilterSelected: (idx) {
+                    setState(() => _activeMainFilter = idx);
+                  },
+                ),
+              ),
+
               // Real Chat List Items
               Expanded(
                 child: ListView(
-                  padding: const EdgeInsets.only(bottom: 120),
+                  padding: EdgeInsets.only(
+                    bottom: 54.0 + MediaQuery.of(context).padding.bottom + 80.0,
+                  ),
                   children: [
                     ChatListItem(
                       chatName: 'Theaver News',
@@ -629,7 +653,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
         // Floating Action Button (Pencil FAB)
         Positioned(
           right: 16,
-          bottom: 74,
+          bottom: 54.0 + MediaQuery.of(context).padding.bottom + 16.0,
           child: FloatingActionButton(
             heroTag: 'theme_preview_fab',
             backgroundColor: p.primary,
