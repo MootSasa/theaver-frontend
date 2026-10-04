@@ -104,6 +104,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
       _currentWallpaper = _currentWallpaper.copyWith(
         type: 'image',
         imagePath: localFile.path,
+        clearImageUrl: true,
       );
     });
   }
@@ -126,7 +127,9 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
 
       final updatedTheme = currentTheme.copyWith(wallpaper: _currentWallpaper);
       await themeProvider.setActiveTheme(updatedTheme);
-      await TheavThemeService().saveTheme(updatedTheme, saveToCloud: false);
+
+      final bool shouldSaveToCloud = !currentTheme.isBuiltIn || currentTheme.isCloudSaved;
+      await TheavThemeService().saveTheme(updatedTheme, saveToCloud: shouldSaveToCloud);
 
       // Also sync WallpaperProvider
       if (_currentWallpaper.type == 'image' && _currentWallpaper.imagePath != null) {

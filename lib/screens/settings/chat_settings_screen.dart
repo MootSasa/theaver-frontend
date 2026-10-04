@@ -262,7 +262,11 @@ class ChatSettingsScreen extends StatelessWidget {
             onTap: () {
               Navigator.push(
                 context,
-                SwipeBackPageRoute(builder: (_) => const WallpaperScreen()),
+                SwipeBackPageRoute(
+                  builder: (_) => WallpaperScreen(
+                    initialWallpaper: activeTheme.wallpaper,
+                  ),
+                ),
               );
             },
           ),
@@ -298,7 +302,10 @@ class ChatSettingsScreen extends StatelessWidget {
                     onChanged: (val) {
                       final updated = activeTheme.copyWith(bubbleRadius: val);
                       themeProvider.setActiveTheme(updated);
-                      TheavThemeService().saveTheme(updated, saveToCloud: false);
+                      TheavThemeService().saveTheme(
+                        updated,
+                        saveToCloud: !activeTheme.isBuiltIn || activeTheme.isCloudSaved,
+                      );
                     },
                   ),
                 ],
@@ -634,13 +641,19 @@ class _ThemeItemBubble extends StatelessWidget {
         ),
         child: const SizedBox.expand(),
       );
-    } else if (wp.type == 'image' && wp.imagePath != null && File(wp.imagePath!).existsSync()) {
-      wallpaperBg = Image.file(
-        File(wp.imagePath!),
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
-      );
+    } else if (wp.type == 'image') {
+      final imgProvider = wp.getImageProvider();
+      if (imgProvider != null) {
+        wallpaperBg = Image(
+          image: imgProvider,
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+          errorBuilder: (context, error, stackTrace) => Container(color: wp.backgroundColor),
+        );
+      } else {
+        wallpaperBg = Container(color: wp.backgroundColor);
+      }
     } else {
       wallpaperBg = Container(color: wp.backgroundColor);
     }

@@ -71,7 +71,11 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     try {
       await TheavThemeService().saveTheme(themeToSave, saveToCloud: true);
       if (mounted) {
-        context.read<ThemeProvider>().setActiveTheme(themeToSave);
+        final savedTheme = TheavThemeService().getAllThemes().firstWhere(
+          (t) => t.id == themeToSave.id,
+          orElse: () => themeToSave,
+        );
+        context.read<ThemeProvider>().setActiveTheme(savedTheme);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Тема сохранена и применена!')),
         );

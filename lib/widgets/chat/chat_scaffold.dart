@@ -190,13 +190,16 @@ class ChatScaffold extends StatelessWidget {
 
       Widget content;
       if (wp.type == 'image') {
-        final imgPath = wp.imagePath ?? context.watch<WallpaperProvider?>()?.wallpaperPath;
-        if (imgPath != null && imgPath.isNotEmpty && File(imgPath).existsSync()) {
-          Widget img = Image.file(
-            File(imgPath),
+        final imgProvider = wp.getImageProvider(
+          fallbackPath: context.watch<WallpaperProvider?>()?.wallpaperPath,
+        );
+        if (imgProvider != null) {
+          Widget img = Image(
+            image: imgProvider,
             fit: BoxFit.cover,
             width: double.infinity,
             height: double.infinity,
+            errorBuilder: (context, error, stackTrace) => baseBackground,
           );
           if (wp.blurRadius > 0) {
             img = ImageFiltered(

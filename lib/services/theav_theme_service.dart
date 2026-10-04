@@ -438,11 +438,42 @@ class TheavThemeService extends ChangeNotifier {
             map[t.id] = t;
           }
           for (final c in fetched) {
-            map[c.id] = c;
+            final existing = map[c.id];
+            TheavTheme toStore = c;
+            if (existing != null) {
+              // If local existing theme has an image file that exists on disk, keep imagePath
+              if (c.wallpaper.type == 'image' &&
+                  (c.wallpaper.imagePath == null || !File(c.wallpaper.imagePath!).existsSync()) &&
+                  existing.wallpaper.imagePath != null &&
+                  File(existing.wallpaper.imagePath!).existsSync()) {
+                toStore = c.copyWith(
+                  wallpaper: c.wallpaper.copyWith(imagePath: existing.wallpaper.imagePath),
+                );
+              }
+            }
+            map[c.id] = toStore;
+
+            // Trigger background download of cloud wallpaper image if needed
+            if (toStore.wallpaper.type == 'image' &&
+                (toStore.wallpaper.imageUrl != null && toStore.wallpaper.imageUrl!.isNotEmpty) &&
+                (toStore.wallpaper.imagePath == null || !File(toStore.wallpaper.imagePath!).existsSync())) {
+              _downloadCloudWallpaperIfNeeded(toStore);
+            }
           }
 
           _customThemes = map.values.toList();
           await _persistCustomThemes();
+
+          // Update active themes if they match synced cloud custom themes
+          final prefs = await SharedPreferences.getInstance();
+          if (_activeLightTheme != null && map.containsKey(_activeLightTheme!.id)) {
+            _activeLightTheme = map[_activeLightTheme!.id]!;
+            await prefs.setString(_keyActiveLightThemeJson, jsonEncode(_activeLightTheme!.toJson()));
+          }
+          if (_activeDarkTheme != null && map.containsKey(_activeDarkTheme!.id)) {
+            _activeDarkTheme = map[_activeDarkTheme!.id]!;
+            await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(_activeDarkTheme!.toJson()));
+          }
         }
       }
     } catch (e) {
@@ -453,28 +484,128 @@ class TheavThemeService extends ChangeNotifier {
     }
   }
 
+  /// Download cloud wallpaper image to local storage for offline use
+  Future<void> _downloadCloudWallpaperIfNeeded(TheavTheme theme) async {
+    if (theme.wallpaper.type != 'image' || theme.wallpaper.imageUrl == null) return;
+    final url = theme.wallpaper.imageUrl!;
+    if (url.isEmpty) return;
+
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final wallpaperDir = Directory('${appDir.path}/wallpapers');
+      if (!await wallpaperDir.exists()) {
+        await wallpaperDir.create(recursive: true);
+      }
+      final sanitizedId = theme.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final targetFile = File('${wallpaperDir.path}/theme_wp_$sanitizedId.png');
+      if (await targetFile.exists() && await targetFile.length() > 0) {
+        _updateThemeWallpaperPath(theme.id, targetFile.path);
+        return;
+      }
+
+      Uint8List? bytes;
+      if (url.startsWith('data:')) {
+        final commaIdx = url.indexOf(',');
+        if (commaIdx != -1) {
+          bytes = base64Decode(url.substring(commaIdx + 1));
+        }
+      } else {
+        var fullUrl = url;
+        if (fullUrl.contains('storage.miptgram.ru')) {
+          fullUrl = fullUrl.replaceAll('storage.miptgram.ru', 'storage.theaver.app');
+        } else if (fullUrl.contains('miptgram.ru')) {
+          fullUrl = fullUrl.replaceAll('miptgram.ru', 'theaver.app');
+        }
+        if (fullUrl.startsWith('/')) {
+          fullUrl = '${AppConfig.baseUrl}$fullUrl';
+        }
+        final token = await AuthService.getToken();
+        final res = await http.get(
+          Uri.parse(fullUrl),
+          headers: token != null ? {'Authorization': 'Bearer $token'} : null,
+        );
+        if (res.statusCode == 200) {
+          bytes = res.bodyBytes;
+        }
+      }
+
+      if (bytes != null && bytes.isNotEmpty) {
+        await targetFile.writeAsBytes(bytes);
+        _updateThemeWallpaperPath(theme.id, targetFile.path);
+      }
+    } catch (e) {
+      debugPrint('TheavThemeService: Error downloading cloud wallpaper for theme ${theme.id}: $e');
+    }
+  }
+
+  void _updateThemeWallpaperPath(String themeId, String path) {
+    final idx = _customThemes.indexWhere((t) => t.id == themeId);
+    if (idx != -1) {
+      _customThemes[idx] = _customThemes[idx].copyWith(
+        wallpaper: _customThemes[idx].wallpaper.copyWith(imagePath: path),
+      );
+      _persistCustomThemes();
+    }
+    if (_activeLightTheme?.id == themeId) {
+      _activeLightTheme = _activeLightTheme!.copyWith(
+        wallpaper: _activeLightTheme!.wallpaper.copyWith(imagePath: path),
+      );
+    }
+    if (_activeDarkTheme?.id == themeId) {
+      _activeDarkTheme = _activeDarkTheme!.copyWith(
+        wallpaper: _activeDarkTheme!.wallpaper.copyWith(imagePath: path),
+      );
+    }
+    notifyListeners();
+  }
+
   /// Save or update a theme in account cloud and local list
   Future<bool> saveTheme(TheavTheme theme, {bool saveToCloud = true}) async {
-    _themeOverrides[theme.id] = theme;
+    var themeToSave = theme;
+
+    // If saving to cloud and wallpaper is a local image without a remote imageUrl, upload it
+    if (saveToCloud && themeToSave.wallpaper.type == 'image') {
+      final imgPath = themeToSave.wallpaper.imagePath;
+      if (imgPath != null &&
+          (themeToSave.wallpaper.imageUrl == null || themeToSave.wallpaper.imageUrl!.isEmpty)) {
+        final file = File(imgPath);
+        if (await file.exists()) {
+          try {
+            final uploadRes = await AuthService.uploadWallpaper(imgPath);
+            if (uploadRes['success'] == true && uploadRes['wallpaper_url'] != null) {
+              final serverUrl = uploadRes['wallpaper_url'] as String;
+              themeToSave = themeToSave.copyWith(
+                wallpaper: themeToSave.wallpaper.copyWith(imageUrl: serverUrl),
+              );
+              debugPrint('TheavThemeService: Uploaded theme wallpaper image to $serverUrl');
+            }
+          } catch (e) {
+            debugPrint('TheavThemeService: Error uploading theme wallpaper: $e');
+          }
+        }
+      }
+    }
+
+    _themeOverrides[themeToSave.id] = themeToSave;
     await _persistThemeOverrides();
 
     final prefs = await SharedPreferences.getInstance();
-    if (theme.id == _activeLightThemeId || (!theme.isDark && _activeLightTheme?.id == theme.id)) {
-      _activeLightTheme = theme;
-      await prefs.setString(_keyActiveLightThemeJson, jsonEncode(theme.toJson()));
+    if (themeToSave.id == _activeLightThemeId || (!themeToSave.isDark && _activeLightTheme?.id == themeToSave.id)) {
+      _activeLightTheme = themeToSave;
+      await prefs.setString(_keyActiveLightThemeJson, jsonEncode(themeToSave.toJson()));
     }
-    if (theme.id == _activeDarkThemeId || (theme.isDark && _activeDarkTheme?.id == theme.id)) {
-      _activeDarkTheme = theme;
-      await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(theme.toJson()));
+    if (themeToSave.id == _activeDarkThemeId || (themeToSave.isDark && _activeDarkTheme?.id == themeToSave.id)) {
+      _activeDarkTheme = themeToSave;
+      await prefs.setString(_keyActiveDarkThemeJson, jsonEncode(themeToSave.toJson()));
     }
 
     // 1. Update local custom themes list if custom theme
-    if (!theme.isBuiltIn) {
-      final idx = _customThemes.indexWhere((t) => t.id == theme.id);
+    if (!themeToSave.isBuiltIn) {
+      final idx = _customThemes.indexWhere((t) => t.id == themeToSave.id);
       if (idx != -1) {
-        _customThemes[idx] = theme.copyWith(isCloudSaved: saveToCloud || theme.isCloudSaved);
+        _customThemes[idx] = themeToSave.copyWith(isCloudSaved: saveToCloud || themeToSave.isCloudSaved);
       } else {
-        _customThemes.add(theme.copyWith(isCloudSaved: saveToCloud));
+        _customThemes.add(themeToSave.copyWith(isCloudSaved: saveToCloud));
       }
       await _persistCustomThemes();
     }
@@ -492,14 +623,14 @@ class TheavThemeService extends ChangeNotifier {
               'Content-Type': 'application/json',
             },
             body: jsonEncode({
-              'theme_id': theme.id,
-              'name': theme.name,
-              'is_dark': theme.isDark,
-              'theme_data': theme.toJson(),
+              'theme_id': themeToSave.id,
+              'name': themeToSave.name,
+              'is_dark': themeToSave.isDark,
+              'theme_data': themeToSave.toJson(),
             }),
           );
           if (res.statusCode == 200) {
-            debugPrint('TheavThemeService: Successfully saved theme ${theme.id} to cloud');
+            debugPrint('TheavThemeService: Successfully saved theme ${themeToSave.id} to cloud');
             return true;
           }
         }
@@ -562,11 +693,43 @@ class TheavThemeService extends ChangeNotifier {
     archive.addFile(ArchiveFile('theme.json', manifestBytes.length, manifestBytes));
 
     // 2. Custom wallpaper asset if present
-    if (theme.wallpaper.imagePath != null) {
+    if (theme.wallpaper.imagePath != null && await File(theme.wallpaper.imagePath!).exists()) {
       final file = File(theme.wallpaper.imagePath!);
-      if (await file.exists()) {
-        final imgBytes = await file.readAsBytes();
-        archive.addFile(ArchiveFile('wallpaper.png', imgBytes.length, imgBytes));
+      final imgBytes = await file.readAsBytes();
+      archive.addFile(ArchiveFile('wallpaper.png', imgBytes.length, imgBytes));
+    } else if (theme.wallpaper.imageUrl != null && theme.wallpaper.imageUrl!.isNotEmpty) {
+      try {
+        final url = theme.wallpaper.imageUrl!;
+        Uint8List? imgBytes;
+        if (url.startsWith('data:')) {
+          final commaIdx = url.indexOf(',');
+          if (commaIdx != -1) {
+            imgBytes = base64Decode(url.substring(commaIdx + 1));
+          }
+        } else {
+          var fullUrl = url;
+          if (fullUrl.contains('storage.miptgram.ru')) {
+            fullUrl = fullUrl.replaceAll('storage.miptgram.ru', 'storage.theaver.app');
+          } else if (fullUrl.contains('miptgram.ru')) {
+            fullUrl = fullUrl.replaceAll('miptgram.ru', 'theaver.app');
+          }
+          if (fullUrl.startsWith('/')) {
+            fullUrl = '${AppConfig.baseUrl}$fullUrl';
+          }
+          final token = await AuthService.getToken();
+          final res = await http.get(
+            Uri.parse(fullUrl),
+            headers: token != null ? {'Authorization': 'Bearer $token'} : null,
+          );
+          if (res.statusCode == 200) {
+            imgBytes = res.bodyBytes;
+          }
+        }
+        if (imgBytes != null && imgBytes.isNotEmpty) {
+          archive.addFile(ArchiveFile('wallpaper.png', imgBytes.length, imgBytes));
+        }
+      } catch (e) {
+        debugPrint('TheavThemeService: Error bundling remote wallpaper: $e');
       }
     } else if (theme.wallpaper.customSvgPath != null) {
       final file = File(theme.wallpaper.customSvgPath!);

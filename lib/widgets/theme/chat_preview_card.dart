@@ -251,12 +251,14 @@ class _ChatPreviewCardState extends State<ChatPreviewCard> {
 
     Widget content;
     if (wp.type == 'image') {
-      if (wp.imagePath != null && File(wp.imagePath!).existsSync()) {
-        Widget img = Image.file(
-          File(wp.imagePath!),
+      final imgProvider = wp.getImageProvider();
+      if (imgProvider != null) {
+        Widget img = Image(
+          image: imgProvider,
           fit: BoxFit.cover,
           width: double.infinity,
           height: double.infinity,
+          errorBuilder: (context, error, stackTrace) => baseBackground,
         );
         if (wp.blurRadius > 0) {
           img = ImageFiltered(

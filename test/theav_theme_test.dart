@@ -69,6 +69,47 @@ void main() {
       expect(fromJson.wallpaper.motionEnabled, true);
     });
 
+    test('TheavWallpaper image & imageUrl serialization roundtrip', () {
+      const wallpaper = TheavWallpaper(
+        type: 'image',
+        imagePath: '/local/test/path.png',
+        imageUrl: 'https://storage.theaver.app/wallpapers/user1/test.png',
+        blurRadius: 10.0,
+        dimming: 0.3,
+      );
+
+      final json = wallpaper.toJson();
+      expect(json['type'], 'image');
+      expect(json['imagePath'], '/local/test/path.png');
+      expect(json['imageUrl'], 'https://storage.theaver.app/wallpapers/user1/test.png');
+      expect(json['blurRadius'], 10.0);
+      expect(json['dimming'], 0.3);
+
+      final fromJson = TheavWallpaper.fromJson(json);
+      expect(fromJson.type, 'image');
+      expect(fromJson.imagePath, '/local/test/path.png');
+      expect(fromJson.imageUrl, 'https://storage.theaver.app/wallpapers/user1/test.png');
+      expect(fromJson.blurRadius, 10.0);
+      expect(fromJson.dimming, 0.3);
+      expect(fromJson.hasImage, true);
+    });
+
+    test('TheavWallpaper copyWith clearImageUrl', () {
+      const wallpaper = TheavWallpaper(
+        type: 'image',
+        imagePath: '/old/path.png',
+        imageUrl: 'https://storage.theaver.app/wallpapers/old.png',
+      );
+
+      final updated = wallpaper.copyWith(
+        imagePath: '/new/path.png',
+        clearImageUrl: true,
+      );
+
+      expect(updated.imagePath, '/new/path.png');
+      expect(updated.imageUrl, isNull);
+    });
+
     test('TheavTheme ZIP packaging roundtrip', () async {
       TestWidgetsFlutterBinding.ensureInitialized();
       final service = TheavThemeService();

@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../utils/image_utils.dart';
 
 /// Helper for parsing and formatting hex colors.
 class TheavColorUtils {
@@ -164,8 +168,11 @@ class TheavWallpaper {
   /// 4-point corner gradient configuration
   final FourCornerGradient? fourCornerGradient;
 
-  /// Path or URL to photo wallpaper
+  /// Path to local photo wallpaper file
   final String? imagePath;
+
+  /// Remote URL to photo wallpaper (cloud-synced)
+  final String? imageUrl;
 
   /// Image blur radius [0.0 - 30.0]
   final double blurRadius;
@@ -185,6 +192,7 @@ class TheavWallpaper {
     this.patternOpacity = 0.15,
     this.fourCornerGradient,
     this.imagePath,
+    this.imageUrl,
     this.blurRadius = 0.0,
     this.dimming = 0.0,
     this.motionEnabled = false,
@@ -199,6 +207,8 @@ class TheavWallpaper {
     double? patternOpacity,
     FourCornerGradient? fourCornerGradient,
     String? imagePath,
+    String? imageUrl,
+    bool clearImageUrl = false,
     double? blurRadius,
     double? dimming,
     bool? motionEnabled,
@@ -212,6 +222,7 @@ class TheavWallpaper {
       patternOpacity: patternOpacity ?? this.patternOpacity,
       fourCornerGradient: fourCornerGradient ?? this.fourCornerGradient,
       imagePath: imagePath ?? this.imagePath,
+      imageUrl: clearImageUrl ? null : (imageUrl ?? this.imageUrl),
       blurRadius: blurRadius ?? this.blurRadius,
       dimming: dimming ?? this.dimming,
       motionEnabled: motionEnabled ?? this.motionEnabled,
@@ -227,6 +238,7 @@ class TheavWallpaper {
         'patternOpacity': patternOpacity,
         if (fourCornerGradient != null) 'fourCornerGradient': fourCornerGradient!.toJson(),
         if (imagePath != null) 'imagePath': imagePath,
+        if (imageUrl != null) 'imageUrl': imageUrl,
         'blurRadius': blurRadius,
         'dimming': dimming,
         'motionEnabled': motionEnabled,
@@ -244,10 +256,44 @@ class TheavWallpaper {
           ? FourCornerGradient.fromJson(json['fourCornerGradient'] as Map<String, dynamic>)
           : null,
       imagePath: json['imagePath'],
+      imageUrl: json['imageUrl'],
       blurRadius: (json['blurRadius'] as num?)?.toDouble() ?? 0.0,
       dimming: (json['dimming'] as num?)?.toDouble() ?? 0.0,
       motionEnabled: json['motionEnabled'] == true,
     );
+  }
+
+  /// Whether wallpaper has a valid image source (local file or remote URL)
+  bool get hasImage {
+    if (type != 'image') return false;
+    if (imagePath != null && imagePath!.isNotEmpty && File(imagePath!).existsSync()) return true;
+    if (imageUrl != null && imageUrl!.isNotEmpty) return true;
+    return false;
+  }
+
+  /// Get ImageProvider for photo wallpaper, checking local file first, then fallback path, then remote cached URL.
+  ImageProvider? getImageProvider({String? fallbackPath}) {
+    if (imagePath != null && imagePath!.isNotEmpty && File(imagePath!).existsSync()) {
+      return FileImage(File(imagePath!));
+    }
+    if (fallbackPath != null && fallbackPath.isNotEmpty && File(fallbackPath).existsSync()) {
+      return FileImage(File(fallbackPath));
+    }
+    if (imageUrl != null && imageUrl!.isNotEmpty) {
+      if (imageUrl!.startsWith('data:')) {
+        try {
+          final commaIdx = imageUrl!.indexOf(',');
+          if (commaIdx != -1) {
+            return MemoryImage(base64Decode(imageUrl!.substring(commaIdx + 1)));
+          }
+        } catch (_) {}
+      }
+      final validUrl = getValidAvatarUrl(imageUrl);
+      if (validUrl != null && (validUrl.startsWith('http://') || validUrl.startsWith('https://'))) {
+        return CachedNetworkImageProvider(validUrl);
+      }
+    }
+    return null;
   }
 
   /// Helper to get asset path for built-in SVG patterns
