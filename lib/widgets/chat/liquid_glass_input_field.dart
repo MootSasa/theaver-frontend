@@ -12,7 +12,6 @@ import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
-import '../../theme/app_theme.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
 import '../message/spoiler_text_widget.dart';

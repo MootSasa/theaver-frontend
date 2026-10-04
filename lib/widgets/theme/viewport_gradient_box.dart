@@ -22,22 +22,114 @@ class ChatViewportScope extends InheritedWidget {
       scopeKey != oldWidget.scopeKey;
 }
 
-/// A RenderBox widget that renders a continuous, viewport-bound linear gradient
+/// A widget that renders a continuous, viewport-bound linear gradient
 /// behind its child clipped to the specified [borderRadius].
 ///
 /// When messages scroll inside a ListView, each bubble acts as a dynamic mask/window
-/// revealing its slice of the continuous full-screen gradient.
+/// revealing its slice of the continuous chat viewport gradient.
+///
+/// Automatically listens to the ancestor [ScrollPosition] to repaint on each scroll
+/// frame with zero layout overhead.
 ///
 /// Supports per-color transparency/alpha so wallpapers and pattern doodles
 /// underneath can shine through the bubble.
-class ViewportGradientBox extends SingleChildRenderObjectWidget {
+class ViewportGradientBox extends StatefulWidget {
   final List<Color>? gradientColors;
   final List<double>? gradientStops;
   final Color? solidColor;
   final BorderRadius borderRadius;
   final GlobalKey? viewportScopeKey;
+  final Widget child;
 
   const ViewportGradientBox({
+    Key? key,
+    required this.child,
+    this.gradientColors,
+    this.gradientStops,
+    this.solidColor,
+    this.borderRadius = BorderRadius.zero,
+    this.viewportScopeKey,
+  }) : super(key: key);
+
+  @override
+  State<ViewportGradientBox> createState() => _ViewportGradientBoxState();
+}
+
+class _ViewportGradientBoxState extends State<ViewportGradientBox> {
+  ScrollPosition? _scrollPosition;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateScrollListener();
+  }
+
+  @override
+  void didUpdateWidget(covariant ViewportGradientBox oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _updateScrollListener();
+  }
+
+  void _updateScrollListener() {
+    final bool hasGradient =
+        widget.gradientColors != null && widget.gradientColors!.length >= 2;
+    if (!hasGradient) {
+      if (_scrollPosition != null) {
+        _scrollPosition!.removeListener(_onScroll);
+        _scrollPosition = null;
+      }
+      return;
+    }
+
+    final newPosition = Scrollable.maybeOf(context)?.position;
+    if (_scrollPosition != newPosition) {
+      _scrollPosition?.removeListener(_onScroll);
+      _scrollPosition = newPosition;
+      _scrollPosition?.addListener(_onScroll);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollPosition?.removeListener(_onScroll);
+    _scrollPosition = null;
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final ro = context.findRenderObject();
+    if (ro != null && ro.attached) {
+      ro.markNeedsPaint();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveScopeKey =
+        widget.viewportScopeKey ?? ChatViewportScope.of(context);
+    final mediaQuerySize = MediaQuery.maybeSizeOf(context);
+
+    return _RawViewportGradientBox(
+      gradientColors: widget.gradientColors,
+      gradientStops: widget.gradientStops,
+      solidColor: widget.solidColor,
+      borderRadius: widget.borderRadius,
+      viewportScopeKey: effectiveScopeKey,
+      fallbackScreenSize: mediaQuerySize,
+      child: widget.child,
+    );
+  }
+}
+
+class _RawViewportGradientBox extends SingleChildRenderObjectWidget {
+  final List<Color>? gradientColors;
+  final List<double>? gradientStops;
+  final Color? solidColor;
+  final BorderRadius borderRadius;
+  final GlobalKey? viewportScopeKey;
+  final Size? fallbackScreenSize;
+
+  const _RawViewportGradientBox({
     Key? key,
     required Widget child,
     this.gradientColors,
@@ -45,20 +137,18 @@ class ViewportGradientBox extends SingleChildRenderObjectWidget {
     this.solidColor,
     this.borderRadius = BorderRadius.zero,
     this.viewportScopeKey,
+    this.fallbackScreenSize,
   }) : super(key: key, child: child);
 
   @override
   RenderViewportGradientBox createRenderObject(BuildContext context) {
-    final effectiveScopeKey = viewportScopeKey ?? ChatViewportScope.of(context);
-    final mediaQuerySize = MediaQuery.maybeSizeOf(context);
-
     return RenderViewportGradientBox(
       gradientColors: gradientColors,
       gradientStops: gradientStops,
       solidColor: solidColor,
       borderRadius: borderRadius,
-      viewportScopeKey: effectiveScopeKey,
-      fallbackScreenSize: mediaQuerySize,
+      viewportScopeKey: viewportScopeKey,
+      fallbackScreenSize: fallbackScreenSize,
     );
   }
 
@@ -67,16 +157,13 @@ class ViewportGradientBox extends SingleChildRenderObjectWidget {
     BuildContext context,
     RenderViewportGradientBox renderObject,
   ) {
-    final effectiveScopeKey = viewportScopeKey ?? ChatViewportScope.of(context);
-    final mediaQuerySize = MediaQuery.maybeSizeOf(context);
-
     renderObject
       ..gradientColors = gradientColors
       ..gradientStops = gradientStops
       ..solidColor = solidColor
       ..borderRadius = borderRadius
-      ..viewportScopeKey = effectiveScopeKey
-      ..fallbackScreenSize = mediaQuerySize;
+      ..viewportScopeKey = viewportScopeKey
+      ..fallbackScreenSize = fallbackScreenSize;
   }
 }
 
@@ -172,26 +259,61 @@ class RenderViewportGradientBox extends RenderProxyBox {
         bottomInCanvas = topInCanvas + scopeBox.size.height;
         centerXInCanvas = offset.dx - originInScope.dx + scopeBox.size.width * 0.5;
       } else {
-        // 2. Full-screen viewport binding
-        final globalPos = localToGlobal(Offset.zero);
+        // 2. Check if inside a scrolling viewport (ListView in chat screens)
+        final ancestorViewport = RenderAbstractViewport.maybeOf(this);
+        final RenderBox? viewportBox = ancestorViewport is RenderBox
+            ? (ancestorViewport as RenderBox)
+            : null;
 
-        double screenH = _fallbackScreenSize?.height ?? 0.0;
-        double screenW = _fallbackScreenSize?.width ?? 0.0;
+        if (viewportBox != null && viewportBox.attached && viewportBox.hasSize) {
+          final posInViewport = localToGlobal(Offset.zero, ancestor: viewportBox);
 
-        if (screenH <= 0.0 || screenW <= 0.0) {
-          try {
-            final view = WidgetsBinding.instance.platformDispatcher.views.first;
-            screenH = view.physicalSize.height / view.devicePixelRatio;
-            screenW = view.physicalSize.width / view.devicePixelRatio;
-          } catch (_) {
-            screenH = 800.0;
-            screenW = 390.0;
+          // Find sliver padding (topPadding / bottomPadding of chat list)
+          double topPadding = 0.0;
+          double bottomPadding = 0.0;
+          RenderObject? cur = parent;
+          while (cur != null && cur != viewportBox) {
+            if (cur is RenderSliverPadding) {
+              final insets = cur.resolvedPadding;
+              if (insets != null) {
+                topPadding = insets.top;
+                bottomPadding = insets.bottom;
+              }
+              break;
+            }
+            cur = cur.parent;
           }
-        }
 
-        topInCanvas = offset.dy - globalPos.dy;
-        bottomInCanvas = topInCanvas + screenH;
-        centerXInCanvas = offset.dx - globalPos.dx + screenW * 0.5;
+          final effectiveHeight = viewportBox.size.height - topPadding - bottomPadding;
+          final double gradientStartInViewport = topPadding;
+          final double gradientEndInViewport = (effectiveHeight > 100.0)
+              ? (viewportBox.size.height - bottomPadding)
+              : viewportBox.size.height;
+
+          topInCanvas = offset.dy - (posInViewport.dy - gradientStartInViewport);
+          bottomInCanvas = offset.dy + (gradientEndInViewport - posInViewport.dy);
+          centerXInCanvas = offset.dx - posInViewport.dx + viewportBox.size.width * 0.5;
+        } else {
+          // 3. Fallback: Full screen dimensions
+          final globalPos = localToGlobal(Offset.zero);
+          double screenH = _fallbackScreenSize?.height ?? 0.0;
+          double screenW = _fallbackScreenSize?.width ?? 0.0;
+
+          if (screenH <= 0.0 || screenW <= 0.0) {
+            try {
+              final view = WidgetsBinding.instance.platformDispatcher.views.first;
+              screenH = view.physicalSize.height / view.devicePixelRatio;
+              screenW = view.physicalSize.width / view.devicePixelRatio;
+            } catch (_) {
+              screenH = 800.0;
+              screenW = 390.0;
+            }
+          }
+
+          topInCanvas = offset.dy - globalPos.dy;
+          bottomInCanvas = topInCanvas + screenH;
+          centerXInCanvas = offset.dx - globalPos.dx + screenW * 0.5;
+        }
       }
 
       final shader = ui.Gradient.linear(
@@ -214,7 +336,6 @@ class RenderViewportGradientBox extends RenderProxyBox {
       canvas.drawRRect(rrect, paint);
     }
 
-    // Paint child content (text, timestamp, sender, icons) over the bubble background
     super.paint(context, offset);
   }
 }
