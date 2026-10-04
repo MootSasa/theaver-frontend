@@ -129,8 +129,8 @@ class _MainScreenState extends State<MainScreen>
     );
     _classicTopMenuAnimation = CurvedAnimation(
       parent: _classicTopMenuController,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeOutCubic,
+      curve: Curves.easeInOutCubic,
+      reverseCurve: Curves.easeInOutCubic,
     );
     _classicFolderMenuController = AnimationController(
       vsync: this,
@@ -139,8 +139,8 @@ class _MainScreenState extends State<MainScreen>
     );
     _classicFolderMenuAnimation = CurvedAnimation(
       parent: _classicFolderMenuController,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeOutCubic,
+      curve: Curves.easeInOutCubic,
+      reverseCurve: Curves.easeInOutCubic,
     );
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
