@@ -345,12 +345,6 @@ class AppTheme {
         color: p.divider,
         thickness: 0.5,
       ),
-      inputDecorationTheme: base.inputDecorationTheme.copyWith(
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: p.primary, width: 2),
-        ),
-      ),
       extensions: [
         TheavThemeExtension(
           palette: p,

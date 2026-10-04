@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import '../../models/name_color_preset.dart';
 import '../../models/theav_theme.dart';
 import '../../l10n/app_localizations.dart';
 import '../chat/chat_scaffold.dart';
@@ -125,7 +126,7 @@ class _ChatPreviewCardState extends State<ChatPreviewCard> {
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.bold,
-                                        color: palette.chatBubbleIncomingAuthor,
+                                        color: NameColorPresets.red.primaryColor,
                                       ),
                                     ),
                                   ),

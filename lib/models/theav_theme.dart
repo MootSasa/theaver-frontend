@@ -292,7 +292,6 @@ class TheavPalette {
   // Extended customizable colors
   final Color? _chatBubbleOutgoingLink;
   final Color? _chatBubbleIncomingLink;
-  final Color? _chatBubbleIncomingAuthor;
   final Color? _chatInputBackground;
   final Color? _chatInputText;
   final Color? _chatInputButtons;
@@ -305,7 +304,6 @@ class TheavPalette {
 
   Color get chatBubbleOutgoingLink => _chatBubbleOutgoingLink ?? chatBubbleOutgoingText;
   Color get chatBubbleIncomingLink => _chatBubbleIncomingLink ?? primary;
-  Color get chatBubbleIncomingAuthor => _chatBubbleIncomingAuthor ?? primary;
   Color get chatInputBackground => _chatInputBackground ?? surface;
   Color get chatInputText => _chatInputText ?? onSurface;
   Color get chatInputButtons => _chatInputButtons ?? onSurface.withValues(alpha: 0.6);
@@ -341,7 +339,6 @@ class TheavPalette {
     this.chatBubbleOutgoingGradient,
     Color? chatBubbleOutgoingLink,
     Color? chatBubbleIncomingLink,
-    Color? chatBubbleIncomingAuthor,
     Color? chatInputBackground,
     Color? chatInputText,
     Color? chatInputButtons,
@@ -353,7 +350,6 @@ class TheavPalette {
     Color? divider,
   })  : _chatBubbleOutgoingLink = chatBubbleOutgoingLink,
         _chatBubbleIncomingLink = chatBubbleIncomingLink,
-        _chatBubbleIncomingAuthor = chatBubbleIncomingAuthor,
         _chatInputBackground = chatInputBackground,
         _chatInputText = chatInputText,
         _chatInputButtons = chatInputButtons,
@@ -384,7 +380,6 @@ class TheavPalette {
     bool clearOutgoingGradient = false,
     Color? chatBubbleOutgoingLink,
     Color? chatBubbleIncomingLink,
-    Color? chatBubbleIncomingAuthor,
     Color? chatInputBackground,
     Color? chatInputText,
     Color? chatInputButtons,
@@ -416,7 +411,6 @@ class TheavPalette {
           : (chatBubbleOutgoingGradient ?? this.chatBubbleOutgoingGradient),
       chatBubbleOutgoingLink: chatBubbleOutgoingLink ?? _chatBubbleOutgoingLink,
       chatBubbleIncomingLink: chatBubbleIncomingLink ?? _chatBubbleIncomingLink,
-      chatBubbleIncomingAuthor: chatBubbleIncomingAuthor ?? _chatBubbleIncomingAuthor,
       chatInputBackground: chatInputBackground ?? _chatInputBackground,
       chatInputText: chatInputText ?? _chatInputText,
       chatInputButtons: chatInputButtons ?? _chatInputButtons,
@@ -452,8 +446,6 @@ class TheavPalette {
           'chatBubbleOutgoingLink': TheavColorUtils.toHex(_chatBubbleOutgoingLink!),
         if (_chatBubbleIncomingLink != null)
           'chatBubbleIncomingLink': TheavColorUtils.toHex(_chatBubbleIncomingLink!),
-        if (_chatBubbleIncomingAuthor != null)
-          'chatBubbleIncomingAuthor': TheavColorUtils.toHex(_chatBubbleIncomingAuthor!),
         if (_chatInputBackground != null)
           'chatInputBackground': TheavColorUtils.toHex(_chatInputBackground!),
         if (_chatInputText != null)
@@ -503,9 +495,6 @@ class TheavPalette {
           : null,
       chatBubbleIncomingLink: json['chatBubbleIncomingLink'] != null
           ? TheavColorUtils.fromHex(json['chatBubbleIncomingLink'])
-          : null,
-      chatBubbleIncomingAuthor: json['chatBubbleIncomingAuthor'] != null
-          ? TheavColorUtils.fromHex(json['chatBubbleIncomingAuthor'])
           : null,
       chatInputBackground: json['chatInputBackground'] != null
           ? TheavColorUtils.fromHex(json['chatInputBackground'])

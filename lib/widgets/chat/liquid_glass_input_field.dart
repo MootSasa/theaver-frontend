@@ -568,6 +568,11 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                     decoration: InputDecoration(
                       hintText: widget.hintText,
                       border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      errorBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                      focusedErrorBorder: InputBorder.none,
                       filled: false,
                       isDense: true,
                       contentPadding:

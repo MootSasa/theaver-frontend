@@ -332,13 +332,6 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 )),
           ),
           _buildColorTile(
-            title: 'Имя отправителя',
-            color: _currentTheme.palette.chatBubbleIncomingAuthor,
-            onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleIncomingAuthor: c),
-                )),
-          ),
-          _buildColorTile(
             title: 'Цвет ссылок в сообщении',
             color: _currentTheme.palette.chatBubbleIncomingLink,
             onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
