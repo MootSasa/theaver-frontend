@@ -13,8 +13,8 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/websocket_service.dart';
-import '../../services/wallpaper_provider.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/unread_separator.dart';
 import '../../widgets/message/message_bubble.dart';
@@ -157,7 +157,6 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
     final l10n = context.l10n;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final wallpaperPath = context.watch<WallpaperProvider>().wallpaperPath;
     final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
     final mediaQuery = MediaQuery.of(context);
 
@@ -169,118 +168,73 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
         : l10n.translate('system_notifications_title');
     final String chatSubtitle = l10n.translate('system_notifications_subtitle');
 
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: Stack(
-        children: [
-          // 1. Wallpaper background (exact match with PrivateChatScreen)
-          if (wallpaperPath != null)
-            Positioned.fill(
-              child: Image.file(
-                File(wallpaperPath),
-                fit: BoxFit.cover,
-              ),
-            )
-          else
-            Positioned.fill(
-              child: Container(
-                color: theme.scaffoldBackgroundColor,
-              ),
-            ),
+    return ChatScaffold(
+      appBar: FloatingGlassAppBar(
+        name: chatTitle,
+        isOnline: false,
+        titleWidget: _buildAppBarTitle(theme, chatTitle),
+        statusText: chatSubtitle,
+        avatarWidget: _buildServiceAvatar(theme),
+        isChannel: true,
+        onBack: () => Navigator.pop(context),
+        onTitleTap: () => _showChatInfoDialog(context, l10n),
+        onAvatarTap: () => _showChatInfoDialog(context, l10n),
+      ),
+      bottomBar: _buildBottomBar(glassEnabled, isDark, theme, l10n),
+      floatingActionButton: ScrollDownFab(
+        visible: _showScrollDownFab,
+        unreadCount: 0,
+        onPressed: () {
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        },
+      ),
+      body: ShaderMask(
+        shaderCallback: (Rect bounds) {
+          final statusBarHeight = mediaQuery.padding.top;
+          final appBarBottom = statusBarHeight + 54 + 8;
+          final fadeStart = appBarBottom + 20;
+          final fadeEnd = statusBarHeight;
 
-          // 2. Messages List with top shader fade under Floating AppBar
-          Positioned.fill(
-            child: ShaderMask(
-              shaderCallback: (Rect bounds) {
-                final statusBarHeight = mediaQuery.padding.top;
-                final appBarBottom = statusBarHeight + 54 + 8;
-                final fadeStart = appBarBottom + 20;
-                final fadeEnd = statusBarHeight;
-
-                return LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: const [
-                    Colors.transparent,
-                    Colors.transparent,
-                    Colors.black,
-                    Colors.black,
-                  ],
-                  stops: [
-                    0.0,
-                    (fadeEnd / bounds.height).clamp(0.0, 1.0),
-                    (fadeStart / bounds.height).clamp(0.0, 1.0),
-                    1.0,
-                  ],
-                ).createShader(bounds);
-              },
-              blendMode: BlendMode.dstIn,
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _messages.isEmpty
-                      ? _buildEmptyState(theme, l10n)
-                      : ListView.builder(
-                          controller: _scrollController,
-                          reverse: true,
-                          padding: EdgeInsets.only(
-                            top: topPadding,
-                            bottom: 74.0,
-                            left: 8.0,
-                            right: 8.0,
-                          ),
-                          itemCount: _messages.length,
-                          itemBuilder: (context, index) {
-                            return _buildMessageItem(index, theme, l10n);
-                          },
-                        ),
-            ),
-          ),
-
-          // 3. Scroll Down FAB button
-          Positioned(
-            right: 14,
-            bottom: 74,
-            child: ScrollDownFab(
-              visible: _showScrollDownFab,
-              unreadCount: 0,
-              onPressed: () {
-                _scrollController.animateTo(
-                  0,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOut,
-                );
-              },
-            ),
-          ),
-
-          // 4. Floating Cloud AppBar (used in BOTH glass and regular design,
-          // matching PrivateChatScreen exactly)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: FloatingGlassAppBar(
-              name: chatTitle,
-              isOnline: false,
-              titleWidget: _buildAppBarTitle(theme, chatTitle),
-              statusText: chatSubtitle,
-              avatarWidget: _buildServiceAvatar(theme),
-              isChannel: true,
-              onBack: () => Navigator.pop(context),
-              onTitleTap: () => _showChatInfoDialog(context, l10n),
-              onAvatarTap: () => _showChatInfoDialog(context, l10n),
-            ),
-          ),
-
-          // 5. Read-only bottom bar matching the exact slot, size, and styling
-          // of the input field in both glass and regular/matte design
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _buildBottomBar(glassEnabled, isDark, theme, l10n),
-          ),
-        ],
+          return LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: const [
+              Colors.transparent,
+              Colors.transparent,
+              Colors.black,
+              Colors.black,
+            ],
+            stops: [
+              0.0,
+              (fadeEnd / bounds.height).clamp(0.0, 1.0),
+              (fadeStart / bounds.height).clamp(0.0, 1.0),
+              1.0,
+            ],
+          ).createShader(bounds);
+        },
+        blendMode: BlendMode.dstIn,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _messages.isEmpty
+                ? _buildEmptyState(theme, l10n)
+                : ListView.builder(
+                    controller: _scrollController,
+                    reverse: true,
+                    padding: EdgeInsets.only(
+                      top: topPadding,
+                      bottom: 74.0,
+                      left: 8.0,
+                      right: 8.0,
+                    ),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      return _buildMessageItem(index, theme, l10n);
+                    },
+                  ),
       ),
     );
   }

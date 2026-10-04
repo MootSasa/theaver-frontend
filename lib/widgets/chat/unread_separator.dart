@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 
 /// Разделитель «↓ X непрочитанных сообщений» в чате
@@ -53,17 +54,28 @@ class DateSeparator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final badgeBg = themeExt?.palette.chatDateBadge ?? Colors.black.withValues(alpha: 0.2);
+    final badgeText = themeExt?.palette.chatDateBadgeText ?? Colors.white;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-      child: Row(
-        children: [
-          Expanded(child: Container(height: 1, color: Colors.grey.withValues(alpha: 0.2))),
-          const SizedBox(width: 8),
-          Text(dateLabel,
-              style: TextStyle(color: Colors.grey[500], fontSize: 12, fontWeight: FontWeight.w500)),
-          const SizedBox(width: 8),
-          Expanded(child: Container(height: 1, color: Colors.grey.withValues(alpha: 0.2))),
-        ],
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 3.5),
+          decoration: BoxDecoration(
+            color: badgeBg,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            dateLabel,
+            style: TextStyle(
+              color: badgeText,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -86,7 +98,10 @@ class ScrollDownFab extends StatelessWidget {
   Widget build(BuildContext context) {
     final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
+    final unreadBg = themeExt?.palette.unreadBadge ?? theme.colorScheme.primary;
+    final unreadText = themeExt?.palette.unreadBadgeText ?? Colors.white;
 
     final child = Stack(
       alignment: Alignment.center,
@@ -100,7 +115,7 @@ class ScrollDownFab extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: theme.colorScheme.primary,
+                color: unreadBg,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
@@ -113,8 +128,8 @@ class ScrollDownFab extends StatelessWidget {
               constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
               child: Text(
                 unreadCount > 99 ? '99+' : '$unreadCount',
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: unreadText,
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                 ),

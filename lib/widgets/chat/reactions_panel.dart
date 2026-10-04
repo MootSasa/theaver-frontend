@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../models/theav_theme.dart';
 import '../../utils/emoji_utils.dart';
 
 /// Панель реакций — появляется при длинном нажатии на сообщение.
@@ -207,8 +208,15 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
 
   Widget _buildBadge(_ReactionItemEntry item) {
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
     final colorScheme = theme.colorScheme;
     final isMine = item.isMine;
+
+    final activeBg = p?.reactionActiveBackground ?? colorScheme.primaryContainer;
+    final inactiveBg = p?.reactionInactiveBackground ?? colorScheme.surfaceContainerHighest;
+    final activeText = p?.reactionActiveText ?? colorScheme.primary;
+    final inactiveText = p?.subtext ?? (theme.brightness == Brightness.dark ? Colors.white60 : Colors.grey[600]!);
 
     return InkWell(
       onTap: () => widget.onTap?.call(item.emoji),
@@ -217,12 +225,10 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          color: isMine
-              ? colorScheme.primaryContainer
-              : colorScheme.surfaceContainerHighest,
+          color: isMine ? activeBg : inactiveBg,
           borderRadius: BorderRadius.circular(12),
           border: isMine
-              ? Border.all(color: colorScheme.primary, width: 1.2)
+              ? Border.all(color: activeText, width: 1.2)
               : null,
         ),
         child: Row(
@@ -241,7 +247,7 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: isMine ? colorScheme.primary : Colors.grey[600],
+                    color: isMine ? activeText : inactiveText,
                   ),
                 ),
               ),

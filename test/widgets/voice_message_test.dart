@@ -115,8 +115,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Play icon button
-      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      // Download icon button for uncached remote voice note
+      expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
       // Duration text 0:42
       expect(find.text('0:42'), findsOneWidget);
       // Time text 12:34
@@ -193,7 +193,7 @@ void main() {
 
       // VoiceMessageWidget should be found
       expect(find.byType(VoiceMessageWidget), findsOneWidget);
-      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_downward_rounded), findsOneWidget);
     });
 
     testWidgets('Renders voice message inside MessageBubble with waveform and duration', (tester) async {

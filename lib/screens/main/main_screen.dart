@@ -29,7 +29,7 @@ import '../../services/unread_count_provider.dart';
 import '../../screens/auth/login_screen.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/user/avatar_with_status.dart';
-import '../../widgets/chat/liquid_glass_filter_chips.dart';
+import '../../models/theav_theme.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/settings/settings_group.dart';
@@ -51,7 +51,8 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
+class _MainScreenState extends State<MainScreen>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   int _currentIndex = 1; // 0: Settings, 1: Chats, 2: Search
   int _activeFilter = 0; // 0: Все, 1: Личные, 2: Группы, 3: Каналы
 
@@ -74,12 +75,31 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // Top glass bar & morph context menu
   bool _isTopMenuOpen = false;
   bool _isTopMenuWide = false;
-  bool _isMorphing = false;
 
   // Central folder morph menu
   bool _isFolderMenuOpen = false;
   bool _isFolderMenuWide = false;
-  bool _isFolderMorphing = false;
+
+  // Animation controllers for Material mode top bar morphing
+  late final AnimationController _classicTopMenuController;
+  late final AnimationController _classicFolderMenuController;
+  late final CurvedAnimation _classicTopMenuAnimation;
+  late final CurvedAnimation _classicFolderMenuAnimation;
+  int _topMenuTabIndex = 1;
+
+  Timer? _morphSafetyTimer;
+
+  void _startMorphSafetyTimer() {
+    _morphSafetyTimer?.cancel();
+    _morphSafetyTimer = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) {
+        setState(() {
+          _isTopMenuWide = _isTopMenuOpen;
+          _isFolderMenuWide = _isFolderMenuOpen;
+        });
+      }
+    });
+  }
 
   // Search results
   List<SearchResultUser> _users = [];
@@ -102,6 +122,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _classicTopMenuController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
+    _classicTopMenuAnimation = CurvedAnimation(
+      parent: _classicTopMenuController,
+      curve: Curves.easeInOutCubic,
+      reverseCurve: Curves.easeInOutCubic,
+    );
+    _classicFolderMenuController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
+    _classicFolderMenuAnimation = CurvedAnimation(
+      parent: _classicFolderMenuController,
+      curve: Curves.easeInOutCubic,
+      reverseCurve: Curves.easeInOutCubic,
+    );
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
 
@@ -779,6 +819,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _classicTopMenuAnimation.dispose();
+    _classicFolderMenuAnimation.dispose();
+    _classicTopMenuController.dispose();
+    _classicFolderMenuController.dispose();
+    _morphSafetyTimer?.cancel();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
@@ -901,8 +946,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const iconoir.UserPlus(
-                color: Color(0xFF0088CC),
+              leading: iconoir.UserPlus(
+                color: Theme.of(context).colorScheme.primary,
                 width: 24,
                 height: 24,
               ),
@@ -918,8 +963,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: const iconoir.Group(
-                color: Color(0xFF0088CC),
+              leading: iconoir.Group(
+                color: Theme.of(context).colorScheme.primary,
                 width: 24,
                 height: 24,
               ),
@@ -934,8 +979,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               },
             ),
             ListTile(
-              leading: const iconoir.Megaphone(
-                color: Color(0xFF0088CC),
+              leading: iconoir.Megaphone(
+                color: Theme.of(context).colorScheme.primary,
                 width: 24,
                 height: 24,
               ),
@@ -959,23 +1004,27 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // ── Top Glass Bar & Morph Menu Logic ──────────────────────────────
 
   void _openTopMenu() {
-    if (_isMorphing || _isTopMenuOpen) return;
+    if (_isTopMenuOpen) return;
     if (_isFolderMenuOpen) {
       _closeFolderMenu();
     }
+    _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
+    _startMorphSafetyTimer();
+    _classicTopMenuController.forward();
     setState(() {
       _isTopMenuWide = true;
       _isTopMenuOpen = true;
-      _isMorphing = true;
     });
   }
 
   void _closeTopMenu() {
     if (!_isTopMenuOpen) return;
+    _startMorphSafetyTimer();
+    _classicTopMenuController.reverse();
     setState(() {
       _isTopMenuOpen = false;
-      _isMorphing = true;
+      _isTopMenuWide = false;
     });
   }
 
@@ -989,23 +1038,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   void _openFolderMenu() {
     if (_currentIndex != 1) return;
-    if (_isFolderMorphing || _isFolderMenuOpen) return;
+    if (_isFolderMenuOpen) return;
     if (_isTopMenuOpen) {
       _closeTopMenu();
     }
     HapticUtils.tap();
+    _startMorphSafetyTimer();
+    _classicFolderMenuController.forward();
     setState(() {
       _isFolderMenuWide = true;
       _isFolderMenuOpen = true;
-      _isFolderMorphing = true;
     });
   }
 
   void _closeFolderMenu() {
     if (!_isFolderMenuOpen) return;
+    _startMorphSafetyTimer();
+    _classicFolderMenuController.reverse();
     setState(() {
       _isFolderMenuOpen = false;
-      _isFolderMorphing = true;
+      _isFolderMenuWide = false;
     });
   }
 
@@ -1015,6 +1067,21 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     } else {
       _openFolderMenu();
     }
+  }
+
+  double _calculateTitleWidth(BuildContext context) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: _currentTitleText,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          letterSpacing: -0.2,
+        ),
+      ),
+      textDirection: Directionality.of(context),
+    )..layout();
+    return tp.width;
   }
 
   String get _currentTitleText {
@@ -1284,36 +1351,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _showClassicMenu(BuildContext context) {
-    final items = _getMenuItems(_currentIndex);
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: items
-              .map(
-                (item) => ListTile(
-                  leading: item.iconBuilder(
-                    item.color ??
-                        (Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white
-                            : const Color(0xFF1C1C1E)),
-                    24.0,
-                  ),
-                  title: Text(item.label, style: TextStyle(color: item.color)),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _handleMenuAction(item.id);
-                  },
-                ),
-              )
-              .toList(),
-        ),
-      ),
-    );
-  }
-
   Widget _buildTopGlassBar(
     BuildContext context,
     LiquidGlassProvider glassProvider,
@@ -1365,6 +1402,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       ),
     );
 
+    final double closedPillWidth =
+        math.max(130.0, _calculateTitleWidth(context) + 48.0);
+
     final double maxActiveMenuHeight = math.max(
       _isTopMenuWide ? menuHeight : 0,
       _isFolderMenuWide ? folderMenuHeight : 0,
@@ -1382,41 +1422,52 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             left: 0,
             right: 0,
             height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
-            child: LiquidGlassMorph(
+            child: Align(
               alignment: Alignment.topCenter,
-              motion: LiquidGlassMorphMotion.fluid,
-              smoothness: 28,
-              style: pillStyle,
-              onEnd: () {
-                if (_isFolderMenuWide != _isFolderMenuOpen) {
-                  setState(() => _isFolderMenuWide = _isFolderMenuOpen);
-                }
-                _isFolderMorphing = false;
-              },
-              child: _isFolderMenuOpen
-                  ? _FolderMorphMenu(
-                      key: const ValueKey<String>('folder_menu'),
-                      width: folderMenuWidth,
-                      activeFilter: _activeFilter,
-                      unreadCounts: [
-                        _getUnreadCountForFilter(0),
-                        _getUnreadCountForFilter(1),
-                        _getUnreadCountForFilter(2),
-                        _getUnreadCountForFilter(3),
-                      ],
-                      onSelectFolder: (index) {
-                        HapticUtils.selection();
-                        setState(() => _activeFilter = index);
-                        _closeFolderMenu();
-                      },
-                    )
-                  : _TitlePillContent(
-                      key: const ValueKey<String>('title_pill'),
-                      title: _currentTitleText,
-                      titleKey: _currentTitleKey,
-                      isConnected: _isTitleConnected,
-                      onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
-                    ),
+              child: SizedBox(
+                width: _isFolderMenuWide ? folderMenuWidth : closedPillWidth,
+                height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
+                child: LiquidGlassMorph(
+                  alignment: Alignment.topCenter,
+                  motion: LiquidGlassMorphMotion.plain,
+                  smoothness: 28,
+                  style: pillStyle,
+                  onEnd: () {
+                    _morphSafetyTimer?.cancel();
+                    if (mounted) {
+                      setState(() {
+                        if (_isFolderMenuWide != _isFolderMenuOpen) {
+                          _isFolderMenuWide = _isFolderMenuOpen;
+                        }
+                      });
+                    }
+                  },
+                  child: _isFolderMenuOpen
+                      ? _FolderMorphMenu(
+                          key: const ValueKey<String>('folder_menu'),
+                          width: folderMenuWidth,
+                          activeFilter: _activeFilter,
+                          unreadCounts: [
+                            _getUnreadCountForFilter(0),
+                            _getUnreadCountForFilter(1),
+                            _getUnreadCountForFilter(2),
+                            _getUnreadCountForFilter(3),
+                          ],
+                          onSelectFolder: (index) {
+                            HapticUtils.selection();
+                            setState(() => _activeFilter = index);
+                            _closeFolderMenu();
+                          },
+                        )
+                      : _TitlePillContent(
+                          key: const ValueKey<String>('title_pill'),
+                          title: _currentTitleText,
+                          titleKey: _currentTitleKey,
+                          isConnected: _isTitleConnected,
+                          onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+                        ),
+                ),
+              ),
             ),
           ),
 
@@ -1428,14 +1479,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             height: _isTopMenuWide ? menuHeight : ctrlSize,
             child: LiquidGlassMorph(
               alignment: Alignment.topRight,
-              motion: LiquidGlassMorphMotion.fluid,
+              motion: LiquidGlassMorphMotion.plain,
               smoothness: 28,
               style: morphStyle,
               onEnd: () {
-                if (_isTopMenuWide != _isTopMenuOpen) {
-                  setState(() => _isTopMenuWide = _isTopMenuOpen);
+                _morphSafetyTimer?.cancel();
+                if (mounted) {
+                  setState(() {
+                    if (_isTopMenuWide != _isTopMenuOpen) {
+                      _isTopMenuWide = _isTopMenuOpen;
+                    }
+                  });
                 }
-                _isMorphing = false;
               },
               child: _isTopMenuOpen
                   ? _TopMorphMenu(
@@ -1457,16 +1512,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildSelectModeBar(BuildContext context) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
     return Container(
       height: 44,
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF0088CC),
+        color: primaryColor,
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF0088CC).withValues(alpha: 0.35),
+            color: primaryColor.withValues(alpha: 0.35),
             blurRadius: 10,
             offset: const Offset(0, 3),
           ),
@@ -1509,112 +1565,249 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildClassicTopBar(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return SafeArea(
-      bottom: false,
-      child: SizedBox(
-        height: 52,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Center(
-              child: Container(
-                height: 38,
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? const Color(0xFF2C2C2E)
-                      : const Color(0xFFF2F2F7),
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                child: AnimatedSize(
-                  duration: const Duration(milliseconds: 320),
-                  curve: Curves.easeOutCubic,
-                  clipBehavior: Clip.none,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 280),
-                          transitionBuilder: (child, animation) {
-                            final inAnimation = Tween<Offset>(
-                              begin: const Offset(0.0, -1.0),
-                              end: Offset.zero,
-                            ).animate(CurvedAnimation(
-                              parent: animation,
-                              curve: Curves.easeOutCubic,
-                            ));
-                            final outAnimation = Tween<Offset>(
-                              begin: const Offset(0.0, 1.0),
-                              end: Offset.zero,
-                            ).animate(CurvedAnimation(
-                              parent: animation,
-                              curve: Curves.easeInCubic,
-                            ));
-                            final isIncoming =
-                                child.key == ValueKey<String>(_currentTitleKey);
-                            return ClipRect(
-                              child: SlideTransition(
-                                position: isIncoming ? inAnimation : outAnimation,
-                                child: FadeTransition(
-                                  opacity: animation,
-                                  child: child,
-                                ),
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
+    final isDark = theme.brightness == Brightness.dark;
+
+    final barBackgroundColor = p?.surface ??
+        (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+    final borderColor = p?.divider ??
+        (isDark
+            ? Colors.white.withValues(alpha: 0.1)
+            : Colors.black.withValues(alpha: 0.06));
+    final double baseShadowAlpha = isDark ? 0.35 : 0.08;
+
+    const double ctrlSize = 44.0;
+    const double menuWidth = 200.0;
+    final int menuTabIndex =
+        _classicTopMenuController.value > 0 ? _topMenuTabIndex : _currentIndex;
+    final double menuHeight = _getMenuHeight(menuTabIndex);
+    const double folderMenuWidth = 220.0;
+    const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
+
+    final double closedPillWidth =
+        math.max(130.0, _calculateTitleWidth(context) + 48.0);
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        _classicTopMenuAnimation,
+        _classicFolderMenuAnimation,
+      ]),
+      builder: (context, _) {
+        final double topProgress = _classicTopMenuAnimation.value;
+        final double folderProgress = _classicFolderMenuAnimation.value;
+
+        final double currentTopWidth =
+            ctrlSize + (menuWidth - ctrlSize) * topProgress;
+        final double currentTopHeight =
+            ctrlSize + (menuHeight - ctrlSize) * topProgress;
+
+        final double currentFolderWidth =
+            closedPillWidth + (folderMenuWidth - closedPillWidth) * folderProgress;
+        final double currentFolderHeight =
+            ctrlSize + (folderMenuHeight - ctrlSize) * folderProgress;
+
+        final double currentBarHeight = math.max(
+          ctrlSize + 4,
+          math.max(currentTopHeight, currentFolderHeight) + 8,
+        );
+
+        return SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: SizedBox(
+              width: double.infinity,
+              height: currentBarHeight,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Centered title pill / morph folder dropdown menu
+                  Positioned(
+                    top: 2,
+                    left: 0,
+                    right: 0,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Container(
+                        width: currentFolderWidth,
+                        height: currentFolderHeight,
+                        decoration: BoxDecoration(
+                          color: barBackgroundColor,
+                          borderRadius: BorderRadius.circular(22.0),
+                          border: Border.all(color: borderColor, width: 0.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(
+                                alpha: (baseShadowAlpha *
+                                        (0.6 + 0.4 * folderProgress))
+                                    .clamp(0.0, 1.0),
                               ),
-                            );
-                          },
-                          layoutBuilder: (currentChild, previousChildren) {
-                            return Stack(
-                              alignment: Alignment.center,
-                              clipBehavior: Clip.none,
-                              children: [
-                                ...previousChildren.map(
-                                  (w) => Positioned.fill(
-                                    child: Center(
-                                      child: OverflowBox(
-                                        minWidth: 0,
-                                        maxWidth: double.infinity,
-                                        minHeight: 0,
-                                        maxHeight: double.infinity,
-                                        child: w,
+                              blurRadius: 10 + 6 * folderProgress,
+                              offset: Offset(0, 3 + 3 * folderProgress),
+                            ),
+                          ],
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: Stack(
+                          clipBehavior: Clip.hardEdge,
+                          children: [
+                            // Folder menu items
+                            if (folderProgress > 0.01)
+                              Positioned(
+                                top: 0,
+                                left: (currentFolderWidth - folderMenuWidth) / 2,
+                                width: folderMenuWidth,
+                                height: folderMenuHeight,
+                                child: Opacity(
+                                  opacity: ((folderProgress - 0.15) / 0.85)
+                                      .clamp(0.0, 1.0),
+                                  child: Transform.translate(
+                                    offset:
+                                        Offset(0, -10.0 * (1.0 - folderProgress)),
+                                    child: IgnorePointer(
+                                      ignoring: folderProgress < 0.9,
+                                      child: _FolderMorphMenu(
+                                        key: const ValueKey<String>('folder_menu'),
+                                        width: folderMenuWidth,
+                                        activeFilter: _activeFilter,
+                                        unreadCounts: [
+                                          _getUnreadCountForFilter(0),
+                                          _getUnreadCountForFilter(1),
+                                          _getUnreadCountForFilter(2),
+                                          _getUnreadCountForFilter(3),
+                                        ],
+                                        onSelectFolder: (index) {
+                                          HapticUtils.selection();
+                                          setState(() => _activeFilter = index);
+                                          _closeFolderMenu();
+                                        },
                                       ),
                                     ),
                                   ),
                                 ),
-                                if (currentChild != null) currentChild,
-                              ],
-                            );
-                          },
-                          child: Text(
-                            _currentTitleText,
-                            key: ValueKey<String>(_currentTitleKey),
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w600,
-                              color: _isTitleConnected
-                                  ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
-                                  : Colors.grey,
-                            ),
-                          ),
+                              ),
+
+                            // Title pill content ("Theaver")
+                            if (folderProgress < 0.99)
+                              Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                height: ctrlSize,
+                                child: Opacity(
+                                  opacity: (1.0 - (folderProgress / 0.35))
+                                      .clamp(0.0, 1.0),
+                                  child: Transform.scale(
+                                    scale: 1.0 - 0.15 * folderProgress,
+                                    child: IgnorePointer(
+                                      ignoring: folderProgress > 0.1,
+                                      child: _TitlePillContent(
+                                        key: const ValueKey<String>('title_pill'),
+                                        title: _currentTitleText,
+                                        titleKey: _currentTitleKey,
+                                        isConnected: _isTitleConnected,
+                                        onTap: _currentIndex == 1
+                                            ? _toggleFolderMenu
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+
+                  // Persistent three dots button and morph context menu
+                  Positioned(
+                    top: 2,
+                    right: 16,
+                    child: Container(
+                      width: currentTopWidth,
+                      height: currentTopHeight,
+                      decoration: BoxDecoration(
+                        color: barBackgroundColor,
+                        borderRadius: BorderRadius.circular(22.0),
+                        border: Border.all(color: borderColor, width: 0.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha:
+                                  (baseShadowAlpha * (0.6 + 0.4 * topProgress))
+                                      .clamp(0.0, 1.0),
+                            ),
+                            blurRadius: 10 + 6 * topProgress,
+                            offset: Offset(0, 3 + 3 * topProgress),
+                          ),
+                        ],
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Stack(
+                        clipBehavior: Clip.hardEdge,
+                        children: [
+                          // Menu items
+                          if (topProgress > 0.01)
+                            Positioned(
+                              top: 0,
+                              right: 0,
+                              width: menuWidth,
+                              height: menuHeight,
+                              child: Opacity(
+                                opacity: ((topProgress - 0.15) / 0.85)
+                                    .clamp(0.0, 1.0),
+                                child: Transform.translate(
+                                  offset:
+                                      Offset(0, -10.0 * (1.0 - topProgress)),
+                                  child: IgnorePointer(
+                                    ignoring: topProgress < 0.9,
+                                    child: _TopMorphMenu(
+                                      key: const ValueKey<String>('menu'),
+                                      width: menuWidth,
+                                      items: _getMenuItems(menuTabIndex),
+                                      onItemTap: _handleMenuAction,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                          // Three dots glyph
+                          if (topProgress < 0.99)
+                            Positioned(
+                              top: 0,
+                              right: 0,
+                              width: ctrlSize,
+                              height: ctrlSize,
+                              child: Opacity(
+                                opacity: (1.0 - (topProgress / 0.35))
+                                    .clamp(0.0, 1.0),
+                                child: Transform.scale(
+                                  scale: 1.0 - 0.2 * topProgress,
+                                  child: IgnorePointer(
+                                    ignoring: topProgress > 0.1,
+                                    child: _ThreeDotsGlyph(
+                                      key: const ValueKey<String>('glyph'),
+                                      size: ctrlSize,
+                                      onTap: _toggleTopMenu,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            Positioned(
-              right: 16,
-              child: IconButton(
-                icon: const iconoir.MoreVert(width: 24, height: 24),
-                onPressed: () => _showClassicMenu(context),
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -1751,7 +1944,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       leadingWidget = Checkbox(
         value: isSelected,
         onChanged: (_) => _toggleChatSelection(chat.id),
-        activeColor: const Color(0xFF0088CC),
+        activeColor: Theme.of(context).colorScheme.primary,
       );
     } else {
       leadingWidget = Stack(
@@ -1765,7 +1958,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             )
           else
             CircleAvatar(
-              backgroundColor: const Color(0xFF0088CC),
+              backgroundColor: Theme.of(context).colorScheme.primary,
               backgroundImage:
                   chat.avatarUrl != null && chat.avatarUrl!.isNotEmpty
                       ? avatarImageProvider(chat.avatarUrl)
@@ -1802,7 +1995,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     return Container(
       color:
-          isSelected ? const Color(0xFF0088CC).withValues(alpha: 0.08) : null,
+          isSelected ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.08) : null,
       child: ListTile(
         onLongPress: () {
           HapticUtils.impact();
@@ -1855,7 +2048,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   ),
                   if (chat.chatType == 'system') ...[
                     const SizedBox(width: 4),
-                    const iconoir.CheckCircle(width: 16, height: 16, color: Color(0xFF0088CC)),
+                    iconoir.CheckCircle(width: 16, height: 16, color: Theme.of(context).colorScheme.primary),
                   ],
                 ],
               ),
@@ -1865,7 +2058,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         subtitle: _buildChatSubtitle(chat, hasUnread),
         trailing: _isSelectMode
             ? (isSelected
-                ? const iconoir.CheckCircle(color: Color(0xFF0088CC), width: 22, height: 22)
+                ? iconoir.CheckCircle(color: Theme.of(context).colorScheme.primary, width: 22, height: 22)
                 : iconoir.Circle(color: Colors.grey[400], width: 22, height: 22))
             : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -2040,8 +2233,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             if (!hasSavedChat || selectedChats.length > 1)
               ListTile(
                 leading: allPinned
-                    ? const iconoir.PinSlash(color: Color(0xFF0088CC), width: 22, height: 22)
-                    : const iconoir.Pin(color: Color(0xFF0088CC), width: 22, height: 22),
+                    ? iconoir.PinSlash(color: Theme.of(context).colorScheme.primary, width: 22, height: 22)
+                    : iconoir.Pin(color: Theme.of(context).colorScheme.primary, width: 22, height: 22),
                 title: Text(allPinned ? 'Открепить чаты' : 'Закрепить чаты'),
                 onTap: () {
                   Navigator.pop(context);
@@ -2051,7 +2244,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             // Mark as read
             if (anyUnread)
               ListTile(
-                leading: const iconoir.DoubleCheck(color: Color(0xFF0088CC), width: 22, height: 22),
+                leading: iconoir.DoubleCheck(color: Theme.of(context).colorScheme.primary, width: 22, height: 22),
                 title: const Text('Отметить как прочитанные'),
                 onTap: () {
                   Navigator.pop(context);
@@ -2405,123 +2598,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     // Страница 1: Чаты
                     RepaintBoundary(
                       child: _KeepAlivePage(
-                        child: Consumer<LiquidGlassProvider>(
-                          builder: (context, glassProvider, _) {
-                            final glassEnabled = glassProvider.enabled;
-                            final filters = [
-                              l10n.translate('filter_all'),
-                              l10n.translate('filter_personal'),
-                              l10n.translate('filter_groups'),
-                              l10n.translate('filter_channels'),
-                            ];
-                            final unreadCounts = [
-                              _getUnreadCountForFilter(0),
-                              _getUnreadCountForFilter(1),
-                              _getUnreadCountForFilter(2),
-                              _getUnreadCountForFilter(3),
-                            ];
-                            // === Glass-режим ===
-                            // Фильтры выбираются через центральный выпадающий LiquidGlassMorph
-                            if (glassEnabled) {
-                              final statusBarHeight =
-                                   MediaQuery.of(context).padding.top;
-                              final topBarHeight = statusBarHeight + 52.0;
-                              return _buildChatList(
-                                topPadding: topBarHeight + 8.0,
-                              );
-                            }
-
-                            // === Classic-режим ===
-                            return SafeArea(
-                              child: Column(
-                                children: [
-                                  // Top bar
-                                  if (_isSelectMode)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 8),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF0088CC),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: const Color(0xFF0088CC)
-                                                .withValues(alpha: 0.3),
-                                            blurRadius: 8,
-                                            offset: const Offset(0, 2),
-                                          ),
-                                        ],
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          IconButton(
-                                            icon: const iconoir.Xmark(
-                                                color: Colors.white,
-                                                width: 22,
-                                                height: 22),
-                                            onPressed: _exitSelectMode,
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            'Выбрано: ${_selectedChatIds.length}',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const Spacer(),
-                                          IconButton(
-                                            icon: const iconoir.ListSelect(
-                                                color: Colors.white,
-                                                width: 22,
-                                                height: 22),
-                                            tooltip: 'Выбрать все',
-                                            onPressed: _selectAllChats,
-                                          ),
-                                          IconButton(
-                                            icon: const iconoir.MoreVert(
-                                                color: Colors.white,
-                                                width: 22,
-                                                height: 22),
-                                            onPressed:
-                                                _showSelectedChatsMenu,
-                                          ),
-                                        ],
-                                      ),
-                                    )
-                                  else
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 8),
-                                      child: Center(
-                                        child: Text(
-                                          _isWsConnected
-                                              ? l10n.translate('app_title')
-                                              : 'соединение',
-                                          style: TextStyle(
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.bold,
-                                            color: _isWsConnected
-                                                ? Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurface
-                                                : Colors.grey,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  // Filter chips + Chat list
-                                  LiquidGlassFilterChips(
-                                    enabled: false,
-                                    filters: filters,
-                                    activeFilter: _activeFilter,
-                                    onFilterSelected: (i) =>
-                                        setState(() => _activeFilter = i),
-                                    unreadCounts: unreadCounts,
-                                  ),
-                                  Expanded(child: _buildChatList()),
-                                ],
-                              ),
+                        child: Builder(
+                          builder: (context) {
+                            final statusBarHeight =
+                                MediaQuery.of(context).padding.top;
+                            final topBarHeight = statusBarHeight + 52.0;
+                            return _buildChatList(
+                              topPadding: topBarHeight + 8.0,
                             );
                           },
                         ),
@@ -2725,7 +2808,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   itemPadding: 3,
                   style: barStyle,
                   itemStyle: LiquidGlassTabItemStyle(
-                    selectedColor: const Color(0xFF0088CC),
+                    selectedColor: Theme.of(context).colorScheme.primary,
                     unselectedColor: isDark
                         ? const Color(0xFF8E8E93)
                         : const Color(0xFF636366),
@@ -2789,6 +2872,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               body: Stack(
                 children: [
                   Positioned.fill(child: pageView),
+                  if (_isTopMenuOpen || _isFolderMenuOpen)
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          if (_isTopMenuOpen) _closeTopMenu();
+                          if (_isFolderMenuOpen) _closeFolderMenu();
+                        },
+                      ),
+                    ),
                   Positioned(
                     top: 0,
                     left: 0,
@@ -2809,7 +2902,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           _onTabTapped(index);
                         },
                         onAddTap: _showCreateMenu,
-                        bottomPadding: 8,
+                        bottomPadding: 12,
                       ),
                     ),
                   ),
@@ -3145,20 +3238,35 @@ class _TopMorphMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double totalHeight = items.length * 44.0 + 12.0;
     return SizedBox(
       width: width,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < items.length; i++)
-              _MorphMenuRow(
-                key: ValueKey(items[i].id),
-                item: items[i],
-                onTap: () => onItemTap(items[i].id),
+      height: totalHeight,
+      child: OverflowBox(
+        minWidth: width,
+        maxWidth: width,
+        minHeight: 0,
+        maxHeight: totalHeight,
+        alignment: Alignment.topCenter,
+        child: Material(
+          color: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6.0),
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < items.length; i++)
+                    _MorphMenuRow(
+                      key: ValueKey(items[i].id),
+                      item: items[i],
+                      onTap: () => onItemTap(items[i].id),
+                    ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
       ),
     );
@@ -3367,24 +3475,39 @@ class _FolderMorphMenu extends StatelessWidget {
       ),
     ];
 
+    const double totalHeight = 4 * 44.0 + 12.0; // 188.0
     return SizedBox(
       width: width,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < folderItems.length; i++)
-              _FolderMenuRow(
-                key: ValueKey('folder_${folderItems[i].index}'),
-                item: folderItems[i],
-                isSelected: activeFilter == folderItems[i].index,
-                unreadCount: folderItems[i].index < unreadCounts.length
-                    ? unreadCounts[folderItems[i].index]
-                    : 0,
-                onTap: () => onSelectFolder(folderItems[i].index),
+      height: totalHeight,
+      child: OverflowBox(
+        minWidth: width,
+        maxWidth: width,
+        minHeight: 0,
+        maxHeight: totalHeight,
+        alignment: Alignment.topCenter,
+        child: Material(
+          color: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6.0),
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < folderItems.length; i++)
+                    _FolderMenuRow(
+                      key: ValueKey('folder_${folderItems[i].index}'),
+                      item: folderItems[i],
+                      isSelected: activeFilter == folderItems[i].index,
+                      unreadCount: folderItems[i].index < unreadCounts.length
+                          ? unreadCounts[folderItems[i].index]
+                          : 0,
+                      onTap: () => onSelectFolder(folderItems[i].index),
+                    ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
       ),
     );
@@ -3421,7 +3544,7 @@ class _FolderMenuRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final defaultColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    const accentColor = Color(0xFF0088CC);
+    final accentColor = Theme.of(context).colorScheme.primary;
     final itemColor = isSelected ? accentColor : defaultColor;
 
     return GestureDetector(
@@ -3477,7 +3600,7 @@ class _FolderMenuRow extends StatelessWidget {
                 const SizedBox(width: 8.0),
               ],
               if (isSelected)
-                const iconoir.Check(width: 18.0, height: 18.0, color: accentColor)
+                iconoir.Check(width: 18.0, height: 18.0, color: accentColor)
               else
                 const SizedBox(width: 18.0),
             ],

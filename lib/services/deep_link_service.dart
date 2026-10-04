@@ -11,6 +11,7 @@ import '../widgets/profile/user_profile_popup.dart';
 import '../screens/chat/private_chat_screen.dart';
 import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/channel_screen.dart';
+import '../screens/settings/theme_preview_screen.dart';
 import '../utils/swipe_back_route.dart';
 
 /// Supported types of deep links
@@ -18,6 +19,7 @@ enum DeepLinkType {
   userProfile,
   groupInvite,
   channel,
+  addTheme,
 }
 
 /// Parsed deep link metadata
@@ -99,6 +101,9 @@ class DeepLinkService {
       } else if (host == 'c' || host == 'channel') {
         final name = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : uri.queryParameters['name'];
         if (name != null && name.isNotEmpty) return ParsedDeepLink(DeepLinkType.channel, name);
+      } else if (host == 'addtheme' || host == 'theme') {
+        final code = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : uri.queryParameters['code'];
+        if (code != null && code.isNotEmpty) return ParsedDeepLink(DeepLinkType.addTheme, code);
       }
     }
 
@@ -121,6 +126,10 @@ class DeepLinkService {
     if ((first == 'c' || first == 'channel') && segments.length >= 2) {
       final name = segments[1].trim();
       if (name.isNotEmpty) return ParsedDeepLink(DeepLinkType.channel, name);
+    }
+    if ((first == 'addtheme' || first == 'theme') && segments.length >= 2) {
+      final code = segments[1].trim();
+      if (code.isNotEmpty) return ParsedDeepLink(DeepLinkType.addTheme, code);
     }
 
     return null;
@@ -146,7 +155,24 @@ class DeepLinkService {
       case DeepLinkType.channel:
         await _handleChannel(parsed.identifier);
         break;
+      case DeepLinkType.addTheme:
+        await _handleThemeLink(parsed.identifier);
+        break;
     }
+  }
+
+  /// Handles theme preview deep link (`/addtheme/{code}`).
+  Future<void> _handleThemeLink(String code) async {
+    final context = navigatorKey.currentContext;
+    if (context == null) {
+      debugPrint('DeepLink: no navigator context for theme preview');
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ThemePreviewScreen(themeCode: code),
+      ),
+    );
   }
 
   /// Handles user profile deep link (`/u/{userId}`).

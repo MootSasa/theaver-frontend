@@ -1,11 +1,18 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:inspire_blur/inspire_blur.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/wallpaper_provider.dart';
+import '../theme/four_corner_gradient.dart';
+import '../theme/motion_wallpaper_wrapper.dart';
+import '../theme/tiled_wallpaper_pattern.dart';
+
+export '../theme/tiled_wallpaper_pattern.dart';
 
 /// Unified scaffold for all chat screens (private chat, group chat, channel).
 /// Supports custom wallpapers, floating glass AppBar, bottom input bars,
@@ -160,14 +167,120 @@ class ChatScaffold extends StatelessWidget {
       return customBackground!;
     }
 
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final wp = themeExt?.wallpaper;
+
+    if (wp != null) {
+      // 1. Base 4-corner gradient or background color
+      Widget baseBackground;
+      if (wp.fourCornerGradient != null) {
+        final grad = wp.fourCornerGradient!;
+        baseBackground = CustomPaint(
+          painter: FourCornerGradientPainter(
+            topLeft: grad.topLeft,
+            topRight: grad.topRight,
+            bottomLeft: grad.bottomLeft,
+            bottomRight: grad.bottomRight,
+          ),
+          child: const SizedBox.expand(),
+        );
+      } else {
+        baseBackground = Container(color: wp.backgroundColor);
+      }
+
+      Widget content;
+      if (wp.type == 'image') {
+        final imgProvider = wp.getImageProvider(
+          fallbackPath: context.watch<WallpaperProvider?>()?.wallpaperPath,
+        );
+        if (imgProvider != null) {
+          Widget img = Image(
+            image: imgProvider,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            errorBuilder: (context, error, stackTrace) => baseBackground,
+          );
+          if (wp.blurRadius > 0) {
+            img = ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(
+                sigmaX: wp.blurRadius,
+                sigmaY: wp.blurRadius,
+              ),
+              child: img,
+            );
+          }
+          content = Stack(
+            fit: StackFit.expand,
+            children: [
+              img,
+              if (wp.dimming > 0)
+                Container(
+                  color: Colors.black.withValues(alpha: wp.dimming),
+                ),
+            ],
+          );
+        } else {
+          content = baseBackground;
+        }
+      } else {
+        // Pattern over 4-corner gradient
+        final svgPath = wp.assetSvgPath;
+        Widget patternWidget = const SizedBox.shrink();
+
+        if (svgPath != null && wp.patternOpacity > 0) {
+          patternWidget = TiledWallpaperPattern(
+            assetPath: svgPath,
+            colorFilter: ColorFilter.mode(
+              wp.patternColor.withValues(alpha: wp.patternOpacity),
+              BlendMode.srcIn,
+            ),
+          );
+        } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
+          patternWidget = TiledWallpaperPattern(
+            filePath: wp.customSvgPath!,
+            colorFilter: ColorFilter.mode(
+              wp.patternColor.withValues(alpha: wp.patternOpacity),
+              BlendMode.srcIn,
+            ),
+          );
+        }
+
+        content = Stack(
+          fit: StackFit.expand,
+          children: [
+            baseBackground,
+            patternWidget,
+          ],
+        );
+      }
+
+      if (wp.motionEnabled) {
+        return Positioned.fill(
+          child: RepaintBoundary(
+            child: MotionWallpaperWrapper(
+              enabled: true,
+              child: content,
+            ),
+          ),
+        );
+      }
+
+      return Positioned.fill(
+        child: RepaintBoundary(child: content),
+      );
+    }
+
     final wallpaperPath = context.watch<WallpaperProvider?>()?.wallpaperPath;
     if (wallpaperPath != null && wallpaperPath.isNotEmpty) {
       final file = File(wallpaperPath);
       if (file.existsSync()) {
         return Positioned.fill(
-          child: Image.file(
-            file,
-            fit: BoxFit.cover,
+          child: RepaintBoundary(
+            child: Image.file(
+              file,
+              fit: BoxFit.cover,
+            ),
           ),
         );
       }
@@ -211,3 +324,4 @@ class ChatBottomScrollEdge extends StatelessWidget {
     );
   }
 }
+

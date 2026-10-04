@@ -6,6 +6,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/date_time_utils.dart';
@@ -428,7 +429,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   }
 
   Widget _buildBackButton(BuildContext context, bool isDark) {
-    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -450,10 +452,10 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   }
 
   Widget _buildCenterPillContent(BuildContext context, bool isDark, ThemeData theme) {
-    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final secondaryTextColor = isDark
-        ? Colors.white.withValues(alpha: 0.75)
-        : const Color(0xFF4A4A4C);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final secondaryTextColor = themeExt?.palette.subtext ??
+        (isDark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF4A4A4C));
 
     return GestureDetector(
       onTap: () {
@@ -485,7 +487,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                     avatarUrl: widget.avatarUrl,
                     name: widget.name,
                     radius: _kCenterAvatarRadius,
-                    isOnline: widget.isOnline,
+                    isOnline: false,
                   ),
             ),
             const SizedBox(width: 8.0),
@@ -560,15 +562,18 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   }
 
   Widget _buildMattePill({required bool isDark, required Widget child}) {
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final defaultBg = isDark
+        ? Colors.black.withValues(alpha: 0.65)
+        : Colors.white.withValues(alpha: 0.65);
+    final pillBg = themeExt?.palette.appBarBackground ?? defaultBg;
     return ClipRRect(
       borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
         child: Container(
           decoration: BoxDecoration(
-            color: isDark
-                ? Colors.black.withValues(alpha: 0.65)
-                : Colors.white.withValues(alpha: 0.65),
+            color: pillBg,
             borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
             border: Border.all(
               color: isDark ? Colors.white10 : Colors.black12,
@@ -603,8 +608,9 @@ class _RightPillContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
-    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
 
     final Widget content;
     if (!hasCall) {
@@ -915,11 +921,12 @@ class _AutoRefreshingLastSeenTextState
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final onlineColor = isDark ? const Color(0xFF4ADE80) : const Color(0xFF2E7D32);
-    final offlineColor = isDark
-        ? Colors.white.withValues(alpha: 0.75)
-        : const Color(0xFF4A4A4C);
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final isDark = theme.brightness == Brightness.dark;
+    final onlineColor = themeExt?.palette.onlineIndicator ?? (isDark ? const Color(0xFF4ADE80) : const Color(0xFF2E7D32));
+    final offlineColor = themeExt?.palette.subtext ??
+        (isDark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF4A4A4C));
 
     final status = _currentStatus.isNotEmpty
         ? _currentStatus

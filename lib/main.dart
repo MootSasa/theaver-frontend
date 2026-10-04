@@ -110,8 +110,8 @@ class TheaverApp extends StatelessWidget {
           return MaterialApp(
             title: 'Theaver',
             debugShowCheckedModeBanner: false,
-            theme: AppTheme.light(),
-            darkTheme: AppTheme.dark(),
+            theme: themeProvider.lightThemeData,
+            darkTheme: themeProvider.darkThemeData,
             themeMode: themeProvider.themeMode,
             locale: localeProvider.locale,
             supportedLocales: const [

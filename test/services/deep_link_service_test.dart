@@ -111,6 +111,27 @@ void main() {
       expect(channel.identifier, equals('hash_channel'));
     });
 
+    test('parses web production addtheme URLs', () {
+      final parsed = DeepLinkService.parseUri(Uri.parse('https://theaver.app/addtheme/cKQjOAcSGnlLUJMb'));
+      expect(parsed, isNotNull);
+      expect(parsed!.type, equals(DeepLinkType.addTheme));
+      expect(parsed.identifier, equals('cKQjOAcSGnlLUJMb'));
+    });
+
+    test('parses custom scheme theaver://addtheme URLs', () {
+      final parsed = DeepLinkService.parseUri(Uri.parse('theaver://addtheme/customTheme123'));
+      expect(parsed, isNotNull);
+      expect(parsed!.type, equals(DeepLinkType.addTheme));
+      expect(parsed.identifier, equals('customTheme123'));
+    });
+
+    test('parses web hash routing fragments for addtheme', () {
+      final parsed = DeepLinkService.parseUri(Uri.parse('http://localhost:3000/#/addtheme/hashTheme456'));
+      expect(parsed, isNotNull);
+      expect(parsed!.type, equals(DeepLinkType.addTheme));
+      expect(parsed.identifier, equals('hashTheme456'));
+    });
+
     test('returns null for unrecognized paths', () {
       final result = DeepLinkService.parseUri(Uri.parse('https://example.com/other/path'));
       expect(result, isNull);

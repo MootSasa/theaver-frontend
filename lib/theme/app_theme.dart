@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../animations/screen_transitions.dart';
+import '../models/theav_theme.dart';
 
 class AppTheme {
   // === Цвета бренда ===
@@ -233,6 +234,124 @@ class AppTheme {
         selectionColor: Color(0x597BE5DA),
         selectionHandleColor: Color(0xFF7BE5DA),
       ),
+    );
+  }
+
+  // === Dynamic TheavTheme application ===
+  static ThemeData fromTheavTheme(TheavTheme theme) {
+    final base = theme.isDark ? dark() : light();
+    final p = theme.palette;
+    final colorScheme = theme.isDark
+        ? ColorScheme.dark(
+            primary: p.primary,
+            secondary: p.primary,
+            surface: p.surface,
+            error: p.error,
+            onPrimary: p.onPrimary,
+            onSecondary: p.onPrimary,
+            onSurface: p.onSurface,
+            onError: Colors.white,
+          )
+        : ColorScheme.light(
+            primary: p.primary,
+            secondary: p.primary,
+            surface: p.surface,
+            error: p.error,
+            onPrimary: p.onPrimary,
+            onSecondary: p.onPrimary,
+            onSurface: p.onSurface,
+            onError: Colors.white,
+          );
+
+    return base.copyWith(
+      primaryColor: p.primary,
+      indicatorColor: p.primary,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: p.background,
+      cardColor: p.surface,
+      appBarTheme: base.appBarTheme.copyWith(
+        backgroundColor: p.appBarBackground,
+        foregroundColor: p.appBarForeground,
+        iconTheme: IconThemeData(color: p.appBarForeground),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: p.primary,
+        foregroundColor: p.onPrimary,
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return p.primary;
+          return Colors.grey;
+        }),
+        trackColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return p.primary.withValues(alpha: 0.4);
+          }
+          return Colors.grey.withValues(alpha: 0.3);
+        }),
+      ),
+      sliderTheme: base.sliderTheme.copyWith(
+        activeTrackColor: p.primary,
+        thumbColor: p.primary,
+        overlayColor: p.primary.withValues(alpha: 0.2),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return p.primary;
+          return null;
+        }),
+      ),
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return p.primary;
+          return null;
+        }),
+      ),
+      listTileTheme: base.listTileTheme.copyWith(
+        iconColor: p.primary,
+        textColor: p.onSurface,
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: p.primary,
+        circularTrackColor: p.primary.withValues(alpha: 0.2),
+      ),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: p.primary,
+        selectionColor: p.primary.withValues(alpha: 0.3),
+        selectionHandleColor: p.primary,
+      ),
+      tabBarTheme: base.tabBarTheme.copyWith(
+        indicatorColor: p.primary,
+        labelColor: p.primary,
+      ),
+      bottomNavigationBarTheme: base.bottomNavigationBarTheme.copyWith(
+        selectedItemColor: p.primary,
+      ),
+      navigationBarTheme: base.navigationBarTheme.copyWith(
+        indicatorColor: p.primary.withValues(alpha: 0.2),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: p.primary,
+          foregroundColor: p.onPrimary,
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: p.primary,
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+        color: p.divider,
+        thickness: 0.5,
+      ),
+      extensions: [
+        TheavThemeExtension(
+          palette: p,
+          wallpaper: theme.wallpaper,
+          bubbleRadius: theme.bubbleRadius,
+        ),
+      ],
     );
   }
 }

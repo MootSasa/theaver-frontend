@@ -3,6 +3,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
@@ -144,10 +145,12 @@ class MessageReplyInfo extends StatelessWidget {
       stripStyle = profileTheme.currentStripStyle;
     }
 
-    // Accent and vibrant opaque background color derived purely from preset via HSL
-    final accentColor = preset.primaryColor;
+    // Accent and vibrant opaque background color derived from preset and theme palette
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
+    final accentColor = isReplyingToMe ? (p?.chatReplyTitle ?? preset.primaryColor) : preset.primaryColor;
     final bgColor = preset.getOpaqueCardBackgroundColor(isDark);
-    const textColor = Color(0xFF1C2530);
+    final textColor = p?.chatReplyText ?? (isDark ? Colors.white70 : const Color(0xFF1C2530));
 
     // Determine preview text
     String previewText;
@@ -253,7 +256,7 @@ class MessageReplyInfo extends StatelessWidget {
                         RichText(
                           text: EmojiUtils.buildEmojiTextSpan(
                             previewText,
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: textColor,
                               fontSize: 12,
                               fontStyle: FontStyle.italic,
@@ -275,7 +278,7 @@ class MessageReplyInfo extends StatelessWidget {
                               child: RichText(
                                 text: EmojiUtils.buildEmojiTextSpan(
                                   previewText,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: textColor,
                                     fontSize: 12,
                                   ),

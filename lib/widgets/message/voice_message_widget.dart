@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../models/theav_theme.dart';
 import '../../services/voice_playback_service.dart';
 import '../../services/media_cache_manager.dart';
 import 'message_status_widget.dart';
@@ -277,14 +278,21 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
-    final primaryColor = theme.colorScheme.primary;
+    final primaryColor = themeExt?.palette.primary ?? theme.colorScheme.primary;
 
     // Outgoing bubble styling vs incoming bubble styling
-    final playedColor = widget.isMe ? Colors.white : primaryColor;
+    final playedColor = widget.isMe
+        ? (themeExt?.palette.chatBubbleOutgoingText ?? Colors.white)
+        : (themeExt?.palette.voiceWaveformActive ?? primaryColor);
     final unplayedColor = widget.isMe
-        ? Colors.white.withValues(alpha: 0.4)
-        : (isDark ? Colors.white24 : Colors.black26);
+        ? (themeExt?.palette.chatBubbleOutgoingSubtext ?? Colors.white.withValues(alpha: 0.4))
+        : (themeExt?.palette.voiceWaveformInactive ?? (isDark ? Colors.white24 : Colors.black26));
+
+    final btnColor = widget.isMe
+        ? (themeExt?.palette.chatBubbleOutgoingText ?? Colors.white)
+        : (themeExt?.palette.voicePlayButton ?? primaryColor);
 
     final duration = _effectiveDuration;
     final position = _effectivePosition;
@@ -317,11 +325,11 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
                   decoration: BoxDecoration(
                     color: widget.isMe
                         ? Colors.white.withValues(alpha: 0.22)
-                        : primaryColor.withValues(alpha: 0.15),
+                        : btnColor.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                   ),
                   child: Center(
-                    child: _buildButtonIcon(primaryColor),
+                    child: _buildButtonIcon(btnColor),
                   ),
                 ),
               ),
@@ -534,21 +542,37 @@ class _WaveformScrubberPainter extends CustomPainter {
     final playedPaint = Paint()
       ..color = playedColor
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = 2.4;
+      ..strokeWidth = 2.2;
 
     final unplayedPaint = Paint()
       ..color = unplayedColor
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = 2.4;
+      ..strokeWidth = 2.2;
 
-    final barCount = waveform.length;
-    final gap = size.width / barCount;
+    final maxVal = waveform.fold<int>(0, math.max);
+    final double normalizer = maxVal > 31 ? maxVal.toDouble() : 31.0;
+
+    // Telegram-style density: ~3.6px per bar (2.2px bar + ~1.4px spacing)
+    const double barStep = 3.6;
+    final int barCount = math.max(1, (size.width / barStep).floor());
+    final double gap = size.width / barCount;
     final centerY = size.height / 2;
     final progressX = progress * size.width;
 
     for (int i = 0; i < barCount; i++) {
       final x = (i * gap) + (gap / 2);
-      final heightRatio = (waveform[i] / 31.0).clamp(0.12, 1.0);
+      final double sample;
+      if (waveform.length == barCount) {
+        sample = waveform[i].toDouble();
+      } else {
+        final double srcPos = (i / (barCount - 1).clamp(1, barCount)) * (waveform.length - 1);
+        final int idx0 = srcPos.floor().clamp(0, waveform.length - 1);
+        final int idx1 = srcPos.ceil().clamp(0, waveform.length - 1);
+        final double t = srcPos - idx0;
+        sample = waveform[idx0] * (1.0 - t) + waveform[idx1] * t;
+      }
+
+      final heightRatio = (sample / normalizer).clamp(0.12, 1.0);
       final barHeight = math.max(3.0, heightRatio * size.height * 0.95);
 
       final paint = (x <= progressX) ? playedPaint : unplayedPaint;
