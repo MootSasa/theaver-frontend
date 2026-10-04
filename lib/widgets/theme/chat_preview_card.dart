@@ -32,7 +32,7 @@ class _ChatPreviewCardState extends State<ChatPreviewCard> {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = context.l10n;
+    final l10n = AppLocalizations.of(context);
     final theme = widget.theme;
     final palette = theme.palette;
     final wp = theme.wallpaper;
@@ -86,7 +86,7 @@ class _ChatPreviewCardState extends State<ChatPreviewCard> {
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Text(
-                                l10n.translate('date_today'),
+                                l10n?.translate('date_today') ?? 'Сегодня',
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,

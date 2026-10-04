@@ -333,11 +333,17 @@ class RenderViewportGradientBox extends RenderProxyBox {
           centerXInCanvas = offset.dx + size.width * 0.5;
         }
 
+        final int colorCount = _gradientColors!.length;
+        final List<double> effectiveStops =
+            (_gradientStops != null && _gradientStops!.length == colorCount)
+                ? _gradientStops!
+                : List<double>.generate(colorCount, (i) => i / (colorCount - 1));
+
         final shader = ui.Gradient.linear(
           Offset(centerXInCanvas, topInCanvas),
           Offset(centerXInCanvas, bottomInCanvas),
           _gradientColors!,
-          _gradientStops,
+          effectiveStops,
         );
 
         final paint = Paint()
