@@ -13,6 +13,7 @@ import '../../services/theav_theme_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/chat/chat_list_item.dart';
+import '../../widgets/chat/classic_bottom_bar.dart';
 import '../../widgets/chat/liquid_glass_filter_chips.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/message/message_bubble.dart';
@@ -400,6 +401,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                         senderName: 'Анна',
                         content: '',
                         messageType: 'voice',
+                        fileUrl: 'demo_voice.m4a',
                         duration: 15,
                         waveform: const [10, 18, 30, 50, 75, 90, 65, 45, 30, 20, 35, 60, 50, 25],
                         createdAt: '08:02',
@@ -520,24 +522,15 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                 padding: EdgeInsets.only(
                   top: statusBarHeight + 4,
                   bottom: 8,
-                  left: 6,
-                  right: 12,
+                  left: 16,
+                  right: 8,
                 ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: iconoir.NavArrowLeft(
-                        width: 22,
-                        height: 22,
-                        color: p.appBarForeground,
-                      ),
-                      onPressed: () {
-                        HapticUtils.tap();
-                        Navigator.of(context).pop();
-                      },
-                    ),
-                    Expanded(
-                      child: Center(
+                child: SizedBox(
+                  height: 44,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Center(
                         child: Container(
                           height: 38,
                           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -558,16 +551,19 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                           ),
                         ),
                       ),
-                    ),
-                    IconButton(
-                      icon: iconoir.MoreVert(
-                        width: 22,
-                        height: 22,
-                        color: p.appBarForeground,
+                      Positioned(
+                        right: 0,
+                        child: IconButton(
+                          icon: iconoir.MoreVert(
+                            width: 22,
+                            height: 22,
+                            color: p.appBarForeground,
+                          ),
+                          onPressed: () {},
+                        ),
                       ),
-                      onPressed: () {},
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
 
@@ -590,13 +586,25 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               Expanded(
                 child: ListView(
                   padding: EdgeInsets.only(
-                    bottom: 54.0 + MediaQuery.of(context).padding.bottom + 80.0,
+                    bottom: 54.0 + MediaQuery.of(context).padding.bottom + 70.0,
                   ),
                   children: [
                     ChatListItem(
+                      chatName: l10n.translate('chat_saved') != 'chat_saved'
+                          ? l10n.translate('chat_saved')
+                          : 'Избранное',
+                      lastMessage: 'Заметки, файлы и ссылки',
+                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 2)),
+                      avatarUrl: '',
+                      isOnline: false,
+                      isGroup: false,
+                      unreadCount: 0,
+                      onTap: () {},
+                    ),
+                    ChatListItem(
                       chatName: 'Theaver News',
                       lastMessage: 'Вышло обновление Theaver 1.0! Добавлена поддержка кастомных тем и ссылок.',
-                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 5)),
+                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 15)),
                       avatarUrl: '',
                       isOnline: true,
                       isGroup: false,
@@ -606,7 +614,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                     ChatListItem(
                       chatName: 'Анна',
                       lastMessage: 'Отправила тебе новые фото с прогулки 📸',
-                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 24)),
+                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 42)),
                       avatarUrl: '',
                       isOnline: true,
                       isGroup: false,
@@ -616,7 +624,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                     ChatListItem(
                       chatName: 'Дизайн и архитектура',
                       lastMessage: 'Обсуждение нового стиля интерфейса и палитры',
-                      lastMessageTime: DateTime.now().subtract(const Duration(hours: 2)),
+                      lastMessageTime: DateTime.now().subtract(const Duration(hours: 3)),
                       avatarUrl: '',
                       isOnline: false,
                       isGroup: true,
@@ -626,7 +634,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                     ChatListItem(
                       chatName: 'Алексей',
                       lastMessage: 'Привет! Посмотри эту новую тему, она супер',
-                      lastMessageTime: DateTime.now().subtract(const Duration(hours: 5)),
+                      lastMessageTime: DateTime.now().subtract(const Duration(hours: 6)),
                       avatarUrl: '',
                       isOnline: false,
                       isGroup: false,
@@ -650,18 +658,19 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
           ),
         ),
 
-        // Floating Action Button (Pencil FAB)
+        // Bottom Navigation Bar matching real main screen
         Positioned(
-          right: 16,
-          bottom: 54.0 + MediaQuery.of(context).padding.bottom + 16.0,
-          child: FloatingActionButton(
-            heroTag: 'theme_preview_fab',
-            backgroundColor: p.primary,
-            onPressed: () {},
-            child: iconoir.EditPencil(
-              width: 24,
-              height: 24,
-              color: p.onPrimary,
+          left: 0,
+          right: 0,
+          bottom: 54.0 + MediaQuery.of(context).padding.bottom + 4.0,
+          child: IgnorePointer(
+            child: ClassicBottomBar(
+              selectedIndex: 1, // 'Чаты' selected
+              onTabSelected: (_) {},
+              onAddTap: () {},
+              horizontalPadding: 16,
+              bottomPadding: 0,
+              barHeight: 56,
             ),
           ),
         ),
