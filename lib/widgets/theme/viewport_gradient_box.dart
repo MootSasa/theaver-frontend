@@ -243,15 +243,6 @@ class RenderViewportGradientBox extends RenderProxyBox {
       final bool hasValidGradient = _gradientColors != null && _gradientColors!.length >= 2;
 
       if (hasValidGradient) {
-        // If gradient has semi-transparency and solid background color is available, paint base first
-        final bool hasAlphaInGradient = _gradientColors!.any((c) => (c.a) < 0.99);
-        if (hasAlphaInGradient && _solidColor != null && _solidColor != Colors.transparent) {
-          final basePaint = Paint()
-            ..color = _solidColor!
-            ..isAntiAlias = true;
-          canvas.drawRRect(rrect, basePaint);
-        }
-
         double topInCanvas = offset.dy;
         double bottomInCanvas = offset.dy + size.height;
         double centerXInCanvas = offset.dx + size.width * 0.5;

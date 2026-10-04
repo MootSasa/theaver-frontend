@@ -164,4 +164,49 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(ChatPreviewCard), findsOneWidget);
   });
+
+  testWidgets('Test ChatPreviewCard with semi-transparent gradient', (WidgetTester tester) async {
+    const testTheme = TheavTheme(
+      id: 'test_theme_translucent',
+      name: 'Translucent Glass',
+      author: 'Tester',
+      isDark: false,
+      wallpaper: TheavWallpaper(type: 'color', backgroundColor: Colors.amber),
+      palette: TheavPalette(
+        primary: Colors.blue,
+        onPrimary: Colors.white,
+        background: Colors.white,
+        surface: Colors.white,
+        onSurface: Colors.black,
+        appBarBackground: Colors.white,
+        appBarForeground: Colors.black,
+        chatBubbleOutgoing: Colors.blue,
+        chatBubbleOutgoingText: Colors.white,
+        chatBubbleOutgoingSubtext: Colors.white70,
+        chatBubbleIncoming: Colors.grey,
+        chatBubbleIncomingText: Colors.black,
+        chatBubbleIncomingSubtext: Colors.black54,
+        chatDateBadge: Colors.grey,
+        chatDateBadgeText: Colors.white,
+        chatBubbleOutgoingGradient: [
+          Color(0x800088CC), // 50% opacity
+          Color(0x335CB8E6), // 20% opacity
+        ],
+      ),
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: ChatPreviewCard(
+            theme: testTheme,
+            height: 200,
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+    expect(find.byType(ChatPreviewCard), findsOneWidget);
+  });
 }
