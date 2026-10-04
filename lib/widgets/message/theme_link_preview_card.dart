@@ -415,8 +415,8 @@ class _ThemeLinkPreviewCardState extends State<ThemeLinkPreviewCard> {
                       gradient: (theme.palette.chatBubbleOutgoingGradient != null &&
                               theme.palette.chatBubbleOutgoingGradient!.length >= 2)
                           ? LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
                               colors: theme.palette.chatBubbleOutgoingGradient!,
                             )
                           : null,
