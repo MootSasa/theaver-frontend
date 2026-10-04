@@ -803,5 +803,17 @@
   "theme_wallpaper_pattern_desc": "Muster: {pattern}, 4-Ecken-Verlauf",
   "theme_wallpaper_gradient_desc": "4-Ecken-Hintergrundverlauf",
   "theme_wallpaper_photo_desc": "Foto aus Galerie",
-  "theme_wallpaper_default_desc": "Chat-Hintergrund"
+  "theme_wallpaper_default_desc": "Chat-Hintergrund",
+  "theme_section_voice_media": "Sprachnachrichten & Medien",
+  "theme_section_replies": "Antworten & Zitate",
+  "theme_color_voice_wave_active": "Aktive Audiowelle",
+  "theme_color_voice_wave_inactive": "Inaktive Audiowelle",
+  "theme_color_voice_play_btn": "Wiedergabetaste",
+  "theme_color_reply_line": "Antwort-Leiste",
+  "theme_color_reply_title": "Antwort-Autor",
+  "theme_color_reply_text": "Antwort-Vorschautext",
+  "theme_color_selection_overlay": "Auswahl-Hervorhebung",
+  "theme_color_reaction_active": "Aktiver Reaktionshintergrund",
+  "theme_color_reaction_inactive": "Inaktiver Reaktionshintergrund",
+  "theme_color_error": "Fehler- & Löschfarbe"
 }

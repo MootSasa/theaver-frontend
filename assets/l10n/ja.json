@@ -803,5 +803,17 @@
   "theme_wallpaper_pattern_desc": "パターン: {pattern}、4隅グラデーション",
   "theme_wallpaper_gradient_desc": "4隅背景グラデーション",
   "theme_wallpaper_photo_desc": "ギャラリー写真",
-  "theme_wallpaper_default_desc": "チャット壁紙"
+  "theme_wallpaper_default_desc": "チャット壁紙",
+  "theme_section_voice_media": "ボイスとメディア",
+  "theme_section_replies": "返信と引用",
+  "theme_color_voice_wave_active": "再生中の音声波形",
+  "theme_color_voice_wave_inactive": "未再生の音声波形",
+  "theme_color_voice_play_btn": "再生ボタン",
+  "theme_color_reply_line": "返信バー",
+  "theme_color_reply_title": "返信の送信者名",
+  "theme_color_reply_text": "返信プレビューテキスト",
+  "theme_color_selection_overlay": "選択ハイライト",
+  "theme_color_reaction_active": "自分のリアクション背景",
+  "theme_color_reaction_inactive": "他のリアクション背景",
+  "theme_color_error": "エラー・削除カラー"
 }

@@ -803,5 +803,17 @@
   "theme_wallpaper_pattern_desc": "Motif : {pattern}, dégradé 4 coins",
   "theme_wallpaper_gradient_desc": "Dégradé de fond 4 coins",
   "theme_wallpaper_photo_desc": "Photo de la galerie",
-  "theme_wallpaper_default_desc": "Fond de discussion"
+  "theme_wallpaper_default_desc": "Fond de discussion",
+  "theme_section_voice_media": "Vocaux et médias",
+  "theme_section_replies": "Réponses et citations",
+  "theme_color_voice_wave_active": "Onde vocale active",
+  "theme_color_voice_wave_inactive": "Onde vocale inactive",
+  "theme_color_voice_play_btn": "Bouton de lecture",
+  "theme_color_reply_line": "Bande de réponse",
+  "theme_color_reply_title": "Auteur de la réponse",
+  "theme_color_reply_text": "Texte de la réponse",
+  "theme_color_selection_overlay": "Surlignage de sélection",
+  "theme_color_reaction_active": "Fond de réaction active",
+  "theme_color_reaction_inactive": "Fond de réaction inactive",
+  "theme_color_error": "Couleur d'erreur et suppression"
 }

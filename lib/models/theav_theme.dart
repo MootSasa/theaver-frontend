@@ -352,6 +352,17 @@ class TheavPalette {
   final Color? _onlineIndicator;
   final Color? _subtext;
   final Color? _divider;
+  final Color? _error;
+  final Color? _voiceWaveformActive;
+  final Color? _voiceWaveformInactive;
+  final Color? _voicePlayButton;
+  final Color? _chatReplyLine;
+  final Color? _chatReplyTitle;
+  final Color? _chatReplyText;
+  final Color? _messageSelectionOverlay;
+  final Color? _reactionActiveBackground;
+  final Color? _reactionInactiveBackground;
+  final Color? _reactionActiveText;
 
   Color get chatBubbleOutgoingLink => _chatBubbleOutgoingLink ?? chatBubbleOutgoingText;
   Color get chatBubbleIncomingLink => _chatBubbleIncomingLink ?? primary;
@@ -366,6 +377,17 @@ class TheavPalette {
   Color get subtext => _subtext ?? onSurface.withValues(alpha: 0.6);
   Color get divider => _divider ?? onSurface.withValues(alpha: 0.12);
   Color get accent => primary;
+  Color get error => _error ?? (primary.computeLuminance() > 0.5 ? const Color(0xFFD32F2F) : const Color(0xFFEF5350));
+  Color get voiceWaveformActive => _voiceWaveformActive ?? primary;
+  Color get voiceWaveformInactive => _voiceWaveformInactive ?? onSurface.withValues(alpha: 0.24);
+  Color get voicePlayButton => _voicePlayButton ?? primary;
+  Color get chatReplyLine => _chatReplyLine ?? primary;
+  Color get chatReplyTitle => _chatReplyTitle ?? primary;
+  Color get chatReplyText => _chatReplyText ?? onSurface;
+  Color get messageSelectionOverlay => _messageSelectionOverlay ?? primary.withValues(alpha: 0.18);
+  Color get reactionActiveBackground => _reactionActiveBackground ?? primary.withValues(alpha: 0.18);
+  Color get reactionInactiveBackground => _reactionInactiveBackground ?? surface;
+  Color get reactionActiveText => _reactionActiveText ?? primary;
 
   /// Optional multi-color vertical gradient for outgoing message bubbles
   /// (viewport-anchored continuous mask). If null or < 2 colors, solid
@@ -400,6 +422,17 @@ class TheavPalette {
     Color? onlineIndicator,
     Color? subtext,
     Color? divider,
+    Color? error,
+    Color? voiceWaveformActive,
+    Color? voiceWaveformInactive,
+    Color? voicePlayButton,
+    Color? chatReplyLine,
+    Color? chatReplyTitle,
+    Color? chatReplyText,
+    Color? messageSelectionOverlay,
+    Color? reactionActiveBackground,
+    Color? reactionInactiveBackground,
+    Color? reactionActiveText,
   })  : _chatBubbleOutgoingLink = chatBubbleOutgoingLink,
         _chatBubbleIncomingLink = chatBubbleIncomingLink,
         _chatInputBackground = chatInputBackground,
@@ -410,7 +443,18 @@ class TheavPalette {
         _unreadBadgeText = unreadBadgeText,
         _onlineIndicator = onlineIndicator,
         _subtext = subtext,
-        _divider = divider;
+        _divider = divider,
+        _error = error,
+        _voiceWaveformActive = voiceWaveformActive,
+        _voiceWaveformInactive = voiceWaveformInactive,
+        _voicePlayButton = voicePlayButton,
+        _chatReplyLine = chatReplyLine,
+        _chatReplyTitle = chatReplyTitle,
+        _chatReplyText = chatReplyText,
+        _messageSelectionOverlay = messageSelectionOverlay,
+        _reactionActiveBackground = reactionActiveBackground,
+        _reactionInactiveBackground = reactionInactiveBackground,
+        _reactionActiveText = reactionActiveText;
 
   TheavPalette copyWith({
     Color? primary,
@@ -441,6 +485,17 @@ class TheavPalette {
     Color? onlineIndicator,
     Color? subtext,
     Color? divider,
+    Color? error,
+    Color? voiceWaveformActive,
+    Color? voiceWaveformInactive,
+    Color? voicePlayButton,
+    Color? chatReplyLine,
+    Color? chatReplyTitle,
+    Color? chatReplyText,
+    Color? messageSelectionOverlay,
+    Color? reactionActiveBackground,
+    Color? reactionInactiveBackground,
+    Color? reactionActiveText,
   }) {
     return TheavPalette(
       primary: primary ?? this.primary,
@@ -472,6 +527,17 @@ class TheavPalette {
       onlineIndicator: onlineIndicator ?? _onlineIndicator,
       subtext: subtext ?? _subtext,
       divider: divider ?? _divider,
+      error: error ?? _error,
+      voiceWaveformActive: voiceWaveformActive ?? _voiceWaveformActive,
+      voiceWaveformInactive: voiceWaveformInactive ?? _voiceWaveformInactive,
+      voicePlayButton: voicePlayButton ?? _voicePlayButton,
+      chatReplyLine: chatReplyLine ?? _chatReplyLine,
+      chatReplyTitle: chatReplyTitle ?? _chatReplyTitle,
+      chatReplyText: chatReplyText ?? _chatReplyText,
+      messageSelectionOverlay: messageSelectionOverlay ?? _messageSelectionOverlay,
+      reactionActiveBackground: reactionActiveBackground ?? _reactionActiveBackground,
+      reactionInactiveBackground: reactionInactiveBackground ?? _reactionInactiveBackground,
+      reactionActiveText: reactionActiveText ?? _reactionActiveText,
     );
   }
 
@@ -516,6 +582,28 @@ class TheavPalette {
           'subtext': TheavColorUtils.toHex(_subtext!),
         if (_divider != null)
           'divider': TheavColorUtils.toHex(_divider!),
+        if (_error != null)
+          'error': TheavColorUtils.toHex(_error!),
+        if (_voiceWaveformActive != null)
+          'voiceWaveformActive': TheavColorUtils.toHex(_voiceWaveformActive!),
+        if (_voiceWaveformInactive != null)
+          'voiceWaveformInactive': TheavColorUtils.toHex(_voiceWaveformInactive!),
+        if (_voicePlayButton != null)
+          'voicePlayButton': TheavColorUtils.toHex(_voicePlayButton!),
+        if (_chatReplyLine != null)
+          'chatReplyLine': TheavColorUtils.toHex(_chatReplyLine!),
+        if (_chatReplyTitle != null)
+          'chatReplyTitle': TheavColorUtils.toHex(_chatReplyTitle!),
+        if (_chatReplyText != null)
+          'chatReplyText': TheavColorUtils.toHex(_chatReplyText!),
+        if (_messageSelectionOverlay != null)
+          'messageSelectionOverlay': TheavColorUtils.toHex(_messageSelectionOverlay!),
+        if (_reactionActiveBackground != null)
+          'reactionActiveBackground': TheavColorUtils.toHex(_reactionActiveBackground!),
+        if (_reactionInactiveBackground != null)
+          'reactionInactiveBackground': TheavColorUtils.toHex(_reactionInactiveBackground!),
+        if (_reactionActiveText != null)
+          'reactionActiveText': TheavColorUtils.toHex(_reactionActiveText!),
       };
 
   factory TheavPalette.fromJson(Map<String, dynamic> json) {
@@ -571,6 +659,37 @@ class TheavPalette {
           : null,
       subtext: json['subtext'] != null ? TheavColorUtils.fromHex(json['subtext']) : null,
       divider: json['divider'] != null ? TheavColorUtils.fromHex(json['divider']) : null,
+      error: json['error'] != null ? TheavColorUtils.fromHex(json['error']) : null,
+      voiceWaveformActive: json['voiceWaveformActive'] != null
+          ? TheavColorUtils.fromHex(json['voiceWaveformActive'])
+          : null,
+      voiceWaveformInactive: json['voiceWaveformInactive'] != null
+          ? TheavColorUtils.fromHex(json['voiceWaveformInactive'])
+          : null,
+      voicePlayButton: json['voicePlayButton'] != null
+          ? TheavColorUtils.fromHex(json['voicePlayButton'])
+          : null,
+      chatReplyLine: json['chatReplyLine'] != null
+          ? TheavColorUtils.fromHex(json['chatReplyLine'])
+          : null,
+      chatReplyTitle: json['chatReplyTitle'] != null
+          ? TheavColorUtils.fromHex(json['chatReplyTitle'])
+          : null,
+      chatReplyText: json['chatReplyText'] != null
+          ? TheavColorUtils.fromHex(json['chatReplyText'])
+          : null,
+      messageSelectionOverlay: json['messageSelectionOverlay'] != null
+          ? TheavColorUtils.fromHex(json['messageSelectionOverlay'])
+          : null,
+      reactionActiveBackground: json['reactionActiveBackground'] != null
+          ? TheavColorUtils.fromHex(json['reactionActiveBackground'])
+          : null,
+      reactionInactiveBackground: json['reactionInactiveBackground'] != null
+          ? TheavColorUtils.fromHex(json['reactionInactiveBackground'])
+          : null,
+      reactionActiveText: json['reactionActiveText'] != null
+          ? TheavColorUtils.fromHex(json['reactionActiveText'])
+          : null,
     );
   }
 }

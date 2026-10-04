@@ -1,3 +1,4 @@
+import '../../models/theav_theme.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/date_time_utils.dart';
@@ -47,6 +48,16 @@ class ChatListItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasUnread = unreadCount > 0;
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
+    final primaryColor = p?.primary ?? theme.colorScheme.primary;
+    final onPrimaryColor = p?.onPrimary ?? theme.colorScheme.onPrimary;
+    final onlineColor = p?.onlineIndicator ?? const Color(0xFF4CAF50);
+    final surfaceColor = p?.surface ?? theme.colorScheme.surface;
+    final subtextColor = p?.subtext ?? (theme.brightness == Brightness.dark ? Colors.white60 : Colors.grey[600]!);
+    final unreadBg = p?.unreadBadge ?? primaryColor;
+    final unreadText = p?.unreadBadgeText ?? onPrimaryColor;
     
     return ListTile(
       onTap: onTap,
@@ -54,13 +65,13 @@ class ChatListItem extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 22,
-            backgroundColor: const Color(0xFF0088CC),
+            backgroundColor: primaryColor,
             backgroundImage: avatarImageProvider(avatarUrl),
             onBackgroundImageError: (_, __) {},
             child: avatarImageProvider(avatarUrl) == null
                 ? Text(
                     chatName.isNotEmpty ? chatName[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    style: TextStyle(color: onPrimaryColor, fontWeight: FontWeight.bold),
                   )
                 : null,
           ),
@@ -72,9 +83,9 @@ class ChatListItem extends StatelessWidget {
                 width: 12,
                 height: 12,
                 decoration: BoxDecoration(
-                  color: Colors.green,
+                  color: onlineColor,
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
+                  border: Border.all(color: surfaceColor, width: 2),
                 ),
               ),
             ),
@@ -88,6 +99,7 @@ class ChatListItem extends StatelessWidget {
               style: TextStyle(
                 fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
                 fontSize: 16,
+                color: p?.onSurface,
               ),
             ),
           ),
@@ -95,13 +107,13 @@ class ChatListItem extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary,
+                color: unreadBg,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
                 unreadCount > 99 ? '99+' : unreadCount.toString(),
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimary,
+                  color: unreadText,
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
@@ -129,7 +141,7 @@ class ChatListItem extends StatelessWidget {
                                 ?.translate('chat_video_note') ??
                             'Video message'),
                     style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
+                      color: unreadBg,
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
                     ),
@@ -140,7 +152,7 @@ class ChatListItem extends StatelessWidget {
                     text: EmojiUtils.buildEmojiTextSpan(
                       lastMessage,
                       style: TextStyle(
-                        color: hasUnread ? Colors.grey[800] : Colors.grey[600],
+                        color: hasUnread ? (p?.onSurface ?? Colors.grey[800]) : subtextColor,
                         fontSize: 14,
                         fontWeight: hasUnread ? FontWeight.w500 : FontWeight.normal,
                       ),
@@ -154,7 +166,7 @@ class ChatListItem extends StatelessWidget {
             _formatTime(lastMessageTime),
             style: TextStyle(
               fontSize: 12,
-              color: hasUnread ? Theme.of(context).colorScheme.primary : Colors.grey[500],
+              color: hasUnread ? unreadBg : subtextColor,
             ),
           ),
         ],

@@ -5,6 +5,7 @@ import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/emoji_utils.dart';
@@ -578,9 +579,12 @@ class TextMessageWidget extends StatelessWidget {
       markdownData = text;
     }
 
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final linkColor = isMe
-        ? (isDark ? const Color(0xFF7BE5DA) : const Color(0xFF007AFF))
-        : (isDark ? const Color(0xFF7BE5DA) : Theme.of(context).colorScheme.primary);
+        ? (themeExt?.palette.chatBubbleOutgoingLink ??
+            (isDark ? const Color(0xFF7BE5DA) : const Color(0xFF007AFF)))
+        : (themeExt?.palette.chatBubbleIncomingLink ??
+            (isDark ? const Color(0xFF7BE5DA) : Theme.of(context).colorScheme.primary));
 
     final formattedData = preserveWhitespace(markdownData);
 

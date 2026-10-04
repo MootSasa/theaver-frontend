@@ -858,5 +858,17 @@
   "theme_wallpaper_pattern_desc": "Узор: {pattern}, 4-точечный градиент",
   "theme_wallpaper_gradient_desc": "4-точечный градиент фона",
   "theme_wallpaper_photo_desc": "Фото из галереи",
-  "theme_wallpaper_default_desc": "Обои чата"
+  "theme_wallpaper_default_desc": "Обои чата",
+  "theme_section_voice_media": "Голосовые и медиа",
+  "theme_section_replies": "Цитаты и ответы",
+  "theme_color_voice_wave_active": "Активная волна аудио",
+  "theme_color_voice_wave_inactive": "Неактивная волна аудио",
+  "theme_color_voice_play_btn": "Кнопка воспроизведения",
+  "theme_color_reply_line": "Полоса ответа / цитаты",
+  "theme_color_reply_title": "Имя в ответе",
+  "theme_color_reply_text": "Текст в ответе",
+  "theme_color_selection_overlay": "Подсветка выделения",
+  "theme_color_reaction_active": "Фон активной реакции",
+  "theme_color_reaction_inactive": "Фон неактивной реакции",
+  "theme_color_error": "Цвет ошибок и удаления"
 }

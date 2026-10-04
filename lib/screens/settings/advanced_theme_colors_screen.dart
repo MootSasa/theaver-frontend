@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:ios_color_picker/show_ios_color_picker.dart';
@@ -8,9 +9,11 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../theme/theme_provider.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/user/avatar_with_status.dart';
 
 /// Screen allowing granular customization of every single color in [TheavPalette],
-/// grouped into logical sections with real-time dedicated micro-previews.
+/// grouped into logical sections with real-time dedicated pixel-perfect micro-previews
+/// rendering the actual UI components of Theaver.
 class AdvancedThemeColorsScreen extends StatefulWidget {
   final TheavTheme? initialTheme;
   final ValueChanged<TheavTheme>? onThemeChanged;
@@ -107,6 +110,20 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                     _theme.copyWith(palette: _theme.palette.copyWith(appBarForeground: c)),
                   ),
                 ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_online'),
+                  color: _theme.palette.onlineIndicator,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(onlineIndicator: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_subtext'),
+                  color: _theme.palette.subtext,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(subtext: c)),
+                  ),
+                ),
               ],
             ),
 
@@ -144,6 +161,13 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                   color: _theme.palette.chatBubbleOutgoingLink,
                   onChanged: (c) => _updateTheme(
                     _theme.copyWith(palette: _theme.palette.copyWith(chatBubbleOutgoingLink: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_selection_overlay'),
+                  color: _theme.palette.messageSelectionOverlay,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(messageSelectionOverlay: c)),
                   ),
                 ),
               ],
@@ -185,12 +209,90 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                     _theme.copyWith(palette: _theme.palette.copyWith(chatBubbleIncomingLink: c)),
                   ),
                 ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_reaction_active'),
+                  color: _theme.palette.reactionActiveBackground,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(reactionActiveBackground: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_reaction_inactive'),
+                  color: _theme.palette.reactionInactiveBackground,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(reactionInactiveBackground: c)),
+                  ),
+                ),
               ],
             ),
 
             const SizedBox(height: 16),
 
-            // Section 4: Input Field
+            // Section 4: Voice & Audio Player
+            _buildSectionCard(
+              title: l10n.translate('theme_section_voice_media'),
+              icon: const iconoir.Microphone(width: 20, height: 20),
+              preview: _VoiceMediaMicroPreview(theme: _theme),
+              children: [
+                _buildColorTile(
+                  title: l10n.translate('theme_color_voice_wave_active'),
+                  color: _theme.palette.voiceWaveformActive,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(voiceWaveformActive: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_voice_wave_inactive'),
+                  color: _theme.palette.voiceWaveformInactive,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(voiceWaveformInactive: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_voice_play_btn'),
+                  color: _theme.palette.voicePlayButton,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(voicePlayButton: c)),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 16),
+
+            // Section 5: Replies & Quotes
+            _buildSectionCard(
+              title: l10n.translate('theme_section_replies'),
+              icon: const iconoir.Reply(width: 20, height: 20),
+              preview: _RepliesMicroPreview(theme: _theme),
+              children: [
+                _buildColorTile(
+                  title: l10n.translate('theme_color_reply_line'),
+                  color: _theme.palette.chatReplyLine,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(chatReplyLine: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_reply_title'),
+                  color: _theme.palette.chatReplyTitle,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(chatReplyTitle: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_reply_text'),
+                  color: _theme.palette.chatReplyText,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(chatReplyText: c)),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 16),
+
+            // Section 6: Input Field
             _buildSectionCard(
               title: l10n.translate('theme_section_input'),
               icon: const iconoir.EditPencil(width: 20, height: 20),
@@ -229,7 +331,7 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
 
             const SizedBox(height: 16),
 
-            // Section 5: Badges & Indicators
+            // Section 7: Badges & Indicators
             _buildSectionCard(
               title: l10n.translate('theme_section_badges'),
               icon: const iconoir.BellNotification(width: 20, height: 20),
@@ -263,36 +365,22 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                     _theme.copyWith(palette: _theme.palette.copyWith(unreadBadgeText: c)),
                   ),
                 ),
-                _buildColorTile(
-                  title: l10n.translate('theme_color_online'),
-                  color: _theme.palette.onlineIndicator,
-                  onChanged: (c) => _updateTheme(
-                    _theme.copyWith(palette: _theme.palette.copyWith(onlineIndicator: c)),
-                  ),
-                ),
               ],
             ),
 
             const SizedBox(height: 16),
 
-            // Section 6: System & Surface Colors
+            // Section 8: System & Surface Colors
             _buildSectionCard(
               title: l10n.translate('theme_section_other'),
               icon: const iconoir.Palette(width: 20, height: 20),
               preview: _SystemColorsMicroPreview(theme: _theme),
               children: [
                 _buildColorTile(
-                  title: l10n.translate('theme_color_primary'),
+                  title: l10n.translate('theme_primary_color'),
                   color: _theme.palette.primary,
                   onChanged: (c) => _updateTheme(
                     _theme.copyWith(palette: _theme.palette.copyWith(primary: c)),
-                  ),
-                ),
-                _buildColorTile(
-                  title: l10n.translate('theme_color_on_primary'),
-                  color: _theme.palette.onPrimary,
-                  onChanged: (c) => _updateTheme(
-                    _theme.copyWith(palette: _theme.palette.copyWith(onPrimary: c)),
                   ),
                 ),
                 _buildColorTile(
@@ -317,17 +405,17 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                   ),
                 ),
                 _buildColorTile(
-                  title: l10n.translate('theme_color_subtext'),
-                  color: _theme.palette.subtext,
-                  onChanged: (c) => _updateTheme(
-                    _theme.copyWith(palette: _theme.palette.copyWith(subtext: c)),
-                  ),
-                ),
-                _buildColorTile(
                   title: l10n.translate('theme_color_divider'),
                   color: _theme.palette.divider,
                   onChanged: (c) => _updateTheme(
                     _theme.copyWith(palette: _theme.palette.copyWith(divider: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_error'),
+                  color: _theme.palette.error,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(error: c)),
                   ),
                 ),
               ],
@@ -336,15 +424,15 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
         );
 
         if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
           return Scaffold(
+            backgroundColor: _theme.palette.background,
             body: Stack(
               children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: bodyList,
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top + kToolbarHeight,
                   ),
+                  child: bodyList,
                 ),
                 Positioned(
                   top: 0,
@@ -352,6 +440,10 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                   right: 0,
                   child: LiquidGlassAppBar(
                     title: Text(l10n.translate('theme_advanced_settings')),
+                    leading: IconButton(
+                      icon: const iconoir.ArrowLeft(width: 22, height: 22),
+                      onPressed: () => Navigator.pop(context),
+                    ),
                     centerTitle: true,
                     isLite: glassProvider.isLite,
                   ),
@@ -362,9 +454,23 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
         }
 
         return Scaffold(
+          backgroundColor: _theme.palette.background,
           appBar: AppBar(
-            title: Text(l10n.translate('theme_advanced_settings')),
-            centerTitle: true,
+            backgroundColor: _theme.palette.appBarBackground,
+            foregroundColor: _theme.palette.appBarForeground,
+            elevation: 0,
+            leading: IconButton(
+              icon: iconoir.ArrowLeft(width: 22, height: 22, color: _theme.palette.appBarForeground),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text(
+              l10n.translate('theme_advanced_settings'),
+              style: TextStyle(
+                color: _theme.palette.appBarForeground,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
           ),
           body: bodyList,
         );
@@ -378,22 +484,20 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
     required Widget preview,
     required List<Widget> children,
   }) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final isDark = _theme.isDark;
+    final cardColor = _theme.palette.surface;
+    final borderColor = _theme.palette.divider;
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06),
-          width: 0.8,
-        ),
+        color: cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor, width: 0.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
+            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
             blurRadius: 10,
-            offset: const Offset(0, 4),
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -401,39 +505,55 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Section Title Header
+          // Section Header
           Padding(
-            padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 10),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
             child: Row(
               children: [
-                icon,
-                const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
+                IconTheme(
+                  data: IconThemeData(color: _theme.palette.primary, size: 20),
+                  child: icon,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.bold,
+                      color: _theme.palette.onSurface,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
 
-          // Micro-Preview box
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: preview,
+          // Real-time Dedicated Micro-Preview
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              border: Border.symmetric(
+                horizontal: BorderSide(color: borderColor, width: 0.5),
+              ),
             ),
+            child: preview,
           ),
 
-          const SizedBox(height: 8),
-
-          // Color tiles
-          ...children,
-
-          const SizedBox(height: 8),
+          // Granular Color Tiles
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: children.length,
+            separatorBuilder: (_, __) => Divider(
+              height: 1,
+              thickness: 0.5,
+              indent: 16,
+              endIndent: 16,
+              color: borderColor,
+            ),
+            itemBuilder: (_, index) => children[index],
+          ),
         ],
       ),
     );
@@ -443,41 +563,33 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
     required String title,
     required Color color,
     required ValueChanged<Color> onChanged,
+    bool allowOpacity = true,
   }) {
-    final hexString = '#${(color.a * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}'
-        '${(color.r * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}'
-        '${(color.g * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}'
-        '${(color.b * 255).round().toRadixString(16).padLeft(2, '0').toUpperCase()}';
-
     return ListTile(
-      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       title: Text(
         title,
-        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500),
-      ),
-      subtitle: Text(
-        hexString,
         style: TextStyle(
-          fontSize: 11,
-          fontFamily: 'monospace',
-          color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+          color: _theme.palette.onSurface,
         ),
       ),
-      leading: GestureDetector(
-        onTap: () => _pickColor(context, title, color, onChanged),
+      trailing: GestureDetector(
+        onTap: () => _pickColor(context, title, color, onChanged, allowOpacity: allowOpacity),
         child: Container(
-          width: 32,
-          height: 32,
+          width: 36,
+          height: 36,
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
             color: color,
+            shape: BoxShape.circle,
             border: Border.all(
-              color: Colors.white,
-              width: 2,
+              color: _theme.palette.divider,
+              width: 1.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.2),
+                color: Colors.black.withValues(alpha: 0.12),
                 blurRadius: 4,
                 offset: const Offset(0, 1.5),
               ),
@@ -485,21 +597,16 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
           ),
         ),
       ),
-      trailing: const iconoir.NavArrowRight(
-        width: 16,
-        height: 16,
-        color: Colors.grey,
-      ),
-      onTap: () => _pickColor(context, title, color, onChanged),
+      onTap: () => _pickColor(context, title, color, onChanged, allowOpacity: allowOpacity),
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// Dedicated Micro-Previews for Each Section
-// ---------------------------------------------------------------------------
+// ============================================================================
+// PIXEL-PERFECT REAL COMPONENT MICRO PREVIEWS
+// ============================================================================
 
-/// 1. App Bar Micro Preview
+/// 1. Floating Glass App Bar Micro Preview (Exact Floating 3-Pill Layout)
 class _AppBarMicroPreview extends StatelessWidget {
   final TheavTheme theme;
   const _AppBarMicroPreview({required this.theme});
@@ -507,53 +614,159 @@ class _AppBarMicroPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = theme.palette;
+    final isDark = theme.isDark;
+    final pillBg = p.appBarBackground;
+
     return Container(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: p.appBarBackground,
-        border: Border(
-          bottom: BorderSide(
-            color: p.divider,
-            width: 0.5,
-          ),
-        ),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      color: theme.wallpaper.backgroundColor,
       child: Row(
         children: [
-          iconoir.ArrowLeft(
-            width: 20,
-            height: 20,
-            color: p.appBarForeground,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Theaver',
-                  style: TextStyle(
+          // Left Pill: Back Button (40x40 circle)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: pillBg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isDark ? Colors.white12 : Colors.black12,
+                    width: 0.5,
+                  ),
+                ),
+                child: Center(
+                  child: iconoir.NavArrowLeft(
+                    width: 20,
+                    height: 20,
                     color: p.appBarForeground,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
                   ),
                 ),
-                Text(
-                  'online',
-                  style: TextStyle(
-                    color: p.appBarForeground.withValues(alpha: 0.7),
-                    fontSize: 10.5,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-          iconoir.MoreVert(
-            width: 20,
-            height: 20,
-            color: p.appBarForeground,
+          const SizedBox(width: 8),
+
+          // Center Pill: Avatar + Title + Status
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                child: Container(
+                  height: 40,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: pillBg,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isDark ? Colors.white12 : Colors.black12,
+                      width: 0.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Stack(
+                        children: [
+                          CircleAvatar(
+                            radius: 14,
+                            backgroundColor: p.primary,
+                            child: Text(
+                              'A',
+                              style: TextStyle(
+                                color: p.onPrimary,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: p.onlineIndicator,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: p.surface, width: 1.5),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Александр',
+                              style: TextStyle(
+                                color: p.appBarForeground,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              'в сети',
+                              style: TextStyle(
+                                color: p.onlineIndicator,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          // Right Pill: Call + More
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: pillBg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isDark ? Colors.white12 : Colors.black12,
+                    width: 0.5,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    iconoir.Phone(
+                      width: 17,
+                      height: 17,
+                      color: p.appBarForeground,
+                    ),
+                    const SizedBox(width: 8),
+                    iconoir.MoreVert(
+                      width: 17,
+                      height: 17,
+                      color: p.appBarForeground,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -561,7 +774,7 @@ class _AppBarMicroPreview extends StatelessWidget {
   }
 }
 
-/// 2. Outgoing Bubble Micro Preview
+/// 2. Outgoing Bubble Micro Preview (Exact MessageBubble Structure)
 class _OutgoingBubbleMicroPreview extends StatelessWidget {
   final TheavTheme theme;
   const _OutgoingBubbleMicroPreview({required this.theme});
@@ -576,7 +789,7 @@ class _OutgoingBubbleMicroPreview extends StatelessWidget {
       color: theme.wallpaper.backgroundColor,
       alignment: Alignment.centerRight,
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 240),
+        constraints: const BoxConstraints(maxWidth: 250),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isGrad ? null : p.chatBubbleOutgoing,
@@ -587,24 +800,73 @@ class _OutgoingBubbleMicroPreview extends StatelessWidget {
                   end: Alignment.bottomCenter,
                 )
               : null,
-          borderRadius: BorderRadius.circular(theme.bubbleRadius.clamp(4.0, 18.0)),
+          borderRadius: BorderRadius.circular(theme.bubbleRadius.clamp(4.0, 22.0)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 4,
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 5,
               offset: const Offset(0, 1.5),
             ),
           ],
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Reply Preview Header inside Outgoing Bubble
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              margin: const EdgeInsets.only(bottom: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 3,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: p.chatReplyLine,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Александр',
+                          style: TextStyle(
+                            color: p.chatReplyTitle,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10.5,
+                          ),
+                          maxLines: 1,
+                        ),
+                        Text(
+                          'Где посмотреть исходники?',
+                          style: TextStyle(
+                            color: p.chatReplyText,
+                            fontSize: 10,
+                          ),
+                          maxLines: 1,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Message text with link
             Text(
               'Привет! Посмотри сайт Theaver:',
               style: TextStyle(
                 color: p.chatBubbleOutgoingText,
-                fontSize: 12,
+                fontSize: 13,
               ),
             ),
             const SizedBox(height: 2),
@@ -612,28 +874,33 @@ class _OutgoingBubbleMicroPreview extends StatelessWidget {
               'https://theaver.app',
               style: TextStyle(
                 color: p.chatBubbleOutgoingLink,
-                fontSize: 12,
+                fontSize: 13,
                 decoration: TextDecoration.underline,
               ),
             ),
-            const SizedBox(height: 3),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '12:45',
-                  style: TextStyle(
-                    color: p.chatBubbleOutgoingSubtext,
-                    fontSize: 9.5,
+            const SizedBox(height: 4),
+
+            // Metadata row: Time + Double Check
+            Align(
+              alignment: Alignment.bottomRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '12:45',
+                    style: TextStyle(
+                      color: p.chatBubbleOutgoingSubtext,
+                      fontSize: 10,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 4),
-                iconoir.Check(
-                  width: 12,
-                  height: 12,
-                  color: p.chatBubbleOutgoingSubtext,
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  iconoir.DoubleCheck(
+                    width: 14,
+                    height: 14,
+                    color: p.chatBubbleOutgoingSubtext,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -642,7 +909,7 @@ class _OutgoingBubbleMicroPreview extends StatelessWidget {
   }
 }
 
-/// 3. Incoming Bubble Micro Preview
+/// 3. Incoming Bubble Micro Preview (Exact MessageBubble with Avatar and Reaction)
 class _IncomingBubbleMicroPreview extends StatelessWidget {
   final TheavTheme theme;
   const _IncomingBubbleMicroPreview({required this.theme});
@@ -655,66 +922,132 @@ class _IncomingBubbleMicroPreview extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       color: theme.wallpaper.backgroundColor,
       alignment: Alignment.centerLeft,
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          CircleAvatar(
-            radius: 12,
-            backgroundColor: p.primary,
-            child: Text(
-              'A',
-              style: TextStyle(
-                color: p.onPrimary,
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const AvatarWithStatus(
+                avatarUrl: null,
+                name: 'Александр',
+                radius: 14,
+                isOnline: true,
               ),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Container(
-            constraints: const BoxConstraints(maxWidth: 240),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: p.chatBubbleIncoming,
-              borderRadius: BorderRadius.circular(theme.bubbleRadius.clamp(4.0, 18.0)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
-                  blurRadius: 4,
-                  offset: const Offset(0, 1.5),
+              const SizedBox(width: 6),
+              Container(
+                constraints: const BoxConstraints(maxWidth: 240),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: p.chatBubbleIncoming,
+                  borderRadius: BorderRadius.circular(theme.bubbleRadius.clamp(4.0, 22.0)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1.5),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Александр',
+                      style: TextStyle(
+                        color: p.primary,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Все работает отлично! Подробнее:',
+                      style: TextStyle(
+                        color: p.chatBubbleIncomingText,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'https://theaver.app/docs',
+                      style: TextStyle(
+                        color: p.chatBubbleIncomingLink,
+                        fontSize: 12.5,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Align(
+                      alignment: Alignment.bottomRight,
+                      child: Text(
+                        '12:46',
+                        style: TextStyle(
+                          color: p.chatBubbleIncomingSubtext,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+
+          // Real Reactions Row
+          Padding(
+            padding: const EdgeInsets.only(left: 34),
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  'Все работает отлично! Подробнее:',
-                  style: TextStyle(
-                    color: p.chatBubbleIncomingText,
-                    fontSize: 12,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: p.reactionActiveBackground,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: p.reactionActiveText, width: 1.2),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('👍', style: TextStyle(fontSize: 12)),
+                      const SizedBox(width: 4),
+                      Text(
+                        '2',
+                        style: TextStyle(
+                          color: p.reactionActiveText,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'https://theaver.org/docs',
-                  style: TextStyle(
-                    color: p.chatBubbleIncomingLink,
-                    fontSize: 12,
-                    decoration: TextDecoration.underline,
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: p.reactionInactiveBackground,
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ),
-                const SizedBox(height: 3),
-                Align(
-                  alignment: Alignment.bottomRight,
-                  child: Text(
-                    '12:46',
-                    style: TextStyle(
-                      color: p.chatBubbleIncomingSubtext,
-                      fontSize: 9.5,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('🔥', style: TextStyle(fontSize: 12)),
+                      const SizedBox(width: 4),
+                      Text(
+                        '1',
+                        style: TextStyle(
+                          color: p.subtext,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -726,7 +1059,207 @@ class _IncomingBubbleMicroPreview extends StatelessWidget {
   }
 }
 
-/// 4. Input Bar Micro Preview
+/// 4. Voice & Audio Player Micro Preview (Real VoiceMessageWidget Layout)
+class _VoiceMediaMicroPreview extends StatelessWidget {
+  final TheavTheme theme;
+  const _VoiceMediaMicroPreview({required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = theme.palette;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      color: theme.wallpaper.backgroundColor,
+      alignment: Alignment.centerLeft,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 260),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: p.chatBubbleIncoming,
+          borderRadius: BorderRadius.circular(theme.bubbleRadius.clamp(4.0, 22.0)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 4,
+              offset: const Offset(0, 1.5),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                // Play / Pause Circle Button
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: p.voicePlayButton,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: iconoir.PlaySolid(
+                      width: 18,
+                      height: 18,
+                      color: p.onPrimary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+
+                // Multi-bar Waveform
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        height: 22,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: List.generate(24, (i) {
+                            final heights = [
+                              8.0, 12.0, 18.0, 14.0, 10.0, 16.0, 20.0, 15.0,
+                              11.0, 19.0, 14.0, 9.0, 16.0, 22.0, 17.0, 11.0,
+                              13.0, 18.0, 12.0, 15.0, 10.0, 16.0, 12.0, 7.0
+                            ];
+                            final h = heights[i % heights.length];
+                            final isPlayed = i < 10;
+                            return Expanded(
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 1),
+                                height: h,
+                                decoration: BoxDecoration(
+                                  color: isPlayed ? p.voiceWaveformActive : p.voiceWaveformInactive,
+                                  borderRadius: BorderRadius.circular(1.5),
+                                ),
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Container(
+                            width: 5,
+                            height: 5,
+                            margin: const EdgeInsets.only(right: 4),
+                            decoration: BoxDecoration(
+                              color: p.primary,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          Text(
+                            '0:18',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                              color: p.subtext,
+                            ),
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: p.primary.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '2X',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: p.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 5. Replies & Quotes Micro Preview (Real MessageReplyInfo Layout)
+class _RepliesMicroPreview extends StatelessWidget {
+  final TheavTheme theme;
+  const _RepliesMicroPreview({required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = theme.palette;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      color: theme.wallpaper.backgroundColor,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: p.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: p.divider, width: 0.5),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 3.5,
+              height: 36,
+              decoration: BoxDecoration(
+                color: p.chatReplyLine,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      iconoir.Reply(width: 13, height: 13, color: p.chatReplyTitle),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Мария Иванова',
+                        style: TextStyle(
+                          color: p.chatReplyTitle,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Отправила макет дизайна в новом обновлении Theaver',
+                    style: TextStyle(
+                      color: p.chatReplyText,
+                      fontSize: 11.5,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 6. Input Bar Micro Preview (Exact LiquidGlassInputField / ChatInputBar Structure)
 class _InputBarMicroPreview extends StatelessWidget {
   final TheavTheme theme;
   const _InputBarMicroPreview({required this.theme});
@@ -741,52 +1274,64 @@ class _InputBarMicroPreview extends StatelessWidget {
     final inputBg = p.explicitChatInputBackground ?? defaultBg;
 
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       color: theme.wallpaper.backgroundColor,
       child: Row(
         children: [
+          // Main Pill Container (24px radius, Emoji on left, Hint, Attach on right)
           Expanded(
-            child: Container(
-              height: 38,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: inputBg,
-                borderRadius: BorderRadius.circular(19),
-                border: Border.all(
-                  color: isDark ? Colors.white12 : Colors.black12,
-                  width: 0.5,
-                ),
-              ),
-              child: Row(
-                children: [
-                  iconoir.Attachment(
-                    width: 17,
-                    height: 17,
-                    color: p.chatInputButtons,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Сообщение...',
-                      style: TextStyle(
-                        color: p.chatInputText.withValues(alpha: 0.65),
-                        fontSize: 12.5,
-                      ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                child: Container(
+                  height: 44,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: inputBg,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: isDark ? Colors.white12 : Colors.black12,
+                      width: 0.5,
                     ),
                   ),
-                  iconoir.Emoji(
-                    width: 17,
-                    height: 17,
-                    color: p.chatInputButtons,
+                  child: Row(
+                    children: [
+                      // Emoji on Left
+                      iconoir.Emoji(
+                        width: 22,
+                        height: 22,
+                        color: p.chatInputButtons,
+                      ),
+                      const SizedBox(width: 8),
+                      // Message TextField Hint
+                      Expanded(
+                        child: Text(
+                          'Сообщение...',
+                          style: TextStyle(
+                            color: p.chatInputText.withValues(alpha: 0.6),
+                            fontSize: 13.5,
+                          ),
+                        ),
+                      ),
+                      // Attachment on Right
+                      iconoir.Attachment(
+                        width: 20,
+                        height: 20,
+                        color: p.chatInputButtons,
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
           const SizedBox(width: 8),
+
+          // Send Button Circle (38x38)
           Container(
-            width: 36,
-            height: 36,
+            width: 40,
+            height: 40,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: p.chatSendButton,
@@ -800,8 +1345,8 @@ class _InputBarMicroPreview extends StatelessWidget {
             ),
             child: Center(
               child: iconoir.ArrowUp(
-                width: 18,
-                height: 18,
+                width: 20,
+                height: 20,
                 color: p.onPrimary,
               ),
             ),
@@ -812,7 +1357,7 @@ class _InputBarMicroPreview extends StatelessWidget {
   }
 }
 
-/// 5. Badges & Indicators Micro Preview
+/// 7. Badges & Indicators Micro Preview (Real DateSeparator & ChatListItem Layout)
 class _BadgesMicroPreview extends StatelessWidget {
   final TheavTheme theme;
   const _BadgesMicroPreview({required this.theme});
@@ -826,15 +1371,15 @@ class _BadgesMicroPreview extends StatelessWidget {
       color: theme.wallpaper.backgroundColor,
       child: Column(
         children: [
-          // Floating Date Badge
+          // Floating Date Badge Pill (Exact DateSeparator)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 3.5),
             decoration: BoxDecoration(
               color: p.chatDateBadge,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(12),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
+                  color: Colors.black.withValues(alpha: 0.12),
                   blurRadius: 3,
                 ),
               ],
@@ -843,18 +1388,19 @@ class _BadgesMicroPreview extends StatelessWidget {
               'Сегодня',
               style: TextStyle(
                 color: p.chatDateBadgeText,
-                fontSize: 10.5,
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
           const SizedBox(height: 8),
-          // Chat Row Item
+
+          // Real ChatListItem Row
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               color: p.surface,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(color: p.divider, width: 0.5),
             ),
             child: Row(
@@ -862,14 +1408,14 @@ class _BadgesMicroPreview extends StatelessWidget {
                 Stack(
                   children: [
                     CircleAvatar(
-                      radius: 16,
-                      backgroundColor: p.primary.withValues(alpha: 0.2),
+                      radius: 20,
+                      backgroundColor: p.primary,
                       child: Text(
                         'T',
                         style: TextStyle(
-                          color: p.primary,
+                          color: p.onPrimary,
                           fontWeight: FontWeight.bold,
-                          fontSize: 13,
+                          fontSize: 15,
                         ),
                       ),
                     ),
@@ -877,12 +1423,12 @@ class _BadgesMicroPreview extends StatelessWidget {
                       right: 0,
                       bottom: 0,
                       child: Container(
-                        width: 9,
-                        height: 9,
+                        width: 10,
+                        height: 10,
                         decoration: BoxDecoration(
                           color: p.onlineIndicator,
                           shape: BoxShape.circle,
-                          border: Border.all(color: p.surface, width: 1.5),
+                          border: Border.all(color: p.surface, width: 2),
                         ),
                       ),
                     ),
@@ -893,40 +1439,59 @@ class _BadgesMicroPreview extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Команда Theaver',
-                        style: TextStyle(
-                          color: p.onSurface,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Команда Theaver',
+                            style: TextStyle(
+                              color: p.onSurface,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          Text(
+                            '12:48',
+                            style: TextStyle(
+                              color: p.subtext,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        'Новое обновление уже доступно',
-                        style: TextStyle(
-                          color: p.subtext,
-                          fontSize: 10.5,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Новое обновление уже доступно для загрузки',
+                              style: TextStyle(
+                                color: p.subtext,
+                                fontSize: 11.5,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: p.unreadBadge,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '3',
+                              style: TextStyle(
+                                color: p.unreadBadgeText,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: p.unreadBadge,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '3',
-                    style: TextStyle(
-                      color: p.unreadBadgeText,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
                   ),
                 ),
               ],
@@ -938,7 +1503,7 @@ class _BadgesMicroPreview extends StatelessWidget {
   }
 }
 
-/// 6. System & Surface Micro Preview
+/// 8. System & Surface Micro Preview (Real Card and Action Layout)
 class _SystemColorsMicroPreview extends StatelessWidget {
   final TheavTheme theme;
   const _SystemColorsMicroPreview({required this.theme});
@@ -954,23 +1519,43 @@ class _SystemColorsMicroPreview extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: p.surface,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: p.divider, width: 0.5),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Основной заголовок',
-              style: TextStyle(
-                color: p.onSurface,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 12,
+                  backgroundColor: p.primary.withValues(alpha: 0.15),
+                  child: iconoir.User(width: 14, height: 14, color: p.primary),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Настройки профиля',
+                    style: TextStyle(
+                      color: p.onSurface,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                Text(
+                  'Изменить',
+                  style: TextStyle(
+                    color: p.primary,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 6),
             Text(
-              'Второстепенный поясняющий текст',
+              'Управляйте персональными параметрами и внешним видом.',
               style: TextStyle(
                 color: p.subtext,
                 fontSize: 11,
@@ -984,28 +1569,42 @@ class _SystemColorsMicroPreview extends StatelessWidget {
               ),
             ),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'Настройки профиля',
-                  style: TextStyle(
-                    color: p.onSurface,
-                    fontSize: 11.5,
-                  ),
-                ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: p.primary,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    'Действие',
+                    'Сохранить',
                     style: TextStyle(
                       color: p.onPrimary,
-                      fontSize: 10.5,
+                      fontSize: 11,
                       fontWeight: FontWeight.w600,
                     ),
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: p.error.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      iconoir.Trash(width: 13, height: 13, color: p.error),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Удалить',
+                        style: TextStyle(
+                          color: p.error,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import '../../models/theav_theme.dart';
 import '../../utils/image_utils.dart';
 
 /// A widget that displays a user avatar with an online status indicator.
-/// Shows a blue circle in the bottom-right corner when the user is online.
+/// Shows an online status circle in the bottom-right corner when the user is online.
 class AvatarWithStatus extends StatelessWidget {
   final String? avatarUrl;
   final String name;
@@ -24,7 +25,12 @@ class AvatarWithStatus extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final provider = avatarImageProvider(avatarUrl);
-    final bgColor = backgroundColor ?? const Color(0xFF0088CC);
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final bgColor = backgroundColor ?? themeExt?.palette.primary ?? const Color(0xFF0088CC);
+    final textColor = themeExt?.palette.onPrimary ?? Colors.white;
+    final onlineColor = themeExt?.palette.onlineIndicator ?? const Color(0xFF4CAF50);
+    final borderColor = themeExt?.palette.surface ?? (theme.brightness == Brightness.dark ? const Color(0xFF1C1C1E) : Colors.white);
     
     Widget avatar = CircleAvatar(
       radius: radius,
@@ -35,7 +41,7 @@ class AvatarWithStatus extends StatelessWidget {
           ? Text(
               name.isNotEmpty ? name[0].toUpperCase() : '?',
               style: TextStyle(
-                color: Colors.white,
+                color: textColor,
                 fontSize: radius * 0.8,
                 fontWeight: FontWeight.bold,
               ),
@@ -55,10 +61,10 @@ class AvatarWithStatus extends StatelessWidget {
               width: radius * 0.5,
               height: radius * 0.5,
               decoration: BoxDecoration(
-                color: const Color(0xFF0088CC),
+                color: onlineColor,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: Colors.white,
+                  color: borderColor,
                   width: 1.5,
                 ),
               ),

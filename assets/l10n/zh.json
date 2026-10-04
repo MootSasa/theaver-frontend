@@ -803,5 +803,17 @@
   "theme_wallpaper_pattern_desc": "图案: {pattern}，四角渐变",
   "theme_wallpaper_gradient_desc": "四角背景渐变",
   "theme_wallpaper_photo_desc": "相册照片",
-  "theme_wallpaper_default_desc": "聊天壁纸"
+  "theme_wallpaper_default_desc": "聊天壁纸",
+  "theme_section_voice_media": "语音与媒体",
+  "theme_section_replies": "回复与引用",
+  "theme_color_voice_wave_active": "播放中语音波形",
+  "theme_color_voice_wave_inactive": "未播放语音波形",
+  "theme_color_voice_play_btn": "播放按钮",
+  "theme_color_reply_line": "回复指示条",
+  "theme_color_reply_title": "回复作者名",
+  "theme_color_reply_text": "回复预览文本",
+  "theme_color_selection_overlay": "选中高亮颜色",
+  "theme_color_reaction_active": "已选反应背景",
+  "theme_color_reaction_inactive": "未选反应背景",
+  "theme_color_error": "错误与删除颜色"
 }

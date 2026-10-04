@@ -803,5 +803,17 @@
   "theme_wallpaper_pattern_desc": "Motivo: {pattern}, sfumatura a 4 angoli",
   "theme_wallpaper_gradient_desc": "Sfumatura sfondo a 4 angoli",
   "theme_wallpaper_photo_desc": "Foto dalla galleria",
-  "theme_wallpaper_default_desc": "Sfondo della chat"
+  "theme_wallpaper_default_desc": "Sfondo della chat",
+  "theme_section_voice_media": "Vocali e media",
+  "theme_section_replies": "Risposte e citazioni",
+  "theme_color_voice_wave_active": "Forma d'onda attiva",
+  "theme_color_voice_wave_inactive": "Forma d'onda inattiva",
+  "theme_color_voice_play_btn": "Pulsante di riproduzione",
+  "theme_color_reply_line": "Barra di risposta",
+  "theme_color_reply_title": "Autore della risposta",
+  "theme_color_reply_text": "Testo della risposta",
+  "theme_color_selection_overlay": "Evidenziazione selezione",
+  "theme_color_reaction_active": "Sfondo reazione attiva",
+  "theme_color_reaction_inactive": "Sfondo reazione inattiva",
+  "theme_color_error": "Colore di errore ed eliminazione"
 }

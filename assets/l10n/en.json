@@ -859,5 +859,17 @@
   "theme_wallpaper_pattern_desc": "Pattern: {pattern}, 4-corner gradient",
   "theme_wallpaper_gradient_desc": "4-corner background gradient",
   "theme_wallpaper_photo_desc": "Gallery photo",
-  "theme_wallpaper_default_desc": "Chat wallpaper"
+  "theme_wallpaper_default_desc": "Chat wallpaper",
+  "theme_section_voice_media": "Voice & Media",
+  "theme_section_replies": "Replies & Quotes",
+  "theme_color_voice_wave_active": "Active Voice Waveform",
+  "theme_color_voice_wave_inactive": "Inactive Voice Waveform",
+  "theme_color_voice_play_btn": "Play Button",
+  "theme_color_reply_line": "Reply Strip",
+  "theme_color_reply_title": "Reply Author Name",
+  "theme_color_reply_text": "Reply Preview Text",
+  "theme_color_selection_overlay": "Selection Highlight",
+  "theme_color_reaction_active": "Active Reaction Background",
+  "theme_color_reaction_inactive": "Inactive Reaction Background",
+  "theme_color_error": "Error & Destructive Color"
 }

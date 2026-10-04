@@ -803,5 +803,17 @@
   "theme_wallpaper_pattern_desc": "패턴: {pattern}, 4방향 그라디언트",
   "theme_wallpaper_gradient_desc": "4방향 배경 그라디언트",
   "theme_wallpaper_photo_desc": "갤러리 사진",
-  "theme_wallpaper_default_desc": "채팅 배경화면"
+  "theme_wallpaper_default_desc": "채팅 배경화면",
+  "theme_section_voice_media": "음성 및 미디어",
+  "theme_section_replies": "답장 및 인용",
+  "theme_color_voice_wave_active": "활성 음성 파형",
+  "theme_color_voice_wave_inactive": "비활성 음성 파형",
+  "theme_color_voice_play_btn": "재생 버튼",
+  "theme_color_reply_line": "답장 표시줄",
+  "theme_color_reply_title": "답장 보낸 사람",
+  "theme_color_reply_text": "답장 미리보기 텍스트",
+  "theme_color_selection_overlay": "선택 강조 색상",
+  "theme_color_reaction_active": "내 반응 배경",
+  "theme_color_reaction_inactive": "다른 반응 배경",
+  "theme_color_error": "오류 및 삭제 색상"
 }

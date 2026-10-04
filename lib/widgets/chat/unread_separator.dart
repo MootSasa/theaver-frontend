@@ -98,7 +98,10 @@ class ScrollDownFab extends StatelessWidget {
   Widget build(BuildContext context) {
     final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
+    final unreadBg = themeExt?.palette.unreadBadge ?? theme.colorScheme.primary;
+    final unreadText = themeExt?.palette.unreadBadgeText ?? Colors.white;
 
     final child = Stack(
       alignment: Alignment.center,
@@ -112,7 +115,7 @@ class ScrollDownFab extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: theme.colorScheme.primary,
+                color: unreadBg,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
@@ -125,8 +128,8 @@ class ScrollDownFab extends StatelessWidget {
               constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
               child: Text(
                 unreadCount > 99 ? '99+' : '$unreadCount',
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: unreadText,
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                 ),

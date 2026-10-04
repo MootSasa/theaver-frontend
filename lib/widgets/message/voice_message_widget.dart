@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../models/theav_theme.dart';
 import '../../services/voice_playback_service.dart';
 import '../../services/media_cache_manager.dart';
 import 'message_status_widget.dart';
@@ -277,14 +278,21 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
-    final primaryColor = theme.colorScheme.primary;
+    final primaryColor = themeExt?.palette.primary ?? theme.colorScheme.primary;
 
     // Outgoing bubble styling vs incoming bubble styling
-    final playedColor = widget.isMe ? Colors.white : primaryColor;
+    final playedColor = widget.isMe
+        ? (themeExt?.palette.chatBubbleOutgoingText ?? Colors.white)
+        : (themeExt?.palette.voiceWaveformActive ?? primaryColor);
     final unplayedColor = widget.isMe
-        ? Colors.white.withValues(alpha: 0.4)
-        : (isDark ? Colors.white24 : Colors.black26);
+        ? (themeExt?.palette.chatBubbleOutgoingSubtext ?? Colors.white.withValues(alpha: 0.4))
+        : (themeExt?.palette.voiceWaveformInactive ?? (isDark ? Colors.white24 : Colors.black26));
+
+    final btnColor = widget.isMe
+        ? (themeExt?.palette.chatBubbleOutgoingText ?? Colors.white)
+        : (themeExt?.palette.voicePlayButton ?? primaryColor);
 
     final duration = _effectiveDuration;
     final position = _effectivePosition;
@@ -317,11 +325,11 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
                   decoration: BoxDecoration(
                     color: widget.isMe
                         ? Colors.white.withValues(alpha: 0.22)
-                        : primaryColor.withValues(alpha: 0.15),
+                        : btnColor.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                   ),
                   child: Center(
-                    child: _buildButtonIcon(primaryColor),
+                    child: _buildButtonIcon(btnColor),
                   ),
                 ),
               ),
