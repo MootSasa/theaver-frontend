@@ -542,21 +542,37 @@ class _WaveformScrubberPainter extends CustomPainter {
     final playedPaint = Paint()
       ..color = playedColor
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = 2.4;
+      ..strokeWidth = 2.2;
 
     final unplayedPaint = Paint()
       ..color = unplayedColor
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = 2.4;
+      ..strokeWidth = 2.2;
 
-    final barCount = waveform.length;
-    final gap = size.width / barCount;
+    final maxVal = waveform.fold<int>(0, math.max);
+    final double normalizer = maxVal > 31 ? maxVal.toDouble() : 31.0;
+
+    // Telegram-style density: ~3.6px per bar (2.2px bar + ~1.4px spacing)
+    const double barStep = 3.6;
+    final int barCount = math.max(1, (size.width / barStep).floor());
+    final double gap = size.width / barCount;
     final centerY = size.height / 2;
     final progressX = progress * size.width;
 
     for (int i = 0; i < barCount; i++) {
       final x = (i * gap) + (gap / 2);
-      final heightRatio = (waveform[i] / 31.0).clamp(0.12, 1.0);
+      final double sample;
+      if (waveform.length == barCount) {
+        sample = waveform[i].toDouble();
+      } else {
+        final double srcPos = (i / (barCount - 1).clamp(1, barCount)) * (waveform.length - 1);
+        final int idx0 = srcPos.floor().clamp(0, waveform.length - 1);
+        final int idx1 = srcPos.ceil().clamp(0, waveform.length - 1);
+        final double t = srcPos - idx0;
+        sample = waveform[idx0] * (1.0 - t) + waveform[idx1] * t;
+      }
+
+      final heightRatio = (sample / normalizer).clamp(0.12, 1.0);
       final barHeight = math.max(3.0, heightRatio * size.height * 0.95);
 
       final paint = (x <= progressX) ? playedPaint : unplayedPaint;

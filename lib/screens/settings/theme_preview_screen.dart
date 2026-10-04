@@ -402,7 +402,12 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                         messageType: 'voice',
                         fileUrl: 'demo_voice.m4a',
                         duration: 15,
-                        waveform: const [10, 18, 30, 50, 75, 90, 65, 45, 30, 20, 35, 60, 50, 25],
+                        waveform: const [
+                          4, 6, 11, 15, 8, 12, 20, 27, 24, 18,
+                          13, 19, 25, 30, 26, 18, 12, 7, 13, 21,
+                          28, 25, 16, 10, 15, 23, 29, 27, 20, 15,
+                          9, 5, 11, 18, 22, 15, 8, 4,
+                        ],
                         createdAt: '08:02',
                         isRead: true,
                         isEdited: false,
