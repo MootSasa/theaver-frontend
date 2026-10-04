@@ -29,7 +29,7 @@ import '../../services/unread_count_provider.dart';
 import '../../screens/auth/login_screen.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/user/avatar_with_status.dart';
-import '../../widgets/chat/liquid_glass_filter_chips.dart';
+import '../../models/theav_theme.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/settings/settings_group.dart';
@@ -1284,36 +1284,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _showClassicMenu(BuildContext context) {
-    final items = _getMenuItems(_currentIndex);
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: items
-              .map(
-                (item) => ListTile(
-                  leading: item.iconBuilder(
-                    item.color ??
-                        (Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white
-                            : const Color(0xFF1C1C1E)),
-                    24.0,
-                  ),
-                  title: Text(item.label, style: TextStyle(color: item.color)),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _handleMenuAction(item.id);
-                  },
-                ),
-              )
-              .toList(),
-        ),
-      ),
-    );
-  }
-
   Widget _buildTopGlassBar(
     BuildContext context,
     LiquidGlassProvider glassProvider,
@@ -1510,110 +1480,139 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildClassicTopBar(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
+    final isDark = theme.brightness == Brightness.dark;
+
+    final barBackgroundColor = p?.surface ??
+        (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+    final borderColor = p?.divider ??
+        (isDark
+            ? Colors.white.withValues(alpha: 0.1)
+            : Colors.black.withValues(alpha: 0.06));
+    final shadowColor = isDark
+        ? Colors.black.withValues(alpha: 0.35)
+        : Colors.black.withValues(alpha: 0.08);
+
+    const double ctrlSize = 44.0;
+    const double menuWidth = 200.0;
+    final double menuHeight = _getMenuHeight(_currentIndex);
+    const double folderMenuWidth = 220.0;
+    const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
+
+    final double maxActiveMenuHeight = math.max(
+      _isTopMenuOpen ? menuHeight : 0,
+      _isFolderMenuOpen ? folderMenuHeight : 0,
+    );
+
     return SafeArea(
       bottom: false,
-      child: SizedBox(
-        height: 52,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Center(
-              child: Container(
-                height: 38,
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? const Color(0xFF2C2C2E)
-                      : const Color(0xFFF2F2F7),
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                child: AnimatedSize(
-                  duration: const Duration(milliseconds: 320),
-                  curve: Curves.easeOutCubic,
-                  clipBehavior: Clip.none,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 280),
-                          transitionBuilder: (child, animation) {
-                            final inAnimation = Tween<Offset>(
-                              begin: const Offset(0.0, -1.0),
-                              end: Offset.zero,
-                            ).animate(CurvedAnimation(
-                              parent: animation,
-                              curve: Curves.easeOutCubic,
-                            ));
-                            final outAnimation = Tween<Offset>(
-                              begin: const Offset(0.0, 1.0),
-                              end: Offset.zero,
-                            ).animate(CurvedAnimation(
-                              parent: animation,
-                              curve: Curves.easeInCubic,
-                            ));
-                            final isIncoming =
-                                child.key == ValueKey<String>(_currentTitleKey);
-                            return ClipRect(
-                              child: SlideTransition(
-                                position: isIncoming ? inAnimation : outAnimation,
-                                child: FadeTransition(
-                                  opacity: animation,
-                                  child: child,
-                                ),
-                              ),
-                            );
-                          },
-                          layoutBuilder: (currentChild, previousChildren) {
-                            return Stack(
-                              alignment: Alignment.center,
-                              clipBehavior: Clip.none,
-                              children: [
-                                ...previousChildren.map(
-                                  (w) => Positioned.fill(
-                                    child: Center(
-                                      child: OverflowBox(
-                                        minWidth: 0,
-                                        maxWidth: double.infinity,
-                                        minHeight: 0,
-                                        maxHeight: double.infinity,
-                                        child: w,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                if (currentChild != null) currentChild,
-                              ],
-                            );
-                          },
-                          child: Text(
-                            _currentTitleText,
-                            key: ValueKey<String>(_currentTitleKey),
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w600,
-                              color: _isTitleConnected
-                                  ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
-                                  : Colors.grey,
-                            ),
-                          ),
+      child: Padding(
+        padding: const EdgeInsets.only(top: 8.0),
+        child: SizedBox(
+          width: double.infinity,
+          height: maxActiveMenuHeight > 0 ? maxActiveMenuHeight + 8 : ctrlSize + 4,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // Centered title pill / morph folder dropdown menu
+              Positioned(
+                top: 2,
+                left: 0,
+                right: 0,
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOutCubic,
+                    width: _isFolderMenuOpen ? folderMenuWidth : null,
+                    height: _isFolderMenuOpen ? folderMenuHeight : ctrlSize,
+                    decoration: BoxDecoration(
+                      color: barBackgroundColor,
+                      borderRadius: BorderRadius.circular(22.0),
+                      border: Border.all(color: borderColor, width: 0.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: shadowColor,
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
                         ),
                       ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: _isFolderMenuOpen
+                          ? _FolderMorphMenu(
+                              key: const ValueKey<String>('folder_menu'),
+                              width: folderMenuWidth,
+                              activeFilter: _activeFilter,
+                              unreadCounts: [
+                                _getUnreadCountForFilter(0),
+                                _getUnreadCountForFilter(1),
+                                _getUnreadCountForFilter(2),
+                                _getUnreadCountForFilter(3),
+                              ],
+                              onSelectFolder: (index) {
+                                HapticUtils.selection();
+                                setState(() => _activeFilter = index);
+                                _closeFolderMenu();
+                              },
+                            )
+                          : _TitlePillContent(
+                              key: const ValueKey<String>('title_pill'),
+                              title: _currentTitleText,
+                              titleKey: _currentTitleKey,
+                              isConnected: _isTitleConnected,
+                              onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+                            ),
                     ),
                   ),
                 ),
               ),
-            ),
-            Positioned(
-              right: 16,
-              child: IconButton(
-                icon: const iconoir.MoreVert(width: 24, height: 24),
-                onPressed: () => _showClassicMenu(context),
+
+              // Persistent three dots button and morph context menu
+              Positioned(
+                top: 2,
+                right: 16,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  width: _isTopMenuOpen ? menuWidth : ctrlSize,
+                  height: _isTopMenuOpen ? menuHeight : ctrlSize,
+                  decoration: BoxDecoration(
+                    color: barBackgroundColor,
+                    borderRadius: BorderRadius.circular(22.0),
+                    border: Border.all(color: borderColor, width: 0.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: shadowColor,
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: _isTopMenuOpen
+                        ? _TopMorphMenu(
+                            key: const ValueKey<String>('menu'),
+                            width: menuWidth,
+                            items: _getMenuItems(_currentIndex),
+                            onItemTap: _handleMenuAction,
+                          )
+                        : _ThreeDotsGlyph(
+                            key: const ValueKey<String>('glyph'),
+                            size: ctrlSize,
+                            onTap: _toggleTopMenu,
+                          ),
+                  ),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2406,123 +2405,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     // Страница 1: Чаты
                     RepaintBoundary(
                       child: _KeepAlivePage(
-                        child: Consumer<LiquidGlassProvider>(
-                          builder: (context, glassProvider, _) {
-                            final glassEnabled = glassProvider.enabled;
-                            final filters = [
-                              l10n.translate('filter_all'),
-                              l10n.translate('filter_personal'),
-                              l10n.translate('filter_groups'),
-                              l10n.translate('filter_channels'),
-                            ];
-                            final unreadCounts = [
-                              _getUnreadCountForFilter(0),
-                              _getUnreadCountForFilter(1),
-                              _getUnreadCountForFilter(2),
-                              _getUnreadCountForFilter(3),
-                            ];
-                            // === Glass-режим ===
-                            // Фильтры выбираются через центральный выпадающий LiquidGlassMorph
-                            if (glassEnabled) {
-                              final statusBarHeight =
-                                   MediaQuery.of(context).padding.top;
-                              final topBarHeight = statusBarHeight + 52.0;
-                              return _buildChatList(
-                                topPadding: topBarHeight + 8.0,
-                              );
-                            }
-
-                            // === Classic-режим ===
-                            return SafeArea(
-                              child: Column(
-                                children: [
-                                  // Top bar
-                                  if (_isSelectMode)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 8),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context).colorScheme.primary,
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Theme.of(context).colorScheme.primary
-                                                .withValues(alpha: 0.3),
-                                            blurRadius: 8,
-                                            offset: const Offset(0, 2),
-                                          ),
-                                        ],
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          IconButton(
-                                            icon: const iconoir.Xmark(
-                                                color: Colors.white,
-                                                width: 22,
-                                                height: 22),
-                                            onPressed: _exitSelectMode,
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            'Выбрано: ${_selectedChatIds.length}',
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const Spacer(),
-                                          IconButton(
-                                            icon: const iconoir.ListSelect(
-                                                color: Colors.white,
-                                                width: 22,
-                                                height: 22),
-                                            tooltip: 'Выбрать все',
-                                            onPressed: _selectAllChats,
-                                          ),
-                                          IconButton(
-                                            icon: const iconoir.MoreVert(
-                                                color: Colors.white,
-                                                width: 22,
-                                                height: 22),
-                                            onPressed:
-                                                _showSelectedChatsMenu,
-                                          ),
-                                        ],
-                                      ),
-                                    )
-                                  else
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 8),
-                                      child: Center(
-                                        child: Text(
-                                          _isWsConnected
-                                              ? l10n.translate('app_title')
-                                              : 'соединение',
-                                          style: TextStyle(
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.bold,
-                                            color: _isWsConnected
-                                                ? Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurface
-                                                : Colors.grey,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  // Filter chips + Chat list
-                                  LiquidGlassFilterChips(
-                                    enabled: false,
-                                    filters: filters,
-                                    activeFilter: _activeFilter,
-                                    onFilterSelected: (i) =>
-                                        setState(() => _activeFilter = i),
-                                    unreadCounts: unreadCounts,
-                                  ),
-                                  Expanded(child: _buildChatList()),
-                                ],
-                              ),
+                        child: Builder(
+                          builder: (context) {
+                            final statusBarHeight =
+                                MediaQuery.of(context).padding.top;
+                            final topBarHeight = statusBarHeight + 52.0;
+                            return _buildChatList(
+                              topPadding: topBarHeight + 8.0,
                             );
                           },
                         ),
@@ -2790,6 +2679,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               body: Stack(
                 children: [
                   Positioned.fill(child: pageView),
+                  if (_isTopMenuOpen || _isFolderMenuOpen)
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          if (_isTopMenuOpen) _closeTopMenu();
+                          if (_isFolderMenuOpen) _closeFolderMenu();
+                        },
+                      ),
+                    ),
                   Positioned(
                     top: 0,
                     left: 0,
@@ -2810,7 +2709,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           _onTabTapped(index);
                         },
                         onAddTap: _showCreateMenu,
-                        bottomPadding: 8,
+                        bottomPadding: 12,
                       ),
                     ),
                   ),

@@ -532,34 +532,64 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                     children: [
                       Center(
                         child: Container(
-                          height: 38,
+                          height: 44,
                           padding: const EdgeInsets.symmetric(horizontal: 20),
                           decoration: BoxDecoration(
-                            color: isDark
-                                ? const Color(0xFF2C2C2E)
-                                : const Color(0xFFF2F2F7),
-                            borderRadius: BorderRadius.circular(30),
+                            color: p.surface,
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(
+                              color: p.divider,
+                              width: 0.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: isDark
+                                    ? Colors.black.withValues(alpha: 0.3)
+                                    : Colors.black.withValues(alpha: 0.08),
+                                blurRadius: 10,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
                           ),
                           alignment: Alignment.center,
                           child: Text(
                             'Theaver',
                             style: TextStyle(
                               fontSize: 17,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w700,
                               color: p.appBarForeground,
                             ),
                           ),
                         ),
                       ),
                       Positioned(
-                        right: 0,
-                        child: IconButton(
-                          icon: iconoir.MoreVert(
+                        right: 8,
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: p.surface,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: p.divider,
+                              width: 0.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: isDark
+                                    ? Colors.black.withValues(alpha: 0.3)
+                                    : Colors.black.withValues(alpha: 0.08),
+                                blurRadius: 10,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          alignment: Alignment.center,
+                          child: iconoir.MoreVert(
                             width: 22,
                             height: 22,
                             color: p.appBarForeground,
                           ),
-                          onPressed: () {},
                         ),
                       ),
                     ],

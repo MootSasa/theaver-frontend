@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
+import '../../models/theav_theme.dart';
 import '../../utils/haptic_utils.dart';
 
 /// Описание вкладки в нижнем баре.
@@ -30,10 +31,10 @@ class ClassicBottomBar extends StatefulWidget {
     required this.selectedIndex,
     required this.onTabSelected,
     this.onAddTap,
-    this.spacing = 8,
-    this.horizontalPadding = 20,
-    this.bottomPadding = 20,
-    this.barHeight = 64,
+    this.spacing = 10,
+    this.horizontalPadding = 16,
+    this.bottomPadding = 12,
+    this.barHeight = 60,
   }) : super(key: key);
 
   /// Индекс активной вкладки
@@ -78,17 +79,17 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
     final brightness = MediaQuery.platformBrightnessOf(context);
     final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
 
     // Цвета заливки — непрозрачные (классический дизайн)
-    final barBackgroundColor = isDark
-        ? const Color(0xFF2C2C2E)
-        : Colors.white;
+    final barBackgroundColor = p?.surface ??
+        (isDark ? const Color(0xFF2C2C2E) : Colors.white);
     final indicatorColor = isDark
         ? Colors.white.withValues(alpha: 0.15)
         : Colors.black.withValues(alpha: 0.08);
-    final addButtonColor = isDark
-        ? const Color(0xFF2C2C2E)
-        : Colors.white;
+    final addButtonColor = p?.surface ??
+        (isDark ? const Color(0xFF2C2C2E) : Colors.white);
 
     return Padding(
       padding: EdgeInsets.only(
@@ -200,7 +201,7 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
                   child: iconoir.Plus(
                     width: 28,
                     height: 28,
-                    color: isDark ? Colors.white70 : Colors.black54,
+                    color: p?.onSurface ?? (isDark ? Colors.white70 : Colors.black54),
                   ),
                 ),
               ),
@@ -235,9 +236,11 @@ class _ClassicBottomBarTabButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
     final iconColor = selected
-        ? theme.colorScheme.primary
-        : (isDark ? Colors.white54 : Colors.black54);
+        ? (p?.primary ?? theme.colorScheme.primary)
+        : (p?.subtext ?? (isDark ? Colors.white54 : Colors.black54));
 
     return GestureDetector(
       onTap: onTap,
@@ -245,40 +248,17 @@ class _ClassicBottomBarTabButton extends StatelessWidget {
       child: Semantics(
         button: true,
         label: tab.label,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Transform.translate(
-            offset: const Offset(0, 2),
-            child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedScale(
-                scale: selected ? 1.1 : 1.0,
-                duration: const Duration(milliseconds: 150),
-                child: tab.iconBuilder != null
-                    ? tab.iconBuilder!(iconColor, 24)
-                    : Icon(
-                        selected ? (tab.selectedIcon ?? tab.icon) : tab.icon,
-                        color: iconColor,
-                        size: 24,
-                      ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                tab.label,
-                maxLines: 1,
-                textAlign: TextAlign.center,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: iconColor,
-                  fontSize: 11,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
+        child: Center(
+          child: AnimatedScale(
+            scale: selected ? 1.08 : 1.0,
+            duration: const Duration(milliseconds: 150),
+            child: tab.iconBuilder != null
+                ? tab.iconBuilder!(iconColor, 26)
+                : Icon(
+                    selected ? (tab.selectedIcon ?? tab.icon) : tab.icon,
+                    color: iconColor,
+                    size: 26,
+                  ),
           ),
         ),
       ),
