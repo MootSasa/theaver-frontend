@@ -171,6 +171,49 @@ void main() {
       final imported = await service.importThemePackage(zipBytes, defaultName: 'Импортированная тема');
       expect(imported.name, 'Импортированная тема');
     });
+
+    test('TheavTheme.fromJson handles missing fields with safe defaults', () {
+      final minimalJson = <String, dynamic>{};
+      final theme = TheavTheme.fromJson(minimalJson);
+
+      expect(theme.name, 'Custom Theme');
+      expect(theme.author, 'Theaver User');
+      expect(theme.isDark, false);
+      expect(theme.bubbleRadius, 16.0);
+      expect(theme.palette.primary, const Color(0xFF0088CC));
+      expect(theme.palette.background, const Color(0xFFFFFFFF));
+      expect(theme.palette.error, const Color(0xFFEF5350));
+      expect(theme.wallpaper.type, 'pattern');
+      expect(theme.wallpaper.backgroundColor, const Color(0xFFEAF2F8));
+    });
+
+    test('TheavTheme.fromJson ignores extra unknown fields without errors', () {
+      final jsonWithExtras = <String, dynamic>{
+        'name': 'Future Theme',
+        'extraFutureSetting': true,
+        'someRandomList': [1, 2, 3],
+        'palette': {
+          'primary': '#FF0000',
+          'nonExistentColorKey': '#123456',
+          'futureGradientMode': 'mesh',
+        },
+        'wallpaper': {
+          'type': 'pattern',
+          'extraWallpaperParam': 42,
+        },
+      };
+
+      final theme = TheavTheme.fromJson(jsonWithExtras);
+      expect(theme.name, 'Future Theme');
+      expect(theme.palette.primary, const Color(0xFFFF0000));
+      expect(theme.wallpaper.type, 'pattern');
+    });
+
+    test('TheavColorUtils handles invalid hex strings gracefully', () {
+      expect(TheavColorUtils.fromHex('not-a-hex'), const Color(0xFF0088CC));
+      expect(TheavColorUtils.fromHex(''), const Color(0xFF0088CC));
+      expect(TheavColorUtils.fromHex('#XYZ123'), const Color(0xFF0088CC));
+    });
   });
 
   group('TheavThemeService Filename Sanitization Tests', () {
