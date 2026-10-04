@@ -51,7 +51,8 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
+class _MainScreenState extends State<MainScreen>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   int _currentIndex = 1; // 0: Settings, 1: Chats, 2: Search
   int _activeFilter = 0; // 0: Все, 1: Личные, 2: Группы, 3: Каналы
 
@@ -78,6 +79,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // Central folder morph menu
   bool _isFolderMenuOpen = false;
   bool _isFolderMenuWide = false;
+
+  // Animation controllers for Material mode top bar morphing
+  late final AnimationController _classicTopMenuController;
+  late final AnimationController _classicFolderMenuController;
+  late final CurvedAnimation _classicTopMenuAnimation;
+  late final CurvedAnimation _classicFolderMenuAnimation;
+  int _topMenuTabIndex = 1;
 
   Timer? _morphSafetyTimer;
 
@@ -114,6 +122,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _classicTopMenuController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
+    _classicTopMenuAnimation = CurvedAnimation(
+      parent: _classicTopMenuController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeOutCubic,
+    );
+    _classicFolderMenuController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
+    _classicFolderMenuAnimation = CurvedAnimation(
+      parent: _classicFolderMenuController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeOutCubic,
+    );
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
 
@@ -791,6 +819,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _classicTopMenuAnimation.dispose();
+    _classicFolderMenuAnimation.dispose();
+    _classicTopMenuController.dispose();
+    _classicFolderMenuController.dispose();
     _morphSafetyTimer?.cancel();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
@@ -976,8 +1008,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (_isFolderMenuOpen) {
       _closeFolderMenu();
     }
+    _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
     _startMorphSafetyTimer();
+    _classicTopMenuController.forward();
     setState(() {
       _isTopMenuWide = true;
       _isTopMenuOpen = true;
@@ -987,6 +1021,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _closeTopMenu() {
     if (!_isTopMenuOpen) return;
     _startMorphSafetyTimer();
+    _classicTopMenuController.reverse();
     setState(() {
       _isTopMenuOpen = false;
       _isTopMenuWide = false;
@@ -1009,6 +1044,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
     HapticUtils.tap();
     _startMorphSafetyTimer();
+    _classicFolderMenuController.forward();
     setState(() {
       _isFolderMenuWide = true;
       _isFolderMenuOpen = true;
@@ -1018,6 +1054,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _closeFolderMenu() {
     if (!_isFolderMenuOpen) return;
     _startMorphSafetyTimer();
+    _classicFolderMenuController.reverse();
     setState(() {
       _isFolderMenuOpen = false;
       _isFolderMenuWide = false;
@@ -1539,139 +1576,238 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         (isDark
             ? Colors.white.withValues(alpha: 0.1)
             : Colors.black.withValues(alpha: 0.06));
-    final shadowColor = isDark
-        ? Colors.black.withValues(alpha: 0.35)
-        : Colors.black.withValues(alpha: 0.08);
+    final double baseShadowAlpha = isDark ? 0.35 : 0.08;
 
     const double ctrlSize = 44.0;
     const double menuWidth = 200.0;
-    final double menuHeight = _getMenuHeight(_currentIndex);
+    final int menuTabIndex =
+        _classicTopMenuController.value > 0 ? _topMenuTabIndex : _currentIndex;
+    final double menuHeight = _getMenuHeight(menuTabIndex);
     const double folderMenuWidth = 220.0;
     const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
 
     final double closedPillWidth =
         math.max(130.0, _calculateTitleWidth(context) + 48.0);
 
-    final double maxActiveMenuHeight = math.max(
-      _isTopMenuOpen ? menuHeight : 0,
-      _isFolderMenuOpen ? folderMenuHeight : 0,
-    );
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        _classicTopMenuAnimation,
+        _classicFolderMenuAnimation,
+      ]),
+      builder: (context, _) {
+        final double topProgress = _classicTopMenuAnimation.value;
+        final double folderProgress = _classicFolderMenuAnimation.value;
 
-    return SafeArea(
-      bottom: false,
-      child: Padding(
-        padding: const EdgeInsets.only(top: 8.0),
-        child: SizedBox(
-          width: double.infinity,
-          height: maxActiveMenuHeight > 0 ? maxActiveMenuHeight + 8 : ctrlSize + 4,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              // Centered title pill / morph folder dropdown menu
-              Positioned(
-                top: 2,
-                left: 0,
-                right: 0,
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
-                    curve: Curves.easeOutCubic,
-                    width: _isFolderMenuOpen ? folderMenuWidth : closedPillWidth,
-                    height: _isFolderMenuOpen ? folderMenuHeight : ctrlSize,
-                    decoration: BoxDecoration(
-                      color: barBackgroundColor,
-                      borderRadius: BorderRadius.circular(22.0),
-                      border: Border.all(color: borderColor, width: 0.5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: shadowColor,
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    onEnd: () {
-                      _morphSafetyTimer?.cancel();
-                    },
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: _isFolderMenuOpen
-                          ? _FolderMorphMenu(
-                              key: const ValueKey<String>('folder_menu'),
-                              width: folderMenuWidth,
-                              activeFilter: _activeFilter,
-                              unreadCounts: [
-                                _getUnreadCountForFilter(0),
-                                _getUnreadCountForFilter(1),
-                                _getUnreadCountForFilter(2),
-                                _getUnreadCountForFilter(3),
-                              ],
-                              onSelectFolder: (index) {
-                                HapticUtils.selection();
-                                setState(() => _activeFilter = index);
-                                _closeFolderMenu();
-                              },
-                            )
-                          : _TitlePillContent(
-                              key: const ValueKey<String>('title_pill'),
-                              title: _currentTitleText,
-                              titleKey: _currentTitleKey,
-                              isConnected: _isTitleConnected,
-                              onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+        final double currentTopWidth =
+            ctrlSize + (menuWidth - ctrlSize) * topProgress;
+        final double currentTopHeight =
+            ctrlSize + (menuHeight - ctrlSize) * topProgress;
+
+        final double currentFolderWidth =
+            closedPillWidth + (folderMenuWidth - closedPillWidth) * folderProgress;
+        final double currentFolderHeight =
+            ctrlSize + (folderMenuHeight - ctrlSize) * folderProgress;
+
+        final double currentBarHeight = math.max(
+          ctrlSize + 4,
+          math.max(currentTopHeight, currentFolderHeight) + 8,
+        );
+
+        return SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: SizedBox(
+              width: double.infinity,
+              height: currentBarHeight,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // Centered title pill / morph folder dropdown menu
+                  Positioned(
+                    top: 2,
+                    left: 0,
+                    right: 0,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Container(
+                        width: currentFolderWidth,
+                        height: currentFolderHeight,
+                        decoration: BoxDecoration(
+                          color: barBackgroundColor,
+                          borderRadius: BorderRadius.circular(22.0),
+                          border: Border.all(color: borderColor, width: 0.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(
+                                alpha: (baseShadowAlpha *
+                                        (0.6 + 0.4 * folderProgress))
+                                    .clamp(0.0, 1.0),
+                              ),
+                              blurRadius: 10 + 6 * folderProgress,
+                              offset: Offset(0, 3 + 3 * folderProgress),
                             ),
+                          ],
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: Stack(
+                          clipBehavior: Clip.hardEdge,
+                          children: [
+                            // Folder menu items
+                            if (folderProgress > 0.01)
+                              Positioned(
+                                top: 0,
+                                left: (currentFolderWidth - folderMenuWidth) / 2,
+                                width: folderMenuWidth,
+                                height: folderMenuHeight,
+                                child: Opacity(
+                                  opacity: ((folderProgress - 0.15) / 0.85)
+                                      .clamp(0.0, 1.0),
+                                  child: Transform.translate(
+                                    offset:
+                                        Offset(0, -10.0 * (1.0 - folderProgress)),
+                                    child: IgnorePointer(
+                                      ignoring: folderProgress < 0.9,
+                                      child: _FolderMorphMenu(
+                                        key: const ValueKey<String>('folder_menu'),
+                                        width: folderMenuWidth,
+                                        activeFilter: _activeFilter,
+                                        unreadCounts: [
+                                          _getUnreadCountForFilter(0),
+                                          _getUnreadCountForFilter(1),
+                                          _getUnreadCountForFilter(2),
+                                          _getUnreadCountForFilter(3),
+                                        ],
+                                        onSelectFolder: (index) {
+                                          HapticUtils.selection();
+                                          setState(() => _activeFilter = index);
+                                          _closeFolderMenu();
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                            // Title pill content ("Theaver")
+                            if (folderProgress < 0.99)
+                              Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                height: ctrlSize,
+                                child: Opacity(
+                                  opacity: (1.0 - (folderProgress / 0.35))
+                                      .clamp(0.0, 1.0),
+                                  child: Transform.scale(
+                                    scale: 1.0 - 0.15 * folderProgress,
+                                    child: IgnorePointer(
+                                      ignoring: folderProgress > 0.1,
+                                      child: _TitlePillContent(
+                                        key: const ValueKey<String>('title_pill'),
+                                        title: _currentTitleText,
+                                        titleKey: _currentTitleKey,
+                                        isConnected: _isTitleConnected,
+                                        onTap: _currentIndex == 1
+                                            ? _toggleFolderMenu
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
 
-              // Persistent three dots button and morph context menu
-              Positioned(
-                top: 2,
-                right: 16,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOutCubic,
-                  width: _isTopMenuOpen ? menuWidth : ctrlSize,
-                  height: _isTopMenuOpen ? menuHeight : ctrlSize,
-                  decoration: BoxDecoration(
-                    color: barBackgroundColor,
-                    borderRadius: BorderRadius.circular(22.0),
-                    border: Border.all(color: borderColor, width: 0.5),
-                    boxShadow: [
-                      BoxShadow(
-                        color: shadowColor,
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  onEnd: () {
-                    _morphSafetyTimer?.cancel();
-                  },
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: _isTopMenuOpen
-                        ? _TopMorphMenu(
-                            key: const ValueKey<String>('menu'),
-                            width: menuWidth,
-                            items: _getMenuItems(_currentIndex),
-                            onItemTap: _handleMenuAction,
-                          )
-                        : _ThreeDotsGlyph(
-                            key: const ValueKey<String>('glyph'),
-                            size: ctrlSize,
-                            onTap: _toggleTopMenu,
+                  // Persistent three dots button and morph context menu
+                  Positioned(
+                    top: 2,
+                    right: 16,
+                    child: Container(
+                      width: currentTopWidth,
+                      height: currentTopHeight,
+                      decoration: BoxDecoration(
+                        color: barBackgroundColor,
+                        borderRadius: BorderRadius.circular(22.0),
+                        border: Border.all(color: borderColor, width: 0.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha:
+                                  (baseShadowAlpha * (0.6 + 0.4 * topProgress))
+                                      .clamp(0.0, 1.0),
+                            ),
+                            blurRadius: 10 + 6 * topProgress,
+                            offset: Offset(0, 3 + 3 * topProgress),
                           ),
+                        ],
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Stack(
+                        clipBehavior: Clip.hardEdge,
+                        children: [
+                          // Menu items
+                          if (topProgress > 0.01)
+                            Positioned(
+                              top: 0,
+                              right: 0,
+                              width: menuWidth,
+                              height: menuHeight,
+                              child: Opacity(
+                                opacity: ((topProgress - 0.15) / 0.85)
+                                    .clamp(0.0, 1.0),
+                                child: Transform.translate(
+                                  offset:
+                                      Offset(0, -10.0 * (1.0 - topProgress)),
+                                  child: IgnorePointer(
+                                    ignoring: topProgress < 0.9,
+                                    child: _TopMorphMenu(
+                                      key: const ValueKey<String>('menu'),
+                                      width: menuWidth,
+                                      items: _getMenuItems(menuTabIndex),
+                                      onItemTap: _handleMenuAction,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                          // Three dots glyph
+                          if (topProgress < 0.99)
+                            Positioned(
+                              top: 0,
+                              right: 0,
+                              width: ctrlSize,
+                              height: ctrlSize,
+                              child: Opacity(
+                                opacity: (1.0 - (topProgress / 0.35))
+                                    .clamp(0.0, 1.0),
+                                child: Transform.scale(
+                                  scale: 1.0 - 0.2 * topProgress,
+                                  child: IgnorePointer(
+                                    ignoring: topProgress > 0.1,
+                                    child: _ThreeDotsGlyph(
+                                      key: const ValueKey<String>('glyph'),
+                                      size: ctrlSize,
+                                      onTap: _toggleTopMenu,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
