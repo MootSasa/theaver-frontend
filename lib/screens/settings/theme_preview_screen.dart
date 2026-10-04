@@ -14,7 +14,7 @@ import '../../theme/app_theme.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/chat/chat_list_item.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
-import '../../widgets/chat/liquid_glass_filter_chips.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
@@ -40,7 +40,6 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
   final PageController _pageController = PageController();
   final TextEditingController _mockInputController = TextEditingController();
   int _currentPage = 0;
-  int _activeMainFilter = 0;
   bool _isLoading = true;
   String? _errorMessage;
   TheavTheme? _theme;
@@ -494,16 +493,281 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
     final isDark = theme.isDark;
     final p = theme.palette;
     final statusBarHeight = MediaQuery.of(context).padding.top;
+    final safeBottom = MediaQuery.of(context).padding.bottom;
     final glassProvider = context.watch<LiquidGlassProvider?>();
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final lightAngle = glassProvider?.getEffectiveLightAngle(reduceMotion: reduceMotion) ?? 0.785;
 
-    final filters = [
-      l10n.translate('filter_all'),
-      l10n.translate('filter_personal'),
-      l10n.translate('filter_groups'),
-      l10n.translate('filter_channels'),
-    ];
+    // 1. Floating Top App Bar (matching real main_screen)
+    final Widget centerPill;
+    final Widget rightButton;
+
+    if (glassEnabled) {
+      final topGlassShape = LiquidGlassShape.continuousRoundedRectangle(
+        cornerRadius: 22.0,
+        clipQuality: LiquidGlassClipQuality.exact,
+        borderWidth: 0.7,
+        lightIntensity: isDark ? 0.7 : 0.95,
+        lightDirection: lightAngle,
+        borderType: const OpticalBorder(
+          borderSaturation: 1.1,
+          ambientIntensity: 0.85,
+          borderSolidity: 0.95,
+        ),
+      );
+
+      final topGlassStyle = LiquidGlassStyle(
+        shape: topGlassShape,
+        appearance: LiquidGlassAppearance(
+          color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+          blur: glassProvider?.blurEffect ??
+              const LiquidGlassBlur(sigmaX: 8.0, sigmaY: 8.0),
+          shadow: LiquidGlassShadow(
+            blur: 16,
+            opacity: isDark ? 0.40 : 0.18,
+            offset: const Offset(0, 4),
+            color: Colors.black,
+          ),
+        ),
+        refraction: const LiquidGlassRefraction(
+          distortion: 0.06,
+          distortionWidth: 26,
+        ),
+        liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
+      );
+
+      centerPill = SizedBox(
+        width: 140.0,
+        height: 44.0,
+        child: LiquidGlassLens(
+          style: topGlassStyle,
+          child: Center(
+            child: Text(
+              'Theaver',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                letterSpacing: -0.2,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      rightButton = SizedBox(
+        width: 44.0,
+        height: 44.0,
+        child: LiquidGlassLens(
+          style: topGlassStyle,
+          child: Center(
+            child: iconoir.MoreVert(
+              width: 22.0,
+              height: 22.0,
+              color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+            ),
+          ),
+        ),
+      );
+    } else {
+      centerPill = Container(
+        width: 140.0,
+        height: 44.0,
+        decoration: BoxDecoration(
+          color: p.surface,
+          borderRadius: BorderRadius.circular(22.0),
+          border: Border.all(
+            color: p.divider,
+            width: 0.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          'Theaver',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: p.onSurface,
+            letterSpacing: -0.2,
+          ),
+        ),
+      );
+
+      rightButton = Container(
+        width: 44.0,
+        height: 44.0,
+        decoration: BoxDecoration(
+          color: p.surface,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: p.divider,
+            width: 0.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: iconoir.MoreVert(
+          width: 22.0,
+          height: 22.0,
+          color: p.onSurface,
+        ),
+      );
+    }
+
+    // 2. Floating Bottom Navigation Bar (matching real main_screen)
+    final Widget bottomBar;
+    if (glassEnabled) {
+      final bottomGlassShape = LiquidGlassShape.continuousRoundedRectangle(
+        cornerRadius: 30.0,
+        clipQuality: LiquidGlassClipQuality.exact,
+        borderWidth: 0.7,
+        lightIntensity: isDark ? 0.7 : 0.95,
+        lightDirection: lightAngle,
+        borderType: const OpticalBorder(
+          borderSaturation: 1.1,
+          ambientIntensity: 0.85,
+          borderSolidity: 0.95,
+        ),
+      );
+
+      final bottomGlassStyle = LiquidGlassStyle(
+        shape: bottomGlassShape,
+        appearance: LiquidGlassAppearance(
+          color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+          blur: glassProvider?.blurEffect ??
+              const LiquidGlassBlur(sigmaX: 8.0, sigmaY: 8.0),
+          shadow: LiquidGlassShadow(
+            blur: 16,
+            opacity: isDark ? 0.40 : 0.18,
+            offset: const Offset(0, 8),
+            color: Colors.black,
+          ),
+        ),
+        refraction: const LiquidGlassRefraction(
+          distortion: 0.06,
+          distortionWidth: 26,
+        ),
+        liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
+      );
+
+      bottomBar = Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+        child: Row(
+          children: [
+            // Tabs Capsule (Settings | Chats | Search)
+            Expanded(
+              child: SizedBox(
+                height: 60.0,
+                child: LiquidGlassLens(
+                  style: bottomGlassStyle,
+                  child: Stack(
+                    children: [
+                      // Active indicator behind center tab ('Чаты')
+                      Align(
+                        alignment: Alignment.center,
+                        child: FractionallySizedBox(
+                          widthFactor: 1 / 3,
+                          child: Padding(
+                            padding: const EdgeInsets.all(4.0),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: isDark
+                                    ? const Color(0x38FFFFFF)
+                                    : const Color(0x2EAEAEB2),
+                                borderRadius: BorderRadius.circular(26),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // 3 Tab Icons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Center(
+                              child: iconoir.Settings(
+                                width: 26,
+                                height: 26,
+                                color: isDark
+                                    ? const Color(0xFF8E8E93)
+                                    : const Color(0xFF636366),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Center(
+                              child: iconoir.ChatBubble(
+                                width: 26,
+                                height: 26,
+                                color: p.primary,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Center(
+                              child: iconoir.Search(
+                                width: 26,
+                                height: 26,
+                                color: isDark
+                                    ? const Color(0xFF8E8E93)
+                                    : const Color(0xFF636366),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            // '+' Action Button
+            SizedBox(
+              width: 60.0,
+              height: 60.0,
+              child: LiquidGlassLens(
+                style: bottomGlassStyle,
+                child: Center(
+                  child: iconoir.Plus(
+                    width: 28,
+                    height: 28,
+                    color: isDark ? Colors.white : const Color(0xFF121215),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      bottomBar = ClassicBottomBar(
+        selectedIndex: 1, // 'Чаты' selected
+        onTabSelected: (_) {},
+        onAddTap: () {},
+        horizontalPadding: 16,
+        bottomPadding: 0,
+        barHeight: 60,
+        spacing: 10,
+      );
+    }
+
+    final double bottomActionHeight = 54.0 + safeBottom;
 
     return Stack(
       children: [
@@ -512,196 +776,125 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
           child: Container(color: p.background),
         ),
 
-        // Main App Bar + Filter Chips + Chat List
+        // Real Chat List Items (Scrolling under the top and bottom bars)
         Positioned.fill(
-          child: Column(
+          child: ListView(
+            padding: EdgeInsets.only(
+              top: statusBarHeight + 60.0,
+              bottom: bottomActionHeight + 60.0 + 16.0,
+            ),
             children: [
-              // Main Screen App Bar matching actual main screen
-              Container(
-                color: p.appBarBackground,
-                padding: EdgeInsets.only(
-                  top: statusBarHeight + 4,
-                  bottom: 8,
-                  left: 16,
-                  right: 8,
-                ),
-                child: SizedBox(
-                  height: 44,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Center(
-                        child: Container(
-                          height: 44,
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          decoration: BoxDecoration(
-                            color: p.surface,
-                            borderRadius: BorderRadius.circular(22),
-                            border: Border.all(
-                              color: p.divider,
-                              width: 0.5,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: isDark
-                                    ? Colors.black.withValues(alpha: 0.3)
-                                    : Colors.black.withValues(alpha: 0.08),
-                                blurRadius: 10,
-                                offset: const Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            'Theaver',
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w700,
-                              color: p.appBarForeground,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        right: 8,
-                        child: Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: p.surface,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: p.divider,
-                              width: 0.5,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: isDark
-                                    ? Colors.black.withValues(alpha: 0.3)
-                                    : Colors.black.withValues(alpha: 0.08),
-                                blurRadius: 10,
-                                offset: const Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          alignment: Alignment.center,
-                          child: iconoir.MoreVert(
-                            width: 22,
-                            height: 22,
-                            color: p.appBarForeground,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+              ChatListItem(
+                chatName: l10n.translate('chat_saved') != 'chat_saved'
+                    ? l10n.translate('chat_saved')
+                    : 'Избранное',
+                lastMessage: 'Заметки, файлы и ссылки',
+                lastMessageTime: DateTime.now().subtract(const Duration(minutes: 2)),
+                avatarUrl: '',
+                isOnline: false,
+                isGroup: false,
+                unreadCount: 0,
+                onTap: () {},
               ),
-
-              // Filter chips (matching real main_screen)
-              Padding(
-                padding: const EdgeInsets.only(top: 4, bottom: 4),
-                child: LiquidGlassFilterChips(
-                  enabled: glassEnabled,
-                  isLite: isLite,
-                  filters: filters,
-                  activeFilter: _activeMainFilter,
-                  unreadCounts: const [3, 2, 1, 0],
-                  onFilterSelected: (idx) {
-                    setState(() => _activeMainFilter = idx);
-                  },
-                ),
+              ChatListItem(
+                chatName: 'Theaver News',
+                lastMessage: 'Вышло обновление Theaver 1.0! Добавлена поддержка кастомных тем и ссылок.',
+                lastMessageTime: DateTime.now().subtract(const Duration(minutes: 15)),
+                avatarUrl: '',
+                isOnline: true,
+                isGroup: false,
+                unreadCount: 1,
+                onTap: () {},
               ),
-
-              // Real Chat List Items
-              Expanded(
-                child: ListView(
-                  padding: EdgeInsets.only(
-                    bottom: 54.0 + MediaQuery.of(context).padding.bottom + 70.0,
-                  ),
-                  children: [
-                    ChatListItem(
-                      chatName: l10n.translate('chat_saved') != 'chat_saved'
-                          ? l10n.translate('chat_saved')
-                          : 'Избранное',
-                      lastMessage: 'Заметки, файлы и ссылки',
-                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 2)),
-                      avatarUrl: '',
-                      isOnline: false,
-                      isGroup: false,
-                      unreadCount: 0,
-                      onTap: () {},
-                    ),
-                    ChatListItem(
-                      chatName: 'Theaver News',
-                      lastMessage: 'Вышло обновление Theaver 1.0! Добавлена поддержка кастомных тем и ссылок.',
-                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 15)),
-                      avatarUrl: '',
-                      isOnline: true,
-                      isGroup: false,
-                      unreadCount: 1,
-                      onTap: () {},
-                    ),
-                    ChatListItem(
-                      chatName: 'Анна',
-                      lastMessage: 'Отправила тебе новые фото с прогулки 📸',
-                      lastMessageTime: DateTime.now().subtract(const Duration(minutes: 42)),
-                      avatarUrl: '',
-                      isOnline: true,
-                      isGroup: false,
-                      unreadCount: 2,
-                      onTap: () {},
-                    ),
-                    ChatListItem(
-                      chatName: 'Дизайн и архитектура',
-                      lastMessage: 'Обсуждение нового стиля интерфейса и палитры',
-                      lastMessageTime: DateTime.now().subtract(const Duration(hours: 3)),
-                      avatarUrl: '',
-                      isOnline: false,
-                      isGroup: true,
-                      unreadCount: 0,
-                      onTap: () {},
-                    ),
-                    ChatListItem(
-                      chatName: 'Алексей',
-                      lastMessage: 'Привет! Посмотри эту новую тему, она супер',
-                      lastMessageTime: DateTime.now().subtract(const Duration(hours: 6)),
-                      avatarUrl: '',
-                      isOnline: false,
-                      isGroup: false,
-                      unreadCount: 0,
-                      onTap: () {},
-                    ),
-                    ChatListItem(
-                      chatName: 'Рабочий чат',
-                      lastMessage: 'Встреча перенесена на 15:00',
-                      lastMessageTime: DateTime.now().subtract(const Duration(days: 1)),
-                      avatarUrl: '',
-                      isOnline: false,
-                      isGroup: true,
-                      unreadCount: 0,
-                      onTap: () {},
-                    ),
-                  ],
-                ),
+              ChatListItem(
+                chatName: 'Анна',
+                lastMessage: 'Отправила тебе новые фото с прогулки 📸',
+                lastMessageTime: DateTime.now().subtract(const Duration(minutes: 42)),
+                avatarUrl: '',
+                isOnline: true,
+                isGroup: false,
+                unreadCount: 2,
+                onTap: () {},
+              ),
+              ChatListItem(
+                chatName: 'Дизайн и архитектура',
+                lastMessage: 'Обсуждение нового стиля интерфейса и палитры',
+                lastMessageTime: DateTime.now().subtract(const Duration(hours: 3)),
+                avatarUrl: '',
+                isOnline: false,
+                isGroup: true,
+                unreadCount: 0,
+                onTap: () {},
+              ),
+              ChatListItem(
+                chatName: 'Алексей',
+                lastMessage: 'Привет! Посмотри эту новую тему, она супер',
+                lastMessageTime: DateTime.now().subtract(const Duration(hours: 6)),
+                avatarUrl: '',
+                isOnline: false,
+                isGroup: false,
+                unreadCount: 0,
+                onTap: () {},
+              ),
+              ChatListItem(
+                chatName: 'Рабочий чат',
+                lastMessage: 'Встреча перенесена на 15:00',
+                lastMessageTime: DateTime.now().subtract(const Duration(days: 1)),
+                avatarUrl: '',
+                isOnline: false,
+                isGroup: true,
+                unreadCount: 0,
+                onTap: () {},
               ),
             ],
           ),
         ),
 
-        // Bottom Navigation Bar matching real main screen
+        // Floating Top App Bar (matching real main_screen)
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: SizedBox(
+                width: double.infinity,
+                height: 48.0,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    // Centered "Theaver" pill
+                    Positioned(
+                      top: 2,
+                      left: 0,
+                      right: 0,
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: centerPill,
+                      ),
+                    ),
+                    // Right three dots button
+                    Positioned(
+                      top: 2,
+                      right: 16,
+                      child: rightButton,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // Floating Bottom Navigation Bar (matching real main_screen)
         Positioned(
           left: 0,
           right: 0,
-          bottom: 54.0 + MediaQuery.of(context).padding.bottom + 4.0,
+          bottom: bottomActionHeight + 8.0,
           child: IgnorePointer(
-            child: ClassicBottomBar(
-              selectedIndex: 1, // 'Чаты' selected
-              onTabSelected: (_) {},
-              onAddTap: () {},
-              horizontalPadding: 16,
-              bottomPadding: 0,
-              barHeight: 56,
-            ),
+            child: bottomBar,
           ),
         ),
       ],
