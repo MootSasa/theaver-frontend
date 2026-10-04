@@ -669,34 +669,17 @@ class _AppBarMicroPreview extends StatelessWidget {
                   ),
                   child: Row(
                     children: [
-                      Stack(
-                        children: [
-                          CircleAvatar(
-                            radius: 14,
-                            backgroundColor: p.primary,
-                            child: Text(
-                              'A',
-                              style: TextStyle(
-                                color: p.onPrimary,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                              ),
-                            ),
+                      CircleAvatar(
+                        radius: 14,
+                        backgroundColor: p.primary,
+                        child: Text(
+                          'A',
+                          style: TextStyle(
+                            color: p.onPrimary,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
                           ),
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: p.onlineIndicator,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: p.surface, width: 1.5),
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
@@ -1405,34 +1388,12 @@ class _BadgesMicroPreview extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Stack(
-                  children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: p.primary,
-                      child: Text(
-                        'T',
-                        style: TextStyle(
-                          color: p.onPrimary,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: p.onlineIndicator,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: p.surface, width: 2),
-                        ),
-                      ),
-                    ),
-                  ],
+                AvatarWithStatus(
+                  avatarUrl: null,
+                  name: 'T',
+                  radius: 20,
+                  isOnline: true,
+                  backgroundColor: p.primary,
                 ),
                 const SizedBox(width: 10),
                 Expanded(

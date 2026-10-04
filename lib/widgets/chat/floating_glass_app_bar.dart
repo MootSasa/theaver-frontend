@@ -487,7 +487,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                     avatarUrl: widget.avatarUrl,
                     name: widget.name,
                     radius: _kCenterAvatarRadius,
-                    isOnline: widget.isOnline,
+                    isOnline: false,
                   ),
             ),
             const SizedBox(width: 8.0),

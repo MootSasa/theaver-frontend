@@ -1,10 +1,10 @@
 import '../../models/theav_theme.dart';
-import '../../utils/image_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/date_time_utils.dart';
 import '../../l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'round_video_thumbnail.dart';
+import '../user/avatar_with_status.dart';
 
 class ChatListItem extends StatelessWidget {
   final String chatName;
@@ -53,45 +53,18 @@ class ChatListItem extends StatelessWidget {
     final p = themeExt?.palette;
     final primaryColor = p?.primary ?? theme.colorScheme.primary;
     final onPrimaryColor = p?.onPrimary ?? theme.colorScheme.onPrimary;
-    final onlineColor = p?.onlineIndicator ?? const Color(0xFF4CAF50);
-    final surfaceColor = p?.surface ?? theme.colorScheme.surface;
     final subtextColor = p?.subtext ?? (theme.brightness == Brightness.dark ? Colors.white60 : Colors.grey[600]!);
     final unreadBg = p?.unreadBadge ?? primaryColor;
     final unreadText = p?.unreadBadgeText ?? onPrimaryColor;
-    
-    final imageProvider = avatarImageProvider(avatarUrl);
-    
+
     return ListTile(
       onTap: onTap,
-      leading: Stack(
-        children: [
-          CircleAvatar(
-            radius: 22,
-            backgroundColor: primaryColor,
-            backgroundImage: imageProvider,
-            onBackgroundImageError: imageProvider != null ? (_, __) {} : null,
-            child: imageProvider == null
-                ? Text(
-                    chatName.isNotEmpty ? chatName[0].toUpperCase() : '?',
-                    style: TextStyle(color: onPrimaryColor, fontWeight: FontWeight.bold),
-                  )
-                : null,
-          ),
-          if (!isGroup && isOnline)
-            Positioned(
-              bottom: 0,
-              right: 0,
-              child: Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: onlineColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: surfaceColor, width: 2),
-                ),
-              ),
-            ),
-        ],
+      leading: AvatarWithStatus(
+        avatarUrl: avatarUrl,
+        name: chatName,
+        radius: 22,
+        isOnline: !isGroup && isOnline,
+        backgroundColor: primaryColor,
       ),
       title: Row(
         children: [
