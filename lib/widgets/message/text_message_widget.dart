@@ -13,6 +13,8 @@ import '../../utils/entity_parser.dart';
 import 'code_block_widget.dart';
 import 'collapsible_blockquote_widget.dart';
 import 'spoiler_text_widget.dart';
+import '../../screens/settings/theme_preview_screen.dart';
+import '../../services/theav_theme_service.dart';
 
 // --- НАСТРОЙКИ СТИЛЯ ТЕКСТОВОГО СООБЩЕНИЯ ---
 /// Стандартный размер шрифта сообщений.
@@ -663,6 +665,16 @@ class TextMessageWidget extends StatelessWidget {
       onTapLink: (text, href, title) async {
         if (href != null && href.trim().isNotEmpty) {
           final normalized = EntityParser.normalizeUrl(href.trim());
+          final themeCode = TheavThemeService.extractThemeCode(normalized);
+          if (themeCode != null) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ThemePreviewScreen(themeCode: themeCode),
+              ),
+            );
+            return;
+          }
           final uri = Uri.tryParse(normalized);
           if (uri != null) {
             try {

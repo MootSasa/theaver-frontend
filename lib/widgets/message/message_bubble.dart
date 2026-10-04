@@ -24,6 +24,8 @@ import 'dart:io';
 import 'video_message_widget.dart';
 import 'voice_message_widget.dart';
 import 'link_preview_card.dart';
+import 'theme_link_preview_card.dart';
+import '../../services/theav_theme_service.dart';
 import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
 import '../../services/media_cache_manager.dart';
@@ -1008,11 +1010,20 @@ class MessageBubble extends StatelessWidget {
         if (previewUrl != null && previewUrl.isNotEmpty && !previewDisabled) {
           final bool showAbove = previewOpts?.showAboveText ?? false;
           final bool preferLarge = previewOpts?.preferLargeMedia ?? false;
-          final previewCard = LinkPreviewCard(
-            url: EntityParser.normalizeUrl(previewUrl),
-            preferLargeMedia: preferLarge,
-            isDark: isDark,
-          );
+          final String? themeCode = TheavThemeService.extractThemeCode(previewUrl);
+          final Widget previewCard = themeCode != null
+              ? ThemeLinkPreviewCard(
+                  code: themeCode,
+                  isDark: isDark,
+                  isMe: isMe,
+                  preset: effectivePreset,
+                  stripStyle: effectiveStripStyle,
+                )
+              : LinkPreviewCard(
+                  url: EntityParser.normalizeUrl(previewUrl),
+                  preferLargeMedia: preferLarge,
+                  isDark: isDark,
+                );
 
           textBodyWidget = Column(
             crossAxisAlignment: CrossAxisAlignment.start,

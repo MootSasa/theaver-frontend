@@ -817,5 +817,12 @@
   "theme_color_reaction_inactive": "Fond de réaction inactive",
   "theme_color_error": "Couleur d'erreur et suppression",
   "theme_delete": "Supprimer le thème",
-  "theme_delete_confirm": "Voulez-vous vraiment supprimer ce thème ?"
+  "theme_delete_confirm": "Voulez-vous vraiment supprimer ce thème ?",
+  "theme_color_theme_header": "THÈME DE COULEUR",
+  "theme_view_button": "VOIR LE THÈME",
+  "theme_preview_title": "Aperçu du thème",
+  "theme_installs_count": "Installations : {count}",
+  "theme_link_copied": "Lien du thème copié dans le presse-papier",
+  "theme_share_title": "Partager le thème",
+  "theme_applied_toast": "Thème appliqué"
 }

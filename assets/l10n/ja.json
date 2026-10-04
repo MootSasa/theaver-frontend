@@ -817,5 +817,12 @@
   "theme_color_reaction_inactive": "他のリアクション背景",
   "theme_color_error": "エラー・削除カラー",
   "theme_delete": "テーマを削除",
-  "theme_delete_confirm": "このテーマを削除してもよろしいですか？"
+  "theme_delete_confirm": "このテーマを削除してもよろしいですか？",
+  "theme_color_theme_header": "カラーテーマ",
+  "theme_view_button": "テーマを見る",
+  "theme_preview_title": "テーマのプレビュー",
+  "theme_installs_count": "インストール数: {count}",
+  "theme_link_copied": "テーマリンクがクリップボードにコピーされました",
+  "theme_share_title": "テーマを共有",
+  "theme_applied_toast": "テーマを適用しました"
 }

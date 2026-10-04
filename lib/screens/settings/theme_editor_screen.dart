@@ -5,11 +5,12 @@ import 'package:ios_color_picker/show_ios_color_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:flutter/services.dart';
+import '../../services/glass_toast_service.dart';
+import '../../widgets/theme/theme_editor_floating_app_bar.dart';
 import '../../models/theav_theme.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../theme/theme_provider.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/theme/chat_preview_card.dart';
 import '../../l10n/app_localizations.dart';
 import 'advanced_theme_colors_screen.dart';
@@ -150,36 +151,45 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     }
   }
 
+  Future<void> _shareThemeLink() async {
+    final l10n = context.l10n;
+    try {
+      final url = await TheavThemeService().sharePublicTheme(_currentTheme);
+      if (url != null) {
+        await Clipboard.setData(ClipboardData(text: url));
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            l10n.translate('theme_link_copied'),
+            icon: Icons.link,
+          );
+        }
+        await Share.share(url, subject: _currentTheme.name);
+      } else {
+        await _exportTheme();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error sharing theme: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final isEditing = widget.themeToEdit != null;
+    final statusBarHeight = MediaQuery.of(context).padding.top;
+    final topPadding = statusBarHeight + kThemeEditorAppBarTotalHeight;
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        final appBarActions = [
-          IconButton(
-            icon: const iconoir.ShareAndroid(width: 22, height: 22),
-            tooltip: l10n.translate('theme_export'),
-            onPressed: _exportTheme,
-          ),
-          TextButton(
-            onPressed: _isSaving ? null : _saveTheme,
-            child: Text(
-              l10n.translate('theme_apply'),
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-            ),
-          ),
-        ];
-
-        final listView = ListView(
-          padding: EdgeInsets.only(
-            top: glassEnabled ? 12 : 0,
-            bottom: 30,
-          ),
-          children: [
+    final listView = ListView(
+      padding: const EdgeInsets.only(
+        top: 12,
+        bottom: 40,
+      ),
+      children: [
             // 1. Live Sticky Interactive Preview Card
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -565,50 +575,31 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
           ],
         );
 
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: listView,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(
-                      isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    actions: appBarActions,
-                    centerTitle: false,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
+    return Scaffold(
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Padding(
+              padding: EdgeInsets.only(top: topPadding),
+              child: listView,
             ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(
-              isEditing ? l10n.translate('theme_edit') : l10n.translate('theme_create_new'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            centerTitle: false,
-            actions: appBarActions,
           ),
-          body: listView,
-        );
-      },
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: ThemeEditorFloatingAppBar(
+              title: isEditing
+                  ? l10n.translate('theme_edit')
+                  : l10n.translate('theme_create_new'),
+              onBack: () => Navigator.of(context).pop(),
+              onShare: _shareThemeLink,
+              onApply: _saveTheme,
+              isSaving: _isSaving,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

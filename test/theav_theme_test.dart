@@ -358,5 +358,23 @@ void main() {
       expect(provider.themeMode, equals(ThemeMode.dark));
     });
   });
+
+  group('Public Theme Sharing & Link Extraction Tests', () {
+    test('extractThemeCode successfully extracts valid theaver.app/addtheme codes', () {
+      expect(TheavThemeService.extractThemeCode('https://theaver.app/addtheme/cKQjOAcSGnlLUJMb'), equals('cKQjOAcSGnlLUJMb'));
+      expect(TheavThemeService.extractThemeCode('http://theaver.app/addtheme/1234567890abcdef'), equals('1234567890abcdef'));
+      expect(TheavThemeService.extractThemeCode('theaver.app/addtheme/AbCdEf123456'), equals('AbCdEf123456'));
+      expect(TheavThemeService.extractThemeCode('Check out this theme: https://theaver.app/addtheme/themeCode123 and let me know!'), equals('themeCode123'));
+      expect(TheavThemeService.extractThemeCode('theaver://addtheme/customCode789'), equals('customCode789'));
+    });
+
+    test('extractThemeCode returns null for non-theaver or non-theme URLs', () {
+      expect(TheavThemeService.extractThemeCode('https://t.me/addtheme/cKQjOAcSGnlLUJMb'), isNull);
+      expect(TheavThemeService.extractThemeCode('https://theaver.app/u/123'), isNull);
+      expect(TheavThemeService.extractThemeCode('https://example.com/addtheme/abc'), isNull);
+      expect(TheavThemeService.extractThemeCode('Just a random message without links'), isNull);
+    });
+  });
 }
+
 

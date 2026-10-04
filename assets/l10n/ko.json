@@ -817,5 +817,12 @@
   "theme_color_reaction_inactive": "다른 반응 배경",
   "theme_color_error": "오류 및 삭제 색상",
   "theme_delete": "테마 삭제",
-  "theme_delete_confirm": "이 테마를 삭제하시겠습니까?"
+  "theme_delete_confirm": "이 테마를 삭제하시겠습니까?",
+  "theme_color_theme_header": "색상 테마",
+  "theme_view_button": "테마 보기",
+  "theme_preview_title": "테마 미리보기",
+  "theme_installs_count": "설치 수: {count}",
+  "theme_link_copied": "테마 링크가 클립보드에 복사되었습니다",
+  "theme_share_title": "테마 공유",
+  "theme_applied_toast": "테마가 적용되었습니다"
 }

@@ -870,5 +870,12 @@
   "theme_color_selection_overlay": "Подсветка выделения",
   "theme_color_reaction_active": "Фон активной реакции",
   "theme_color_reaction_inactive": "Фон неактивной реакции",
-  "theme_color_error": "Цвет ошибок и удаления"
+  "theme_color_error": "Цвет ошибок и удаления",
+  "theme_color_theme_header": "ЦВЕТОВАЯ ТЕМА",
+  "theme_view_button": "ПРОСМОТР ТЕМЫ",
+  "theme_preview_title": "Предпросмотр темы",
+  "theme_installs_count": "Число установок: {count}",
+  "theme_link_copied": "Ссылка на тему скопирована в буфер обмена",
+  "theme_share_title": "Поделиться темой",
+  "theme_applied_toast": "Тема применена"
 }

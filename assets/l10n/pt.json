@@ -817,5 +817,12 @@
   "theme_color_reaction_inactive": "Fundo da reação inativa",
   "theme_color_error": "Cor de erro e exclusão",
   "theme_delete": "Excluir tema",
-  "theme_delete_confirm": "Tem certeza de que deseja excluir este tema?"
+  "theme_delete_confirm": "Tem certeza de que deseja excluir este tema?",
+  "theme_color_theme_header": "TEMA DE CORES",
+  "theme_view_button": "VER TEMA",
+  "theme_preview_title": "Prévia do tema",
+  "theme_installs_count": "Instalações: {count}",
+  "theme_link_copied": "Link do tema copiado para a área de transferência",
+  "theme_share_title": "Compartilhar tema",
+  "theme_applied_toast": "Tema aplicado"
 }

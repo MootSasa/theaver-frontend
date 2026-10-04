@@ -871,5 +871,12 @@
   "theme_color_selection_overlay": "Selection Highlight",
   "theme_color_reaction_active": "Active Reaction Background",
   "theme_color_reaction_inactive": "Inactive Reaction Background",
-  "theme_color_error": "Error & Destructive Color"
+  "theme_color_error": "Error & Destructive Color",
+  "theme_color_theme_header": "COLOR THEME",
+  "theme_view_button": "VIEW THEME",
+  "theme_preview_title": "Theme Preview",
+  "theme_installs_count": "Installs: {count}",
+  "theme_link_copied": "Theme link copied to clipboard",
+  "theme_share_title": "Share Theme",
+  "theme_applied_toast": "Theme applied"
 }

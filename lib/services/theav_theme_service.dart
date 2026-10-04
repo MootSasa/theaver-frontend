@@ -798,6 +798,80 @@ class TheavThemeService extends ChangeNotifier {
     await prefs.setString(_keyCachedCustomThemes, jsonEncode(jsonList));
   }
 
+  /// Extracts theme code from text if it contains a theaver.app/addtheme/{code} link.
+  static String? extractThemeCode(String text) {
+    if (text.isEmpty) return null;
+    final reg = RegExp(r'(?:https?:\/\/)?(?:www\.)?theaver\.app\/addtheme\/([a-zA-Z0-9]+)|theaver:\/\/addtheme\/([a-zA-Z0-9]+)', caseSensitive: false);
+    final match = reg.firstMatch(text);
+    if (match != null) {
+      return match.group(1) ?? match.group(2);
+    }
+    return null;
+  }
+
+  /// Share a theme publicly and get the public URL (https://theaver.app/addtheme/{code})
+  Future<String?> sharePublicTheme(TheavTheme theme) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null || token.isEmpty) return null;
+
+      final res = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/user/themes/share'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json; charset=UTF-8',
+        },
+        body: jsonEncode({
+          'theme_id': theme.id,
+          'name': theme.name,
+          'is_dark': theme.isDark,
+          'theme_data': theme.toJson(),
+        }),
+      );
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes));
+        if (data['success'] == true && data['url'] != null) {
+          return data['url'] as String;
+        }
+      }
+    } catch (e) {
+      debugPrint('TheavThemeService: Error sharing public theme: $e');
+    }
+    return null;
+  }
+
+  /// Fetch public theme details by code
+  Future<Map<String, dynamic>?> fetchPublicTheme(String code) async {
+    try {
+      final res = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/themes/public/$code'),
+      );
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes));
+        if (data['success'] == true && data['theme'] != null) {
+          return data['theme'] as Map<String, dynamic>;
+        }
+      }
+    } catch (e) {
+      debugPrint('TheavThemeService: Error fetching public theme $code: $e');
+    }
+    return null;
+  }
+
+  /// Increment install count for a public theme
+  Future<bool> installPublicTheme(String code) async {
+    try {
+      final res = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/themes/public/$code/install'),
+      );
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('TheavThemeService: Error installing public theme $code: $e');
+      return false;
+    }
+  }
+
   /// Package a TheavTheme into a .theavtheme ZIP archive
   Future<Uint8List> exportThemePackage(TheavTheme theme) async {
     final archive = Archive();
