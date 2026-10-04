@@ -96,12 +96,12 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     try {
       final bytes = await TheavThemeService().exportThemePackage(_currentTheme);
       final tempDir = await getTemporaryDirectory();
-      final cleanName = _currentTheme.name.replaceAll(RegExp(r'[^\w\s]+'), '').trim().replaceAll(' ', '_');
-      final file = File('${tempDir.path}/${cleanName.isEmpty ? "theme" : cleanName}.theavtheme');
+      final cleanName = TheavThemeService.sanitizeFileName(_currentTheme.name);
+      final file = File('${tempDir.path}/$cleanName.theavtheme');
       await file.writeAsBytes(bytes);
 
       await Share.shareXFiles(
-        [XFile(file.path)],
+        [XFile(file.path, name: '$cleanName.theavtheme')],
         text: 'Тема Theaver: ${_currentTheme.name}',
       );
     } catch (e) {

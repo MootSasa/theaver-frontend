@@ -8,21 +8,42 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../models/theav_theme.dart';
+import 'account_manager.dart';
 import 'auth_service.dart';
 
 /// Service managing built-in presets, cloud-synced account themes,
-/// local device active themes, and .theavtheme package import/export.
+/// local account active themes, and .theavtheme package import/export.
 class TheavThemeService extends ChangeNotifier {
   static final TheavThemeService _instance = TheavThemeService._internal();
   factory TheavThemeService() => _instance;
   TheavThemeService._internal();
 
-  static const String _keyActiveLightId = 'device_active_light_theme_id';
-  static const String _keyActiveDarkId = 'device_active_dark_theme_id';
-  static const String _keyActiveLightThemeJson = 'device_active_light_theme_json';
-  static const String _keyActiveDarkThemeJson = 'device_active_dark_theme_json';
-  static const String _keyCachedCustomThemes = 'device_cached_custom_themes';
-  static const String _keyThemeOverrides = 'device_theme_overrides_json';
+  static const String _legacyKeyActiveLightId = 'device_active_light_theme_id';
+  static const String _legacyKeyActiveDarkId = 'device_active_dark_theme_id';
+  static const String _legacyKeyActiveLightThemeJson = 'device_active_light_theme_json';
+  static const String _legacyKeyActiveDarkThemeJson = 'device_active_dark_theme_json';
+  static const String _legacyKeyCachedCustomThemes = 'device_cached_custom_themes';
+  static const String _legacyKeyThemeOverrides = 'device_theme_overrides_json';
+  static const String _keyLegacyMigrated = 'device_themes_legacy_migrated';
+
+  String? _currentUserId;
+  bool _isInitialized = false;
+
+  String? get currentUserId => _currentUserId;
+
+  String _prefKey(String base) {
+    if (_currentUserId != null && _currentUserId!.isNotEmpty) {
+      return 'user_${_currentUserId}_$base';
+    }
+    return 'device_$base';
+  }
+
+  String get _keyActiveLightId => _prefKey('active_light_theme_id');
+  String get _keyActiveDarkId => _prefKey('active_dark_theme_id');
+  String get _keyActiveLightThemeJson => _prefKey('active_light_theme_json');
+  String get _keyActiveDarkThemeJson => _prefKey('active_dark_theme_json');
+  String get _keyCachedCustomThemes => _prefKey('cached_custom_themes');
+  String get _keyThemeOverrides => _prefKey('theme_overrides_json');
 
   String _activeLightThemeId = 'theaver_classic';
   String _activeDarkThemeId = 'dark_slate';
@@ -36,6 +57,19 @@ class TheavThemeService extends ChangeNotifier {
   String get activeDarkThemeId => _activeDarkThemeId;
   List<TheavTheme> get customThemes => List.unmodifiable(_customThemes);
   bool get isSyncing => _isSyncing;
+
+  /// Sanitize filename for safe cross-platform saving while allowing any valid characters
+  /// (Cyrillic, spaces, Unicode, punctuation, etc.).
+  static String sanitizeFileName(String name, {String fallback = 'theme'}) {
+    // Only strip filesystem-prohibited characters: \ / : * ? " < > | and control chars 0x00-0x1F
+    var safe = name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_').trim();
+    // Remove trailing dots and spaces (forbidden on Windows/FAT32)
+    safe = safe.replaceAll(RegExp(r'[. ]+$'), '');
+    if (safe.isEmpty || safe.replaceAll('_', '').trim().isEmpty) {
+      return fallback;
+    }
+    return safe;
+  }
 
   /// List of built-in preset themes
   static final List<TheavTheme> builtInThemes = [
@@ -286,11 +320,62 @@ class TheavThemeService extends ChangeNotifier {
     ),
   ];
 
-  /// Initialize service, load local preferences, and sync with cloud
+  /// Initialize service, register account listener, load preferences, and sync with cloud
   Future<void> init() async {
+    if (_isInitialized) return;
+    _isInitialized = true;
+
+    final accountManager = AccountManager();
+    accountManager.removeListener(_onAccountManagerChanged);
+    accountManager.addListener(_onAccountManagerChanged);
+
+    final currentUid = accountManager.currentAccount?.userId ?? await AuthService.getUserId();
+    await switchUser(currentUid, force: true);
+  }
+
+  void _onAccountManagerChanged() {
+    final newUid = AccountManager().currentAccount?.userId;
+    if (newUid != _currentUserId) {
+      switchUser(newUid);
+    }
+  }
+
+  /// Switch theme preferences and cache to a specific user account
+  Future<void> switchUser(String? userId, {bool force = false}) async {
+    if (!force && _currentUserId == userId) return;
+    _currentUserId = userId;
+
     final prefs = await SharedPreferences.getInstance();
+
+    // Perform one-time migration of legacy device keys to the first logged-in user
+    if (userId != null && userId.isNotEmpty) {
+      final isMigrated = prefs.getBool(_keyLegacyMigrated) ?? false;
+      final hasUserData = prefs.containsKey(_keyActiveLightId);
+      if (!isMigrated && !hasUserData && prefs.containsKey(_legacyKeyActiveLightId)) {
+        final legacyLightId = prefs.getString(_legacyKeyActiveLightId);
+        final legacyDarkId = prefs.getString(_legacyKeyActiveDarkId);
+        final legacyLightJson = prefs.getString(_legacyKeyActiveLightThemeJson);
+        final legacyDarkJson = prefs.getString(_legacyKeyActiveDarkThemeJson);
+        final legacyOverrides = prefs.getString(_legacyKeyThemeOverrides);
+        final legacyCustom = prefs.getString(_legacyKeyCachedCustomThemes);
+
+        if (legacyLightId != null) await prefs.setString(_keyActiveLightId, legacyLightId);
+        if (legacyDarkId != null) await prefs.setString(_keyActiveDarkId, legacyDarkId);
+        if (legacyLightJson != null) await prefs.setString(_keyActiveLightThemeJson, legacyLightJson);
+        if (legacyDarkJson != null) await prefs.setString(_keyActiveDarkThemeJson, legacyDarkJson);
+        if (legacyOverrides != null) await prefs.setString(_keyThemeOverrides, legacyOverrides);
+        if (legacyCustom != null) await prefs.setString(_keyCachedCustomThemes, legacyCustom);
+
+        await prefs.setBool(_keyLegacyMigrated, true);
+      }
+    }
+
     _activeLightThemeId = prefs.getString(_keyActiveLightId) ?? 'theaver_classic';
     _activeDarkThemeId = prefs.getString(_keyActiveDarkId) ?? 'dark_slate';
+    _activeLightTheme = null;
+    _activeDarkTheme = null;
+    _themeOverrides = {};
+    _customThemes = [];
 
     // Load theme overrides (customized wallpapers, bubble radiuses, etc.)
     final overridesJson = prefs.getString(_keyThemeOverrides);
@@ -336,8 +421,10 @@ class TheavThemeService extends ChangeNotifier {
 
     notifyListeners();
 
-    // Background sync from server
-    syncCloudThemes();
+    // Background sync from server for the active account
+    if (_currentUserId != null && _currentUserId!.isNotEmpty) {
+      syncCloudThemes();
+    }
   }
 
   /// Get all available themes (built-ins with overrides + custom/cloud)
@@ -406,6 +493,7 @@ class TheavThemeService extends ChangeNotifier {
   Future<void> syncCloudThemes() async {
     final token = await AuthService.getToken();
     if (token == null || token.isEmpty) return;
+    final syncUserId = _currentUserId;
 
     _isSyncing = true;
     notifyListeners();
@@ -415,6 +503,11 @@ class TheavThemeService extends ChangeNotifier {
         Uri.parse('${AppConfig.baseUrl}/api/user/themes'),
         headers: {'Authorization': 'Bearer $token'},
       );
+
+      if (_currentUserId != syncUserId) {
+        // Discard result if user switched accounts while syncing
+        return;
+      }
 
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(res.body);
@@ -431,6 +524,8 @@ class TheavThemeService extends ChangeNotifier {
 
             fetched.add(TheavTheme.fromJson(themeData, isCloudSaved: true));
           }
+
+          if (_currentUserId != syncUserId) return;
 
           // Merge fetched cloud themes with local themes and built-in overrides
           final Map<String, TheavTheme> map = {};
@@ -467,6 +562,8 @@ class TheavThemeService extends ChangeNotifier {
             }
           }
 
+          if (_currentUserId != syncUserId) return;
+
           await _persistThemeOverrides();
           _customThemes = map.values.toList();
           await _persistCustomThemes();
@@ -492,8 +589,10 @@ class TheavThemeService extends ChangeNotifier {
     } catch (e) {
       debugPrint('TheavThemeService: syncCloudThemes error: $e');
     } finally {
-      _isSyncing = false;
-      notifyListeners();
+      if (_currentUserId == syncUserId) {
+        _isSyncing = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -509,8 +608,9 @@ class TheavThemeService extends ChangeNotifier {
       if (!await wallpaperDir.exists()) {
         await wallpaperDir.create(recursive: true);
       }
+      final userPrefix = _currentUserId != null && _currentUserId!.isNotEmpty ? '${_currentUserId}_' : '';
       final sanitizedId = theme.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-      final targetFile = File('${wallpaperDir.path}/theme_wp_$sanitizedId.png');
+      final targetFile = File('${wallpaperDir.path}/theme_wp_$userPrefix$sanitizedId.png');
       if (await targetFile.exists() && await targetFile.length() > 0) {
         _updateThemeWallpaperPath(theme.id, targetFile.path);
         return;
@@ -634,7 +734,7 @@ class TheavThemeService extends ChangeNotifier {
             Uri.parse('${AppConfig.baseUrl}/api/user/themes'),
             headers: {
               'Authorization': 'Bearer $token',
-              'Content-Type': 'application/json',
+              'Content-Type': 'application/json; charset=UTF-8',
             },
             body: jsonEncode({
               'theme_id': themeToSave.id,
@@ -759,7 +859,7 @@ class TheavThemeService extends ChangeNotifier {
   }
 
   /// Import a TheavTheme from a .theavtheme ZIP archive
-  Future<TheavTheme> importThemePackage(Uint8List zipBytes) async {
+  Future<TheavTheme> importThemePackage(Uint8List zipBytes, {String? defaultName}) async {
     final decoder = ZipDecoder();
     final archive = decoder.decodeBytes(zipBytes);
 
@@ -794,6 +894,9 @@ class TheavThemeService extends ChangeNotifier {
     }
 
     var importedTheme = TheavTheme.fromJson(data);
+    if (importedTheme.name.trim().isEmpty && defaultName != null && defaultName.trim().isNotEmpty) {
+      importedTheme = importedTheme.copyWith(name: defaultName.trim());
+    }
     if (localWallpaperPath != null) {
       if (wallpaperFile!.name.endsWith('.svg')) {
         importedTheme = importedTheme.copyWith(

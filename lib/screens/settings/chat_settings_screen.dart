@@ -45,7 +45,11 @@ class ChatSettingsScreen extends StatelessWidget {
       }
 
       final bytes = await file.readAsBytes();
-      final imported = await TheavThemeService().importThemePackage(bytes);
+      final pickedFileName = result.files.single.name;
+      final defaultName = pickedFileName.toLowerCase().endsWith('.theavtheme')
+          ? pickedFileName.substring(0, pickedFileName.length - '.theavtheme'.length)
+          : pickedFileName;
+      final imported = await TheavThemeService().importThemePackage(bytes, defaultName: defaultName);
 
       if (context.mounted) {
         ThemePreviewSheet.show(
@@ -83,12 +87,12 @@ class ChatSettingsScreen extends StatelessWidget {
 
       final bytes = await TheavThemeService().exportThemePackage(activeTheme);
       final tempDir = await getTemporaryDirectory();
-      final cleanName = activeTheme.name.replaceAll(RegExp(r'[^\w\s]+'), '').trim().replaceAll(' ', '_');
-      final file = File('${tempDir.path}/${cleanName.isEmpty ? "theme" : cleanName}.theavtheme');
+      final cleanName = TheavThemeService.sanitizeFileName(activeTheme.name);
+      final file = File('${tempDir.path}/$cleanName.theavtheme');
       await file.writeAsBytes(bytes);
 
       await Share.shareXFiles(
-        [XFile(file.path)],
+        [XFile(file.path, name: '$cleanName.theavtheme')],
         text: 'Тема Theaver: ${activeTheme.name}',
       );
     } catch (e) {
