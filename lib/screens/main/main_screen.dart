@@ -74,12 +74,24 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // Top glass bar & morph context menu
   bool _isTopMenuOpen = false;
   bool _isTopMenuWide = false;
-  bool _isMorphing = false;
 
   // Central folder morph menu
   bool _isFolderMenuOpen = false;
   bool _isFolderMenuWide = false;
-  bool _isFolderMorphing = false;
+
+  Timer? _morphSafetyTimer;
+
+  void _startMorphSafetyTimer() {
+    _morphSafetyTimer?.cancel();
+    _morphSafetyTimer = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) {
+        setState(() {
+          _isTopMenuWide = _isTopMenuOpen;
+          _isFolderMenuWide = _isFolderMenuOpen;
+        });
+      }
+    });
+  }
 
   // Search results
   List<SearchResultUser> _users = [];
@@ -779,6 +791,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _morphSafetyTimer?.cancel();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
@@ -959,23 +972,24 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   // ── Top Glass Bar & Morph Menu Logic ──────────────────────────────
 
   void _openTopMenu() {
-    if (_isMorphing || _isTopMenuOpen) return;
+    if (_isTopMenuOpen) return;
     if (_isFolderMenuOpen) {
       _closeFolderMenu();
     }
     HapticUtils.tap();
+    _startMorphSafetyTimer();
     setState(() {
       _isTopMenuWide = true;
       _isTopMenuOpen = true;
-      _isMorphing = true;
     });
   }
 
   void _closeTopMenu() {
     if (!_isTopMenuOpen) return;
+    _startMorphSafetyTimer();
     setState(() {
       _isTopMenuOpen = false;
-      _isMorphing = true;
+      _isTopMenuWide = false;
     });
   }
 
@@ -989,23 +1003,24 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   void _openFolderMenu() {
     if (_currentIndex != 1) return;
-    if (_isFolderMorphing || _isFolderMenuOpen) return;
+    if (_isFolderMenuOpen) return;
     if (_isTopMenuOpen) {
       _closeTopMenu();
     }
     HapticUtils.tap();
+    _startMorphSafetyTimer();
     setState(() {
       _isFolderMenuWide = true;
       _isFolderMenuOpen = true;
-      _isFolderMorphing = true;
     });
   }
 
   void _closeFolderMenu() {
     if (!_isFolderMenuOpen) return;
+    _startMorphSafetyTimer();
     setState(() {
       _isFolderMenuOpen = false;
-      _isFolderMorphing = true;
+      _isFolderMenuWide = false;
     });
   }
 
@@ -1015,6 +1030,21 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     } else {
       _openFolderMenu();
     }
+  }
+
+  double _calculateTitleWidth(BuildContext context) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: _currentTitleText,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          letterSpacing: -0.2,
+        ),
+      ),
+      textDirection: Directionality.of(context),
+    )..layout();
+    return tp.width;
   }
 
   String get _currentTitleText {
@@ -1335,6 +1365,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       ),
     );
 
+    final double closedPillWidth =
+        math.max(130.0, _calculateTitleWidth(context) + 48.0);
+
     final double maxActiveMenuHeight = math.max(
       _isTopMenuWide ? menuHeight : 0,
       _isFolderMenuWide ? folderMenuHeight : 0,
@@ -1352,41 +1385,52 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             left: 0,
             right: 0,
             height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
-            child: LiquidGlassMorph(
+            child: Align(
               alignment: Alignment.topCenter,
-              motion: LiquidGlassMorphMotion.fluid,
-              smoothness: 28,
-              style: pillStyle,
-              onEnd: () {
-                if (_isFolderMenuWide != _isFolderMenuOpen) {
-                  setState(() => _isFolderMenuWide = _isFolderMenuOpen);
-                }
-                _isFolderMorphing = false;
-              },
-              child: _isFolderMenuOpen
-                  ? _FolderMorphMenu(
-                      key: const ValueKey<String>('folder_menu'),
-                      width: folderMenuWidth,
-                      activeFilter: _activeFilter,
-                      unreadCounts: [
-                        _getUnreadCountForFilter(0),
-                        _getUnreadCountForFilter(1),
-                        _getUnreadCountForFilter(2),
-                        _getUnreadCountForFilter(3),
-                      ],
-                      onSelectFolder: (index) {
-                        HapticUtils.selection();
-                        setState(() => _activeFilter = index);
-                        _closeFolderMenu();
-                      },
-                    )
-                  : _TitlePillContent(
-                      key: const ValueKey<String>('title_pill'),
-                      title: _currentTitleText,
-                      titleKey: _currentTitleKey,
-                      isConnected: _isTitleConnected,
-                      onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
-                    ),
+              child: SizedBox(
+                width: _isFolderMenuWide ? folderMenuWidth : closedPillWidth,
+                height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
+                child: LiquidGlassMorph(
+                  alignment: Alignment.topCenter,
+                  motion: LiquidGlassMorphMotion.plain,
+                  smoothness: 28,
+                  style: pillStyle,
+                  onEnd: () {
+                    _morphSafetyTimer?.cancel();
+                    if (mounted) {
+                      setState(() {
+                        if (_isFolderMenuWide != _isFolderMenuOpen) {
+                          _isFolderMenuWide = _isFolderMenuOpen;
+                        }
+                      });
+                    }
+                  },
+                  child: _isFolderMenuOpen
+                      ? _FolderMorphMenu(
+                          key: const ValueKey<String>('folder_menu'),
+                          width: folderMenuWidth,
+                          activeFilter: _activeFilter,
+                          unreadCounts: [
+                            _getUnreadCountForFilter(0),
+                            _getUnreadCountForFilter(1),
+                            _getUnreadCountForFilter(2),
+                            _getUnreadCountForFilter(3),
+                          ],
+                          onSelectFolder: (index) {
+                            HapticUtils.selection();
+                            setState(() => _activeFilter = index);
+                            _closeFolderMenu();
+                          },
+                        )
+                      : _TitlePillContent(
+                          key: const ValueKey<String>('title_pill'),
+                          title: _currentTitleText,
+                          titleKey: _currentTitleKey,
+                          isConnected: _isTitleConnected,
+                          onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+                        ),
+                ),
+              ),
             ),
           ),
 
@@ -1398,14 +1442,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             height: _isTopMenuWide ? menuHeight : ctrlSize,
             child: LiquidGlassMorph(
               alignment: Alignment.topRight,
-              motion: LiquidGlassMorphMotion.fluid,
+              motion: LiquidGlassMorphMotion.plain,
               smoothness: 28,
               style: morphStyle,
               onEnd: () {
-                if (_isTopMenuWide != _isTopMenuOpen) {
-                  setState(() => _isTopMenuWide = _isTopMenuOpen);
+                _morphSafetyTimer?.cancel();
+                if (mounted) {
+                  setState(() {
+                    if (_isTopMenuWide != _isTopMenuOpen) {
+                      _isTopMenuWide = _isTopMenuOpen;
+                    }
+                  });
                 }
-                _isMorphing = false;
               },
               child: _isTopMenuOpen
                   ? _TopMorphMenu(
@@ -1501,6 +1549,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     const double folderMenuWidth = 220.0;
     const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
 
+    final double closedPillWidth =
+        math.max(130.0, _calculateTitleWidth(context) + 48.0);
+
     final double maxActiveMenuHeight = math.max(
       _isTopMenuOpen ? menuHeight : 0,
       _isFolderMenuOpen ? folderMenuHeight : 0,
@@ -1526,7 +1577,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 250),
                     curve: Curves.easeOutCubic,
-                    width: _isFolderMenuOpen ? folderMenuWidth : null,
+                    width: _isFolderMenuOpen ? folderMenuWidth : closedPillWidth,
                     height: _isFolderMenuOpen ? folderMenuHeight : ctrlSize,
                     decoration: BoxDecoration(
                       color: barBackgroundColor,
@@ -1541,6 +1592,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                       ],
                     ),
                     clipBehavior: Clip.antiAlias,
+                    onEnd: () {
+                      _morphSafetyTimer?.cancel();
+                    },
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 200),
                       child: _isFolderMenuOpen
@@ -1594,6 +1648,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     ],
                   ),
                   clipBehavior: Clip.antiAlias,
+                  onEnd: () {
+                    _morphSafetyTimer?.cancel();
+                  },
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 200),
                     child: _isTopMenuOpen
@@ -3045,20 +3102,35 @@ class _TopMorphMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double totalHeight = items.length * 44.0 + 12.0;
     return SizedBox(
       width: width,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < items.length; i++)
-              _MorphMenuRow(
-                key: ValueKey(items[i].id),
-                item: items[i],
-                onTap: () => onItemTap(items[i].id),
+      height: totalHeight,
+      child: OverflowBox(
+        minWidth: width,
+        maxWidth: width,
+        minHeight: 0,
+        maxHeight: totalHeight,
+        alignment: Alignment.topCenter,
+        child: Material(
+          color: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6.0),
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < items.length; i++)
+                    _MorphMenuRow(
+                      key: ValueKey(items[i].id),
+                      item: items[i],
+                      onTap: () => onItemTap(items[i].id),
+                    ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
       ),
     );
@@ -3267,24 +3339,39 @@ class _FolderMorphMenu extends StatelessWidget {
       ),
     ];
 
+    const double totalHeight = 4 * 44.0 + 12.0; // 188.0
     return SizedBox(
       width: width,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < folderItems.length; i++)
-              _FolderMenuRow(
-                key: ValueKey('folder_${folderItems[i].index}'),
-                item: folderItems[i],
-                isSelected: activeFilter == folderItems[i].index,
-                unreadCount: folderItems[i].index < unreadCounts.length
-                    ? unreadCounts[folderItems[i].index]
-                    : 0,
-                onTap: () => onSelectFolder(folderItems[i].index),
+      height: totalHeight,
+      child: OverflowBox(
+        minWidth: width,
+        maxWidth: width,
+        minHeight: 0,
+        maxHeight: totalHeight,
+        alignment: Alignment.topCenter,
+        child: Material(
+          color: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6.0),
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < folderItems.length; i++)
+                    _FolderMenuRow(
+                      key: ValueKey('folder_${folderItems[i].index}'),
+                      item: folderItems[i],
+                      isSelected: activeFilter == folderItems[i].index,
+                      unreadCount: folderItems[i].index < unreadCounts.length
+                          ? unreadCounts[folderItems[i].index]
+                          : 0,
+                      onTap: () => onSelectFolder(folderItems[i].index),
+                    ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
       ),
     );
