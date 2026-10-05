@@ -1273,13 +1273,13 @@ class _MainScreenState extends State<MainScreen>
           ElevatedButton(
             onPressed: () async {
               Navigator.of(context).pop();
-              await AuthService.logout();
-              if (!mounted) return;
-              // ignore: use_build_context_synchronously
-              Navigator.of(context).pushAndRemoveUntil(
+              final nav = DeepLinkService().navigatorKey.currentState ??
+                  Navigator.of(context, rootNavigator: true);
+              nav.pushAndRemoveUntil(
                 SwipeBackPageRoute(builder: (_) => const LoginScreen()),
                 (route) => false,
               );
+              await AuthService.logout();
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
@@ -1320,25 +1320,22 @@ class _MainScreenState extends State<MainScreen>
           ),
           ElevatedButton(
             onPressed: () async {
-              final scaffoldMessenger = ScaffoldMessenger.of(context);
-              final navigator = Navigator.of(context);
-              navigator.pop();
+              final nav = DeepLinkService().navigatorKey.currentState ??
+                  Navigator.of(context, rootNavigator: true);
+              Navigator.of(context).pop();
+              nav.pushAndRemoveUntil(
+                SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
               try {
+                WebSocketService().disconnect();
+                await AuthService.logout();
+                await AppDatabase().clearAllData();
+                await CacheService().clearCache();
                 await _accountManager.clearAll();
                 final prefs = await SharedPreferences.getInstance();
                 await prefs.clear();
               } catch (_) {}
-              if (!mounted) return;
-              scaffoldMessenger.showSnackBar(
-                SnackBar(
-                  content: Text(l10n.translate('clear_data_success')),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-              navigator.pushAndRemoveUntil(
-                SwipeBackPageRoute(builder: (_) => const LoginScreen()),
-                (route) => false,
-              );
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,

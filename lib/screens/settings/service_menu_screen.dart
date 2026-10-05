@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/websocket_service.dart';
 import '../auth/login_screen.dart';
 import '../../widgets/common/adaptive_switch.dart';
@@ -111,13 +112,13 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
   }
 
   Future<void> _logoutFromCurrentAccount() async {
-    await AuthService.logout();
-    WebSocketService().disconnect();
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
+    final nav = DeepLinkService().navigatorKey.currentState ??
+        Navigator.of(context, rootNavigator: true);
+    nav.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (route) => false,
     );
+    await AuthService.logout();
   }
 
   void _showServerConfigDialog() {

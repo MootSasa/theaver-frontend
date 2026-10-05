@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/websocket_service.dart';
 import '../auth/login_screen.dart';
 import '../main/main_screen.dart';
@@ -171,23 +172,25 @@ class _AccountsScreenState extends State<AccountsScreen> {
     );
 
     if (confirmed == true) {
-      await _accountManager.removeAccount(account.userId);
-      _loadAccounts();
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(context.l10n.translate('accounts_removed')),
-          ),
-        );
-      }
-
-      // If no accounts left, go to login
-      if (_accounts.isEmpty && mounted) {
-        Navigator.of(context).pushAndRemoveUntil(
+      final isCurrent = account.userId == _currentAccount?.userId;
+      if (isCurrent) {
+        final nav = DeepLinkService().navigatorKey.currentState ??
+            Navigator.of(context, rootNavigator: true);
+        nav.pushAndRemoveUntil(
           SwipeBackPageRoute(builder: (_) => const LoginScreen()),
           (route) => false,
         );
+        await AuthService.logout();
+      } else {
+        await _accountManager.removeAccount(account.userId);
+        _loadAccounts();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(context.l10n.translate('accounts_removed')),
+            ),
+          );
+        }
       }
     }
   }

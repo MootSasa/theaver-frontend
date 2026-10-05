@@ -81,10 +81,13 @@ class AccountManager extends ChangeNotifier {
     _accounts.removeWhere((acc) => acc.userId == userId);
     if (_currentAccount?.userId == userId) {
       _currentAccount = null;
-      if (_accounts.isNotEmpty) {
-        _currentAccount = _accounts.first;
-      }
     }
+    await _saveAccounts();
+  }
+
+  /// Clears the currently active account pointer without removing accounts from the list
+  Future<void> clearCurrentAccount() async {
+    _currentAccount = null;
     await _saveAccounts();
   }
 

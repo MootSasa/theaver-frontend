@@ -199,27 +199,23 @@ class AuthService {
   /// Logs out the current user by invalidating the session and cleaning local data.
   static Future<void> logout() async {
     try {
-      // 1. Disconnect WebSocket
+      // 1. Disconnect WebSocket immediately
       try {
         WebSocketService().disconnect();
       } catch (_) {}
 
-      // 2. Unregister push token before destroying session
-      await NotificationService().unregisterPushToken();
+      // Grab token & current account info before wiping
       final token = await getToken();
-      if (token != null) {
-        await http.post(
-          Uri.parse('${AppConfig.baseUrl}/api/auth/logout'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $token',
-          },
-        );
+      final accountManager = AccountManager();
+      final currentUserId = accountManager.currentAccount?.userId;
+
+      // 2. Clear current account from AccountManager immediately
+      if (currentUserId != null) {
+        await accountManager.removeAccount(currentUserId);
+      } else {
+        await accountManager.clearCurrentAccount();
       }
-    } catch (e) {
-      // Log error but don't throw - we want to clear local state anyway
-      debugPrint('Logout error: $e');
-    } finally {
+
       // 3. Clear local SQLite database and media cache
       try {
         await AppDatabase().clearAllData();
@@ -232,11 +228,28 @@ class AuthService {
         debugPrint('Logout: error clearing CacheService: $e');
       }
 
-      // 4. Clear current account from AccountManager
-      final accountManager = AccountManager();
-      if (accountManager.currentAccount != null) {
-        await accountManager.removeAccount(accountManager.currentAccount!.userId);
+      // 4. Remote network cleanup in background with short timeout so it never blocks UI
+      if (token != null) {
+        NotificationService()
+            .unregisterPushToken()
+            .timeout(const Duration(seconds: 2))
+            .catchError((e) {
+          debugPrint('Logout: error unregistering push token: $e');
+        });
+
+        http.post(
+          Uri.parse('${AppConfig.baseUrl}/api/auth/logout'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        ).timeout(const Duration(seconds: 2)).catchError((e) {
+          debugPrint('Logout: error notifying server: $e');
+          return http.Response('', 500);
+        });
       }
+    } catch (e) {
+      debugPrint('Logout error: $e');
     }
   }
 
@@ -320,85 +333,42 @@ class AuthService {
         await accountManager.removeAccount(currentUserId);
       }
 
-      final nextAccount = accountManager.currentAccount;
-
-      // 4. Navigation & notification
+      // 4. Navigation to LoginScreen & notification
       final nav = DeepLinkService().navigatorKey.currentState;
       final context = DeepLinkService().navigatorKey.currentContext;
 
       final isExpired = reason == 'session_expired' || (reason?.contains('expired') ?? false);
 
-      if (nextAccount != null) {
-        // Multi-account: switch to the next account!
-        debugPrint('AuthService: Switched to next account ${nextAccount.userId}');
-        try {
-          await WebSocketService().updateUserId(nextAccount.userId);
-        } catch (_) {}
+      if (nav != null) {
+        nav.pushAndRemoveUntil(
+          SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+      }
 
-        if (nav != null) {
-          nav.pushAndRemoveUntil(
-            SwipeBackPageRoute(builder: (_) => const MainScreen()),
-            (route) => false,
-          );
-        }
-
-        if (context != null && context.mounted) {
-          final message = isExpired
-              ? (context.l10n.translate('session_expired_account_switched').replaceAll('{username}', terminatedUsername.isNotEmpty ? '@$terminatedUsername' : ''))
-              : (context.l10n.translate('session_terminated_account_switched').replaceAll('{username}', terminatedUsername.isNotEmpty ? '@$terminatedUsername' : ''));
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(Icons.info_outline, color: Colors.white),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      message,
-                      style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.white),
-                    ),
+      if (context != null && context.mounted) {
+        final message = isExpired
+            ? context.l10n.translate('session_expired')
+            : context.l10n.translate('session_terminated_remotely');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded, color: Colors.white),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.white),
                   ),
-                ],
-              ),
-              backgroundColor: Colors.orange[800],
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 5),
+                ),
+              ],
             ),
-          );
-        }
-      } else {
-        // No accounts left: navigate to LoginScreen
-        if (nav != null) {
-          nav.pushAndRemoveUntil(
-            SwipeBackPageRoute(builder: (_) => const LoginScreen()),
-            (route) => false,
-          );
-        }
-
-        if (context != null && context.mounted) {
-          final message = isExpired
-              ? context.l10n.translate('session_expired')
-              : context.l10n.translate('session_terminated_remotely');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(Icons.warning_amber_rounded, color: Colors.white),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      message,
-                      style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-              backgroundColor: Colors.red[700],
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 5),
-            ),
-          );
-        }
+            backgroundColor: Colors.red[700],
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 5),
+          ),
+        );
       }
     } catch (e) {
       debugPrint('Error in handleRemoteSessionTerminated: $e');

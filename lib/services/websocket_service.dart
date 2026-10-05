@@ -331,6 +331,7 @@ class WebSocketService {
     _channel = null;
     _setConnected(false);
     _isConnecting = false;
+    _currentUserId = null;
   }
 
   /// Reconnect to WebSocket server

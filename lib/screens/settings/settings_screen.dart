@@ -815,27 +815,16 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
 
     if (confirmed == true) {
+      // 1. Immediately kick user to LoginScreen using root navigator
+      final nav = DeepLinkService().navigatorKey.currentState ??
+          Navigator.of(context, rootNavigator: true);
+      nav.pushAndRemoveUntil(
+        SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+
+      // 2. Perform logout and local data wipe in background
       await AuthService.logout();
-      
-      if (!context.mounted) return;
-      
-      final nextAccount = _accountManager.currentAccount;
-      if (nextAccount != null) {
-        // Multi-account: switch to the next active account
-        try {
-          await WebSocketService().updateUserId(nextAccount.userId);
-        } catch (_) {}
-        Navigator.of(context).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const MainScreen()),
-          (route) => false,
-        );
-      } else {
-        // No accounts left: go to login screen
-        Navigator.of(context).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-        );
-      }
     }
   }
 
@@ -947,12 +936,12 @@ class _SettingsScreenState extends State<SettingsScreen>
         SnackBar(content: Text(l10n.translate('clear_data_success'))),
       );
 
-      if (context.mounted) {
-        Navigator.of(context).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-        );
-      }
+      final nav = DeepLinkService().navigatorKey.currentState ??
+          (context.mounted ? Navigator.of(context, rootNavigator: true) : null);
+      nav?.pushAndRemoveUntil(
+        SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
     } catch (e) {
       if (context.mounted) {
         Navigator.of(context).pop();

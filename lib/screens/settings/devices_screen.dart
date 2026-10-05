@@ -18,8 +18,11 @@ import 'package:iconoir_flutter/regular/info_circle.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../config/app_config.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../utils/swipe_back_route.dart';
+import '../auth/login_screen.dart';
 
 /// Screen displaying all active device sessions for the current account.
 /// Allows users to view, rename, and terminate sessions on other devices,
@@ -234,6 +237,17 @@ class _DevicesScreenState extends State<DevicesScreen> {
     );
 
     if (confirmed == true && mounted) {
+      if (isCurrent) {
+        final nav = DeepLinkService().navigatorKey.currentState ??
+            Navigator.of(context, rootNavigator: true);
+        nav.pushAndRemoveUntil(
+          SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+        await AuthService.logout();
+        return;
+      }
+
       final scaffoldMessenger = ScaffoldMessenger.of(context);
       try {
         final success = await AuthService.logoutDevice(deviceId);
