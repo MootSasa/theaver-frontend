@@ -518,4 +518,16 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteBankingCard(int id) async {
     await (delete(bankingCards)..where((t) => t.id.equals(id))).go();
   }
+
+  /// Очистить все данные локальной базы (сообщения, чаты, состояние синхронизации, карты)
+  Future<void> clearAllData() async {
+    await ensureInitialized();
+    await transaction(() async {
+      await delete(messages).go();
+      await delete(chats).go();
+      await delete(syncStates).go();
+      await delete(bankingCards).go();
+    });
+    debugPrint('AppDatabase: All local data cleared');
+  }
 }

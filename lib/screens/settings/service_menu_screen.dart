@@ -65,13 +65,32 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
             _isCheckingConnection = false;
           });
         } else {
+          final token = await AuthService.getToken();
+          bool isAuthValid = false;
+          if (token != null && token.isNotEmpty) {
+            try {
+              final authResp = await http.get(
+                Uri.parse('${AppConfig.baseUrl}/api/auth/sessions'),
+                headers: {'Authorization': 'Bearer $token'},
+              ).timeout(const Duration(seconds: 4));
+              if (authResp.statusCode == 200) {
+                isAuthValid = true;
+                msg += '\nАвторизация: Действительна (OK)';
+              } else if (authResp.statusCode == 401) {
+                msg += '\n⚠️ Авторизация: Ошибка 401 (Сессия истекла или отозвана)';
+              } else {
+                msg += '\n⚠️ Авторизация: HTTP ${authResp.statusCode}';
+              }
+            } catch (_) {}
+          }
+
           await WebSocketService().reconnect();
           await Future.delayed(const Duration(milliseconds: 600));
           final isWs = WebSocketService().isConnected;
           msg += isWs ? '\nWebSocket: Подключено (OK)' : '\nWebSocket: В процессе подключения...';
           setState(() {
             _connectionTestResult = msg;
-            _connectionTestSuccess = true;
+            _connectionTestSuccess = isAuthValid && isWs;
             _isCheckingConnection = false;
           });
         }
