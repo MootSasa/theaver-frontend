@@ -23,6 +23,8 @@ import '../../services/chat_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
+import '../../services/deep_link_service.dart';
+import '../../services/cache_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
