@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -962,9 +963,9 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
     if (wp.patternOpacity > 0) {
       final double buttonPatternOpacity = (wp.patternOpacity * 1.6).clamp(0.24, 0.60);
       Widget? svgWidget;
-      if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
+      if (!kIsWeb && wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
         svgWidget = SvgPicture.file(
-          File(wp.customSvgPath!),
+          File(wp.customSvgPath!) as dynamic,
           width: double.infinity,
           height: double.infinity,
           fit: BoxFit.cover,

@@ -21,13 +21,20 @@ import '../../services/account_manager.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../services/auth_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
+import 'package:http/http.dart' as http;
 import '../auth/login_screen.dart';
+import '../main/main_screen.dart';
+import '../../services/database/app_database.dart';
+import '../../services/cache_service.dart';
+import '../../services/websocket_service.dart';
+import '../../services/notification_service.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../services/update_service.dart';
 import 'widgets/update_dialog.dart';
@@ -809,14 +816,16 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
 
     if (confirmed == true) {
-      await AuthService.logout();
-      
-      if (!context.mounted) return;
-      
-      Navigator.of(context).pushAndRemoveUntil(
+      // 1. Immediately kick user to LoginScreen using root navigator
+      final nav = DeepLinkService().navigatorKey.currentState ??
+          Navigator.of(context, rootNavigator: true);
+      nav.pushAndRemoveUntil(
         SwipeBackPageRoute(builder: (_) => const LoginScreen()),
         (route) => false,
       );
+
+      // 2. Perform logout and local data wipe in background
+      await AuthService.logout();
     }
   }
 
@@ -874,8 +883,46 @@ class _SettingsScreenState extends State<SettingsScreen>
         builder: (context) => const Center(child: CircularProgressIndicator()),
       );
 
+      // 1. Disconnect WebSocket
+      try {
+        WebSocketService().disconnect();
+      } catch (_) {}
+
+      // 2. Unregister push tokens and notify server of logout
+      try {
+        await NotificationService().unregisterPushToken();
+        final token = await AuthService.getToken();
+        if (token != null) {
+          await http.post(
+            Uri.parse('${AppConfig.baseUrl}/api/auth/logout'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        }
+      } catch (e) {
+        debugPrint('_clearAllData: server logout error: $e');
+      }
+
+      // 3. Clear SQLite database (all chats, messages, sync states, cards)
+      try {
+        await AppDatabase().clearAllData();
+      } catch (e) {
+        debugPrint('_clearAllData: error clearing AppDatabase: $e');
+      }
+
+      // 4. Clear disk and image cache
+      try {
+        await CacheService().clearCache();
+      } catch (e) {
+        debugPrint('_clearAllData: error clearing CacheService: $e');
+      }
+
+      // 5. Clear all accounts
       await _accountManager.clearAll();
 
+      // 6. Clear app settings
       final settingsService = SettingsService();
       await settingsService.clearAllSettings();
 
@@ -890,12 +937,12 @@ class _SettingsScreenState extends State<SettingsScreen>
         SnackBar(content: Text(l10n.translate('clear_data_success'))),
       );
 
-      if (context.mounted) {
-        Navigator.of(context).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-        );
-      }
+      final nav = DeepLinkService().navigatorKey.currentState ??
+          (context.mounted ? Navigator.of(context, rootNavigator: true) : null);
+      nav?.pushAndRemoveUntil(
+        SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
     } catch (e) {
       if (context.mounted) {
         Navigator.of(context).pop();

@@ -3,13 +3,16 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import 'account_manager.dart';
+import 'cache_service.dart';
 import 'database/app_database.dart';
 import 'deep_link_service.dart';
 import 'websocket_service.dart';
 import 'notification_service.dart';
 import '../screens/auth/login_screen.dart';
+import '../screens/main/main_screen.dart';
 import '../utils/swipe_back_route.dart';
 import '../l10n/app_localizations.dart';
 
@@ -193,57 +196,149 @@ class AuthService {
   }
   }
 
-  /// Logs out the current user by invalidating the session.
+  /// Logs out the current user by invalidating the session and cleaning local data.
   static Future<void> logout() async {
     try {
-      // Unregister push token before destroying session
-      await NotificationService().unregisterPushToken();
+      // 1. Disconnect WebSocket immediately
+      try {
+        WebSocketService().disconnect();
+      } catch (_) {}
+
+      // Grab token & current account info before wiping
       final token = await getToken();
+      final accountManager = AccountManager();
+      final currentUserId = accountManager.currentAccount?.userId;
+
+      // 2. Clear current account from AccountManager immediately
+      if (currentUserId != null) {
+        await accountManager.removeAccount(currentUserId);
+      } else {
+        await accountManager.clearCurrentAccount();
+      }
+
+      // 3. Clear local SQLite database and media cache
+      try {
+        await AppDatabase().clearAllData();
+      } catch (e) {
+        debugPrint('Logout: error clearing AppDatabase: $e');
+      }
+      try {
+        await CacheService().clearCache();
+      } catch (e) {
+        debugPrint('Logout: error clearing CacheService: $e');
+      }
+
+      // 4. Remote network cleanup in background with short timeout so it never blocks UI
       if (token != null) {
-        await http.post(
+        NotificationService()
+            .unregisterPushToken()
+            .timeout(const Duration(seconds: 2))
+            .catchError((e) {
+          debugPrint('Logout: error unregistering push token: $e');
+        });
+
+        http.post(
           Uri.parse('${AppConfig.baseUrl}/api/auth/logout'),
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer $token',
           },
-        );
+        ).timeout(const Duration(seconds: 2)).catchError((e) {
+          debugPrint('Logout: error notifying server: $e');
+          return http.Response('', 500);
+        });
       }
     } catch (e) {
-      // Log error but don't throw - we want to clear local state anyway
       debugPrint('Logout error: $e');
-    } finally {
-      // Clear current account from AccountManager
-      final accountManager = AccountManager();
-      if (accountManager.currentAccount != null) {
-        await accountManager.removeAccount(accountManager.currentAccount!.userId);
-      }
     }
+  }
+
+  /// Refreshes the JWT token for the current active account.
+  /// Calls POST /api/auth/refresh and updates local storage.
+  /// Returns true if successful, false otherwise.
+  static Future<bool> refreshToken() async {
+    try {
+      final token = await getToken();
+      if (token == null || token.isEmpty) return false;
+
+      final accountManager = AccountManager();
+      final currentUserId = accountManager.currentAccount?.userId;
+      final deviceId = accountManager.currentDeviceId ?? '';
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/refresh'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+          if (deviceId.isNotEmpty) 'X-Device-ID': deviceId,
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true && data['auth_token'] != null) {
+          final newToken = data['auth_token'] as String;
+          if (currentUserId != null) {
+            await accountManager.updateAccountToken(currentUserId, newToken);
+          }
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('auth_token', newToken);
+          debugPrint('AuthService: Token refreshed successfully (TTL: ${data['ttl_days']} days)');
+          return true;
+        }
+      } else if (response.statusCode == 401) {
+        debugPrint('AuthService: Refresh token rejected with 401 (session expired)');
+        await handleRemoteSessionTerminated(reason: 'session_expired');
+        return false;
+      }
+    } catch (e) {
+      debugPrint('AuthService: Error refreshing token: $e');
+    }
+    return false;
   }
 
   static bool _isTerminating = false;
 
-  /// Handles remote termination of the current session
+  /// Handles remote or expired termination of the current session
   static Future<void> handleRemoteSessionTerminated({String? reason}) async {
     if (_isTerminating) return;
     _isTerminating = true;
 
     try {
-      debugPrint('AuthService: Session terminated remotely. Reason: $reason');
+      debugPrint('AuthService: Session terminated. Reason: $reason');
 
       // 1. Disconnect WebSocket
       try {
         WebSocketService().disconnect();
       } catch (_) {}
 
-      // 2. Clear current account credentials locally
+      // 2. Clear local SQLite database and media cache
+      try {
+        await AppDatabase().clearAllData();
+      } catch (e) {
+        debugPrint('Error clearing AppDatabase on session termination: $e');
+      }
+      try {
+        await CacheService().clearCache();
+      } catch (e) {
+        debugPrint('Error clearing CacheService on session termination: $e');
+      }
+
+      // 3. Clear current account credentials locally
       final accountManager = AccountManager();
-      final currentUserId = accountManager.currentAccount?.userId;
+      final terminatedAccount = accountManager.currentAccount;
+      final currentUserId = terminatedAccount?.userId;
+      final terminatedUsername = terminatedAccount?.username ?? terminatedAccount?.displayName ?? '';
       if (currentUserId != null) {
         await accountManager.removeAccount(currentUserId);
       }
 
-      // 3. Navigate to LoginScreen immediately via global navigatorKey
+      // 4. Navigation to LoginScreen & notification
       final nav = DeepLinkService().navigatorKey.currentState;
+      final context = DeepLinkService().navigatorKey.currentContext;
+
+      final isExpired = reason == 'session_expired' || (reason?.contains('expired') ?? false);
+
       if (nav != null) {
         nav.pushAndRemoveUntil(
           SwipeBackPageRoute(builder: (_) => const LoginScreen()),
@@ -251,9 +346,10 @@ class AuthService {
         );
       }
 
-      // 4. Show SnackBar to the user
-      final context = DeepLinkService().navigatorKey.currentContext;
       if (context != null && context.mounted) {
+        final message = isExpired
+            ? context.l10n.translate('session_expired')
+            : context.l10n.translate('session_terminated_remotely');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -262,7 +358,7 @@ class AuthService {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    context.l10n.translate('session_terminated_remotely'),
+                    message,
                     style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.white),
                   ),
                 ),
@@ -369,7 +465,24 @@ class AuthService {
         body: jsonEncode({'ttl_days': ttlDays}),
       );
 
-      return response.statusCode == 200;
+      if (response.statusCode == 200) {
+        try {
+          final data = jsonDecode(response.body);
+          if (data['auth_token'] != null && (data['auth_token'] as String).isNotEmpty) {
+            final newToken = data['auth_token'] as String;
+            final accountManager = AccountManager();
+            final currentUserId = accountManager.currentAccount?.userId;
+            if (currentUserId != null) {
+              await accountManager.updateAccountToken(currentUserId, newToken);
+            }
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('auth_token', newToken);
+            debugPrint('AuthService: Saved updated token after TTL change to $ttlDays days');
+          }
+        } catch (_) {}
+        return true;
+      }
+      return false;
     } catch (e) {
       debugPrint('setSessionsTTL error: $e');
       return false;

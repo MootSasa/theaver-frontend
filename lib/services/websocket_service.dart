@@ -109,10 +109,12 @@ class WebSocketService {
   bool _isConnecting = false;
   Timer? _reconnectTimer;
   Timer? _pingTimer;
+  Timer? _onlineRefreshTimer;
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 100; // Практически без лимита
   static const Duration _reconnectDelay = Duration(seconds: 3);
   static const Duration _pingInterval = Duration(seconds: 30);
+  static const Duration _onlineRefreshInterval = Duration(hours: 12);
   StreamSubscription? _streamSubscription;
   bool _isSessionTerminated = false;
   bool _isKeepAliveEnabled = false;
@@ -257,6 +259,9 @@ class WebSocketService {
       // Start ping timer
       _startPingTimer();
 
+      // Start online token refresh timer
+      _startOnlineRefreshTimer();
+
       // Re-send currently open chat on this device to suppress push notifications
       if (_activeChatId != null && _activeChatId!.isNotEmpty) {
         sendActiveChat(_activeChatId);
@@ -279,6 +284,24 @@ class WebSocketService {
       debugPrint('WebSocket: Connection error: $e');
       _setConnected(false);
       _isConnecting = false;
+
+      final isAuthError = e.toString().contains('401') ||
+          e.toString().toLowerCase().contains('unauthorized');
+      if (isAuthError) {
+        debugPrint('WebSocket: Authentication error (401). Attempting token refresh...');
+        final refreshed = await AuthService.refreshToken();
+        if (refreshed && !_isSessionTerminated) {
+          debugPrint('WebSocket: Token refreshed after 401, reconnecting...');
+          return await connect();
+        } else {
+          debugPrint('WebSocket: Token refresh failed or session expired. Logging out.');
+          _isSessionTerminated = true;
+          _reconnectTimer?.cancel();
+          await AuthService.handleRemoteSessionTerminated(reason: 'session_expired');
+          return false;
+        }
+      }
+
       if (!_isSessionTerminated) {
         _scheduleReconnect();
       }
@@ -291,6 +314,8 @@ class WebSocketService {
     debugPrint('WebSocket: Disconnecting');
     _pingTimer?.cancel();
     _pingTimer = null;
+    _onlineRefreshTimer?.cancel();
+    _onlineRefreshTimer = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
 
@@ -306,6 +331,7 @@ class WebSocketService {
     _channel = null;
     _setConnected(false);
     _isConnecting = false;
+    _currentUserId = null;
   }
 
   /// Reconnect to WebSocket server
@@ -423,6 +449,18 @@ class WebSocketService {
     _pingTimer = Timer.periodic(interval, (_) {
       sendPing();
     });
+  }
+
+  /// Start periodic token refresh timer while connected online
+  void _startOnlineRefreshTimer() {
+    _onlineRefreshTimer?.cancel();
+    _onlineRefreshTimer = Timer.periodic(_onlineRefreshInterval, (_) {
+      if (_isConnected) {
+        AuthService.refreshToken();
+      }
+    });
+    // Trigger a refresh check when starting online session
+    AuthService.refreshToken();
   }
 
   /// Send ping message
