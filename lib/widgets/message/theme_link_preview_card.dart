@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -301,9 +302,9 @@ class _ThemeLinkPreviewCardState extends State<ThemeLinkPreviewCard> {
     if (wp.patternOpacity > 0) {
       final double patternAlpha = (wp.patternOpacity * 1.5).clamp(0.18, 0.60);
       Widget? svgWidget;
-      if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
+      if (!kIsWeb && wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
         svgWidget = SvgPicture.file(
-          File(wp.customSvgPath!),
+          File(wp.customSvgPath!) as dynamic,
           fit: BoxFit.cover,
           colorFilter: ColorFilter.mode(
             wp.patternColor.withValues(alpha: patternAlpha),

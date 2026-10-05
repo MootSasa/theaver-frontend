@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
@@ -58,13 +59,15 @@ class TiledWallpaperPattern extends StatelessWidget {
                                 fit: BoxFit.fill,
                                 colorFilter: colorFilter,
                               )
-                            : SvgPicture.file(
-                                File(filePath!),
-                                width: tileSize,
-                                height: tileSize,
-                                fit: BoxFit.fill,
-                                colorFilter: colorFilter,
-                              ),
+                            : (!kIsWeb && filePath != null)
+                                ? SvgPicture.file(
+                                    File(filePath!) as dynamic,
+                                    width: tileSize,
+                                    height: tileSize,
+                                    fit: BoxFit.fill,
+                                    colorFilter: colorFilter,
+                                  )
+                                : const SizedBox(),
                       ),
                 ],
               ),

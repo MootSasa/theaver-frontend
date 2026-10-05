@@ -21,6 +21,7 @@ import '../../services/account_manager.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../services/auth_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
