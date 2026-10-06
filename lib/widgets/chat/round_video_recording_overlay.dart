@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:camera/camera.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
@@ -404,15 +403,29 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
                 ..rotateY(angle + (isBack ? math.pi : 0)),
               child: widget.recorderService.cameraController != null &&
                       widget.recorderService.cameraController!.value.isInitialized
-                  ? FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(
-                        width: diameter,
-                        height: diameter,
-                        child: CameraPreview(
-                          widget.recorderService.cameraController!,
-                        ),
-                      ),
+                  ? Builder(
+                      builder: (context) {
+                        final ctrl = widget.recorderService.cameraController!;
+                        final previewSize = ctrl.value.previewSize;
+                        final double previewW = (previewSize != null && previewSize.width > 0)
+                            ? previewSize.width
+                            : diameter;
+                        final double previewH = (previewSize != null && previewSize.height > 0)
+                            ? previewSize.height
+                            : diameter;
+
+                        return FittedBox(
+                          fit: BoxFit.cover,
+                          child: SizedBox(
+                            width: previewW,
+                            height: previewH,
+                            child: Transform.scale(
+                              scaleX: widget.recorderService.isFrontCamera ? -1.0 : 1.0,
+                              child: ctrl.buildPreview(),
+                            ),
+                          ),
+                        );
+                      },
                     )
                   : (widget.recorderService.renderer != null &&
                           widget.recorderService.isInitialized
