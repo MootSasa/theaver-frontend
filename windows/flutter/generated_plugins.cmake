@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  camera_windows
   emoji_picker_flutter
   file_selector_windows
   firebase_core

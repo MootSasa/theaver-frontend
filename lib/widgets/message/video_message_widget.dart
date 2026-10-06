@@ -190,7 +190,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
 
     if (!isNetwork) {
-      final filePath = url.startsWith('file://') ? url.replaceFirst('file://', '') : url;
+      final filePath = url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
       final file = File(filePath);
       if (!await file.exists()) {
         debugPrint('[VideoMessageWidget] File does not exist: $filePath');

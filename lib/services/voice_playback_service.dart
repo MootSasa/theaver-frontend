@@ -122,7 +122,7 @@ class VoicePlaybackService with ChangeNotifier {
         await _player.setUrl(playPath);
       } else {
         final localFile = playPath.startsWith('file://')
-            ? playPath.replaceFirst('file://', '')
+            ? Uri.parse(playPath).toFilePath()
             : playPath;
         if (!await File(localFile).exists()) {
           debugPrint('[VoicePlaybackService] Local voice file not found: $localFile');

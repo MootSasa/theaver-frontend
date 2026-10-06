@@ -185,6 +185,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.3.5+6"
+  camera_windows:
+    dependency: "direct main"
+    description:
+      name: camera_windows
+      sha256: da05937f6dff64fbbd2d64f74e4240b6da50d377031034704b0a12a9dfb4ea15
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.0"
   characters:
     dependency: transitive
     description:
@@ -713,10 +721,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_webrtc
-      sha256: b832dc76c0d1577f14aaf35e9c38d4ed7667cbc89c492b7bf4505d8d5f62e08b
+      sha256: c1d3674f61b14cbe98b60f0cce396835b1483163e644b8cd26fd3fdd55360fb9
       url: "https://pub.dev"
     source: hosted
-    version: "0.12.12+hotfix.1"
+    version: "1.6.2+hotfix.3"
   fvp:
     dependency: "direct main"
     description:
@@ -1125,6 +1133,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.1.6"
+  logger:
+    dependency: transitive
+    description:
+      name: logger
+      sha256: "2a0dc097e7b01d942475bdd552356db2d0f768b05540bd4b2b53f1840f2239a7"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.8.0"
   logging:
     dependency: transitive
     description:

@@ -3873,7 +3873,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               final uri = Uri.tryParse(resolvedUrl);
               final ctrl = uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
                   ? VideoPlayerController.networkUrl(uri)
-                  : VideoPlayerController.file(File(resolvedUrl.replaceFirst('file://', '')));
+                  : VideoPlayerController.file(File(
+                      resolvedUrl.startsWith('file://')
+                          ? Uri.parse(resolvedUrl).toFilePath()
+                          : resolvedUrl,
+                    ));
               ctrl.initialize().then((_) {
                 if (!mounted) {
                   ctrl.dispose();

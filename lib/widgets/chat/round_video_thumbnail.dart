@@ -51,7 +51,7 @@ class _RoundVideoThumbnailState extends State<RoundVideoThumbnail> {
       // 1. Check if local .thumb.jpg exists directly for local path
       if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
         final localPath =
-            rawUrl.startsWith('file://') ? rawUrl.replaceFirst('file://', '') : rawUrl;
+            rawUrl.startsWith('file://') ? Uri.parse(rawUrl).toFilePath() : rawUrl;
         final directThumb = File('$localPath.thumb.jpg');
         if (await directThumb.exists()) {
           if (mounted) setState(() => _cachedThumbFile = directThumb);
@@ -94,7 +94,7 @@ class _RoundVideoThumbnailState extends State<RoundVideoThumbnail> {
         controller = VideoPlayerController.networkUrl(resolvedUri);
       } else {
         final filePath = resolvedUrl.startsWith('file://')
-            ? resolvedUrl.replaceFirst('file://', '')
+            ? Uri.parse(resolvedUrl).toFilePath()
             : resolvedUrl;
         final file = File(filePath);
         if (!await file.exists()) return;

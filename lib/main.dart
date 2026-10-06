@@ -45,11 +45,11 @@ void main() async {
     debugPrint('fvp initialization skipped: $e');
   }
 
-  // Initialize cross-platform audio player engine (Linux, Windows)
+  // Initialize cross-platform audio player engine (Linux, Windows uses native just_audio_windows)
   try {
     JustAudioMediaKit.ensureInitialized(
       linux: true,
-      windows: true,
+      windows: false,
       android: false,
       iOS: false,
       macOS: false,
@@ -59,25 +59,27 @@ void main() async {
   }
 
   // Configure AudioSession for media playback (A2DP stereo, no SCO phone mode, active during iOS mute switch)
-  try {
-    final audioSession = await AudioSession.instance;
-    await audioSession.configure(const AudioSessionConfiguration(
-      avAudioSessionCategory: AVAudioSessionCategory.playback,
-      avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetoothA2dp,
-      avAudioSessionMode: AVAudioSessionMode.defaultMode,
-      avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
-      avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
-      androidAudioAttributes: AndroidAudioAttributes(
-        contentType: AndroidAudioContentType.music,
-        flags: AndroidAudioFlags.none,
-        usage: AndroidAudioUsage.media,
-      ),
-      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-      androidWillPauseWhenDucked: true,
-    ));
-    debugPrint('AudioSession configured for media playback');
-  } catch (e) {
-    debugPrint('Failed to configure AudioSession: $e');
+  if (Platform.isIOS || Platform.isAndroid || Platform.isMacOS) {
+    try {
+      final audioSession = await AudioSession.instance;
+      await audioSession.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playback,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetoothA2dp,
+        avAudioSessionMode: AVAudioSessionMode.defaultMode,
+        avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.music,
+          flags: AndroidAudioFlags.none,
+          usage: AndroidAudioUsage.media,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+        androidWillPauseWhenDucked: true,
+      ));
+      debugPrint('AudioSession configured for media playback');
+    } catch (e) {
+      debugPrint('Failed to configure AudioSession: $e');
+    }
   }
 
   // Initialize AppConfig (4-tier dynamic environment configuration)

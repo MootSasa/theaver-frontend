@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:camera/camera.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
@@ -401,30 +402,42 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
               transform: Matrix4.identity()
                 ..setEntry(3, 2, 0.002)
                 ..rotateY(angle + (isBack ? math.pi : 0)),
-              child: widget.recorderService.renderer != null &&
-                      widget.recorderService.isInitialized
+              child: widget.recorderService.cameraController != null &&
+                      widget.recorderService.cameraController!.value.isInitialized
                   ? FittedBox(
                       fit: BoxFit.cover,
                       child: SizedBox(
                         width: diameter,
                         height: diameter,
-                        child: RTCVideoView(
-                          widget.recorderService.renderer!,
-                          mirror: widget.recorderService.isFrontCamera,
-                          objectFit:
-                              RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                        child: CameraPreview(
+                          widget.recorderService.cameraController!,
                         ),
                       ),
                     )
-                  : Container(
-                      color: Colors.black87,
-                      child: const Center(
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white70,
-                        ),
-                      ),
-                    ),
+                  : (widget.recorderService.renderer != null &&
+                          widget.recorderService.isInitialized
+                      ? FittedBox(
+                          fit: BoxFit.cover,
+                          child: SizedBox(
+                            width: diameter,
+                            height: diameter,
+                            child: RTCVideoView(
+                              widget.recorderService.renderer!,
+                              mirror: widget.recorderService.isFrontCamera,
+                              objectFit:
+                                  RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                            ),
+                          ),
+                        )
+                      : Container(
+                          color: Colors.black87,
+                          child: const Center(
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        )),
             );
           },
         ),

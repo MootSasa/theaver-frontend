@@ -93,7 +93,7 @@ class _FullscreenPhotoViewerState extends State<FullscreenPhotoViewer> {
       }
     }
     if (url.startsWith('file://')) {
-      return FileImage(File(url.replaceFirst('file://', '')));
+      return FileImage(File(Uri.parse(url).toFilePath()));
     }
     if (url.startsWith('/') && !url.startsWith('//')) {
       return FileImage(File(url));
