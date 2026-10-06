@@ -28,10 +28,57 @@ import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'screens/call/voice_call_screen.dart';
 import 'screens/call/video_call_screen.dart';
+import 'package:fvp/fvp.dart' as fvp;
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
+import 'package:audio_session/audio_session.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   debugPrint('main() started');
+
+  // Initialize cross-platform video player engine (Windows, Linux, macOS)
+  try {
+    fvp.registerWith(options: {
+      'platforms': ['windows', 'linux', 'macos'],
+    });
+  } catch (e) {
+    debugPrint('fvp initialization skipped: $e');
+  }
+
+  // Initialize cross-platform audio player engine (Linux, Windows)
+  try {
+    JustAudioMediaKit.ensureInitialized(
+      linux: true,
+      windows: true,
+      android: false,
+      iOS: false,
+      macOS: false,
+    );
+  } catch (e) {
+    debugPrint('JustAudioMediaKit initialization skipped: $e');
+  }
+
+  // Configure AudioSession for media playback (A2DP stereo, no SCO phone mode, active during iOS mute switch)
+  try {
+    final audioSession = await AudioSession.instance;
+    await audioSession.configure(const AudioSessionConfiguration(
+      avAudioSessionCategory: AVAudioSessionCategory.playback,
+      avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetoothA2dp,
+      avAudioSessionMode: AVAudioSessionMode.defaultMode,
+      avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
+      avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+      androidAudioAttributes: AndroidAudioAttributes(
+        contentType: AndroidAudioContentType.music,
+        flags: AndroidAudioFlags.none,
+        usage: AndroidAudioUsage.media,
+      ),
+      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+      androidWillPauseWhenDucked: true,
+    ));
+    debugPrint('AudioSession configured for media playback');
+  } catch (e) {
+    debugPrint('Failed to configure AudioSession: $e');
+  }
 
   // Initialize AppConfig (4-tier dynamic environment configuration)
   await AppConfig.init();

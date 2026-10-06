@@ -2860,22 +2860,27 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   }
 
   Future<void> _onStartVoiceRecord() async {
-    final hasPerm = await _voiceRecorderService.hasPermission();
+    var hasPerm = await _voiceRecorderService.hasPermission();
     if (!hasPerm) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_voice_permission_denied'),
+      final isPermanentlyDenied = await _voiceRecorderService.isPermanentlyDenied();
+      if (isPermanentlyDenied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.l10n.translate('chat_voice_permission_denied'),
+              ),
+              action: SnackBarAction(
+                label: context.l10n.translate('settings_title'),
+                onPressed: () => openAppSettings(),
+              ),
             ),
-            action: SnackBarAction(
-              label: context.l10n.translate('settings_title'),
-              onPressed: () => openAppSettings(),
-            ),
-          ),
-        );
+          );
+        }
+        return;
       }
-      return;
+      final granted = await _voiceRecorderService.requestPermissions();
+      if (!granted) return;
     }
 
     VoicePlaybackService().stopVoice();
@@ -3016,7 +3021,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         final sentMessage = sendResult['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId);
+          await syncService.confirmMessageSent(pendingLocalId, serverId,
+              remoteFileUrl: uploadResult.url);
           if (mounted) {
             setState(() {
               final idx =
@@ -3028,6 +3034,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     replyInfo: _messages[idx].replyInfo,
                     waveform: sentMessage.waveform ?? _messages[idx].waveform,
                     duration: sentMessage.duration ?? _messages[idx].duration,
+                    fileUrl: uploadResult.url,
                   );
                 } else {
                   _messages[idx] = _messages[idx].copyWith(
@@ -3183,7 +3190,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId);
+          await syncService.confirmMessageSent(pendingLocalId, serverId,
+              remoteFileUrl: uploadResult.url);
           if (mounted) {
             setState(() {
               final idx =
@@ -3194,12 +3202,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     localId: pendingLocalId,
                     sendStatus: 1,
                     isRound: true,
+                    fileUrl: uploadResult.url,
                   );
                 } else {
                   _messages[idx] = _messages[idx].copyWith(
                     id: serverId,
                     sendStatus: 1,
                     isRound: true,
+                    fileUrl: uploadResult.url,
                   );
                 }
               }

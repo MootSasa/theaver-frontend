@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
@@ -193,6 +194,17 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       final file = File(filePath);
       if (!await file.exists()) {
         debugPrint('[VideoMessageWidget] File does not exist: $filePath');
+        final baseName = p.basename(filePath);
+        try {
+          final cacheDir = await MediaCacheManager.instance.getMediaCacheDirectory();
+          final candidate = File(p.join(cacheDir.path, baseName));
+          if (await candidate.exists()) {
+            _isCached = true;
+            await _initControllerFromFile(candidate, currentSession);
+            return;
+          }
+        } catch (_) {}
+
         if (mounted && currentSession == _initSession) {
           setState(() => _hasError = true);
         }

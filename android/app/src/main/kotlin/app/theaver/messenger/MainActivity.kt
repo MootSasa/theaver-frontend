@@ -142,22 +142,34 @@ class MainActivity : FlutterFragmentActivity() {
             val buffer = ByteBuffer.allocate(1024 * 1024)
             val bufferInfo = MediaCodec.BufferInfo()
 
-            while (true) {
-                bufferInfo.size = videoExtractor.readSampleData(buffer, 0)
-                if (bufferInfo.size < 0) break
-                bufferInfo.presentationTimeUs = videoExtractor.sampleTime
-                bufferInfo.flags = videoExtractor.sampleFlags
-                muxer.writeSampleData(muxerVideoTrack, buffer, bufferInfo)
-                videoExtractor.advance()
-            }
+            var videoDone = false
+            var audioDone = false
 
-            while (true) {
-                bufferInfo.size = audioExtractor.readSampleData(buffer, 0)
-                if (bufferInfo.size < 0) break
-                bufferInfo.presentationTimeUs = audioExtractor.sampleTime
-                bufferInfo.flags = audioExtractor.sampleFlags
-                muxer.writeSampleData(muxerAudioTrack, buffer, bufferInfo)
-                audioExtractor.advance()
+            while (!videoDone || !audioDone) {
+                val videoTime = if (!videoDone) videoExtractor.sampleTime else Long.MAX_VALUE
+                val audioTime = if (!audioDone) audioExtractor.sampleTime else Long.MAX_VALUE
+
+                if (!videoDone && (audioDone || videoTime <= audioTime)) {
+                    bufferInfo.size = videoExtractor.readSampleData(buffer, 0)
+                    if (bufferInfo.size >= 0) {
+                        bufferInfo.presentationTimeUs = videoExtractor.sampleTime
+                        bufferInfo.flags = videoExtractor.sampleFlags
+                        muxer.writeSampleData(muxerVideoTrack, buffer, bufferInfo)
+                        videoExtractor.advance()
+                    } else {
+                        videoDone = true
+                    }
+                } else if (!audioDone) {
+                    bufferInfo.size = audioExtractor.readSampleData(buffer, 0)
+                    if (bufferInfo.size >= 0) {
+                        bufferInfo.presentationTimeUs = audioExtractor.sampleTime
+                        bufferInfo.flags = audioExtractor.sampleFlags
+                        muxer.writeSampleData(muxerAudioTrack, buffer, bufferInfo)
+                        audioExtractor.advance()
+                    } else {
+                        audioDone = true
+                    }
+                }
             }
 
             return true

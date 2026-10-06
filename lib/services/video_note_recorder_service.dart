@@ -132,7 +132,7 @@ class VideoNoteRecorderService with ChangeNotifier {
   Future<void> _acquireStream() async {
     try {
       final mediaConstraints = <String, dynamic>{
-        'audio': true,
+        'audio': false,
         'video': {
           'mandatory': {
             'minWidth': '640',
@@ -148,7 +148,7 @@ class VideoNoteRecorderService with ChangeNotifier {
       debugPrint(
           'VideoNoteRecorderService: Failed with mandatory constraints, retrying basic: $e');
       final fallbackConstraints = <String, dynamic>{
-        'audio': true,
+        'audio': false,
         'video': {
           'facingMode': _isFrontCamera ? 'user' : 'environment',
         },
@@ -200,6 +200,15 @@ class VideoNoteRecorderService with ChangeNotifier {
       final videoTrack = videoTracks.isNotEmpty ? videoTracks.first : null;
 
       if (!kIsWeb) {
+        if (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.macOS) {
+          _errorMessage = 'Desktop video recording not supported';
+          _isRecording = false;
+          notifyListeners();
+          return false;
+        }
+
         await _recorder!.start(
           _currentFilePath!,
           videoTrack: videoTrack,
@@ -325,9 +334,10 @@ class VideoNoteRecorderService with ChangeNotifier {
           resultFile = file;
         }
 
-        // 3. Mux audio into video file on Android
+        // 3. Mux audio into video file on mobile (Android and iOS)
         if (!kIsWeb &&
-            defaultTargetPlatform == TargetPlatform.android &&
+            (defaultTargetPlatform == TargetPlatform.android ||
+             defaultTargetPlatform == TargetPlatform.iOS) &&
             resultFile != null &&
             recordedAudioPath != null) {
           final audioFile = File(recordedAudioPath);

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'video_note_playback_service.dart';
@@ -123,6 +124,11 @@ class VoicePlaybackService with ChangeNotifier {
         final localFile = playPath.startsWith('file://')
             ? playPath.replaceFirst('file://', '')
             : playPath;
+        if (!await File(localFile).exists()) {
+          debugPrint('[VoicePlaybackService] Local voice file not found: $localFile');
+          stopVoice(messageId);
+          return;
+        }
         await _player.setFilePath(localFile);
       }
       await _player.setSpeed(_playbackSpeed);
