@@ -9,6 +9,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_recorder_service.dart';
 
 /// Full-screen Telegram-style overlay for recording circular video notes («кружочки»).
@@ -82,6 +83,9 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   @override
   void initState() {
     super.initState();
+
+    // Release active audio/video decoders to prevent hardware starvation and crashes during camera recording
+    MediaPlaybackCoordinator.instance.stopAll();
 
     _fadeController = AnimationController(
       vsync: this,

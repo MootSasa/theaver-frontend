@@ -71,7 +71,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
   void _onServiceChange() {
     if (!mounted) return;
     _attachVideoController();
-    final hasActive = _voiceService.hasActiveAudio || (_videoService.hasActiveVideo && !_videoService.isFloating);
+    final hasActive = _voiceService.hasActiveAudio || _videoService.hasActiveVideo;
     if (hasActive) {
       if (_slideController.status != AnimationStatus.forward &&
           _slideController.status != AnimationStatus.completed) {
@@ -95,7 +95,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
   @override
   Widget build(BuildContext context) {
     final hasVoice = _voiceService.hasActiveAudio;
-    final hasVideo = _videoService.hasActiveVideo && !_videoService.isFloating;
+    final hasVideo = _videoService.hasActiveVideo;
 
     if (!hasVoice && !hasVideo && _slideController.value == 0.0) {
       return const SizedBox.shrink();

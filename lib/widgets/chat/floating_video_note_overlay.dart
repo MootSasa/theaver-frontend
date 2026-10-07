@@ -242,7 +242,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
               onPanEnd: (d) => _onPanEnd(d, screenSize, topPadding, bottomPadding),
               onTap: () {
                 if (_isDismissing) return;
-                MediaPlaybackCoordinator.instance.navigateToActiveChat();
+                MediaPlaybackCoordinator.instance.togglePlayPause();
               },
             child: Material(
               type: MaterialType.transparency,
@@ -282,6 +282,22 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
                         ),
                       ),
                     ),
+
+                    // 1.1 Play indicator overlay when paused
+                    if (!controller.value.isPlaying)
+                      IgnorePointer(
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
+                          ),
+                        ),
+                      ),
 
                     // 2. Smooth Circular Progress Ring
                     Positioned.fill(

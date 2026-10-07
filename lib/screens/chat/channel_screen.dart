@@ -109,12 +109,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
     MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
 
-    VideoNotePlaybackService().onPlayNextRequested = _playNextMediaNote;
-    VideoNotePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
-
-    VoicePlaybackService().onPlayNextRequested = _playNextMediaNote;
-    VoicePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
-
     _scrollController.addListener(() {
       if (!_scrollController.hasClients || _messages.isEmpty) return;
 
@@ -987,16 +981,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
       MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
       MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
       MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
-    }
-
-    if (VideoNotePlaybackService().onPlayNextRequested == _playNextMediaNote) {
-      VideoNotePlaybackService().onPlayNextRequested = null;
-      VideoNotePlaybackService().onScrollToMessageRequested = null;
-    }
-
-    if (VoicePlaybackService().onPlayNextRequested == _playNextMediaNote) {
-      VoicePlaybackService().onPlayNextRequested = null;
-      VoicePlaybackService().onScrollToMessageRequested = null;
     }
 
     _updateInputHeight();

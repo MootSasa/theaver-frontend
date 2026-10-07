@@ -229,12 +229,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
     MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
 
-    VideoNotePlaybackService().onPlayNextRequested = _playNextMediaNote;
-    VideoNotePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
-
-    VoicePlaybackService().onPlayNextRequested = _playNextMediaNote;
-    VoicePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
-
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
@@ -3813,16 +3807,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
       MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
       MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
-    }
-
-    if (VideoNotePlaybackService().onPlayNextRequested == _playNextMediaNote) {
-      VideoNotePlaybackService().onPlayNextRequested = null;
-      VideoNotePlaybackService().onScrollToMessageRequested = null;
-    }
-
-    if (VoicePlaybackService().onPlayNextRequested == _playNextMediaNote) {
-      VoicePlaybackService().onPlayNextRequested = null;
-      VoicePlaybackService().onScrollToMessageRequested = null;
     }
 
     super.dispose();

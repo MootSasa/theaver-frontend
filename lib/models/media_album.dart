@@ -107,11 +107,19 @@ List<FeedItem> groupMessagesIntoFeedItems(
 }) {
   if (messages.isEmpty) return const [];
 
+  final seenIds = <String>{};
+  final dedupedMessages = <Message>[];
+  for (final m in messages) {
+    if (seenIds.add(m.id)) {
+      dedupedMessages.add(m);
+    }
+  }
+
   final List<FeedItem> result = [];
   int i = 0;
 
-  while (i < messages.length) {
-    final current = messages[i];
+  while (i < dedupedMessages.length) {
+    final current = dedupedMessages[i];
     final gid = current.groupedId;
 
     if (gid == null || gid.isEmpty) {
@@ -123,8 +131,8 @@ List<FeedItem> groupMessagesIntoFeedItems(
     // Collect all consecutive messages with the same groupedId
     final List<Message> group = [current];
     int j = i + 1;
-    while (j < messages.length && messages[j].groupedId == gid) {
-      group.add(messages[j]);
+    while (j < dedupedMessages.length && dedupedMessages[j].groupedId == gid) {
+      group.add(dedupedMessages[j]);
       j++;
     }
 

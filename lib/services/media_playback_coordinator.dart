@@ -9,6 +9,7 @@ import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/private_chat_screen.dart';
 import '../widgets/message/video_message_widget.dart';
 import 'deep_link_service.dart';
+import 'media_cache_manager.dart';
 import 'video_note_playback_service.dart';
 import 'voice_playback_service.dart';
 
@@ -172,16 +173,29 @@ class MediaPlaybackCoordinator with ChangeNotifier {
         );
       } else {
         final uri = Uri.tryParse(resolvedUrl);
-        final ctrl = uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
-            ? VideoPlayerController.networkUrl(uri)
-            : VideoPlayerController.file(File(
-                resolvedUrl.startsWith('file://')
-                    ? Uri.parse(resolvedUrl).toFilePath()
-                    : resolvedUrl,
-              ));
+        final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+        File? cachedDisk;
+        if (isNetwork) {
+          try {
+            cachedDisk = await MediaCacheManager.instance.getCachedFile(resolvedUrl);
+          } catch (_) {}
+        }
+
+        final VideoPlayerController ctrl;
+        if (cachedDisk != null && await cachedDisk.exists()) {
+          ctrl = VideoPlayerController.file(cachedDisk);
+        } else if (isNetwork) {
+          ctrl = VideoPlayerController.networkUrl(uri);
+        } else {
+          ctrl = VideoPlayerController.file(File(
+            resolvedUrl.startsWith('file://')
+                ? Uri.parse(resolvedUrl).toFilePath()
+                : resolvedUrl,
+          ));
+        }
 
         try {
-          await ctrl.initialize();
+          await ctrl.initialize().timeout(const Duration(seconds: 10));
           ctrl.setLooping(false);
           ctrl.setVolume(1.0);
           ctrl.setPlaybackSpeed(_playbackSpeed);
@@ -200,6 +214,9 @@ class MediaPlaybackCoordinator with ChangeNotifier {
           );
         } catch (e) {
           debugPrint('[MediaPlaybackCoordinator] Video note init error: $e');
+          try {
+            await ctrl.dispose();
+          } catch (_) {}
           onTrackCompleted(track.messageId);
           return;
         }

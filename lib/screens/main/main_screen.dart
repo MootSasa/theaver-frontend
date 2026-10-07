@@ -2603,18 +2603,8 @@ class _MainScreenState extends State<MainScreen>
                             final statusBarHeight =
                                 MediaQuery.of(context).padding.top;
                             final topBarHeight = statusBarHeight + 52.0;
-                            return Stack(
-                              children: [
-                                _buildChatList(
-                                  topPadding: topBarHeight + 8.0,
-                                ),
-                                Positioned(
-                                  top: topBarHeight + 4.0,
-                                  left: 0,
-                                  right: 0,
-                                  child: const MediaNotePlayerHeader(),
-                                ),
-                              ],
+                            return _buildChatList(
+                              topPadding: topBarHeight + 8.0,
                             );
                           },
                         ),
@@ -2681,6 +2671,8 @@ class _MainScreenState extends State<MainScreen>
                 ); // closes PageView
 
             final isDark = Theme.of(context).brightness == Brightness.dark;
+            final statusBarHeight = MediaQuery.of(context).padding.top;
+            final topBarHeight = statusBarHeight + 52.0;
             final reduceMotion = MediaQuery.disableAnimationsOf(context);
             final lightAngle =
                 glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
@@ -2776,7 +2768,17 @@ class _MainScreenState extends State<MainScreen>
                 body: Scaffold(
                   backgroundColor: Colors.transparent,
                   resizeToAvoidBottomInset: true,
-                  body: pageView,
+                  body: Stack(
+                    children: [
+                      pageView,
+                      Positioned(
+                        top: topBarHeight + 4.0,
+                        left: 0,
+                        right: 0,
+                        child: const MediaNotePlayerHeader(),
+                      ),
+                    ],
+                  ),
                 ),
                 actionMargin: actionMargin,
                 bottomNavigationBar: LiquidGlassTabBar(
@@ -2892,6 +2894,12 @@ class _MainScreenState extends State<MainScreen>
                         },
                       ),
                     ),
+                  Positioned(
+                    top: topBarHeight + 4.0,
+                    left: 0,
+                    right: 0,
+                    child: const MediaNotePlayerHeader(),
+                  ),
                   Positioned(
                     top: 0,
                     left: 0,

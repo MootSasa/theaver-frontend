@@ -26,11 +26,21 @@ class VideoNoteControllerPool {
 
   static void put(String url, VideoPlayerController controller) {
     if (_pool.containsKey(url)) return;
-    if (_order.length >= _maxControllers) {
-      final activeUrl = VideoNotePlaybackService().activeVideoUrl;
-      int evictIndex = 0;
-      if (activeUrl != null && _order.length > 1 && _order[0] == activeUrl) {
-        evictIndex = 1;
+    final activeUrl = VideoNotePlaybackService().activeVideoUrl;
+    final activeCtrl = VideoNotePlaybackService().activeController;
+
+    while (_order.length >= _maxControllers) {
+      int evictIndex = -1;
+      for (int i = 0; i < _order.length; i++) {
+        final candUrl = _order[i];
+        final candCtrl = _pool[candUrl];
+        if (candUrl != activeUrl && candCtrl != activeCtrl) {
+          evictIndex = i;
+          break;
+        }
+      }
+      if (evictIndex == -1) {
+        break;
       }
       final oldest = _order.removeAt(evictIndex);
       final oldCtrl = _pool.remove(oldest);
@@ -151,7 +161,14 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     final isThisActive = activeId == widget.messageId;
     if (isThisActive) {
       if (!_isPlayingWithSound && _controller != null && _controller!.value.isInitialized) {
-        _startSoundPlayback(restart: true);
+        final bool isAlreadyPlayingWithSound = (_playbackService.activeController == _controller) &&
+            (_controller!.value.volume > 0 || _controller!.value.isPlaying);
+        if (isAlreadyPlayingWithSound) {
+          _isPlayingWithSound = true;
+          setState(() {});
+        } else {
+          _startSoundPlayback(restart: false);
+        }
       } else {
         setState(() {});
       }
@@ -424,6 +441,30 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     return (normalized / (2 * math.pi)).clamp(0.0, 1.0);
   }
 
+  bool _isSeeking = false;
+  Duration? _pendingSeek;
+
+  void _performSeek(Duration target) async {
+    final ctrl = _controller;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    if (_isSeeking) {
+      _pendingSeek = target;
+      return;
+    }
+    _isSeeking = true;
+    try {
+      await ctrl.seekTo(target);
+    } catch (_) {
+    } finally {
+      _isSeeking = false;
+      if (_pendingSeek != null) {
+        final next = _pendingSeek!;
+        _pendingSeek = null;
+        _performSeek(next);
+      }
+    }
+  }
+
   void _onScrubStart(Offset localPos, Offset center) {
     final ctrl = _controller;
     if (ctrl == null || !ctrl.value.isInitialized) return;
@@ -439,7 +480,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     HapticFeedback.selectionClick();
 
     final targetDuration = duration * _scrubProgress;
-    ctrl.seekTo(targetDuration);
+    _performSeek(targetDuration);
     setState(() {});
   }
 
@@ -452,10 +493,10 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     _scrubProgress = _calculateProgressFromOffset(localPos, center);
 
     final now = DateTime.now();
-    if (now.difference(_lastSeekThrottle).inMilliseconds > 30) {
+    if (now.difference(_lastSeekThrottle).inMilliseconds > 40) {
       _lastSeekThrottle = now;
       final targetDuration = duration * _scrubProgress;
-      ctrl.seekTo(targetDuration);
+      _performSeek(targetDuration);
     }
     setState(() {});
   }
@@ -466,11 +507,10 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     if (ctrl != null && ctrl.value.isInitialized) {
       final duration = ctrl.value.duration;
       final targetDuration = duration * _scrubProgress;
-      ctrl.seekTo(targetDuration).then((_) {
-        if (_wasPlayingBeforeScrub) {
-          ctrl.play();
-        }
-      });
+      _performSeek(targetDuration);
+      if (_wasPlayingBeforeScrub) {
+        ctrl.play();
+      }
     }
     setState(() {
       _isScrubbing = false;
@@ -681,6 +721,8 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
         // Active playback videos (with sound or in floating PiP) must NEVER be paused by visibility detector.
         final bool isActiveVideo = (widget.messageId != null && _playbackService.activeMessageId == widget.messageId) ||
             (_controller != null && _playbackService.activeController == _controller) ||
+            (_playbackService.activeVideoUrl != null && _playbackService.activeVideoUrl == widget.videoUrl) ||
+            (widget.messageId != null && MediaPlaybackCoordinator.instance.activeTrack?.messageId == widget.messageId) ||
             _isPlayingWithSound;
 
         if (!isActiveVideo && _controller != null && _controller!.value.isInitialized) {
@@ -821,30 +863,24 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                       if (_isPlayingWithSound && isInitialized)
                         Positioned.fill(
                           child: _RingHitTestTarget(
-                            innerRadius: (effectiveDiameter / 2) - 28.0,
-                            outerRadius: (effectiveDiameter / 2) + 20.0,
-                            child: GestureDetector(
+                            innerRadius: (effectiveDiameter / 2) - 34.0,
+                            outerRadius: (effectiveDiameter / 2) + 24.0,
+                            child: Listener(
                               behavior: HitTestBehavior.opaque,
-                              onPanDown: (details) {
+                              onPointerDown: (event) {
                                 _onScrubStart(
-                                  details.localPosition,
+                                  event.localPosition,
                                   Offset(effectiveDiameter / 2, effectiveDiameter / 2),
                                 );
                               },
-                              onPanStart: (details) {
-                                _onScrubStart(
-                                  details.localPosition,
-                                  Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                                );
-                              },
-                              onPanUpdate: (details) {
+                              onPointerMove: (event) {
                                 _onScrubUpdate(
-                                  details.localPosition,
+                                  event.localPosition,
                                   Offset(effectiveDiameter / 2, effectiveDiameter / 2),
                                 );
                               },
-                              onPanEnd: (_) => _onScrubEnd(),
-                              onPanCancel: _onScrubEnd,
+                              onPointerUp: (_) => _onScrubEnd(),
+                              onPointerCancel: (_) => _onScrubEnd(),
                               child: _isScrubbing
                                   ? CustomPaint(
                                       painter: _CircularProgressPainter(
