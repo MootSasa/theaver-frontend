@@ -125,34 +125,42 @@ class VideoNoteRecorderService with ChangeNotifier {
         return false;
       }
 
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+      if (!kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.windows ||
+           defaultTargetPlatform == TargetPlatform.android ||
+           defaultTargetPlatform == TargetPlatform.iOS)) {
         try {
           _availableCameras = await availableCameras();
-          if (_availableCameras.isEmpty) {
+          if (_availableCameras.isNotEmpty) {
+            final cam = _availableCameras.firstWhere(
+              (c) => _isFrontCamera
+                  ? c.lensDirection == CameraLensDirection.front
+                  : c.lensDirection == CameraLensDirection.back,
+              orElse: () => _availableCameras.first,
+            );
+            _cameraController = CameraController(
+              cam,
+              ResolutionPreset.medium,
+              enableAudio: true,
+            );
+            await _cameraController!.initialize();
+            _isInitialized = true;
+            notifyListeners();
+            return true;
+          } else if (defaultTargetPlatform == TargetPlatform.windows) {
             _errorMessage = 'No camera available';
             notifyListeners();
             return false;
           }
-          final cam = _availableCameras.firstWhere(
-            (c) => _isFrontCamera
-                ? c.lensDirection == CameraLensDirection.front
-                : c.lensDirection == CameraLensDirection.back,
-            orElse: () => _availableCameras.first,
-          );
-          _cameraController = CameraController(
-            cam,
-            ResolutionPreset.medium,
-            enableAudio: true,
-          );
-          await _cameraController!.initialize();
-          _isInitialized = true;
-          notifyListeners();
-          return true;
         } catch (e) {
-          debugPrint('VideoNoteRecorderService: Windows camera initialization failed: $e');
-          _errorMessage = e.toString();
-          notifyListeners();
-          return false;
+          debugPrint('VideoNoteRecorderService: CameraController init failed, fallback: $e');
+          _cameraController?.dispose();
+          _cameraController = null;
+          if (defaultTargetPlatform == TargetPlatform.windows) {
+            _errorMessage = e.toString();
+            notifyListeners();
+            return false;
+          }
         }
       }
 

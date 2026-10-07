@@ -3,8 +3,8 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -19,14 +19,19 @@ import 'message_status_widget.dart';
 class VideoNoteControllerPool {
   static final Map<String, VideoPlayerController> _pool = {};
   static final List<String> _order = [];
-  static const int _maxControllers = 12;
+  static const int _maxControllers = 4;
 
   static VideoPlayerController? get(String url) => _pool[url];
 
   static void put(String url, VideoPlayerController controller) {
     if (_pool.containsKey(url)) return;
     if (_order.length >= _maxControllers) {
-      final oldest = _order.removeAt(0);
+      final activeUrl = VideoNotePlaybackService().activeVideoUrl;
+      int evictIndex = 0;
+      if (activeUrl != null && _order.length > 1 && _order[0] == activeUrl) {
+        evictIndex = 1;
+      }
+      final oldest = _order.removeAt(evictIndex);
       final oldCtrl = _pool.remove(oldest);
       try {
         oldCtrl?.dispose();
@@ -419,6 +424,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     if (duration.inMilliseconds <= 0) return;
 
     _wasPlayingBeforeScrub = ctrl.value.isPlaying;
+    if (_wasPlayingBeforeScrub) {
+      ctrl.pause();
+    }
     _isScrubbing = true;
     _scrubProgress = _calculateProgressFromOffset(localPos, center);
     HapticFeedback.selectionClick();
@@ -437,7 +445,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     _scrubProgress = _calculateProgressFromOffset(localPos, center);
 
     final now = DateTime.now();
-    if (now.difference(_lastSeekThrottle).inMilliseconds > 50) {
+    if (now.difference(_lastSeekThrottle).inMilliseconds > 30) {
       _lastSeekThrottle = now;
       final targetDuration = duration * _scrubProgress;
       ctrl.seekTo(targetDuration);
@@ -451,10 +459,11 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     if (ctrl != null && ctrl.value.isInitialized) {
       final duration = ctrl.value.duration;
       final targetDuration = duration * _scrubProgress;
-      ctrl.seekTo(targetDuration);
-      if (_wasPlayingBeforeScrub) {
-        ctrl.play();
-      }
+      ctrl.seekTo(targetDuration).then((_) {
+        if (_wasPlayingBeforeScrub) {
+          ctrl.play();
+        }
+      });
     }
     setState(() {
       _isScrubbing = false;
@@ -672,31 +681,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: widget.isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            RawGestureDetector(
-              gestures: <Type, GestureRecognizerFactory>{
-                _CircularRingGestureRecognizer:
-                    GestureRecognizerFactoryWithHandlers<_CircularRingGestureRecognizer>(
-                  () => _CircularRingGestureRecognizer(
-                    isEnabledProvider: () => _isPlayingWithSound && isInitialized,
-                    centerProvider: () => Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                    innerRadiusProvider: () => (effectiveDiameter / 2) - 28.0,
-                    outerRadiusProvider: () => (effectiveDiameter / 2) + 20.0,
-                    onScrubStart: (pos) => _onScrubStart(
-                      pos,
-                      Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                    ),
-                    onScrubUpdate: (pos) => _onScrubUpdate(
-                      pos,
-                      Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                    ),
-                    onScrubEnd: _onScrubEnd,
-                  ),
-                  (instance) {},
-                ),
-              },
-              child: GestureDetector(
-                onTap: _handleTap,
-                child: AnimatedContainer(
+            GestureDetector(
+              onTap: _handleTap,
+              child: AnimatedContainer(
                   duration: const Duration(milliseconds: 260),
                   curve: Curves.easeOutCubic,
                   width: effectiveDiameter,
@@ -815,34 +802,59 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                           ),
                         ),
 
-                      // 3. Smooth Circular Progress Ring around edge (Active during sound playback)
+                      // 3. Smooth Circular Progress Ring around edge with interactive ring scrubbing
                       if (_isPlayingWithSound && isInitialized)
                         Positioned.fill(
-                          child: IgnorePointer(
-                            child: _isScrubbing
-                                ? CustomPaint(
-                                    painter: _CircularProgressPainter(
-                                      progress: _scrubProgress,
-                                      color: Colors.white,
-                                      strokeWidth: 3.2,
-                                      isScrubbing: true,
+                          child: _RingHitTestTarget(
+                            innerRadius: (effectiveDiameter / 2) - 28.0,
+                            outerRadius: (effectiveDiameter / 2) + 20.0,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onPanDown: (details) {
+                                _onScrubStart(
+                                  details.localPosition,
+                                  Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                );
+                              },
+                              onPanStart: (details) {
+                                _onScrubStart(
+                                  details.localPosition,
+                                  Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                );
+                              },
+                              onPanUpdate: (details) {
+                                _onScrubUpdate(
+                                  details.localPosition,
+                                  Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                );
+                              },
+                              onPanEnd: (_) => _onScrubEnd(),
+                              onPanCancel: _onScrubEnd,
+                              child: _isScrubbing
+                                  ? CustomPaint(
+                                      painter: _CircularProgressPainter(
+                                        progress: _scrubProgress,
+                                        color: Colors.white,
+                                        strokeWidth: 3.2,
+                                        isScrubbing: true,
+                                      ),
+                                    )
+                                  : TweenAnimationBuilder<double>(
+                                      tween: Tween<double>(begin: animatedBeginProgress, end: displayProgress),
+                                      duration: const Duration(milliseconds: 250),
+                                      curve: Curves.linear,
+                                      builder: (context, smoothProgress, _) {
+                                        return CustomPaint(
+                                          painter: _CircularProgressPainter(
+                                            progress: smoothProgress,
+                                            color: Colors.white,
+                                            strokeWidth: 3.2,
+                                            isScrubbing: false,
+                                          ),
+                                        );
+                                      },
                                     ),
-                                  )
-                                : TweenAnimationBuilder<double>(
-                                    tween: Tween<double>(begin: animatedBeginProgress, end: displayProgress),
-                                    duration: const Duration(milliseconds: 250),
-                                    curve: Curves.linear,
-                                    builder: (context, smoothProgress, _) {
-                                      return CustomPaint(
-                                        painter: _CircularProgressPainter(
-                                          progress: smoothProgress,
-                                          color: Colors.white,
-                                          strokeWidth: 3.2,
-                                          isScrubbing: false,
-                                        ),
-                                      );
-                                    },
-                                  ),
+                            ),
                           ),
                         ),
 
@@ -864,7 +876,6 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                   ),
                 ),
               ),
-            ),
             const SizedBox(height: 5.0),
             AnimatedContainer(
               duration: const Duration(milliseconds: 260),
@@ -1077,59 +1088,70 @@ class _CircularProgressPainter extends CustomPainter {
   }
 }
 
-class _CircularRingGestureRecognizer extends OneSequenceGestureRecognizer {
-  _CircularRingGestureRecognizer({
-    required this.isEnabledProvider,
-    required this.centerProvider,
-    required this.innerRadiusProvider,
-    required this.outerRadiusProvider,
-    this.onScrubStart,
-    this.onScrubUpdate,
-    this.onScrubEnd,
+/// Hit-test proxy widget that restricts touch events strictly to an annular ring
+/// between [innerRadius] and [outerRadius] centered on the widget.
+///
+/// Touches inside the inner radius (the center of the circle) pass through to
+/// underlying widgets (allowing center tap play/pause and vertical drag scrolling).
+class _RingHitTestTarget extends SingleChildRenderObjectWidget {
+  final double innerRadius;
+  final double outerRadius;
+
+  const _RingHitTestTarget({
+    required this.innerRadius,
+    required this.outerRadius,
+    required super.child,
   });
 
-  final ValueGetter<bool> isEnabledProvider;
-  final ValueGetter<Offset> centerProvider;
-  final ValueGetter<double> innerRadiusProvider;
-  final ValueGetter<double> outerRadiusProvider;
-  final ValueChanged<Offset>? onScrubStart;
-  final ValueChanged<Offset>? onScrubUpdate;
-  final VoidCallback? onScrubEnd;
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderRingHitTest(
+      innerRadius: innerRadius,
+      outerRadius: outerRadius,
+    );
+  }
 
   @override
-  void addAllowedPointer(PointerDownEvent event) {
-    if (!isEnabledProvider()) {
-      resolve(GestureDisposition.rejected);
-      return;
+  void updateRenderObject(
+      BuildContext context, covariant _RenderRingHitTest renderObject) {
+    renderObject
+      ..innerRadius = innerRadius
+      ..outerRadius = outerRadius;
+  }
+}
+
+class _RenderRingHitTest extends RenderProxyBox {
+  _RenderRingHitTest({
+    required double innerRadius,
+    required double outerRadius,
+    RenderBox? child,
+  })  : _innerRadius = innerRadius,
+        _outerRadius = outerRadius,
+        super(child);
+
+  double _innerRadius;
+  double get innerRadius => _innerRadius;
+  set innerRadius(double value) {
+    if (_innerRadius != value) {
+      _innerRadius = value;
     }
+  }
 
-    final center = centerProvider();
-    final dist = (event.localPosition - center).distance;
-    final innerR = innerRadiusProvider();
-    final outerR = outerRadiusProvider();
-
-    if (dist >= innerR && dist <= outerR) {
-      startTrackingPointer(event.pointer, event.transform);
-      resolve(GestureDisposition.accepted);
-      onScrubStart?.call(event.localPosition);
-    } else {
-      resolve(GestureDisposition.rejected);
+  double _outerRadius;
+  double get outerRadius => _outerRadius;
+  set outerRadius(double value) {
+    if (_outerRadius != value) {
+      _outerRadius = value;
     }
   }
 
   @override
-  void handleEvent(PointerEvent event) {
-    if (event is PointerMoveEvent) {
-      onScrubUpdate?.call(event.localPosition);
-    } else if (event is PointerUpEvent || event is PointerCancelEvent) {
-      stopTrackingPointer(event.pointer);
-      onScrubEnd?.call();
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final dist = (position - center).distance;
+    if (dist >= _innerRadius && dist <= _outerRadius) {
+      return super.hitTest(result, position: position);
     }
+    return false;
   }
-
-  @override
-  String get debugDescription => 'CircularRingGestureRecognizer';
-
-  @override
-  void didStopTrackingLastPointer(int pointer) {}
 }

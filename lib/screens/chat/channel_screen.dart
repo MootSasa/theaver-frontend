@@ -400,7 +400,11 @@ class _ChannelScreenState extends State<ChannelScreen> {
             }
 
             _messages.clear();
-            _messages.addAll(merged.values.toSet());
+            final Map<String, Message> dedupedById = {};
+            for (final m in merged.values) {
+              dedupedById[m.id] = m;
+            }
+            _messages.addAll(dedupedById.values);
 
             // Сортировка по createdAt по убыванию
             _messages.sort((a, b) {

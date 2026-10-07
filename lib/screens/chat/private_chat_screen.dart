@@ -1248,7 +1248,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _messages.clear();
           _messageReactions.clear();
           _myReactions.clear();
-          _messages.addAll(merged.values.toSet());
+          final Map<String, Message> dedupedById = {};
+          for (final m in merged.values) {
+            dedupedById[m.id] = m;
+          }
+          _messages.addAll(dedupedById.values);
 
           for (final m in _messages) {
             if (m.reactions.isNotEmpty) {
