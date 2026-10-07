@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/voice_playback_service.dart';
 import 'package:theaver/services/video_note_playback_service.dart';
+import 'package:theaver/services/media_playback_coordinator.dart';
 import 'package:theaver/widgets/chat/media_note_player_header.dart';
 import 'package:theaver/widgets/message/message_bubble.dart';
 import 'package:theaver/widgets/message/voice_message_widget.dart';
@@ -68,6 +70,27 @@ Widget createTestApp(Widget child) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (methodCall) async => '/tmp',
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('com.ryanheise.just_audio.methods'),
+      (methodCall) async {
+        if (methodCall.method == 'init') {
+          return {'id': 'test_player'};
+        }
+        if (methodCall.method == 'load') {
+          return {'duration': 10000000};
+        }
+        return {};
+      },
+    );
+  });
 
   group('VoicePlaybackService Unit Tests', () {
     test('Initial properties and playback speed cycling', () {
@@ -253,6 +276,100 @@ void main() {
 
       await service.cyclePlaybackSpeed();
       expect(service.playbackSpeed, 1.0);
+    });
+  });
+
+  group('MediaPlaybackCoordinator Unit Tests', () {
+    test('Initial coordinator state is empty', () {
+      final coordinator = MediaPlaybackCoordinator.instance;
+      expect(coordinator.hasActiveMedia, isFalse);
+      expect(coordinator.activeTrack, isNull);
+      expect(coordinator.queue, isEmpty);
+    });
+
+    test('Cycle playback speed cycles across 1.0x, 1.5x, 2.0x and updates services', () async {
+      final coordinator = MediaPlaybackCoordinator.instance;
+      await coordinator.cyclePlaybackSpeed(); // might be at 1.0 -> 1.5
+      expect([1.0, 1.5, 2.0], contains(coordinator.playbackSpeed));
+
+      final speedBefore = coordinator.playbackSpeed;
+      await coordinator.cyclePlaybackSpeed();
+      final speedAfter = coordinator.playbackSpeed;
+      expect(speedAfter != speedBefore, isTrue);
+
+      expect(VoicePlaybackService().playbackSpeed, speedAfter);
+      expect(VideoNotePlaybackService().playbackSpeed, speedAfter);
+    });
+
+    test('Queue progression and onTrackCompleted advances sequentially', () async {
+      final coordinator = MediaPlaybackCoordinator.instance;
+      final track1 = const PlaybackTrack(
+        messageId: 'msg_track_1',
+        chatId: 'chat_1',
+        chatType: 'private',
+        mediaType: 'voice',
+        mediaUrl: '/tmp/nonexistent_audio1.m4a',
+      );
+      final track2 = const PlaybackTrack(
+        messageId: 'msg_track_2',
+        chatId: 'chat_1',
+        chatType: 'private',
+        mediaType: 'voice',
+        mediaUrl: '/tmp/nonexistent_audio2.m4a',
+      );
+
+      await coordinator.startPlayback(
+        track: track1,
+        remainingQueue: [track2],
+      );
+
+      expect(coordinator.hasActiveMedia, isTrue);
+      expect(coordinator.activeTrack?.messageId, 'msg_track_1');
+      expect(coordinator.isVoice, isTrue);
+      expect(coordinator.queue.length, 1);
+      expect(coordinator.queue.first.messageId, 'msg_track_2');
+
+      // Complete track 1 -> auto-advances to track 2
+      await coordinator.onTrackCompleted('msg_track_1');
+      expect(coordinator.hasActiveMedia, isTrue);
+      expect(coordinator.activeTrack?.messageId, 'msg_track_2');
+      expect(coordinator.isVoice, isTrue);
+      expect(coordinator.queue, isEmpty);
+
+      // Stop all clears coordinator
+      await coordinator.stopAll();
+      expect(coordinator.hasActiveMedia, isFalse);
+      expect(coordinator.activeTrack, isNull);
+    });
+
+    test('onBuildPlaylistRequested is called when startPlayback has no explicit queue', () async {
+      final coordinator = MediaPlaybackCoordinator.instance;
+      final track1 = const PlaybackTrack(
+        messageId: 'msg_a',
+        chatId: 'chat_test',
+        chatType: 'group',
+        mediaType: 'voice',
+        mediaUrl: '/tmp/nonexistent_a.m4a',
+      );
+      final track2 = const PlaybackTrack(
+        messageId: 'msg_b',
+        chatId: 'chat_test',
+        chatType: 'group',
+        mediaType: 'voice',
+        mediaUrl: '/tmp/nonexistent_b.m4a',
+      );
+
+      coordinator.onBuildPlaylistRequested = (id) {
+        if (id == 'msg_a') return [track2];
+        return [];
+      };
+
+      await coordinator.startPlayback(track: track1);
+      expect(coordinator.queue.length, 1);
+      expect(coordinator.queue.first.messageId, 'msg_b');
+
+      await coordinator.stopAll();
+      coordinator.onBuildPlaylistRequested = null;
     });
   });
 }

@@ -43,6 +43,7 @@ import '../../utils/date_time_utils.dart';
 import '../../services/update_service.dart';
 import '../settings/widgets/update_dialog.dart';
 import '../../widgets/chat/round_video_thumbnail.dart';
+import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
 import '../../services/notification_service.dart';
 
@@ -2602,8 +2603,18 @@ class _MainScreenState extends State<MainScreen>
                             final statusBarHeight =
                                 MediaQuery.of(context).padding.top;
                             final topBarHeight = statusBarHeight + 52.0;
-                            return _buildChatList(
-                              topPadding: topBarHeight + 8.0,
+                            return Stack(
+                              children: [
+                                _buildChatList(
+                                  topPadding: topBarHeight + 8.0,
+                                ),
+                                Positioned(
+                                  top: topBarHeight + 4.0,
+                                  left: 0,
+                                  right: 0,
+                                  child: const MediaNotePlayerHeader(),
+                                ),
+                              ],
                             );
                           },
                         ),

@@ -12,6 +12,7 @@ import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../services/media_cache_manager.dart';
 import '../../services/video_note_playback_service.dart';
+import '../../services/media_playback_coordinator.dart';
 import 'message_status_widget.dart';
 
 /// Static LRU pool for caching active video note controllers to avoid re-initialization
@@ -65,6 +66,9 @@ class VideoMessageWidget extends StatefulWidget {
   final String? timeText;
   final String? senderName;
   final VoidCallback? onRetry;
+  final String? chatId;
+  final String? chatType;
+  final String? chatTitle;
 
   const VideoMessageWidget({
     Key? key,
@@ -82,6 +86,9 @@ class VideoMessageWidget extends StatefulWidget {
     this.timeText,
     this.senderName,
     this.onRetry,
+    this.chatId,
+    this.chatType,
+    this.chatTitle,
   }) : super(key: key);
 
   @override
@@ -498,13 +505,21 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     if (_isPlayingWithSound) {
       _playbackService.togglePlayPause();
     } else {
+      if (_controller != null) {
+        VideoNoteControllerPool.put(widget.videoUrl, _controller!);
+      }
       if (widget.messageId != null) {
-        _playbackService.setActivePlayback(
-          messageId: widget.messageId!,
-          videoUrl: widget.videoUrl,
-          controller: _controller!,
-          senderName: widget.isMe ? null : widget.senderName,
-          initialInView: true,
+        MediaPlaybackCoordinator.instance.startPlayback(
+          track: PlaybackTrack(
+            messageId: widget.messageId!,
+            chatId: widget.chatId ?? '',
+            chatType: widget.chatType ?? 'private',
+            mediaType: 'video_note',
+            mediaUrl: widget.videoUrl,
+            senderName: widget.isMe ? null : widget.senderName,
+            chatTitle: widget.chatTitle ?? (widget.isMe ? null : widget.senderName),
+            duration: widget.duration,
+          ),
         );
       }
       if (!_isPlayingWithSound) {

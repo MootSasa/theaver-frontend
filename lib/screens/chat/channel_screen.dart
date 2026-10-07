@@ -32,11 +32,15 @@ import 'group_chat_screen.dart';
 import '../../utils/entity_parser.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/date_time_utils.dart';
+import '../../config/app_config.dart';
+import '../../services/media_playback_coordinator.dart';
+import '../../services/video_note_playback_service.dart';
+import '../../services/voice_playback_service.dart';
+import '../../widgets/chat/media_note_player_header.dart';
+import '../../widgets/message/video_message_widget.dart';
+import '../../widgets/message/voice_message_widget.dart';
 
-// --- НАСТРОЙКИ СТИЛЯ СООБЩЕНИЙ ---
-/// Радиус скругления «облачка» сообщения в канале.
-const double _kChannelMessageBorderRadius = 12.0;
-// ---------------------------------
+
 
 class ChannelScreen extends StatefulWidget {
   final String channelId;
@@ -98,6 +102,18 @@ class _ChannelScreenState extends State<ChannelScreen> {
     _highlightMessageId = widget.highlightMessageId;
     _loadData();
     _initWebSocket();
+
+    // Connect continuous media playback with coordinator
+    MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.channelId;
+    MediaPlaybackCoordinator.instance.onScrollToMessageRequested = (id) => _scrollToMessage(id);
+    MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
+    MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
+
+    VideoNotePlaybackService().onPlayNextRequested = _playNextMediaNote;
+    VideoNotePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
+
+    VoicePlaybackService().onPlayNextRequested = _playNextMediaNote;
+    VoicePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
 
     _scrollController.addListener(() {
       if (!_scrollController.hasClients || _messages.isEmpty) return;
@@ -966,6 +982,23 @@ class _ChannelScreenState extends State<ChannelScreen> {
     _scrollController.dispose();
     _wsSubscription?.cancel();
 
+    if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.channelId) {
+      MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
+      MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
+      MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
+      MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
+    }
+
+    if (VideoNotePlaybackService().onPlayNextRequested == _playNextMediaNote) {
+      VideoNotePlaybackService().onPlayNextRequested = null;
+      VideoNotePlaybackService().onScrollToMessageRequested = null;
+    }
+
+    if (VoicePlaybackService().onPlayNextRequested == _playNextMediaNote) {
+      VoicePlaybackService().onPlayNextRequested = null;
+      VoicePlaybackService().onScrollToMessageRequested = null;
+    }
+
     _updateInputHeight();
 
     // Clear the open chat indicator in the provider
@@ -974,6 +1007,60 @@ class _ChannelScreenState extends State<ChannelScreen> {
     } catch (_) {}
 
     super.dispose();
+  }
+
+  List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {
+    final List<PlaybackTrack> playlist = [];
+    final startIndex = _messages.indexWhere(
+        (m) => m.id == startMessageId || m.localId == startMessageId);
+    if (startIndex >= 0) {
+      for (int i = startIndex - 1; i >= 0; i--) {
+        final m = _messages[i];
+        final rawUrl = m.fileUrl ?? '';
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        if (resolvedUrl.isEmpty) continue;
+
+        if (m.messageType == 'voice') {
+          playlist.add(PlaybackTrack(
+            messageId: m.id,
+            chatId: widget.channelId,
+            chatType: 'channel',
+            mediaType: 'voice',
+            mediaUrl: resolvedUrl,
+            senderName: m.senderName,
+            chatTitle: widget.channelName,
+            duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
+            waveform: m.waveform,
+          ));
+        } else if (m.isRound || (m.messageType == 'video' && m.isRound)) {
+          playlist.add(PlaybackTrack(
+            messageId: m.id,
+            chatId: widget.channelId,
+            chatType: 'channel',
+            mediaType: 'video_note',
+            mediaUrl: resolvedUrl,
+            senderName: m.senderName,
+            chatTitle: widget.channelName,
+            duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
+          ));
+        }
+      }
+    }
+    return playlist;
+  }
+
+  void _playNextMediaNote(String currentMessageId) {
+    if (!mounted) return;
+    final playlist = _buildPlaylistFrom(currentMessageId);
+    if (playlist.isNotEmpty) {
+      final nextTrack = playlist.removeAt(0);
+      MediaPlaybackCoordinator.instance.startPlayback(
+        track: nextTrack,
+        remainingQueue: playlist,
+      );
+      return;
+    }
+    MediaPlaybackCoordinator.instance.stopAll();
   }
 
   void _updateInputHeight() {
@@ -1057,18 +1144,36 @@ class _ChannelScreenState extends State<ChannelScreen> {
           }
         },
       ),
-      body: ChatMessagesListView(
-        isLoading: _isLoading,
-        isLoadingMore: _isLoadingMore,
-        itemCount: _messages.length,
-        scrollController: _scrollController,
-        topPadding: topPadding,
-        bottomPadding: _isAdmin ? _inputHeight + 8 : 16,
-        emptyTitle: 'No posts yet',
-        itemBuilder: (context, index) {
-          final message = _messages[index];
-          return _buildChannelMessage(message);
-        },
+      body: Stack(
+        children: [
+          ChatMessagesListView(
+            isLoading: _isLoading,
+            isLoadingMore: _isLoadingMore,
+            itemCount: _messages.length,
+            scrollController: _scrollController,
+            topPadding: topPadding,
+            bottomPadding: _isAdmin ? _inputHeight + 8 : 16,
+            emptyTitle: 'No posts yet',
+            itemBuilder: (context, index) {
+              final message = _messages[index];
+              return _buildChannelMessage(message);
+            },
+          ),
+          Positioned(
+            top: topPadding + 4.0,
+            left: 0,
+            right: 0,
+            child: MediaNotePlayerHeader(
+              onScrollToActive: () {
+                final activeId = VoicePlaybackService().activeMessageId ??
+                    VideoNotePlaybackService().activeMessageId;
+                if (activeId != null) {
+                  _scrollToMessage(activeId);
+                }
+              },
+            ),
+          ),
+        ],
       ),
       bottomBar: _isAdmin
           ? Container(
@@ -1232,13 +1337,60 @@ class _ChannelScreenState extends State<ChannelScreen> {
               ),
               const SizedBox(height: 8),
               // Message content
-              if (message.messageType != 'text' && message.fileUrl != null)
+              if (message.messageType == 'voice' && message.fileUrl != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8.0),
+                  child: VoiceMessageWidget(
+                    key: ValueKey('voice_${message.id}'),
+                    messageId: message.id,
+                    audioUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
+                    duration: message.duration != null && message.duration! > 0
+                        ? Duration(seconds: message.duration!)
+                        : null,
+                    waveform: message.waveform,
+                    fileSize: message.mediaFileSize,
+                    isMe: false,
+                    isRead: true,
+                    sendStatus: message.sendStatus,
+                    timeText: _formatTime(message.createdAt),
+                    senderName: _channelName,
+                    chatId: widget.channelId,
+                    chatType: 'channel',
+                    chatTitle: _channelName,
+                  ),
+                )
+              else if ((message.isRound || (message.messageType == 'video' && message.isRound)) && message.fileUrl != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8.0),
+                  child: Center(
+                    child: VideoMessageWidget(
+                      key: ValueKey('vmsg_${message.id}'),
+                      messageId: message.id,
+                      videoUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
+                      duration: message.duration != null && message.duration! > 0
+                          ? Duration(seconds: message.duration!)
+                          : null,
+                      thumbUrl: message.thumbUrl,
+                      thumbBase64: message.thumbBase64,
+                      fileSize: message.mediaFileSize,
+                      isMe: false,
+                      isRead: true,
+                      sendStatus: message.sendStatus,
+                      timeText: _formatTime(message.createdAt),
+                      senderName: _channelName,
+                      chatId: widget.channelId,
+                      chatType: 'channel',
+                      chatTitle: _channelName,
+                    ),
+                  ),
+                )
+              else if (message.messageType != 'text' && message.fileUrl != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8.0),
                     child: Image.network(
-                      message.fileUrl!,
+                      AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
                       errorBuilder: (context, error, stackTrace) {
                         return Container(
                           padding: const EdgeInsets.all(16),

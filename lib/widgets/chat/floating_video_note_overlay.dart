@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_playback_service.dart';
 
 /// Draggable, Telegram-style floating circular video note overlay (PiP).
@@ -169,7 +170,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
         _isDismissing = false;
         _position = null;
         _snapController.duration = const Duration(milliseconds: 260);
-        _service.stopActivePlayback();
+        MediaPlaybackCoordinator.instance.stopAll();
       });
       return;
     }
@@ -241,7 +242,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
               onPanEnd: (d) => _onPanEnd(d, screenSize, topPadding, bottomPadding),
               onTap: () {
                 if (_isDismissing) return;
-                _service.requestScrollToActive();
+                MediaPlaybackCoordinator.instance.navigateToActiveChat();
               },
             child: Material(
               type: MaterialType.transparency,
@@ -323,7 +324,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
                       right: 2,
                       child: GestureDetector(
                         onTap: () {
-                          _service.stopActivePlayback();
+                          MediaPlaybackCoordinator.instance.stopAll();
                         },
                         child: Container(
                           width: 26,

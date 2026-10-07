@@ -25,10 +25,8 @@ import '../../l10n/app_localizations.dart';
 import '../../config/app_config.dart';
 import 'package:drift/drift.dart' show Value;
 import '../../utils/image_utils.dart';
-import 'package:video_player/video_player.dart';
 import '../../services/video_note_playback_service.dart';
-import '../../widgets/chat/floating_video_note_overlay.dart';
-import '../../widgets/message/video_message_widget.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
@@ -210,12 +208,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _loadData();
     _initWebSocket();
 
-    // Connect continuous video note playback and PiP callbacks
-    VideoNotePlaybackService().onPlayNextRequested = _playNextVideoNote;
+    // Connect continuous media playback with coordinator
+    MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
+    MediaPlaybackCoordinator.instance.onScrollToMessageRequested = (id) => _scrollToMessage(id);
+    MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
+    MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
+
+    VideoNotePlaybackService().onPlayNextRequested = _playNextMediaNote;
     VideoNotePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
 
-    // Connect continuous voice note playback
-    VoicePlaybackService().onPlayNextRequested = _playNextVoiceNote;
+    VoicePlaybackService().onPlayNextRequested = _playNextMediaNote;
     VoicePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
 
     _scrollController.addListener(() {
@@ -1997,106 +1999,78 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 
-    if (VideoNotePlaybackService().onPlayNextRequested == _playNextVideoNote) {
-      VideoNotePlaybackService().onPlayNextRequested = null;
-      VideoNotePlaybackService().onScrollToMessageRequested = null;
-      VideoNotePlaybackService().stopActivePlayback();
+    if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.chatId) {
+      MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
+      MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
+      MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
+      MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
     }
 
-    if (VoicePlaybackService().onPlayNextRequested == _playNextVoiceNote) {
+    if (VideoNotePlaybackService().onPlayNextRequested == _playNextMediaNote) {
+      VideoNotePlaybackService().onPlayNextRequested = null;
+      VideoNotePlaybackService().onScrollToMessageRequested = null;
+    }
+
+    if (VoicePlaybackService().onPlayNextRequested == _playNextMediaNote) {
       VoicePlaybackService().onPlayNextRequested = null;
       VoicePlaybackService().onScrollToMessageRequested = null;
-      VoicePlaybackService().stopVoice();
     }
 
     super.dispose();
   }
 
-  void _playNextVoiceNote(String currentMessageId) {
-    if (!mounted) return;
-    final currentIndex = _messages.indexWhere(
-        (m) => m.id == currentMessageId || m.localId == currentMessageId);
-    if (currentIndex > 0) {
-      for (int i = currentIndex - 1; i >= 0; i--) {
+  List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {
+    final List<PlaybackTrack> playlist = [];
+    final startIndex = _messages.indexWhere(
+        (m) => m.id == startMessageId || m.localId == startMessageId);
+    if (startIndex >= 0) {
+      for (int i = startIndex - 1; i >= 0; i--) {
         final m = _messages[i];
+        final rawUrl = m.fileUrl ?? '';
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        if (resolvedUrl.isEmpty) continue;
+
         if (m.messageType == 'voice') {
-          final rawUrl = m.fileUrl ?? '';
-          final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-          if (resolvedUrl.isNotEmpty) {
-            VoicePlaybackService().playVoice(
-              messageId: m.id,
-              audioUrl: resolvedUrl,
-              senderName: m.senderName,
-            );
-            return;
-          }
+          playlist.add(PlaybackTrack(
+            messageId: m.id,
+            chatId: widget.chatId,
+            chatType: 'group',
+            mediaType: 'voice',
+            mediaUrl: resolvedUrl,
+            senderName: m.senderName,
+            chatTitle: widget.groupName,
+            duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
+            waveform: m.waveform,
+          ));
+        } else if (m.isRound || (m.messageType == 'video' && m.isRound)) {
+          playlist.add(PlaybackTrack(
+            messageId: m.id,
+            chatId: widget.chatId,
+            chatType: 'group',
+            mediaType: 'video_note',
+            mediaUrl: resolvedUrl,
+            senderName: m.senderName,
+            chatTitle: widget.groupName,
+            duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
+          ));
         }
       }
     }
-    // End of playback chain reached: clear active state and dismiss header
-    VoicePlaybackService().stopVoice();
+    return playlist;
   }
 
-  void _playNextVideoNote(String currentMessageId) {
+  void _playNextMediaNote(String currentMessageId) {
     if (!mounted) return;
-    final currentIndex = _messages.indexWhere(
-        (m) => m.id == currentMessageId || m.localId == currentMessageId);
-    if (currentIndex > 0) {
-      for (int i = currentIndex - 1; i >= 0; i--) {
-        final m = _messages[i];
-        if (m.isRound || (m.messageType == 'video' && m.isRound)) {
-          final rawUrl = m.fileUrl ?? '';
-          final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-          if (resolvedUrl.isNotEmpty) {
-            final cached = VideoNoteControllerPool.get(resolvedUrl);
-            if (cached != null && cached.value.isInitialized) {
-              cached.seekTo(Duration.zero);
-              cached.setLooping(false);
-              cached.setVolume(1.0);
-              cached.play();
-              VideoNotePlaybackService().setActivePlayback(
-                messageId: m.id,
-                videoUrl: resolvedUrl,
-                controller: cached,
-                senderName: m.senderName,
-                initialInView: VideoNotePlaybackService().isMessageInView(m.id),
-              );
-            } else {
-              final uri = Uri.tryParse(resolvedUrl);
-              final ctrl = uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
-                  ? VideoPlayerController.networkUrl(uri)
-                  : VideoPlayerController.file(File(
-                      resolvedUrl.startsWith('file://')
-                          ? Uri.parse(resolvedUrl).toFilePath()
-                          : resolvedUrl,
-                    ));
-              ctrl.initialize().then((_) {
-                if (!mounted) {
-                  ctrl.dispose();
-                  return;
-                }
-                ctrl.setLooping(false);
-                ctrl.setVolume(1.0);
-                ctrl.play();
-                VideoNoteControllerPool.put(resolvedUrl, ctrl);
-                VideoNotePlaybackService().setActivePlayback(
-                  messageId: m.id,
-                  videoUrl: resolvedUrl,
-                  controller: ctrl,
-                  senderName: m.senderName,
-                  initialInView: VideoNotePlaybackService().isMessageInView(m.id),
-                );
-              }).catchError((err) {
-                debugPrint('Play next init error: $err');
-                VideoNotePlaybackService().stopActivePlayback();
-              });
-            }
-            return;
-          }
-        }
-      }
+    final playlist = _buildPlaylistFrom(currentMessageId);
+    if (playlist.isNotEmpty) {
+      final nextTrack = playlist.removeAt(0);
+      MediaPlaybackCoordinator.instance.startPlayback(
+        track: nextTrack,
+        remainingQueue: playlist,
+      );
+      return;
     }
-    VideoNotePlaybackService().stopActivePlayback();
+    MediaPlaybackCoordinator.instance.stopAll();
   }
 
   void _updateInputHeight() {
@@ -2387,10 +2361,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               onCancelReply: _cancelReply,
             ),
           ),
-        // Плавающий кружочек видеосообщения (PiP), если активный кружок ушел из поля зрения
-        const Positioned.fill(
-          child: FloatingVideoNoteOverlay(),
-        ),
       ],
     );
   }
@@ -2551,6 +2521,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
       senderName: isMe ? null : message.senderName,
+      chatType: 'group',
+      chatTitle: widget.groupName,
       isHighlighted: isHighlighted,
       reactions: _messageReactions[message.id] ??
           (message.reactions.isNotEmpty ? message.reactions : null),

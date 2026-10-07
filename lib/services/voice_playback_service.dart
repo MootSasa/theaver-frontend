@@ -18,6 +18,9 @@ class VoicePlaybackService with ChangeNotifier {
   String? _activeMessageId;
   String? _activeAudioUrl;
   String? _activeSenderName;
+  String? _activeChatId;
+  String? _activeChatType;
+  String? _activeChatTitle;
   bool _isPlaying = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -33,6 +36,9 @@ class VoicePlaybackService with ChangeNotifier {
   String? get activeMessageId => _activeMessageId;
   String? get activeAudioUrl => _activeAudioUrl;
   String? get activeSenderName => _activeSenderName;
+  String? get activeChatId => _activeChatId;
+  String? get activeChatType => _activeChatType;
+  String? get activeChatTitle => _activeChatTitle;
   bool get isPlaying => _isPlaying;
   Duration get position => _position;
   Duration get duration => _duration;
@@ -85,6 +91,9 @@ class VoicePlaybackService with ChangeNotifier {
     required String audioUrl,
     String? senderName,
     Duration? initialDuration,
+    String? chatId,
+    String? chatType,
+    String? chatTitle,
   }) async {
     // 1. Mute/stop any active round video note to prevent audio clash
     VideoNotePlaybackService().stopActivePlayback();
@@ -99,6 +108,9 @@ class VoicePlaybackService with ChangeNotifier {
     _activeMessageId = messageId;
     _activeAudioUrl = audioUrl;
     if (senderName != null) _activeSenderName = senderName;
+    if (chatId != null) _activeChatId = chatId;
+    if (chatType != null) _activeChatType = chatType;
+    if (chatTitle != null) _activeChatTitle = chatTitle;
     if (initialDuration != null) _duration = initialDuration;
     _position = Duration.zero;
     notifyListeners();
@@ -210,6 +222,9 @@ class VoicePlaybackService with ChangeNotifier {
     _activeMessageId = null;
     _activeAudioUrl = null;
     _activeSenderName = null;
+    _activeChatId = null;
+    _activeChatType = null;
+    _activeChatTitle = null;
     _isPlaying = false;
     _position = Duration.zero;
     _duration = Duration.zero;

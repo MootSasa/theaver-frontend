@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../models/theav_theme.dart';
 import '../../services/voice_playback_service.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/media_cache_manager.dart';
 import 'message_status_widget.dart';
 
@@ -26,6 +27,9 @@ class VoiceMessageWidget extends StatefulWidget {
   final String? senderName;
   final int? fileSize;
   final VoidCallback? onRetry;
+  final String? chatId;
+  final String? chatType;
+  final String? chatTitle;
 
   const VoiceMessageWidget({
     Key? key,
@@ -40,6 +44,9 @@ class VoiceMessageWidget extends StatefulWidget {
     this.senderName,
     this.fileSize,
     this.onRetry,
+    this.chatId,
+    this.chatType,
+    this.chatTitle,
   }) : super(key: key);
 
   @override
@@ -225,11 +232,18 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
     } else if (_isThisActive) {
       _playbackService.resumeVoice();
     } else {
-      _playbackService.playVoice(
-        messageId: widget.messageId,
-        audioUrl: widget.audioUrl,
-        senderName: widget.senderName,
-        initialDuration: widget.duration,
+      MediaPlaybackCoordinator.instance.startPlayback(
+        track: PlaybackTrack(
+          messageId: widget.messageId,
+          chatId: widget.chatId ?? '',
+          chatType: widget.chatType ?? 'private',
+          mediaType: 'voice',
+          mediaUrl: widget.audioUrl,
+          senderName: widget.senderName,
+          chatTitle: widget.chatTitle ?? widget.senderName,
+          duration: widget.duration,
+          waveform: widget.waveform,
+        ),
       );
     }
   }
@@ -244,11 +258,18 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
     final targetMs = (fraction * _effectiveDuration.inMilliseconds).round();
 
     if (!_isThisActive) {
-      _playbackService.playVoice(
-        messageId: widget.messageId,
-        audioUrl: widget.audioUrl,
-        senderName: widget.senderName,
-        initialDuration: widget.duration,
+      MediaPlaybackCoordinator.instance.startPlayback(
+        track: PlaybackTrack(
+          messageId: widget.messageId,
+          chatId: widget.chatId ?? '',
+          chatType: widget.chatType ?? 'private',
+          mediaType: 'voice',
+          mediaUrl: widget.audioUrl,
+          senderName: widget.senderName,
+          chatTitle: widget.chatTitle ?? widget.senderName,
+          duration: widget.duration,
+          waveform: widget.waveform,
+        ),
       ).then((_) {
         _playbackService.seekVoice(Duration(milliseconds: targetMs));
       });

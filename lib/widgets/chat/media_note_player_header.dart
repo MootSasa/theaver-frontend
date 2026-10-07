@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/voice_playback_service.dart';
 
@@ -70,7 +71,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
   void _onServiceChange() {
     if (!mounted) return;
     _attachVideoController();
-    final hasActive = _voiceService.hasActiveAudio || _videoService.hasActiveVideo;
+    final hasActive = _voiceService.hasActiveAudio || (_videoService.hasActiveVideo && !_videoService.isFloating);
     if (hasActive) {
       if (_slideController.status != AnimationStatus.forward &&
           _slideController.status != AnimationStatus.completed) {
@@ -94,7 +95,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
   @override
   Widget build(BuildContext context) {
     final hasVoice = _voiceService.hasActiveAudio;
-    final hasVideo = _videoService.hasActiveVideo;
+    final hasVideo = _videoService.hasActiveVideo && !_videoService.isFloating;
 
     if (!hasVoice && !hasVideo && _slideController.value == 0.0) {
       return const SizedBox.shrink();
@@ -126,13 +127,13 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
       progress = (dur.inMilliseconds > 0)
           ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
           : 0.0;
-      speed = _videoService.playbackSpeed;
+      speed = MediaPlaybackCoordinator.instance.playbackSpeed;
       onPlayPause = _videoService.togglePlayPause;
-      onSpeed = _videoService.cyclePlaybackSpeed;
-      onClose = _videoService.stopActivePlayback;
+      onSpeed = MediaPlaybackCoordinator.instance.cyclePlaybackSpeed;
+      onClose = MediaPlaybackCoordinator.instance.stopAll;
       onTap = () {
         widget.onScrollToActive?.call();
-        _videoService.requestScrollToActive();
+        MediaPlaybackCoordinator.instance.navigateToActiveChat();
       };
     } else {
       title = _voiceService.activeSenderName ?? l10n?.translate('chat_voice_message') ?? 'Voice message';
@@ -146,13 +147,13 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
       progress = (dur.inMilliseconds > 0)
           ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
           : 0.0;
-      speed = _voiceService.playbackSpeed;
+      speed = MediaPlaybackCoordinator.instance.playbackSpeed;
       onPlayPause = _voiceService.togglePlayPause;
-      onSpeed = _voiceService.cyclePlaybackSpeed;
-      onClose = _voiceService.stopVoice;
+      onSpeed = MediaPlaybackCoordinator.instance.cyclePlaybackSpeed;
+      onClose = MediaPlaybackCoordinator.instance.stopAll;
       onTap = () {
         widget.onScrollToActive?.call();
-        _voiceService.requestScrollToActive();
+        MediaPlaybackCoordinator.instance.navigateToActiveChat();
       };
     }
 
