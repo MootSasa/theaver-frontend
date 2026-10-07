@@ -24,6 +24,7 @@ class VideoNoteRecorderService with ChangeNotifier {
   bool _isFrontCamera = true;
   Duration _elapsed = Duration.zero;
   String? _errorMessage;
+  double _zoomLevel = 1.0;
 
   RTCVideoRenderer? get renderer => _renderer;
   CameraController? get cameraController => _cameraController;
@@ -34,6 +35,20 @@ class VideoNoteRecorderService with ChangeNotifier {
   Duration get elapsed => _elapsed;
   String? get errorMessage => _errorMessage;
   String? get currentFilePath => _currentFilePath;
+  double get zoomLevel => _zoomLevel;
+
+  /// Sets the zoom level between 1.0 and 3.0
+  Future<void> setZoom(double zoom) async {
+    _zoomLevel = zoom.clamp(1.0, 3.0);
+    notifyListeners();
+    if (_cameraController != null && _cameraController!.value.isInitialized) {
+      try {
+        await _cameraController!.setZoomLevel(_zoomLevel);
+      } catch (_) {
+        // Unimplemented on camera_windows or unsupported by hardware
+      }
+    }
+  }
 
   /// Checks whether both camera and microphone permissions are currently granted.
   Future<bool> hasPermissions() async {
@@ -584,6 +599,7 @@ class VideoNoteRecorderService with ChangeNotifier {
     _recorder = null;
     _isRecording = false;
     _isInitialized = false;
+    _zoomLevel = 1.0;
   }
 
   @override

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -59,10 +60,24 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   bool _isCancelling = false;
   double _dragOffsetX = 0.0;
   double _dragOffsetY = 0.0;
+  double _currentZoom = 1.0;
+  double _baseZoom = 1.0;
+
+  double get currentZoom => _currentZoom;
 
   static const double _kCircleDiameter = 240.0;
   static const double _kCancelThreshold = -85.0;
   static const double _kLockThreshold = -70.0;
+
+  void _setZoom(double zoom) {
+    final clamped = zoom.clamp(1.0, 3.0);
+    if ((clamped - _currentZoom).abs() > 0.005) {
+      setState(() {
+        _currentZoom = clamped;
+      });
+      widget.recorderService.setZoom(clamped);
+    }
+  }
 
   @override
   void initState() {
@@ -107,27 +122,37 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
 
   /// Called by parent or gesture detector when finger moves
   void updatePointerOffset(double dx, double dy) {
-    if (_isLocked || _isCancelling || _isSending) return;
+    if (_isCancelling || _isSending) return;
 
-    setState(() {
-      _dragOffsetX = dx.clamp(-160.0, 0.0);
-      _dragOffsetY = dy.clamp(-120.0, 0.0);
-    });
-
-    // Check lock threshold
-    if (_dragOffsetY <= _kLockThreshold && !_isLocked) {
-      HapticFeedback.mediumImpact();
+    if (!_isLocked) {
       setState(() {
-        _isLocked = true;
-        _dragOffsetX = 0.0;
-        _dragOffsetY = 0.0;
+        _dragOffsetX = dx.clamp(-160.0, 0.0);
+        _dragOffsetY = dy.clamp(-120.0, 0.0);
       });
-      return;
-    }
 
-    // Check cancel threshold
-    if (_dragOffsetX <= _kCancelThreshold && !_isCancelling) {
-      _triggerTrashCancel();
+      // Check lock threshold
+      if (_dragOffsetY <= _kLockThreshold) {
+        HapticFeedback.mediumImpact();
+        setState(() {
+          _isLocked = true;
+          _dragOffsetX = 0.0;
+          _dragOffsetY = 0.0;
+        });
+      }
+
+      // Check cancel threshold
+      if (_dragOffsetX <= _kCancelThreshold && !_isCancelling) {
+        _triggerTrashCancel();
+        return;
+      }
+    } else {
+      // Once locked, dragging further up adjusts zoom (1.0x to 3.0x)
+      if (dy <= _kLockThreshold) {
+        final zoomFraction = ((-dy - (-_kLockThreshold)) / 150.0).clamp(0.0, 1.0);
+        _setZoom(1.0 + zoomFraction * 2.0);
+      } else {
+        _setZoom(1.0);
+      }
     }
   }
 
@@ -184,6 +209,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   Future<void> _flipCamera() async {
     _flipController.forward(from: 0.0);
     HapticFeedback.selectionClick();
+    _setZoom(1.0);
     await widget.recorderService.flipCamera();
   }
 
@@ -202,9 +228,10 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
 
     return FadeTransition(
       opacity: _fadeController,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
+      child: SizedBox.expand(
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
           // 1. Cinematic Telegram Backdrop Blur
           Positioned.fill(
             child: BackdropFilter(
@@ -218,10 +245,14 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
           // 2. Circular Camera Viewfinder with Breathing Aura
           if (!_isCancelling)
             Positioned(
+              left: 0,
+              right: 0,
               bottom: size.height * 0.18 - (_dragOffsetY * 0.4),
-              child: Transform.translate(
-                offset: Offset(_dragOffsetX * 0.4, 0),
-                child: _buildCameraViewfinder(diameter, theme),
+              child: Center(
+                child: Transform.translate(
+                  offset: Offset(_dragOffsetX * 0.4, 0),
+                  child: _buildCameraViewfinder(diameter, theme),
+                ),
               ),
             )
           else
@@ -262,7 +293,8 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
             _buildHandsFreeControlBar(l10n, theme, size),
         ],
       ),
-    );
+    ),
+  );
   }
 
   Widget _buildReplyBanner(ThemeData theme) {
@@ -332,14 +364,14 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
     );
   }
 
-  /// Circular camera viewfinder with pulse aura and top timer badge
+  /// Circular camera viewfinder with pulse aura, top timer badge and bottom zoom badge
   Widget _buildCameraViewfinder(double diameter, ThemeData theme) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         // Top elapsed timer badge
         _buildTimerBadge(),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
 
         // Clean circular camera viewfinder without pulsating aura
         Stack(
@@ -366,33 +398,103 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
               ),
           ],
         ),
+        const SizedBox(height: 10),
+        _buildZoomBadge(),
       ],
     );
   }
 
-  Widget _buildCameraCircle(double diameter) {
-    return Container(
-      width: diameter,
-      height: diameter,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.45),
-            blurRadius: 20,
-            spreadRadius: 2,
-            offset: const Offset(0, 6),
+  Widget _buildZoomBadge() {
+    final label = '${_currentZoom.toStringAsFixed(1)}x';
+    final isZoomed = (_currentZoom - 1.0).abs() > 0.05;
+
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        double nextZoom;
+        if (_currentZoom < 1.8) {
+          nextZoom = 2.0;
+        } else if (_currentZoom < 2.8) {
+          nextZoom = 3.0;
+        } else {
+          nextZoom = 1.0;
+        }
+        _setZoom(nextZoom);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.60),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isZoomed ? const Color(0xFF2EA6FF) : Colors.white.withValues(alpha: 0.25),
+            width: 1.2,
           ),
-        ],
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.25),
-          width: 2.0,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isZoomed ? const Color(0xFF2EA6FF) : Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.2,
+          ),
         ),
       ),
-      child: ClipOval(
-        child: AnimatedBuilder(
-          animation: _flipController,
-          builder: (context, child) {
+    );
+  }
+
+  Widget _buildCameraCircle(double diameter) {
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent) {
+          final delta = -event.scrollDelta.dy * 0.002;
+          _setZoom(_currentZoom + delta);
+        }
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onScaleStart: (_) {
+          _baseZoom = _currentZoom;
+        },
+        onScaleUpdate: (details) {
+          if (details.pointerCount >= 2 || details.scale != 1.0) {
+            _setZoom(_baseZoom * details.scale);
+          }
+        },
+        child: Container(
+          width: diameter,
+          height: diameter,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.45),
+                blurRadius: 20,
+                spreadRadius: 2,
+                offset: const Offset(0, 6),
+              ),
+            ],
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.25),
+              width: 2.0,
+            ),
+          ),
+          child: ClipOval(
+            child: Transform.scale(
+              scale: _currentZoom,
+              child: AnimatedBuilder(
+                animation: _flipController,
+                builder: (context, child) {
             final angle = _flipController.value * math.pi;
             final isBack = _flipController.value >= 0.5;
 
@@ -455,7 +557,10 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
           },
         ),
       ),
-    );
+    ),
+  ),
+),
+);
   }
 
   /// Floating timer badge at top of circle with pulsing red dot
