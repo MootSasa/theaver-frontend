@@ -60,12 +60,15 @@ class ChannelScreen extends StatefulWidget {
   State<ChannelScreen> createState() => _ChannelScreenState();
 }
 
-class _ChannelScreenState extends State<ChannelScreen> {
+class _ChannelScreenState extends State<ChannelScreen>
+    with WidgetsBindingObserver {
   final List<Message> _messages = [];
   final MarkdownTextEditingController _messageController = MarkdownTextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   bool _isLoading = true;
+  bool _isSyncing = false;
+  Timer? _syncDebounceTimer;
   bool _hasMoreMessages = true;
   bool _isLoadingMore = false;
   bool _isSending = false;
@@ -99,6 +102,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _highlightMessageId = widget.highlightMessageId;
     _loadData();
     _initWebSocket();
@@ -189,7 +193,99 @@ class _ChannelScreenState extends State<ChannelScreen> {
     _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _onAppResumed();
+    }
+  }
+
+  void _onAppResumed() {
+    try {
+      context.read<UnreadCountProvider>().setOpenChat(widget.channelId);
+    } catch (_) {}
+    if (!_wsService.isConnected) {
+      _wsService.connect();
+    }
+    _triggerSilentSync();
+  }
+
+  void _triggerSilentSync() {
+    _syncDebounceTimer?.cancel();
+    _syncDebounceTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) {
+        _syncLatestMessages();
+      }
+    });
+  }
+
+  /// Silently synchronizes latest channel messages without flashing a loading indicator.
+  Future<void> _syncLatestMessages() async {
+    if (_isSyncing || !mounted) return;
+    _isSyncing = true;
+
+    try {
+      final result = await ChatService.getMessages(chatId: widget.channelId, limit: 50);
+      if (result['success'] == true && mounted) {
+        final serverMessages = result['messages'] as List<Message>;
+        final db = AppDatabase();
+
+        setState(() {
+          final Map<String, Message> merged = {};
+          for (final m in _messages) {
+            merged[m.id] = m;
+          }
+          for (final m in serverMessages) {
+            merged[m.id] = m;
+          }
+
+          _messages.clear();
+          _messages.addAll(merged.values);
+          _messages.sort((a, b) {
+            try {
+              final ta = DateTime.parse(a.createdAt);
+              final tb = DateTime.parse(b.createdAt);
+              final cmp = tb.compareTo(ta);
+              if (cmp != 0) return cmp;
+              return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+            } catch (_) {
+              return 0;
+            }
+          });
+        });
+
+        try {
+          db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
+        } catch (e) {
+          debugPrint('Drift saveMessages in channel sync error: $e');
+        }
+
+        // Refresh channel info / subscriber count
+        try {
+          final chatResult = await ChatService.getChat(widget.channelId);
+          if (chatResult['success'] == true && mounted) {
+            final chat = chatResult['chat'] as ChatDetails;
+            setState(() {
+              _channelName = chat.name;
+              _channelAvatar = chat.avatarUrl;
+              _subscriberCount = chat.participants.length;
+            });
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('ChannelScreen: _syncLatestMessages error: $e');
+    } finally {
+      _isSyncing = false;
+    }
+  }
+
   void _handleWebSocketEvent(WebSocketEvent event) {
+    if (event.type == WebSocketEventType.connected) {
+      _triggerSilentSync();
+      return;
+    }
+
     if (event.type == WebSocketEventType.newMessage) {
       final chatId = event.data['chat_id']?.toString();
       if (chatId == widget.channelId) {
@@ -975,6 +1071,9 @@ class _ChannelScreenState extends State<ChannelScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _syncDebounceTimer?.cancel();
+
     _messageController.dispose();
     _scrollController.dispose();
     _wsSubscription?.cancel();

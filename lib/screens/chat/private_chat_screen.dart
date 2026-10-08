@@ -85,13 +85,16 @@ class PrivateChatScreen extends StatefulWidget {
   State<PrivateChatScreen> createState() => _PrivateChatScreenState();
 }
 
-class _PrivateChatScreenState extends State<PrivateChatScreen> {
+class _PrivateChatScreenState extends State<PrivateChatScreen>
+    with WidgetsBindingObserver {
   final List<Message> _messages = [];
   final MarkdownTextEditingController _textController = MarkdownTextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _inputFocusNode = FocusNode();
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isSyncing = false;
+  Timer? _syncDebounceTimer;
   String? _currentUserId;
   String _chatName = '';
   String? _chatAvatar;
@@ -236,6 +239,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     if (widget.otherUserId != null) {
       _otherUserId = widget.otherUserId;
     }
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
     _initWebSocket();
     _scrollController.addListener(_onScroll);
@@ -254,6 +258,152 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       } catch (_) {}
       NotificationService().cancelChatNotifications(widget.chatId, chatTitle: widget.otherUserName);
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _onAppResumed();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _onAppPaused();
+    }
+  }
+
+  void _onAppResumed() {
+    try {
+      context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
+    } catch (_) {}
+    if (!_wsService.isConnected) {
+      _wsService.connect();
+    }
+    _triggerSilentSync();
+  }
+
+  void _onAppPaused() {
+    _markReadTimer?.cancel();
+    _flushMarkRead();
+    _stopMyTyping();
+  }
+
+  void _triggerSilentSync() {
+    _syncDebounceTimer?.cancel();
+    _syncDebounceTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) {
+        _syncLatestMessages();
+      }
+    });
+  }
+
+  /// Silently synchronizes latest messages from server without flashing a loading spinner
+  /// or interrupting the user's scroll position.
+  Future<void> _syncLatestMessages() async {
+    if (_isSyncing || !mounted) return;
+    _isSyncing = true;
+
+    try {
+      final result = await ChatService.getMessages(chatId: widget.chatId, limit: 50);
+      if (result['success'] == true && mounted) {
+        final serverMessages = result['messages'] as List<Message>;
+        final db = AppDatabase();
+
+        setState(() {
+          final pendingMessages = _messages
+              .where((m) => m.sendStatus != 1 && m.localId != null)
+              .toList();
+
+          final Map<String, Message> merged = {};
+          for (final m in _messages) {
+            merged[m.id] = m;
+            if (m.localId != null && m.localId!.isNotEmpty) {
+              merged[m.localId!] = m;
+            }
+          }
+          for (final m in serverMessages) {
+            merged[m.id] = m;
+            if (m.localId != null && m.localId!.isNotEmpty) {
+              merged[m.localId!] = m;
+            }
+          }
+          for (final pending in pendingMessages) {
+            final key = pending.localId ?? pending.id;
+            if (!merged.containsKey(key)) {
+              merged[key] = pending;
+            }
+          }
+
+          _messages.clear();
+          final Map<String, Message> dedupedById = {};
+          for (final m in merged.values) {
+            dedupedById[m.id] = m;
+          }
+          _messages.addAll(dedupedById.values);
+
+          for (final m in _messages) {
+            if (m.reactions.isNotEmpty) {
+              _messageReactions[m.id] = Map.from(m.reactions);
+            }
+            if (m.myReactions.isNotEmpty) {
+              _myReactions[m.id] = Set.from(m.myReactions);
+            }
+          }
+
+          _messages.sort((a, b) {
+            try {
+              final ta = DateTime.parse(a.createdAt);
+              final tb = DateTime.parse(b.createdAt);
+              final cmp = tb.compareTo(ta);
+              if (cmp != 0) return cmp;
+              return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+            } catch (_) {
+              return 0;
+            }
+          });
+
+          _updateFeedItems();
+        });
+
+        try {
+          db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
+        } catch (e) {
+          debugPrint('Drift saveMessages error in sync: $e');
+        }
+
+        // Update unread count
+        try {
+          final unreadInfo = await ChatService.getUnreadInfo(chatId: widget.chatId);
+          if (unreadInfo['success'] == true && mounted) {
+            final serverUnreadCount = unreadInfo['unread_count'] as int? ?? 0;
+            setState(() {
+              _unreadCount = serverUnreadCount;
+            });
+            try {
+              context.read<UnreadCountProvider>().setCount(widget.chatId, serverUnreadCount);
+            } catch (_) {}
+          }
+        } catch (_) {}
+
+        // Refresh partner online status
+        try {
+          final chatResult = await ChatService.getChat(widget.chatId);
+          if (chatResult['success'] == true && mounted) {
+            final chat = chatResult['chat'] as ChatDetails;
+            for (var participant in chat.participants) {
+              if (participant.id != _currentUserId) {
+                setState(() {
+                  _isOtherUserOnline = participant.isOnline;
+                  _otherUserLastSeen = participant.lastSeen;
+                });
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('PrivateChatScreen: _syncLatestMessages error: $e');
+    } finally {
+      _isSyncing = false;
+    }
   }
 
   void _onFocusChanged() {
@@ -280,6 +430,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   }
 
   void _handleWebSocketEvent(WebSocketEvent event) {
+    if (event.type == WebSocketEventType.connected) {
+      _triggerSilentSync();
+      return;
+    }
+
     // Handle events specific to this chat
     if (event.type == WebSocketEventType.newMessage) {
       final chatId = event.data['chat_id']?.toString();
@@ -3869,6 +4024,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _syncDebounceTimer?.cancel();
+
     // Stop typing indicator if active
     _stopMyTyping();
 
@@ -3973,8 +4131,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     });
   }
 
-  /// Toggle reaction on a message — optimistic update + API call
+  /// Toggle reaction on a message — optimistic update + API call with rollback
   void _toggleReaction(String messageId, String emoji) {
+    // Snapshot previous reactions for rollback
+    final previousMyReactions = Set<String>.from(_myReactions[messageId] ?? {});
+    final previousReactions = Map<String, int>.from(_messageReactions[messageId] ?? {});
+
     // Optimistic update
     setState(() {
       final mySet = _myReactions.putIfAbsent(messageId, () => <String>{});
@@ -4015,11 +4177,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       debugPrint('PrivateChatScreen: error saving reactions to DB: $e');
     }
 
-    // API call
-    _sendReactionToggle(messageId, emoji);
+    // API call with rollback
+    _sendReactionToggle(messageId, emoji, previousMyReactions, previousReactions);
   }
 
-  Future<void> _sendReactionToggle(String messageId, String emoji) async {
+  Future<void> _sendReactionToggle(
+    String messageId,
+    String emoji,
+    Set<String> previousMyReactions,
+    Map<String, int> previousReactions,
+  ) async {
     try {
       final res = await ChatService.toggleReaction(
         chatId: widget.chatId,
@@ -4029,10 +4196,50 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (res['success'] != true) {
         debugPrint(
             'PrivateChatScreen: toggleReaction returned success=false for msg=$messageId: ${res['message']}');
+        _rollbackReaction(messageId, previousMyReactions, previousReactions);
       }
     } catch (e) {
       debugPrint('PrivateChatScreen: toggleReaction exception: $e');
+      _rollbackReaction(messageId, previousMyReactions, previousReactions);
     }
+  }
+
+  void _rollbackReaction(
+    String messageId,
+    Set<String> previousMyReactions,
+    Map<String, int> previousReactions,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      if (previousMyReactions.isEmpty) {
+        _myReactions.remove(messageId);
+      } else {
+        _myReactions[messageId] = Set.from(previousMyReactions);
+      }
+
+      if (previousReactions.isEmpty) {
+        _messageReactions.remove(messageId);
+      } else {
+        _messageReactions[messageId] = Map.from(previousReactions);
+      }
+
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
+          reactions: Map.from(_messageReactions[messageId] ?? {}),
+          myReactions: Set.from(_myReactions[messageId] ?? {}),
+        );
+        _updateFeedItems();
+      }
+    });
+
+    try {
+      AppDatabase().updateMessageReactions(
+        messageId,
+        _messageReactions[messageId] ?? {},
+        _myReactions[messageId] ?? {},
+      );
+    } catch (_) {}
   }
 
   /// Extract date-only from DateTime
@@ -4129,18 +4336,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   }
 
   Future<void> _deleteMessage(Message message) async {
+    final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
+
     // Optimistically remove from UI
     setState(() {
       _messages.removeWhere((m) => m.id == message.id);
       _updateFeedItems();
     });
-
-    // Remove from local database
-    try {
-      await AppDatabase().deleteMessage(message.id);
-    } catch (e) {
-      debugPrint('PrivateChatScreen: error deleting from DB: $e');
-    }
 
     // Call server API
     final result = await ChatService.deleteMessage(
@@ -4148,10 +4350,40 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       messageId: message.id,
     );
 
-    if (result['success'] != true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['message'] ?? 'Failed to delete message')),
-      );
+    if (result['success'] == true) {
+      // Remove from local database on success
+      try {
+        await AppDatabase().deleteMessage(message.id);
+      } catch (e) {
+        debugPrint('PrivateChatScreen: error deleting from DB: $e');
+      }
+    } else {
+      // Rollback on server error
+      if (mounted) {
+        setState(() {
+          if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
+            _messages.insert(deletedIndex, message);
+          } else {
+            _messages.add(message);
+            _messages.sort((a, b) {
+              try {
+                final ta = DateTime.parse(a.createdAt);
+                final tb = DateTime.parse(b.createdAt);
+                final cmp = tb.compareTo(ta);
+                if (cmp != 0) return cmp;
+                return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+              } catch (_) {
+                return 0;
+              }
+            });
+          }
+          _updateFeedItems();
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result['message'] ?? 'Не удалось удалить сообщение')),
+        );
+      }
     }
   }
 
