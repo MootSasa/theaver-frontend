@@ -159,6 +159,19 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     if (!mounted || widget.messageId == null) return;
     final activeId = _playbackService.activeMessageId;
     final isThisActive = activeId == widget.messageId;
+    
+    if (isThisActive) {
+      final activeCtrl = _playbackService.activeController;
+      if (activeCtrl != null && _controller != activeCtrl) {
+        _controller?.removeListener(_onVideoUpdate);
+        _controller = activeCtrl;
+        _controller!.addListener(_onVideoUpdate);
+        _isCached = true;
+        _isPlayingWithSound = true;
+        if (_isDownloading) _cancelDownload();
+      }
+    }
+
     if (isThisActive) {
       if (!_isPlayingWithSound && _controller != null && _controller!.value.isInitialized) {
         final bool isAlreadyPlayingWithSound = (_playbackService.activeController == _controller) &&
@@ -862,22 +875,26 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                           child: _RingHitTestTarget(
                             innerRadius: (effectiveDiameter / 2) - 34.0,
                             outerRadius: (effectiveDiameter / 2) + 24.0,
-                            child: Listener(
+                            child: GestureDetector(
+                              onPanDown: (_) {},
+                              onPanUpdate: (_) {},
                               behavior: HitTestBehavior.opaque,
-                              onPointerDown: (event) {
-                                _onScrubStart(
-                                  event.localPosition,
-                                  Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                                );
-                              },
-                              onPointerMove: (event) {
-                                _onScrubUpdate(
-                                  event.localPosition,
-                                  Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                                );
-                              },
-                              onPointerUp: (_) => _onScrubEnd(),
-                              onPointerCancel: (_) => _onScrubEnd(),
+                              child: Listener(
+                                behavior: HitTestBehavior.opaque,
+                                onPointerDown: (event) {
+                                  _onScrubStart(
+                                    event.localPosition,
+                                    Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                  );
+                                },
+                                onPointerMove: (event) {
+                                  _onScrubUpdate(
+                                    event.localPosition,
+                                    Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                  );
+                                },
+                                onPointerUp: (_) => _onScrubEnd(),
+                                onPointerCancel: (_) => _onScrubEnd(),
                               child: _isScrubbing
                                   ? CustomPaint(
                                       painter: _CircularProgressPainter(
@@ -902,6 +919,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                                         );
                                       },
                                     ),
+                              ),
                             ),
                           ),
                         ),
