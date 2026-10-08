@@ -64,6 +64,7 @@ class VideoNotePlaybackService with ChangeNotifier {
     VoicePlaybackService().stopVoice();
 
     if (_activeController != null && _activeController != controller) {
+      _activeController!.removeListener(_onControllerTick);
       try {
         _activeController!.setVolume(0.0);
       } catch (_) {}
@@ -71,6 +72,7 @@ class VideoNotePlaybackService with ChangeNotifier {
     _activeMessageId = messageId;
     _activeVideoUrl = videoUrl;
     _activeController = controller;
+    _activeController!.addListener(_onControllerTick);
     if (senderName != null) _activeSenderName = senderName;
     if (chatId != null) _activeChatId = chatId;
     if (chatType != null) _activeChatType = chatType;
@@ -128,9 +130,26 @@ class VideoNotePlaybackService with ChangeNotifier {
     notifyListeners();
   }
 
+  void _onControllerTick() {
+    final ctrl = _activeController;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    
+    final position = ctrl.value.position;
+    final duration = ctrl.value.duration;
+    final isFinished = (duration.inMilliseconds > 0) &&
+        (position >= duration || (!ctrl.value.isPlaying && position >= duration - const Duration(milliseconds: 150)));
+        
+    if (isFinished && _activeMessageId != null) {
+      final finishedId = _activeMessageId!;
+      _activeController?.removeListener(_onControllerTick);
+      onVideoCompleted(finishedId);
+    }
+  }
+
   void stopActivePlayback([String? messageId]) {
     if (messageId != null && _activeMessageId != messageId) return;
     if (_activeController != null) {
+      _activeController!.removeListener(_onControllerTick);
       try {
         _activeController!.setVolume(0.0);
         _activeController!.pause();

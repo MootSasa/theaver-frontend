@@ -223,9 +223,10 @@ class MediaPlaybackCoordinator with ChangeNotifier {
       }
     }
 
-    if (currentForegroundChatId == track.chatId) {
-      onScrollToMessageRequested?.call(track.messageId);
-    }
+    // Disabled automatic scrolling to the next message to keep playback in the background
+    // if (currentForegroundChatId == track.chatId) {
+    //   onScrollToMessageRequested?.call(track.messageId);
+    // }
   }
 
   /// Automatically triggered when either a voice message or video note finishes.

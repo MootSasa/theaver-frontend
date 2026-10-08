@@ -383,9 +383,6 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
           (position >= duration || (!controller.value.isPlaying && position >= duration - const Duration(milliseconds: 150)));
       if (isCompleted) {
         _revertToMutedLoop();
-        if (widget.messageId != null && _playbackService.activeMessageId == widget.messageId) {
-          _playbackService.onVideoCompleted(widget.messageId!);
-        }
         return;
       }
     }

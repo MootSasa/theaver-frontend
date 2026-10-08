@@ -213,11 +213,6 @@ class VoicePlaybackService with ChangeNotifier {
   Future<void> stopVoice([String? messageId]) async {
     if (messageId != null && _activeMessageId != messageId) return;
 
-    try {
-      await _player.stop();
-      await _player.seek(Duration.zero);
-    } catch (_) {}
-
     _activeMessageId = null;
     _activeAudioUrl = null;
     _activeSenderName = null;
@@ -227,6 +222,12 @@ class VoicePlaybackService with ChangeNotifier {
     _isPlaying = false;
     _position = Duration.zero;
     _duration = Duration.zero;
+
+    try {
+      await _player.stop();
+      await _player.seek(Duration.zero);
+    } catch (_) {}
+
     notifyListeners();
   }
 

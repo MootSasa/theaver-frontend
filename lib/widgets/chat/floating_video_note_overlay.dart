@@ -74,15 +74,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
       final bool isFinished = (duration.inMilliseconds > 0) &&
           (position >= duration || (!ctrl.value.isPlaying && position >= duration - const Duration(milliseconds: 150)));
 
-      // If video completed in floating mode, trigger auto-advance
-      if (isFinished) {
-        if (_service.isFloating && _service.activeMessageId != null) {
-          final finishedId = _service.activeMessageId!;
-          _detachControllerListener();
-          _service.onVideoCompleted(finishedId);
-          return;
-        }
-      }
+      // Completion is handled by VideoNotePlaybackService centrally.
       if (_service.isFloating) {
         setState(() {});
       }
