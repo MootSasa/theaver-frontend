@@ -283,6 +283,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _markReadTimer?.cancel();
     _flushMarkRead();
     _stopMyTyping();
+    if (_isVideoRecording) {
+      _onVideoRecordingCancelled();
+    }
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+      setState(() => _isVoiceRecording = false);
+    }
   }
 
   void _triggerSilentSync() {
@@ -2597,15 +2604,20 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final bool isKeyboardVisible = bottomInset > 0;
 
-    // Use PopScope to handle back button for closing emoji panel
+    // Use PopScope to handle back button for closing emoji panel or cancelling active recordings
     return PopScope(
-      canPop: !_showEmojiPanel && !isKeyboardVisible,
+      canPop: !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
           if (_showEmojiPanel) {
             setState(() => _showEmojiPanel = false);
           } else if (isKeyboardVisible) {
             FocusScope.of(context).unfocus();
+          } else if (_isVideoRecording) {
+            _onVideoRecordingCancelled();
+          } else if (_isVoiceRecording) {
+            _voiceRecorderService.cancelRecording();
+            setState(() => _isVoiceRecording = false);
           }
         }
       },
@@ -4048,6 +4060,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       context.read<UnreadCountProvider>().setOpenChat(null);
     } catch (_) {}
 
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+    }
+    if (_isVideoRecording) {
+      _videoRecorderService.cancelRecording();
+    }
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 

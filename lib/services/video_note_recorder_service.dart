@@ -301,6 +301,29 @@ class VideoNoteRecorderService with ChangeNotifier {
     } catch (e) {
       debugPrint('VideoNoteRecorderService: Failed to start recording: $e');
       _isRecording = false;
+      _timer?.cancel();
+      _timer = null;
+      if (_audioRecorder != null) {
+        try {
+          await _audioRecorder!.stop();
+          _audioRecorder!.dispose();
+        } catch (_) {}
+        _audioRecorder = null;
+      }
+      if (_audioFilePath != null) {
+        try {
+          final audioFile = File(_audioFilePath!);
+          if (await audioFile.exists()) await audioFile.delete();
+        } catch (_) {}
+        _audioFilePath = null;
+      }
+      if (_currentFilePath != null) {
+        try {
+          final file = File(_currentFilePath!);
+          if (await file.exists()) await file.delete();
+        } catch (_) {}
+        _currentFilePath = null;
+      }
       final errorStr = e.toString().toLowerCase();
       if (errorStr.contains('permission') ||
           errorStr.contains('notallowed') ||
@@ -408,6 +431,7 @@ class VideoNoteRecorderService with ChangeNotifier {
       } catch (e) {
         debugPrint('VideoNoteRecorderService: CameraController stop error: $e');
       } finally {
+        _currentFilePath = null;
         await _cleanupStream();
         notifyListeners();
       }
@@ -490,6 +514,16 @@ class VideoNoteRecorderService with ChangeNotifier {
           }
         }
 
+        // Cleanup leftover audio file if not muxed or if recording failed
+        if (recordedAudioPath != null) {
+          try {
+            final audioFile = File(recordedAudioPath);
+            if (await audioFile.exists()) {
+              await audioFile.delete();
+            }
+          } catch (_) {}
+        }
+
         if (resultFile == null) {
           debugPrint('VideoNoteRecorderService: File at $path is missing or empty');
         }
@@ -520,6 +554,7 @@ class VideoNoteRecorderService with ChangeNotifier {
       } catch (e) {
         debugPrint('VideoNoteRecorderService: Camera cancel error: $e');
       } finally {
+        _currentFilePath = null;
         _elapsed = Duration.zero;
         await _cleanupStream();
         notifyListeners();
@@ -569,6 +604,15 @@ class VideoNoteRecorderService with ChangeNotifier {
 
     if (_cameraController != null) {
       try {
+        if (_cameraController!.value.isRecordingVideo) {
+          final xfile = await _cameraController!.stopVideoRecording();
+          final file = File(xfile.path);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        }
+      } catch (_) {}
+      try {
         await _cameraController!.dispose();
       } catch (e) {
         debugPrint('VideoNoteRecorderService: CameraController dispose error: $e');
@@ -604,7 +648,13 @@ class VideoNoteRecorderService with ChangeNotifier {
       _stream = null;
     }
 
-    _recorder = null;
+    if (_recorder != null) {
+      try {
+        await _recorder!.stop();
+      } catch (_) {}
+      _recorder = null;
+    }
+
     _isRecording = false;
     _isInitialized = false;
     _zoomLevel = 1.0;
@@ -612,6 +662,28 @@ class VideoNoteRecorderService with ChangeNotifier {
 
   @override
   void dispose() {
+    _timer?.cancel();
+    _timer = null;
+
+    if (_audioFilePath != null) {
+      try {
+        final audioFile = File(_audioFilePath!);
+        if (audioFile.existsSync()) {
+          audioFile.deleteSync();
+        }
+      } catch (_) {}
+      _audioFilePath = null;
+    }
+    if (_currentFilePath != null) {
+      try {
+        final file = File(_currentFilePath!);
+        if (file.existsSync()) {
+          file.deleteSync();
+        }
+      } catch (_) {}
+      _currentFilePath = null;
+    }
+
     _cleanupStream();
     _renderer?.dispose();
     _renderer = null;

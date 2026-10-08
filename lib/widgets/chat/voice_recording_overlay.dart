@@ -86,6 +86,9 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
   @override
   void dispose() {
     widget.recorderService.removeListener(_onRecorderUpdate);
+    if (!_isSending && widget.recorderService.isRecording) {
+      widget.recorderService.cancelRecording();
+    }
     _fadeController.dispose();
     _pulseController.dispose();
     _lockSlideController.dispose();

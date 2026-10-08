@@ -135,6 +135,15 @@ class VoiceNoteRecorderService with ChangeNotifier {
       debugPrint('[VoiceNoteRecorderService] startRecording error: $e');
       _errorMessage = e.toString();
       _isRecording = false;
+      if (_currentFilePath != null) {
+        try {
+          final file = File(_currentFilePath!);
+          if (file.existsSync()) {
+            file.deleteSync();
+          }
+        } catch (_) {}
+        _currentFilePath = null;
+      }
       notifyListeners();
       return false;
     }
@@ -219,6 +228,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
       _isLocked = false;
 
       final path = recordedPath ?? _currentFilePath;
+      _currentFilePath = null;
       if (path == null) {
         notifyListeners();
         return null;
@@ -242,6 +252,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
     } catch (e) {
       debugPrint('[VoiceNoteRecorderService] stopRecording error: $e');
       _isRecording = false;
+      _currentFilePath = null;
       notifyListeners();
       return null;
     }
@@ -312,8 +323,27 @@ class VoiceNoteRecorderService with ChangeNotifier {
   @override
   void dispose() {
     _timer?.cancel();
+    _timer = null;
     _amplitudeSubscription?.cancel();
-    _recorder.dispose();
+    _amplitudeSubscription = null;
+    if (_isRecording) {
+      _isRecording = false;
+      try {
+        _recorder.stop();
+      } catch (_) {}
+    }
+    if (_currentFilePath != null) {
+      try {
+        final file = File(_currentFilePath!);
+        if (file.existsSync()) {
+          file.deleteSync();
+        }
+      } catch (_) {}
+      _currentFilePath = null;
+    }
+    try {
+      _recorder.dispose();
+    } catch (_) {}
     super.dispose();
   }
 }

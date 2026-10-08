@@ -368,6 +368,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _markReadTimer?.cancel();
     _flushMarkRead();
     _stopMyTyping();
+    if (_isVideoRecording) {
+      _onVideoRecordingCancelled();
+    }
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+      setState(() => _isVoiceRecording = false);
+    }
   }
 
   void _triggerSilentSync() {
@@ -2317,6 +2324,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       context.read<UnreadCountProvider>().setOpenChat(null);
     } catch (_) {}
 
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+    }
+    if (_isVideoRecording) {
+      _videoRecorderService.cancelRecording();
+    }
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 
@@ -2442,10 +2455,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     return ChatScaffold(
-      canPop: !isKeyboardVisible,
+      canPop: !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
       onPopInvoked: (didPop, _) {
-        if (!didPop && isKeyboardVisible) {
-          FocusScope.of(context).unfocus();
+        if (!didPop) {
+          if (isKeyboardVisible) {
+            FocusScope.of(context).unfocus();
+          } else if (_isVideoRecording) {
+            _onVideoRecordingCancelled();
+          } else if (_isVoiceRecording) {
+            _voiceRecorderService.cancelRecording();
+            setState(() => _isVoiceRecording = false);
+          }
         }
       },
       appBar: Builder(
