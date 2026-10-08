@@ -111,7 +111,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   String _searchQuery = '';
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
-  bool _showScrollDownFab = false;
+  final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
   double _accumulatedScrollUp = 0;
@@ -145,11 +145,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   final List<File> _attachedFiles = [];
   final List<String> _attachedFileNames = [];
-  double _uploadProgress = 0.0;
+  final ValueNotifier<double> _uploadProgressNotifier = ValueNotifier<double>(0.0);
+  double get _uploadProgress => _uploadProgressNotifier.value;
   bool _isUploading = false;
 
-  List<FeedItem> get _feedItems =>
-      groupMessagesIntoFeedItems(_messages, isReversed: true);
+  List<FeedItem> _feedItems = [];
+
+  void _updateFeedItems() {
+    _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
+  }
 
   bool _isVideoFile(String filePath) {
     final clean = filePath.split('?').first.toLowerCase();
@@ -358,6 +362,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           senderReplyStripStyle: replyStripStyle ?? _replyToMessage!.senderReplyStripStyle,
         );
       }
+      _updateFeedItems();
     });
   }
 
@@ -407,6 +412,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             reactions: reactionsMap,
             myReactions: _myReactions[messageId] ?? _messages[idx].myReactions,
           );
+          _updateFeedItems();
         }
       });
 
@@ -429,6 +435,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     if (mounted) {
       setState(() {
         _messages.removeWhere((m) => m.id == messageId);
+        _updateFeedItems();
       });
     }
 
@@ -463,6 +470,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             entities: newEntities ?? _messages[index].entities,
             isEdited: true,
           );
+          _updateFeedItems();
         }
       });
     }
@@ -515,6 +523,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             replyInfo: message.replyInfo ?? _messages[existingIndex].replyInfo,
             groupedId: message.groupedId ?? _messages[existingIndex].groupedId,
           );
+          _updateFeedItems();
         });
       }
       return;
@@ -535,6 +544,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _typingUserId = null;
         }
         _messages.insert(0, message);
+        _updateFeedItems();
       });
 
       // If message is from other user, queue it for mark-as-read
@@ -724,6 +734,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             _messages[i] = _messages[i].copyWith(isRead: true);
           }
         }
+        _updateFeedItems();
       });
 
       // Обновить статус isRead в Drift для персистенции
@@ -892,7 +903,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     }
 
     // If message is not built yet, we need to find it in the list
-    int index = _messages.indexWhere((m) => m.id == messageId);
+    int index = _feedItems.indexWhere((item) =>
+        item.id == messageId ||
+        (item is FeedAlbumItem &&
+            item.album.items.any((ai) => ai.id == messageId)));
     
     // If message not in list, try to load more
     if (index == -1) {
@@ -952,9 +966,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     if (originalChatId == null || originalChatId == widget.chatId) {
       if (fromMessageId != null && (_jumpHistory.isEmpty || _jumpHistory.last != fromMessageId)) {
         _jumpHistory.add(fromMessageId);
-        setState(() {
-          _showScrollDownFab = true;
-        });
+        _showScrollDownFabNotifier.value = true;
       }
       await _scrollToMessage(messageId);
       return;
@@ -1051,7 +1063,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       }
     }
     
-    bool shouldShow = _showScrollDownFab;
+    final bool currentFabVisible = _showScrollDownFabNotifier.value;
+    bool shouldShow = currentFabVisible;
     if (offset <= threshold) {
       shouldShow = false;
     } else if (_jumpHistory.isNotEmpty) {
@@ -1063,15 +1076,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       shouldShow = false;
     }
     
-    if (shouldShow != _showScrollDownFab) {
-      setState(() {
-        _showScrollDownFab = shouldShow;
-        if (shouldShow) {
-          _accumulatedScrollDown = 0;
-        } else {
-          _accumulatedScrollUp = 0;
-        }
-      });
+    if (shouldShow != currentFabVisible) {
+      _showScrollDownFabNotifier.value = shouldShow;
+      if (shouldShow) {
+        _accumulatedScrollDown = 0;
+      } else {
+        _accumulatedScrollUp = 0;
+      }
     }
   }
 
@@ -1199,6 +1210,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             _myReactions[m.id] = Set.from(m.myReactions);
           }
         }
+        _updateFeedItems();
       });
     }
 
@@ -1272,6 +1284,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               return 0;
             }
           });
+          _updateFeedItems();
 
           // Сохранить в Drift для оффлайн-доступа
           try {
@@ -1311,13 +1324,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
       if (localMessages.isNotEmpty) {
         setState(() {
-          // Дедупликация: добавлять только сообщения, которых ещё нет
-          for (final m
-              in localMessages.map((m) => Message.fromDbMessage(m))) {
-            if (!_messages.any((existing) =>
-                existing.id == m.id ||
-                (m.localId != null && existing.localId == m.localId))) {
+          final existingIds = <String>{
+            for (final m in _messages) m.id,
+            for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+          };
+          for (final m in localMessages.map((m) => Message.fromDbMessage(m))) {
+            if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
               _messages.add(m);
+              existingIds.add(m.id);
+              if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
               if (m.reactions.isNotEmpty) {
                 _messageReactions[m.id] = Map.from(m.reactions);
               }
@@ -1337,6 +1352,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             if (cmp != 0) return cmp;
             return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
           });
+          _updateFeedItems();
           _isLoadingMore = false;
         });
         return;
@@ -1374,10 +1390,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       }
 
       setState(() {
-        // Дедупликация: добавлять только сообщения, которых ещё нет
+        final existingIds = <String>{
+          for (final m in _messages) m.id,
+          for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+        };
         for (final m in newMessages) {
-          if (!_messages.any((existing) => existing.id == m.id)) {
+          if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
             _messages.add(m);
+            existingIds.add(m.id);
+            if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
             if (m.reactions.isNotEmpty) {
               _messageReactions[m.id] = Map.from(m.reactions);
             }
@@ -1397,6 +1418,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           if (cmp != 0) return cmp;
           return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
         });
+        _updateFeedItems();
         _isLoadingMore = false;
       });
     } else if (mounted) {
@@ -1523,6 +1545,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   entities: effectiveEntities,
                   isEdited: true,
                 );
+                _updateFeedItems();
               }
             });
           }
@@ -1600,9 +1623,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
             final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
               if (mounted) {
-                setState(() {
-                  _uploadProgress = (overallProcessedCount + i + p) / totalFilesCount;
-                });
+                _uploadProgressNotifier.value = (overallProcessedCount + i + p) / totalFilesCount;
               }
             });
 
@@ -1686,6 +1707,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   _messages.insert(0, msg);
                 }
               }
+              _updateFeedItems();
               final db = AppDatabase();
               await db.saveMessages(
                   newMsgs.map((m) => _messageToCompanion(m)).toList());
@@ -1713,6 +1735,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             if (res['success'] == true && res['message'] is Message) {
               final sent = res['message'] as Message;
               _messages.insert(0, sent);
+              _updateFeedItems();
               await AppDatabase().saveMessage(_messageToCompanion(sent));
             }
           }
@@ -1721,7 +1744,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _isUploading = false;
-            _uploadProgress = 0.0;
+            _uploadProgressNotifier.value = 0.0;
             _isSending = false;
           });
           _scrollToBottom();
@@ -1739,9 +1762,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           final isImg = _isImageFile(file.path);
           final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
             if (mounted) {
-              setState(() {
-                _uploadProgress = (i + p) / filesToSend.length;
-              });
+              _uploadProgressNotifier.value = (i + p) / filesToSend.length;
             }
           });
 
@@ -1762,6 +1783,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               setState(() {
                 if (!_messages.any((m) => m.id == sent.id)) {
                   _messages.insert(0, sent);
+                  _updateFeedItems();
                 }
               });
             }
@@ -1771,7 +1793,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _isUploading = false;
-            _uploadProgress = 0.0;
+            _uploadProgressNotifier.value = 0.0;
             _isSending = false;
           });
           _scrollToBottom();
@@ -1791,7 +1813,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         final isVideo = _isVideoFile(file.path);
 
         final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
-          setState(() { _uploadProgress = p; });
+          _uploadProgressNotifier.value = p;
         });
 
         singleMediaPayload = {
@@ -1806,7 +1828,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
         setState(() {
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
 
         messageType = isVideo ? 'video' : _getMessageTypeFromMimeType(uploadResult.mimeType);
@@ -1872,6 +1894,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
             _isSending = false;
           });
           _scrollToBottom();
@@ -1921,6 +1944,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                         sendStatus: 1, // sent
                       );
                     }
+                    _updateFeedItems();
                   }
                 });
               }
@@ -1937,6 +1961,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 if (idx != -1) {
                   _messages[idx] =
                       _messages[idx].copyWith(sendStatus: 2); // failed
+                  _updateFeedItems();
                 }
               });
               ScaffoldMessenger.of(context).showSnackBar(
@@ -1954,6 +1979,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               if (idx != -1) {
                 _messages[idx] =
                     _messages[idx].copyWith(sendStatus: 2); // failed
+                _updateFeedItems();
               }
             });
             ScaffoldMessenger.of(context).showSnackBar(
@@ -1979,6 +2005,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               // Дедупликация: не добавлять если WS уже принёс это сообщение
               if (!_messages.any((m) => m.id == sentMsg.id)) {
                 _messages.insert(0, sentMsg);
+                _updateFeedItems();
               }
               _isSending = false;
             });
@@ -1987,7 +2014,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             setState(() => _isSending = false);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                  content: Text(result['message'] ?? 'Failed to send message')),
+                content: Text(result['message'] ?? 'Failed to send message')),
             );
           }
         }
@@ -2004,7 +2031,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         setState(() {
           _isSending = false;
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
       }
     }
@@ -2020,6 +2047,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       final idx = _messages.indexWhere((m) => m.localId == message.localId);
       if (idx != -1) {
         _messages[idx] = _messages[idx].copyWith(sendStatus: 0);
+        _updateFeedItems();
       }
     });
 
@@ -2035,6 +2063,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               _messages.indexWhere((m) => m.localId == message.localId);
           if (idx != -1) {
             _messages[idx] = Message.fromDbMessage(updated);
+            _updateFeedItems();
           }
         });
       }
@@ -2374,21 +2403,24 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 Positioned(
                   right: 14,
                   bottom: _inputHeight + 10 + bottomOffset,
-                  child: ScrollDownFab(
-                    visible: _showScrollDownFab,
-                    unreadCount: _unreadCount,
-                    onPressed: () {
-                      if (_jumpHistory.isNotEmpty) {
-                        final lastId = _jumpHistory.removeLast();
-                        _scrollToMessage(lastId);
-                      } else {
-                        _scrollController.animateTo(
-                          0,
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeOut,
-                        );
-                      }
-                    },
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _showScrollDownFabNotifier,
+                    builder: (context, showFab, _) => ScrollDownFab(
+                      visible: showFab,
+                      unreadCount: _unreadCount,
+                      onPressed: () {
+                        if (_jumpHistory.isNotEmpty) {
+                          final lastId = _jumpHistory.removeLast();
+                          _scrollToMessage(lastId);
+                        } else {
+                          _scrollController.animateTo(
+                            0,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      },
+                    ),
                   ),
                 ),
                 // Поле ввода внизу (внутри Stack над сообщениями)
@@ -2706,6 +2738,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       onRemoveAttachment: _removeAttachedFile,
       isUploading: _isUploading,
       uploadProgress: _uploadProgress,
+      uploadProgressNotifier: _uploadProgressNotifier,
       onChanged: _onInputTextChanged,
       onSend: _sendMessage,
       onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
@@ -2978,6 +3011,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
@@ -2988,7 +3022,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       final uploadResult = await _fileService.uploadFile(
         file,
         onProgress: (progress) {
-          if (mounted) setState(() => _uploadProgress = progress);
+          if (mounted) _uploadProgressNotifier.value = progress;
         },
       );
 
@@ -3035,6 +3069,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     fileUrl: uploadResult.url,
                   );
                 }
+                _updateFeedItems();
               }
             });
           }
@@ -3048,6 +3083,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   _messages.indexWhere((m) => m.localId == pendingLocalId);
               if (idx != -1) {
                 _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+                _updateFeedItems();
               }
             });
           }
@@ -3063,6 +3099,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 _messages.indexWhere((m) => m.localId == pendingLocalId);
             if (idx != -1) {
               _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              _updateFeedItems();
             }
           });
         }
@@ -3071,7 +3108,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (mounted) {
         setState(() {
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
       }
     }
@@ -3148,6 +3185,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
@@ -3158,7 +3196,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       final uploadResult = await _fileService.uploadFileChunked(
         file,
         onProgress: (progress) {
-          if (mounted) setState(() => _uploadProgress = progress);
+          if (mounted) _uploadProgressNotifier.value = progress;
         },
       );
 
@@ -3204,6 +3242,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     fileUrl: uploadResult.url,
                   );
                 }
+                _updateFeedItems();
               }
             });
           }
@@ -3217,6 +3256,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   _messages.indexWhere((m) => m.localId == pendingLocalId);
               if (idx != -1) {
                 _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+                _updateFeedItems();
               }
             });
           }
@@ -3232,6 +3272,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 _messages.indexWhere((m) => m.localId == pendingLocalId);
             if (idx != -1) {
               _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              _updateFeedItems();
             }
           });
         }
@@ -3249,7 +3290,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (mounted) {
         setState(() {
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
       }
     }
@@ -3311,6 +3352,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (result['success'] == true) {
         setState(() {
           _messages.clear();
+          _updateFeedItems();
         });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Chat history cleared')),
@@ -3785,6 +3827,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     _textController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
+    _showScrollDownFabNotifier.dispose();
+    _uploadProgressNotifier.dispose();
     _wsSubscription?.cancel();
     _typingTimer?.cancel();
     _highlightTimer?.cancel();
@@ -3905,6 +3949,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           reactions: Map.from(reactions),
           myReactions: Set.from(mySet),
         );
+        _updateFeedItems();
       }
     });
 
@@ -4022,6 +4067,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     // Optimistically remove from UI
     setState(() {
       _messages.removeWhere((m) => m.id == message.id);
+      _updateFeedItems();
     });
 
     // Remove from local database

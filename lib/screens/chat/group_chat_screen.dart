@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
-import 'package:dio/dio.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -98,7 +97,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   String _groupName = '';
   String? _groupAvatar;
   List<ChatParticipant> _participants = [];
-  bool _showScrollDownFab = false;
+  final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
   double _accumulatedScrollUp = 0;
@@ -110,6 +109,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   final List<String> _jumpHistory = [];
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
+  final Set<String> _pendingMarkRead = {};
+  Timer? _markReadTimer;
+  bool _isMarkingRead = false;
 
   // WebSocket
   final WebSocketService _wsService = WebSocketService();
@@ -142,15 +144,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   bool _isVoiceRecording = false;
 
   // Feed items (messages grouped into albums by grouped_id)
-  List<FeedItem> get _feedItems =>
-      groupMessagesIntoFeedItems(_messages, isReversed: true);
+  List<FeedItem> _feedItems = [];
+
+  void _updateFeedItems() {
+    _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
+  }
 
   // Attachments state
   final ImagePicker _imagePicker = ImagePicker();
   final List<File> _attachedFiles = [];
   final List<String> _attachedFileNames = [];
   bool _isUploading = false;
-  double _uploadProgress = 0.0;
+  final ValueNotifier<double> _uploadProgressNotifier = ValueNotifier<double>(0.0);
+  double get _uploadProgress => _uploadProgressNotifier.value;
 
   bool _isVideoFile(String path) {
     final ext = path.toLowerCase();
@@ -188,8 +194,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _attachedFiles.clear();
       _attachedFileNames.clear();
       _isUploading = false;
-      _uploadProgress = 0.0;
     });
+    _uploadProgressNotifier.value = 0.0;
   }
 
   void _cancelEditing() {
@@ -256,7 +262,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
       }
       
-      bool shouldShow = _showScrollDownFab;
+      final bool currentFabVisible = _showScrollDownFabNotifier.value;
+      bool shouldShow = currentFabVisible;
       if (offset <= threshold) {
         shouldShow = false;
       } else if (_jumpHistory.isNotEmpty) {
@@ -267,15 +274,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         shouldShow = false;
       }
       
-      if (shouldShow != _showScrollDownFab) {
-        setState(() {
-          _showScrollDownFab = shouldShow;
-          if (shouldShow) {
-            _accumulatedScrollDown = 0;
-          } else {
-            _accumulatedScrollUp = 0;
-          }
-        });
+      if (shouldShow != currentFabVisible) {
+        _showScrollDownFabNotifier.value = shouldShow;
+        if (shouldShow) {
+          _accumulatedScrollDown = 0;
+        } else {
+          _accumulatedScrollUp = 0;
+        }
       }
     });
 
@@ -377,6 +382,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             reactions: reactionsMap,
             myReactions: _myReactions[messageId] ?? _messages[idx].myReactions,
           );
+          _updateFeedItems();
         }
       });
 
@@ -399,6 +405,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (mounted) {
       setState(() {
         _messages.removeWhere((m) => m.id == messageId);
+        _updateFeedItems();
       });
     }
 
@@ -448,6 +455,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             entities: newEntities ?? _messages[index].entities,
             isEdited: true,
           );
+          _updateFeedItems();
         }
       });
     }
@@ -486,6 +494,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             replyInfo: message.replyInfo ?? _messages[existingIndex].replyInfo,
             groupedId: message.groupedId ?? _messages[existingIndex].groupedId,
           );
+          _updateFeedItems();
         });
       }
       return;
@@ -506,6 +515,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _typingUserName = null;
         }
         _messages.insert(0, message);
+        _updateFeedItems();
       });
       // Don't auto-scroll to bottom on new message - user should stay at current position
       // _scrollToBottom(); // Removed: user should control scroll position
@@ -515,8 +525,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void _onTypingIndicator(WebSocketEvent event) {
     // Show/hide scroll-down FAB logic
     final showFab = _scrollController.hasClients && _scrollController.offset > 200;
-    if (showFab != _showScrollDownFab) {
-      setState(() => _showScrollDownFab = showFab);
+    if (showFab != _showScrollDownFabNotifier.value) {
+      _showScrollDownFabNotifier.value = showFab;
     }
 
     final chatId = event.data['chat_id']?.toString();
@@ -617,6 +627,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             _messages[i] = _messages[i].copyWith(isRead: true);
           }
         }
+        _updateFeedItems();
       });
     }
   }
@@ -701,6 +712,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             _myReactions[m.id] = Set.from(m.myReactions);
           }
         }
+        _updateFeedItems();
       });
       _scrollToBottom();
     }
@@ -774,6 +786,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 return 0;
               }
             });
+            _updateFeedItems();
 
             // Сохранить в Drift для оффлайн-доступа
             try {
@@ -815,12 +828,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
       if (localMessages.isNotEmpty) {
         setState(() {
-          for (final m
-              in localMessages.map((m) => Message.fromDbMessage(m))) {
-            if (!_messages.any((existing) =>
-                existing.id == m.id ||
-                (m.localId != null && existing.localId == m.localId))) {
+          final existingIds = <String>{
+            for (final m in _messages) m.id,
+            for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+          };
+          for (final m in localMessages.map((m) => Message.fromDbMessage(m))) {
+            if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
               _messages.add(m);
+              existingIds.add(m.id);
+              if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
               if (m.reactions.isNotEmpty) {
                 _messageReactions[m.id] = Map.from(m.reactions);
               }
@@ -840,6 +856,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             if (cmp != 0) return cmp;
             return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
           });
+          _updateFeedItems();
           _isLoadingMore = false;
         });
         return;
@@ -876,9 +893,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
 
       setState(() {
+        final existingIds = <String>{
+          for (final m in _messages) m.id,
+          for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+        };
         for (final m in newMessages) {
-          if (!_messages.any((existing) => existing.id == m.id)) {
+          if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
             _messages.add(m);
+            existingIds.add(m.id);
+            if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
             if (m.reactions.isNotEmpty) {
               _messageReactions[m.id] = Map.from(m.reactions);
             }
@@ -898,6 +921,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           if (cmp != 0) return cmp;
           return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
         });
+        _updateFeedItems();
         _isLoadingMore = false;
       });
     } else if (mounted) {
@@ -1067,9 +1091,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
             final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
               if (mounted) {
-                setState(() {
-                  _uploadProgress = (overallProcessedCount + i + p) / totalFilesCount;
-                });
+                _uploadProgressNotifier.value = (overallProcessedCount + i + p) / totalFilesCount;
               }
             });
 
@@ -1158,6 +1180,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   _messages.insert(0, msg);
                 }
               }
+              _updateFeedItems();
               final db = AppDatabase();
               await db.saveMessages(
                   newMsgs.map((m) => _messageToCompanion(m)).toList());
@@ -1185,6 +1208,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             if (res['success'] == true && res['message'] is Message) {
               final sent = res['message'] as Message;
               _messages.insert(0, sent);
+              _updateFeedItems();
               await AppDatabase().saveMessage(_messageToCompanion(sent));
             }
           }
@@ -1193,7 +1217,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted) {
           setState(() {
             _isUploading = false;
-            _uploadProgress = 0.0;
+            _uploadProgressNotifier.value = 0.0;
             _isSending = false;
           });
           _scrollToBottom();
@@ -1211,9 +1235,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           final isImg = _isImageFile(file.path);
           final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
             if (mounted) {
-              setState(() {
-                _uploadProgress = (i + p) / filesToSend.length;
-              });
+              _uploadProgressNotifier.value = (i + p) / filesToSend.length;
             }
           });
 
@@ -1234,6 +1256,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               setState(() {
                 if (!_messages.any((m) => m.id == sent.id)) {
                   _messages.insert(0, sent);
+                  _updateFeedItems();
                 }
               });
             }
@@ -1243,7 +1266,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted) {
           setState(() {
             _isUploading = false;
-            _uploadProgress = 0.0;
+            _uploadProgressNotifier.value = 0.0;
             _isSending = false;
           });
           _scrollToBottom();
@@ -1263,9 +1286,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         final isVideo = _isVideoFile(file.path);
 
         final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
-          setState(() {
-            _uploadProgress = p;
-          });
+          _uploadProgressNotifier.value = p;
         });
 
         singleMediaPayload = {
@@ -1280,7 +1301,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
         setState(() {
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
 
         messageType =
@@ -1346,6 +1367,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
             _isSending = false;
           });
           _scrollToBottom();
@@ -1393,6 +1415,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                         sendStatus: 1, // sent
                       );
                     }
+                    _updateFeedItems();
                   }
                 });
               }
@@ -1408,6 +1431,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 if (idx != -1) {
                   _messages[idx] =
                       _messages[idx].copyWith(sendStatus: 2); // failed
+                  _updateFeedItems();
                 }
               });
               ScaffoldMessenger.of(context).showSnackBar(
@@ -1425,6 +1449,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               if (idx != -1) {
                 _messages[idx] =
                     _messages[idx].copyWith(sendStatus: 2); // failed
+                _updateFeedItems();
               }
             });
             ScaffoldMessenger.of(context).showSnackBar(
@@ -1448,6 +1473,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             setState(() {
               if (!_messages.any((m) => m.id == sentMsg.id)) {
                 _messages.insert(0, sentMsg);
+                _updateFeedItems();
               }
               _isSending = false;
             });
@@ -1473,7 +1499,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         setState(() {
           _isSending = false;
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
       }
     }
@@ -1795,6 +1821,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       final idx = _messages.indexWhere((m) => m.localId == message.localId);
       if (idx != -1) {
         _messages[idx] = _messages[idx].copyWith(sendStatus: 0);
+        _updateFeedItems();
       }
     });
 
@@ -1809,6 +1836,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               _messages.indexWhere((m) => m.localId == message.localId);
           if (idx != -1) {
             _messages[idx] = Message.fromDbMessage(updated);
+            _updateFeedItems();
           }
         });
       }
@@ -1833,7 +1861,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       return;
     }
 
-    final index = _messages.indexWhere((m) => m.id == messageId);
+    final index = _feedItems.indexWhere((item) =>
+        item.id == messageId ||
+        (item is FeedAlbumItem &&
+            item.album.items.any((ai) => ai.id == messageId)));
     if (index == -1) {
       if (_hasMoreMessages && retryCount < 5) {
         await _loadMoreMessages();
@@ -1883,9 +1914,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (originalChatId == null || originalChatId == widget.chatId) {
       if (fromMessageId != null && (_jumpHistory.isEmpty || _jumpHistory.last != fromMessageId)) {
         _jumpHistory.add(fromMessageId);
-        setState(() {
-          _showScrollDownFab = true;
-        });
+        _showScrollDownFabNotifier.value = true;
       }
       await _scrollToMessage(messageId);
       return;
@@ -1978,6 +2007,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   @override
   void dispose() {
+    _showScrollDownFabNotifier.dispose();
+    _uploadProgressNotifier.dispose();
+    _markReadTimer?.cancel();
     _stopMyTyping();
     _tabController.dispose();
     _messageController.dispose();
@@ -2284,21 +2316,24 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         Positioned(
           right: 14,
           bottom: _inputHeight + 10 + effectiveBottom,
-          child: ScrollDownFab(
-            visible: _showScrollDownFab,
-            unreadCount: 0,
-            onPressed: () {
-              if (_jumpHistory.isNotEmpty) {
-                final lastId = _jumpHistory.removeLast();
-                _scrollToMessage(lastId);
-              } else {
-                _scrollController.animateTo(
-                  0,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOut,
-                );
-              }
-            },
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _showScrollDownFabNotifier,
+            builder: (context, showFab, _) => ScrollDownFab(
+              visible: showFab,
+              unreadCount: 0,
+              onPressed: () {
+                if (_jumpHistory.isNotEmpty) {
+                  final lastId = _jumpHistory.removeLast();
+                  _scrollToMessage(lastId);
+                } else {
+                  _scrollController.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOut,
+                  );
+                }
+              },
+            ),
           ),
         ),
         if (_isVideoRecording)
@@ -2589,6 +2624,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onRemoveAttachment: _removeAttachedFile,
       isUploading: _isUploading,
       uploadProgress: _uploadProgress,
+      uploadProgressNotifier: _uploadProgressNotifier,
       onAttach: _showAttachmentPicker,
       onChanged: _onInputTextChanged,
       onSend: _sendMessage,
@@ -2859,6 +2895,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
@@ -2910,6 +2947,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     fileUrl: uploadResult.url,
                   );
                 }
+                _updateFeedItems();
               }
             });
           }
@@ -2923,6 +2961,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   _messages.indexWhere((m) => m.localId == pendingLocalId);
               if (idx != -1) {
                 _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+                _updateFeedItems();
               }
             });
           }
@@ -2938,6 +2977,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 _messages.indexWhere((m) => m.localId == pendingLocalId);
             if (idx != -1) {
               _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              _updateFeedItems();
             }
           });
         }
@@ -3016,6 +3056,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
@@ -3066,6 +3107,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     fileUrl: uploadResult.url,
                   );
                 }
+                _updateFeedItems();
               }
             });
           }
@@ -3079,6 +3121,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   _messages.indexWhere((m) => m.localId == pendingLocalId);
               if (idx != -1) {
                 _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+                _updateFeedItems();
               }
             });
           }
@@ -3094,6 +3137,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 _messages.indexWhere((m) => m.localId == pendingLocalId);
             if (idx != -1) {
               _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              _updateFeedItems();
             }
           });
         }
@@ -3137,6 +3181,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           reactions: Map.from(reactions),
           myReactions: Set.from(mySet),
         );
+        _updateFeedItems();
       }
     });
 
@@ -3228,6 +3273,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Future<void> _deleteMessage(Message message) async {
     setState(() {
       _messages.removeWhere((m) => m.id == message.id);
+      _updateFeedItems();
     });
 
     try {
@@ -3248,22 +3294,50 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
-  /// Called when a message becomes visible — marks as read via API
+  /// Called when a message becomes visible — queues message for debounced read-up-to
   void _onMessageVisible(String messageId) {
-    // Use the same read-up-to API as private chat
-    _markMessagesReadUpTo(messageId);
+    if (_pendingMarkRead.contains(messageId)) return;
+    _pendingMarkRead.add(messageId);
+
+    _markReadTimer?.cancel();
+    _markReadTimer = Timer(const Duration(milliseconds: 300), () {
+      _flushMarkRead();
+    });
   }
 
-  Future<void> _markMessagesReadUpTo(String messageId) async {
-    try {
-      final token = await AuthService.getToken();
-      final dio = Dio();
-      await dio.post(
-        '${AppConfig.baseUrl}/api/chats/${widget.chatId}/messages/read-up-to',
-        data: {'message_id': messageId},
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
-      );
-    } catch (_) {}
+  Future<void> _flushMarkRead() async {
+    if (_pendingMarkRead.isEmpty || _isMarkingRead) return;
+    _isMarkingRead = true;
+
+    String? latestMessageId;
+    int latestIndex = -1;
+    for (final id in _pendingMarkRead) {
+      final idx = _messages.indexWhere((m) => m.id == id);
+      if (idx != -1 && idx < (latestIndex == -1 ? 999999 : latestIndex)) {
+        latestIndex = idx;
+        latestMessageId = id;
+      }
+    }
+
+    _pendingMarkRead.clear();
+    _isMarkingRead = false;
+
+    if (latestMessageId == null) return;
+
+    final result = await ChatService.markMessagesReadUpTo(
+      chatId: widget.chatId,
+      messageId: latestMessageId,
+    );
+
+    final markedCount = result['marked_count'] as int? ?? 0;
+    if (markedCount > 0) {
+      _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
+
+      if (mounted) {
+        final provider = context.read<UnreadCountProvider>();
+        provider.decrement(widget.chatId, markedCount);
+      }
+    }
   }
 
   /// Helper to check if string is exactly one emoji

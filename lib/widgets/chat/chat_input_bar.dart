@@ -38,6 +38,7 @@ class ChatInputBar extends StatefulWidget {
   final ValueChanged<int>? onRemoveAttachment;
   final bool isUploading;
   final double uploadProgress;
+  final ValueNotifier<double>? uploadProgressNotifier;
   final bool isSending;
   final ValueChanged<String>? onChanged;
   final VoidCallback? onSend;
@@ -78,6 +79,7 @@ class ChatInputBar extends StatefulWidget {
     this.onRemoveAttachment,
     this.isUploading = false,
     this.uploadProgress = 0.0,
+    this.uploadProgressNotifier,
     this.isSending = false,
     this.onChanged,
     this.onSend,
@@ -402,10 +404,18 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
         // 5. Upload progress
         if (widget.isUploading)
-          LinearProgressIndicator(
-            value: widget.uploadProgress > 0 ? widget.uploadProgress : null,
-            backgroundColor: Colors.grey[300],
-          ),
+          widget.uploadProgressNotifier != null
+              ? ValueListenableBuilder<double>(
+                  valueListenable: widget.uploadProgressNotifier!,
+                  builder: (context, progress, _) => LinearProgressIndicator(
+                    value: progress > 0 ? progress : null,
+                    backgroundColor: Colors.grey[300],
+                  ),
+                )
+              : LinearProgressIndicator(
+                  value: widget.uploadProgress > 0 ? widget.uploadProgress : null,
+                  backgroundColor: Colors.grey[300],
+                ),
 
         // 6. Input field row
         Row(
