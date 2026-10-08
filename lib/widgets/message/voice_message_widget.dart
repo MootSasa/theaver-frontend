@@ -218,29 +218,36 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   }
 
   void _handlePlayPause() {
-    if (!_isCached && !_isDownloading) {
-      _startDownload();
-    }
-
     if (_isThisPlaying) {
       _playbackService.pauseVoice();
+      return;
     } else if (_isThisActive) {
       _playbackService.resumeVoice();
-    } else {
-      MediaPlaybackCoordinator.instance.startPlayback(
-        track: PlaybackTrack(
-          messageId: widget.messageId,
-          chatId: widget.chatId ?? '',
-          chatType: widget.chatType ?? 'private',
-          mediaType: 'voice',
-          mediaUrl: widget.audioUrl,
-          senderName: widget.senderName,
-          chatTitle: widget.chatTitle ?? widget.senderName,
-          duration: widget.duration,
-          waveform: widget.waveform,
-        ),
-      );
+      return;
     }
+
+    if (!_isCached) {
+      if (_isDownloading) {
+        _cancelDownload();
+      } else {
+        _startDownload();
+      }
+      return;
+    }
+
+    MediaPlaybackCoordinator.instance.startPlayback(
+      track: PlaybackTrack(
+        messageId: widget.messageId,
+        chatId: widget.chatId ?? '',
+        chatType: widget.chatType ?? 'private',
+        mediaType: 'voice',
+        mediaUrl: widget.audioUrl,
+        senderName: widget.senderName,
+        chatTitle: widget.chatTitle ?? widget.senderName,
+        duration: widget.duration,
+        waveform: widget.waveform,
+      ),
+    );
   }
 
   void _handleWaveformTap(double localDx, double totalWidth) {

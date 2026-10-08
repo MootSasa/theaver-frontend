@@ -126,6 +126,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   double _scrubProgress = 0.0;
   bool _wasPlayingBeforeScrub = false;
   DateTime _lastSeekThrottle = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _isInView = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -189,6 +190,16 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     } else {
       if (_isPlayingWithSound) {
         _revertToMutedLoop();
+      } else if (_playbackService.hasActiveVideo) {
+        if (_controller != null && _controller!.value.isPlaying) {
+          _controller!.pause();
+        }
+      } else if (_isInView &&
+          _controller != null &&
+          _controller!.value.isInitialized &&
+          !_controller!.value.isPlaying &&
+          !_hasError) {
+        _controller!.play();
       }
     }
   }
@@ -231,7 +242,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
         });
       }
       if (_controller!.value.isInitialized && !_controller!.value.isPlaying) {
-        _controller!.play();
+        if (isCurrentlyActive || !_playbackService.hasActiveVideo) {
+          _controller!.play();
+        }
       }
       return;
     }
@@ -374,7 +387,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       setState(() {
         _hasError = false;
       });
-      _controller!.play();
+      if (isCurrentlyActive || !_playbackService.hasActiveVideo) {
+        _controller!.play();
+      }
     } catch (e) {
       debugPrint('[VideoMessageWidget] Controller init failed: $e');
       if (mounted && session == _initSession) {
@@ -430,7 +445,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     _controller?.setLooping(true);
     _controller?.setVolume(0.0);
     if (!_controller!.value.isPlaying) {
-      _controller?.play();
+      if (!_playbackService.hasActiveVideo) {
+        _controller?.play();
+      }
     }
     setState(() {
       _isPlayingWithSound = false;
@@ -720,6 +737,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       key: Key('vnote_${widget.messageId ?? widget.videoUrl}'),
       onVisibilityChanged: (info) {
         final inView = info.visibleFraction >= 0.15;
+        _isInView = inView;
         if (widget.messageId != null) {
           _playbackService.setInView(widget.messageId!, inView);
         }
@@ -733,10 +751,14 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
             _isPlayingWithSound;
 
         if (!isActiveVideo && _controller != null && _controller!.value.isInitialized) {
-          if (!inView && _controller!.value.isPlaying) {
-            _controller!.pause();
+          if (!inView || _playbackService.hasActiveVideo) {
+            if (_controller!.value.isPlaying) {
+              _controller!.pause();
+            }
           } else if (inView && !_controller!.value.isPlaying && !_hasError) {
-            _controller!.play();
+            if (!_playbackService.hasActiveVideo) {
+              _controller!.play();
+            }
           }
         }
       },
