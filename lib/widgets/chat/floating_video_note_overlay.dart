@@ -291,7 +291,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
                       child: IgnorePointer(
                         child: TweenAnimationBuilder<double>(
                           tween: Tween<double>(
-                              end: !controller.value.isPlaying ? 4.5 : 0.0),
+                              end: !controller.value.isPlaying ? 5.5 : 0.0),
                           duration: const Duration(milliseconds: 220),
                           curve: Curves.easeOutCubic,
                           builder: (context, animatedInset, _) {

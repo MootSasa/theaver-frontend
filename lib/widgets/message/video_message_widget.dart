@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -713,7 +714,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
         _playbackService.activeMessageId == widget.messageId;
 
     final double targetPauseInset =
-        (_isScrubbing ? !_wasPlayingBeforeScrub : _isPausedWithSound) ? 8.0 : 0.0;
+        (_isScrubbing ? !_wasPlayingBeforeScrub : _isPausedWithSound) ? 12.0 : 0.0;
 
     return VisibilityDetector(
       key: Key('vnote_${widget.messageId ?? widget.videoUrl}'),
@@ -898,9 +899,15 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                               return _RingHitTestTarget(
                                 innerRadius: (effectiveDiameter / 2) - 34.0 - animatedInset,
                                 outerRadius: (effectiveDiameter / 2) + 24.0 - animatedInset,
-                                child: GestureDetector(
-                                  onPanDown: (_) {},
-                                  onPanUpdate: (_) {},
+                                child: RawGestureDetector(
+                                  gestures: <Type, GestureRecognizerFactory>{
+                                    EagerGestureRecognizer:
+                                        GestureRecognizerFactoryWithHandlers<
+                                            EagerGestureRecognizer>(
+                                      () => EagerGestureRecognizer(),
+                                      (EagerGestureRecognizer instance) {},
+                                    ),
+                                  },
                                   behavior: HitTestBehavior.opaque,
                                   child: Listener(
                                     behavior: HitTestBehavior.opaque,
