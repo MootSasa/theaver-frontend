@@ -116,7 +116,18 @@ class MediaCacheManager {
     final cachedPath = _localPathCache[url];
     if (cachedPath != null) {
       final f = File(cachedPath);
-      if (await f.exists()) return f;
+      if (await f.exists()) {
+        try {
+          if (await f.length() > 0) {
+            return f;
+          } else {
+            await f.delete();
+            _localPathCache.remove(url);
+          }
+        } catch (_) {}
+      } else {
+        _localPathCache.remove(url);
+      }
     }
 
     final filename = getCacheFilename(url);
@@ -129,9 +140,13 @@ class MediaCacheManager {
         final cacheDir = await getApplicationCacheDirectory();
         final targetPath = path.join(cacheDir.path, 'miptgram_media', fname);
         final f = File(targetPath);
-        if (await f.exists() && (await f.length()) > 0) {
-          _localPathCache[url] = targetPath;
-          return f;
+        if (await f.exists()) {
+          if (await f.length() > 0) {
+            _localPathCache[url] = targetPath;
+            return f;
+          } else {
+            await f.delete();
+          }
         }
       } catch (_) {}
 
@@ -140,9 +155,13 @@ class MediaCacheManager {
         final docDir = await getApplicationDocumentsDirectory();
         final targetPath = path.join(docDir.path, 'miptgram_media', fname);
         final f = File(targetPath);
-        if (await f.exists() && (await f.length()) > 0) {
-          _localPathCache[url] = targetPath;
-          return f;
+        if (await f.exists()) {
+          if (await f.length() > 0) {
+            _localPathCache[url] = targetPath;
+            return f;
+          } else {
+            await f.delete();
+          }
         }
       } catch (_) {}
     }
@@ -252,6 +271,9 @@ class MediaCacheManager {
     }
   }
 
+  /// Evicts a specific media file from disk cache and memory (alias for deleteMedia)
+  Future<void> evict(String url) => deleteMedia(url);
+
   /// Computes the total size in bytes of downloaded media files in cache
   Future<int> getCacheSizeBytes() async {
     int total = 0;
@@ -355,23 +377,65 @@ class MediaCacheManager {
       }
 
       final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-      final token = await AuthService.getToken();
+      final parsedUri = Uri.tryParse(resolvedUrl);
 
-      final headers = <String, dynamic>{
-        if (token != null) 'Authorization': 'Bearer $token',
-      };
+      // S3/MinIO storage buckets and direct file downloads reject Bearer tokens with HTTP 400 Bad Request.
+      // We only attach Authorization if the URL is an /api/ endpoint and NOT a MinIO/S3 storage endpoint.
+      bool shouldAttachAuth = false;
+      if (parsedUri != null) {
+        final pathLower = parsedUri.path.toLowerCase();
+        final isMinIOStorage = parsedUri.port == 9000 ||
+            parsedUri.host.contains('minio') ||
+            parsedUri.host.startsWith('storage.') ||
+            (AppConfig.storageUrl.isNotEmpty &&
+                parsedUri.host == (Uri.tryParse(AppConfig.storageUrl)?.host ?? ''));
+        if (!isMinIOStorage && pathLower.contains('/api/')) {
+          shouldAttachAuth = true;
+        }
+      }
+
+      final headers = <String, dynamic>{};
+      if (shouldAttachAuth) {
+        final token = await AuthService.getToken();
+        if (token != null) {
+          headers['Authorization'] = 'Bearer $token';
+        }
+      }
       if (existingBytes > 0) {
         headers['Range'] = 'bytes=$existingBytes-';
       }
 
-      final response = await _dio.get<ResponseBody>(
-        resolvedUrl,
-        cancelToken: cancelToken,
-        options: Options(
-          headers: headers,
-          responseType: ResponseType.stream,
-        ),
-      );
+      Response<ResponseBody> response;
+      try {
+        response = await _dio.get<ResponseBody>(
+          resolvedUrl,
+          cancelToken: cancelToken,
+          options: Options(
+            headers: headers,
+            responseType: ResponseType.stream,
+          ),
+        );
+      } on DioException catch (dioErr) {
+        // If server returns 416 (Range Not Satisfiable), delete corrupted .tmp file and retry from offset 0
+        if (dioErr.response?.statusCode == 416 && headers.containsKey('Range')) {
+          debugPrint('Media download 416 Range Not Satisfiable for $url, resetting .tmp file and retrying from 0');
+          try {
+            if (await tempFile.exists()) await tempFile.delete();
+          } catch (_) {}
+          headers.remove('Range');
+          existingBytes = 0;
+          response = await _dio.get<ResponseBody>(
+            resolvedUrl,
+            cancelToken: cancelToken,
+            options: Options(
+              headers: headers,
+              responseType: ResponseType.stream,
+            ),
+          );
+        } else {
+          rethrow;
+        }
+      }
 
       final statusCode = response.statusCode ?? 200;
       final isPartial = statusCode == 206;
@@ -422,7 +486,7 @@ class MediaCacheManager {
 
       if (await tempFile.exists()) {
         final actualLength = await tempFile.length();
-        if (totalBytes <= 0 || actualLength >= totalBytes) {
+        if (actualLength > 0 && (totalBytes <= 0 || actualLength >= totalBytes)) {
           final targetFile = File(targetPath);
           if (await targetFile.exists()) {
             try {
@@ -434,6 +498,10 @@ class MediaCacheManager {
           _emitProgress(url, actualLength, actualLength, onProgress, onByteProgress);
           _triggerDebouncedCacheCleanup();
           return finalFile;
+        } else if (actualLength == 0) {
+          try {
+            await tempFile.delete();
+          } catch (_) {}
         }
       }
     } catch (e) {
@@ -441,6 +509,16 @@ class MediaCacheManager {
         debugPrint('Media download cancelled for: $url');
       } else {
         debugPrint('Media download error for $url: $e');
+        if (e is DioException && (e.response?.statusCode != null && e.response!.statusCode! >= 400 && e.response!.statusCode! < 500)) {
+          // Fatal client error (e.g. 404, 400, 403), remove any incomplete .tmp file
+          try {
+            final mediaDir = await getMediaCacheDirectory();
+            final filename = getCacheFilename(url);
+            final tempPath = path.join(mediaDir.path, '$filename.tmp');
+            final tempFile = File(tempPath);
+            if (await tempFile.exists()) await tempFile.delete();
+          } catch (_) {}
+        }
       }
     } finally {
       _cancelTokens.remove(url);

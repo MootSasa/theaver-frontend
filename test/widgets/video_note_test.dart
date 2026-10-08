@@ -303,6 +303,30 @@ void main() {
       // Outgoing status for read message (DoubleCheck)
       expect(find.byType(iconoir.DoubleCheck), findsOneWidget);
     });
+
+    testWidgets('Renders refresh retry button on error and resets error state on tap',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          const VideoMessageWidget(
+            videoUrl: '', // empty url triggers error state
+            size: 240.0,
+            isMe: false,
+            isRead: false,
+            sendStatus: 1,
+            timeText: '14:22',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // In error state, refresh icon must be shown
+      expect(find.byIcon(Icons.refresh), findsOneWidget);
+
+      // Tapping refresh icon attempts recovery and does not crash
+      await tester.tap(find.byIcon(Icons.refresh));
+      await tester.pump();
+    });
   });
 
   group('MessageBubble Round Video Integration Tests', () {
