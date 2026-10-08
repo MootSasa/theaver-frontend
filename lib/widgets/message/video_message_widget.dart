@@ -712,6 +712,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
         widget.messageId != null &&
         _playbackService.activeMessageId == widget.messageId;
 
+    final double targetPauseInset =
+        (_isScrubbing ? !_wasPlayingBeforeScrub : _isPausedWithSound) ? 8.0 : 0.0;
+
     return VisibilityDetector(
       key: Key('vnote_${widget.messageId ?? widget.videoUrl}'),
       onVisibilityChanged: (info) {
@@ -887,55 +890,66 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                       // 3. Smooth Circular Progress Ring around edge with interactive ring scrubbing
                       if (_isPlayingWithSound && isInitialized)
                         Positioned.fill(
-                          child: _RingHitTestTarget(
-                            innerRadius: (effectiveDiameter / 2) - 34.0,
-                            outerRadius: (effectiveDiameter / 2) + 24.0,
-                            child: GestureDetector(
-                              onPanDown: (_) {},
-                              onPanUpdate: (_) {},
-                              behavior: HitTestBehavior.opaque,
-                              child: Listener(
-                                behavior: HitTestBehavior.opaque,
-                                onPointerDown: (event) {
-                                  _onScrubStart(
-                                    event.localPosition,
-                                    Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                                  );
-                                },
-                                onPointerMove: (event) {
-                                  _onScrubUpdate(
-                                    event.localPosition,
-                                    Offset(effectiveDiameter / 2, effectiveDiameter / 2),
-                                  );
-                                },
-                                onPointerUp: (_) => _onScrubEnd(),
-                                onPointerCancel: (_) => _onScrubEnd(),
-                              child: _isScrubbing
-                                  ? CustomPaint(
-                                      painter: _CircularProgressPainter(
-                                        progress: _scrubProgress,
-                                        color: Colors.white,
-                                        strokeWidth: 3.2,
-                                        isScrubbing: true,
-                                      ),
-                                    )
-                                  : TweenAnimationBuilder<double>(
-                                      tween: Tween<double>(begin: animatedBeginProgress, end: displayProgress),
-                                      duration: const Duration(milliseconds: 250),
-                                      curve: Curves.linear,
-                                      builder: (context, smoothProgress, _) {
-                                        return CustomPaint(
-                                          painter: _CircularProgressPainter(
-                                            progress: smoothProgress,
-                                            color: Colors.white,
-                                            strokeWidth: 3.2,
-                                            isScrubbing: false,
+                          child: TweenAnimationBuilder<double>(
+                            tween: Tween<double>(end: targetPauseInset),
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeOutCubic,
+                            builder: (context, animatedInset, _) {
+                              return _RingHitTestTarget(
+                                innerRadius: (effectiveDiameter / 2) - 34.0 - animatedInset,
+                                outerRadius: (effectiveDiameter / 2) + 24.0 - animatedInset,
+                                child: GestureDetector(
+                                  onPanDown: (_) {},
+                                  onPanUpdate: (_) {},
+                                  behavior: HitTestBehavior.opaque,
+                                  child: Listener(
+                                    behavior: HitTestBehavior.opaque,
+                                    onPointerDown: (event) {
+                                      _onScrubStart(
+                                        event.localPosition,
+                                        Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                      );
+                                    },
+                                    onPointerMove: (event) {
+                                      _onScrubUpdate(
+                                        event.localPosition,
+                                        Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                      );
+                                    },
+                                    onPointerUp: (_) => _onScrubEnd(),
+                                    onPointerCancel: (_) => _onScrubEnd(),
+                                    child: _isScrubbing
+                                        ? CustomPaint(
+                                            painter: _CircularProgressPainter(
+                                              progress: _scrubProgress,
+                                              color: Colors.white,
+                                              strokeWidth: 3.2,
+                                              isScrubbing: true,
+                                              inset: animatedInset,
+                                            ),
+                                          )
+                                        : TweenAnimationBuilder<double>(
+                                            tween: Tween<double>(
+                                                begin: animatedBeginProgress,
+                                                end: displayProgress),
+                                            duration: const Duration(milliseconds: 250),
+                                            curve: Curves.linear,
+                                            builder: (context, smoothProgress, _) {
+                                              return CustomPaint(
+                                                painter: _CircularProgressPainter(
+                                                  progress: smoothProgress,
+                                                  color: Colors.white,
+                                                  strokeWidth: 3.2,
+                                                  isScrubbing: false,
+                                                  inset: animatedInset,
+                                                ),
+                                              );
+                                            },
                                           ),
-                                        );
-                                      },
-                                    ),
-                              ),
-                            ),
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         ),
 
@@ -1102,18 +1116,20 @@ class _CircularProgressPainter extends CustomPainter {
   final Color color;
   final double strokeWidth;
   final bool isScrubbing;
+  final double inset;
 
   _CircularProgressPainter({
     required this.progress,
     required this.color,
     required this.strokeWidth,
     this.isScrubbing = false,
+    this.inset = 0.0,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width - strokeWidth) / 2;
+    final radius = math.max(0.0, (size.width - strokeWidth) / 2 - inset);
 
     // 1. Subtle background track ring indicating 360-degree duration
     final trackPaint = Paint()
@@ -1165,7 +1181,8 @@ class _CircularProgressPainter extends CustomPainter {
     return oldDelegate.progress != progress ||
         oldDelegate.color != color ||
         oldDelegate.strokeWidth != strokeWidth ||
-        oldDelegate.isScrubbing != isScrubbing;
+        oldDelegate.isScrubbing != isScrubbing ||
+        oldDelegate.inset != inset;
   }
 }
 
