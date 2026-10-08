@@ -541,21 +541,14 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   }
 
   void _handleTap() {
-    if (!_isCached) {
-      if (_isDownloading) {
-        _cancelDownload();
-      } else {
-        _startDownload();
-      }
-      return;
+    if (!_isCached && !_isDownloading) {
+      _startDownload();
     }
-
-    if (_controller == null || !_controller!.value.isInitialized) return;
 
     if (_isPlayingWithSound) {
       _playbackService.togglePlayPause();
     } else {
-      if (_controller != null) {
+      if (_controller != null && _controller!.value.isInitialized) {
         VideoNoteControllerPool.put(widget.videoUrl, _controller!);
       }
       if (widget.messageId != null) {
@@ -572,7 +565,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
           ),
         );
       }
-      if (!_isPlayingWithSound) {
+      if (!_isPlayingWithSound && _isCached && _controller != null) {
         _startSoundPlayback(restart: true);
       }
     }
@@ -791,7 +784,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                                         : const Icon(Icons.error_outline, color: Colors.white70, size: 36),
                                   ),
                                 )
-                              : (!_isCached || !isInitialized)
+                              : !isInitialized
                                   ? _buildPlaceholder(effectiveDiameter)
                                    : isFloatingActive
                                        ? Container(
@@ -818,6 +811,28 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                                          ),
                         ),
                       ),
+
+                      // Downloading Spinner Overlay
+                      if (!_isCached && isInitialized && !_isScrubbing)
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                value: _isDownloading && _downloadProgress > 0.05 ? _downloadProgress : null,
+                                strokeWidth: 2.5,
+                                valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            ),
+                          ),
+                        ),
 
                       // 2. Play / Pause Overlay Icon when paused with sound
                       if (_isPlayingWithSound && _isPausedWithSound && !_isScrubbing)

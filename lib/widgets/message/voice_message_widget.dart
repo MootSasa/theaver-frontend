@@ -218,13 +218,8 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   }
 
   void _handlePlayPause() {
-    if (!_isCached) {
-      if (_isDownloading) {
-        _cancelDownload();
-      } else {
-        _startDownload();
-      }
-      return;
+    if (!_isCached && !_isDownloading) {
+      _startDownload();
     }
 
     if (_isThisPlaying) {
@@ -505,6 +500,33 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
 
   Widget _buildButtonIcon(Color primaryColor) {
     final color = widget.isMe ? Colors.white : primaryColor;
+
+    if (_isThisActive) {
+      final icon = Icon(
+        _isThisPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+        size: 28,
+        color: color,
+      );
+      if (_isDownloading) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                value: _downloadProgress > 0.05 ? _downloadProgress : null,
+                strokeWidth: 2.2,
+                valueColor: AlwaysStoppedAnimation<Color>(color),
+              ),
+            ),
+            icon,
+          ],
+        );
+      }
+      return icon;
+    }
+
     if (_isDownloading) {
       return Stack(
         alignment: Alignment.center,
