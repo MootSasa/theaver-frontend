@@ -145,9 +145,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   // Feed items (messages grouped into albums by grouped_id)
   List<FeedItem> _feedItems = [];
+  double _newestMessageHeight = 150.0;
 
   void _updateFeedItems() {
     _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
+    _pruneMessageKeys();
+  }
+
+  void _pruneMessageKeys() {
+    if (_messageKeys.length > 300) {
+      final activeIds = _messages.take(150).map((m) => m.id).toSet();
+      _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
+    }
   }
 
   // Attachments state
@@ -251,16 +260,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _jumpHistory.clear();
       }
 
-      // Dynamic threshold: height of the newest message
-      double threshold = 150.0;
-      if (_messages.isNotEmpty) {
+      // Dynamic threshold: cached height of newest message
+      if (offset < 50 && _messages.isNotEmpty) {
         final firstMsgId = _messages.first.id;
         final key = _messageKeys[firstMsgId];
         final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
-        if (renderBox != null && renderBox.hasSize) {
-          threshold = renderBox.size.height;
+        if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
+          _newestMessageHeight = renderBox.size.height;
         }
       }
+      final double threshold = _newestMessageHeight;
       
       final bool currentFabVisible = _showScrollDownFabNotifier.value;
       bool shouldShow = currentFabVisible;

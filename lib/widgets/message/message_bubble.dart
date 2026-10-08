@@ -774,12 +774,15 @@ class MessageBubble extends StatelessWidget {
         (e.type == 'pre' || e.type == 'code') &&
         (e.offset + e.length >= trimmedContent.length - 2));
 
-    final profileTheme = context.watch<ProfileThemeProvider?>();
     final NameColorPreset effectivePreset;
     final ReplyStripStyle effectiveStripStyle;
     if (isMe) {
-      effectivePreset = profileTheme?.currentNameColorPreset ?? NameColorPresets.defaults.first;
-      effectiveStripStyle = profileTheme?.currentStripStyle ?? ReplyStripStyle.solid;
+      final profileTheme = context.select<ProfileThemeProvider?, (NameColorPreset, ReplyStripStyle)>((p) => (
+        p?.currentNameColorPreset ?? NameColorPresets.defaults.first,
+        p?.currentStripStyle ?? ReplyStripStyle.solid,
+      ));
+      effectivePreset = profileTheme.$1;
+      effectiveStripStyle = profileTheme.$2;
     } else if (message.senderNameColorId != null && message.senderNameColorId!.isNotEmpty) {
       effectivePreset = NameColorPresets.getById(message.senderNameColorId!);
       effectiveStripStyle = ReplyStripStyle.values.firstWhere(
@@ -796,8 +799,12 @@ class MessageBubble extends StatelessWidget {
     final bool previewDisabled = previewOpts?.isDisabled ?? false;
     String? previewUrl = previewOpts?.url;
     if (previewUrl == null && !previewDisabled) {
-      final urls = EntityParser.extractUrls(message.content);
-      if (urls.isNotEmpty) previewUrl = urls.first;
+      if (message.content.contains('http://') ||
+          message.content.contains('https://') ||
+          message.content.contains('www.')) {
+        final urls = EntityParser.extractUrls(message.content);
+        if (urls.isNotEmpty) previewUrl = urls.first;
+      }
     }
     final bool hasEffectivePreview = previewUrl != null && !previewDisabled;
     final bool showAbove = previewOpts?.showAboveText ?? false;
@@ -1628,19 +1635,24 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                           },
                           errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                         )
-                      : ImageFiltered(
-                          imageFilter: ui.ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                          child: Transform.scale(
-                            scale: 1.15,
-                            child: Image.network(
-                              resolvedThumbUrl,
-                              width: widget.maxWidth,
-                              fit: BoxFit.cover,
-                              loadingBuilder: (context, child, loadingProgress) {
-                                if (loadingProgress == null) return child;
-                                return const SizedBox.shrink();
-                              },
-                              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                      : RepaintBoundary(
+                          child: ImageFiltered(
+                            imageFilter: ui.ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
+                            child: Transform.scale(
+                              scale: 1.15,
+                              child: Image.network(
+                                resolvedThumbUrl,
+                                width: widget.maxWidth,
+                                cacheWidth: (widget.maxWidth *
+                                        MediaQuery.devicePixelRatioOf(context))
+                                    .round(),
+                                fit: BoxFit.cover,
+                                loadingBuilder: (context, child, loadingProgress) {
+                                  if (loadingProgress == null) return child;
+                                  return const SizedBox.shrink();
+                                },
+                                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                              ),
                             ),
                           ),
                         ),

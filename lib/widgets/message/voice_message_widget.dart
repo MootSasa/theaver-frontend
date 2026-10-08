@@ -60,10 +60,12 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   bool _isDownloading = false;
   double _downloadProgress = 0.0;
   ValueNotifier<double>? _progressNotifier;
+  bool _wasActive = false;
 
   @override
   void initState() {
     super.initState();
+    _wasActive = _playbackService.activeMessageId == widget.messageId;
     _playbackService.addListener(_onPlaybackUpdate);
     _checkCacheStatus();
   }
@@ -183,13 +185,17 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
 
   void _onPlaybackUpdate() {
     if (!mounted) return;
-    if (_playbackService.activeMessageId == widget.messageId && _playbackService.isPlaying) {
-      if (!_hasBeenPlayedLocally) {
-        setState(() => _hasBeenPlayedLocally = true);
-        return;
+    final isNowActive = _playbackService.activeMessageId == widget.messageId;
+    if (isNowActive) {
+      _wasActive = true;
+      if (!_hasBeenPlayedLocally && _playbackService.isPlaying) {
+        _hasBeenPlayedLocally = true;
       }
+      setState(() {});
+    } else if (_wasActive) {
+      _wasActive = false;
+      setState(() {});
     }
-    setState(() {});
   }
 
   bool get _isThisPlaying =>

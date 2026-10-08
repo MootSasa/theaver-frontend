@@ -150,9 +150,27 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   bool _isUploading = false;
 
   List<FeedItem> _feedItems = [];
+  int _firstUnreadFeedIndex = -1;
+  double _newestMessageHeight = 150.0;
 
   void _updateFeedItems() {
     _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
+    if (_showUnreadDivider && _firstUnreadMessageId != null) {
+      _firstUnreadFeedIndex = _feedItems.indexWhere((item) =>
+          item.id == _firstUnreadMessageId ||
+          (item is FeedAlbumItem &&
+              item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+    } else {
+      _firstUnreadFeedIndex = -1;
+    }
+    _pruneMessageKeys();
+  }
+
+  void _pruneMessageKeys() {
+    if (_messageKeys.length > 300) {
+      final activeIds = _messages.take(150).map((m) => m.id).toSet();
+      _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
+    }
   }
 
   bool _isVideoFile(String filePath) {
@@ -496,6 +514,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _hasScrolledToUnread = false;
           _showUnreadDivider = false;
         }
+        _updateFeedItems();
       });
     }
   }
@@ -1052,16 +1071,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       _jumpHistory.clear();
     }
 
-    // Dynamic threshold: height of the newest message
-    double threshold = 150.0; // Default
-    if (_messages.isNotEmpty) {
+    // Dynamic threshold: cached height of newest message
+    if (offset < 50 && _messages.isNotEmpty) {
       final firstMsgId = _messages.first.id;
       final key = _messageKeys[firstMsgId];
       final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null && renderBox.hasSize) {
-        threshold = renderBox.size.height; // Message height + small buffer
+      if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
+        _newestMessageHeight = renderBox.size.height;
       }
     }
+    final double threshold = _newestMessageHeight;
     
     final bool currentFabVisible = _showScrollDownFabNotifier.value;
     bool shouldShow = currentFabVisible;
@@ -1129,6 +1148,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _showUnreadDivider = true;
           _dividerUnreadCount = _unreadCount;
         }
+        _updateFeedItems();
       });
     }
 
@@ -2290,63 +2310,68 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   ],
                 ),
               )
-            : Column(
-                children: [
-                  if (_isLoadingMore)
-                    const Padding(
-                      padding: EdgeInsets.all(8.0),
-                      child: Center(
-                          child: CircularProgressIndicator(strokeWidth: 2)),
+            : Builder(
+                builder: (context) {
+                  final int dividerOffset =
+                      (_showUnreadDivider && _firstUnreadFeedIndex != -1) ? 1 : 0;
+                  final int baseCount = _feedItems.length + dividerOffset;
+                  final int totalItemCount = baseCount + (_isLoadingMore ? 1 : 0);
+
+                  return ListView.builder(
+                    controller: _scrollController,
+                    reverse: true,
+                    cacheExtent: 600.0,
+                    // В glass-режиме добавляем верхний отступ,
+                    // чтобы сообщения не прятались за glass AppBar
+                    padding: EdgeInsets.only(
+                      top: topPadding,
+                      bottom: _inputHeight + bottomOffset,
                     ),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: _scrollController,
-                      reverse: true,
-                      cacheExtent: 600.0,
-                      // В glass-режиме добавляем верхний отступ,
-                      // чтобы сообщения не прятались за glass AppBar
-                      padding: EdgeInsets.only(
-                        top: topPadding,
-                        bottom: _inputHeight + bottomOffset,
-                      ),
-                      itemCount: _feedItems.length +
-                          (_showUnreadDivider && _firstUnreadMessageId != null
-                              ? 1
-                              : 0),
-                      itemBuilder: (context, index) {
-                        // Insert unread divider between unread and read messages.
-                        if (_showUnreadDivider &&
-                            _firstUnreadMessageId != null) {
-                          final unreadIndex = _feedItems.indexWhere((item) =>
-                              item.id == _firstUnreadMessageId ||
-                              (item is FeedAlbumItem &&
-                                  item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
-                          if (unreadIndex != -1) {
-                            final dividerPosition = unreadIndex + 1;
+                    itemCount: totalItemCount,
+                    itemBuilder: (context, index) {
+                      // Older messages loading spinner at the top of the reversed list
+                      if (_isLoadingMore && index == baseCount) {
+                        return const Padding(
+                          padding: EdgeInsets.all(12.0),
+                          child: Center(
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        );
+                      }
 
-                            if (index == dividerPosition) {
-                              return _buildUnreadDivider();
-                            }
-                            if (index < dividerPosition) {
-                              return _buildFeedItem(index);
-                            }
-                            final adjustedIndex = index - 1;
-                            if (adjustedIndex >= 0 &&
-                                adjustedIndex < _feedItems.length) {
-                              return _buildFeedItem(adjustedIndex);
-                            }
-                          }
+                      // Insert unread divider between unread and read messages.
+                      if (_showUnreadDivider && _firstUnreadFeedIndex != -1) {
+                        final dividerPosition = _firstUnreadFeedIndex + 1;
+
+                        if (index == dividerPosition) {
+                          return UnreadSeparator(
+                            count: _dividerUnreadCount,
+                            onTap: () {},
+                          );
                         }
-
-                        if (index < 0 || index >= _feedItems.length) {
-                          return const SizedBox.shrink();
+                        if (index < dividerPosition) {
+                          return _buildFeedItem(index);
                         }
+                        final adjustedIndex = index - 1;
+                        if (adjustedIndex >= 0 &&
+                            adjustedIndex < _feedItems.length) {
+                          return _buildFeedItem(adjustedIndex);
+                        }
+                        return const SizedBox.shrink();
+                      }
 
-                        return _buildFeedItem(index);
-                      },
-                    ),
-                  ),
-                ],
+                      if (index < 0 || index >= _feedItems.length) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return _buildFeedItem(index);
+                    },
+                  );
+                },
               );
 
     final messageInput = _buildMessageInput();
@@ -2606,12 +2631,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
     final prevItem =
         index < _feedItems.length - 1 ? _feedItems[index + 1] : null;
-    final currentDt = DateTime.tryParse(message.createdAt) ?? DateTime.now();
-    final prevDt = prevItem != null
-        ? (DateTime.tryParse(prevItem.createdAt) ?? DateTime.now())
-        : null;
-    final currentDate = _dateOnly(currentDt);
-    final prevDate = prevDt != null ? _dateOnly(prevDt) : null;
+    final (currentDt, currentDate) = _resolveDates(message.createdAt);
+    final prevDate = prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
@@ -2690,24 +2711,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     // Add date separator if needed
     final prevItem =
         index < _feedItems.length - 1 ? _feedItems[index + 1] : null;
-    final currentDt = DateTime.tryParse(message.createdAt) ?? DateTime.now();
-    final prevDt = prevItem != null
-        ? (DateTime.tryParse(prevItem.createdAt) ?? DateTime.now())
-        : null;
-    final currentDate = _dateOnly(currentDt);
-    final prevDate = prevDt != null ? _dateOnly(prevDt) : null;
+    final (currentDt, currentDate) = _resolveDates(message.createdAt);
+    final prevDate = prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
       items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
-    }
-
-    // Add unread separator
-    if (_showUnreadDivider && message.id == _firstUnreadMessageId) {
-      items.add(UnreadSeparator(
-        count: _dividerUnreadCount,
-        onTap: () {},
-      ));
     }
 
     items.add(messageWidget);
@@ -3985,6 +3994,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
   /// Extract date-only from DateTime
   DateTime _dateOnly(DateTime dt) => DateTimeUtils.startOfDay(dt);
+
+  static final Map<String, (DateTime, DateTime)> _dateCache = {};
+
+  (DateTime, DateTime) _resolveDates(String createdAt) {
+    var cached = _dateCache[createdAt];
+    if (cached != null) return cached;
+    final dt = DateTime.tryParse(createdAt) ?? DateTime.now();
+    final startOfDay = _dateOnly(dt);
+    cached = (dt, startOfDay);
+    if (_dateCache.length > 500) _dateCache.clear();
+    _dateCache[createdAt] = cached;
+    return cached;
+  }
 
   /// Format date label for date separator
   String _formatDateLabel(DateTime dt) =>

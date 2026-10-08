@@ -79,6 +79,8 @@ class ChatMessagesListView extends StatelessWidget {
       );
     }
 
+    final totalCount = itemCount + (isLoadingMore ? 1 : 0);
+
     final listView = ListView.builder(
       controller: scrollController,
       reverse: reverse,
@@ -89,21 +91,28 @@ class ChatMessagesListView extends StatelessWidget {
         right: 8,
         bottom: bottomPadding,
       ),
-      itemCount: itemCount,
-      itemBuilder: itemBuilder,
+      itemCount: totalCount,
+      itemBuilder: (context, index) {
+        if (isLoadingMore && index == itemCount) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12.0),
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+        return itemBuilder(context, index);
+      },
     );
 
-    final content = (typingIndicator != null || isLoadingMore)
+    final content = typingIndicator != null
         ? Column(
             children: [
-              if (isLoadingMore)
-                const Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: Center(
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
-              if (typingIndicator != null) typingIndicator!,
+              typingIndicator!,
               Expanded(child: listView),
             ],
           )
