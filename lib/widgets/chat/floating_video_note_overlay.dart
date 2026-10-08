@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_playback_service.dart';
 
 /// Draggable, Telegram-style floating circular video note overlay (PiP).
@@ -68,20 +69,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
     if (!mounted) return;
     final ctrl = _observedController;
     if (ctrl != null && ctrl.value.isInitialized) {
-      final position = ctrl.value.position;
-      final duration = ctrl.value.duration;
-      final bool isFinished = (duration.inMilliseconds > 0) &&
-          (position >= duration || (!ctrl.value.isPlaying && position >= duration - const Duration(milliseconds: 150)));
-
-      // If video completed in floating mode, trigger auto-advance
-      if (isFinished) {
-        if (_service.isFloating && _service.activeMessageId != null) {
-          final finishedId = _service.activeMessageId!;
-          _detachControllerListener();
-          _service.onVideoCompleted(finishedId);
-          return;
-        }
-      }
+      // Completion is handled by VideoNotePlaybackService centrally.
       if (_service.isFloating) {
         setState(() {});
       }
@@ -169,7 +157,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
         _isDismissing = false;
         _position = null;
         _snapController.duration = const Duration(milliseconds: 260);
-        _service.stopActivePlayback();
+        MediaPlaybackCoordinator.instance.stopAll();
       });
       return;
     }
@@ -241,7 +229,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
               onPanEnd: (d) => _onPanEnd(d, screenSize, topPadding, bottomPadding),
               onTap: () {
                 if (_isDismissing) return;
-                _service.requestScrollToActive();
+                MediaPlaybackCoordinator.instance.togglePlayPause();
               },
             child: Material(
               type: MaterialType.transparency,
@@ -282,20 +270,47 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
                       ),
                     ),
 
+                    // 1.1 Play indicator overlay when paused
+                    if (!controller.value.isPlaying)
+                      IgnorePointer(
+                        child: Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
+                          ),
+                        ),
+                      ),
+
                     // 2. Smooth Circular Progress Ring
                     Positioned.fill(
                       child: IgnorePointer(
                         child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(begin: animatedBeginProgress, end: targetProgress),
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.linear,
-                          builder: (context, smoothProgress, _) {
-                            return CustomPaint(
-                              painter: _FloatingProgressPainter(
-                                progress: smoothProgress,
-                                color: Colors.white,
-                                strokeWidth: 2.5,
-                              ),
+                          tween: Tween<double>(
+                              end: !controller.value.isPlaying ? 5.5 : 0.0),
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          builder: (context, animatedInset, _) {
+                            return TweenAnimationBuilder<double>(
+                              tween: Tween<double>(
+                                  begin: animatedBeginProgress,
+                                  end: targetProgress),
+                              duration: const Duration(milliseconds: 250),
+                              curve: Curves.linear,
+                              builder: (context, smoothProgress, _) {
+                                return CustomPaint(
+                                  painter: _FloatingProgressPainter(
+                                    progress: smoothProgress,
+                                    color: Colors.white,
+                                    strokeWidth: 2.5,
+                                    inset: animatedInset,
+                                  ),
+                                );
+                              },
                             );
                           },
                         ),
@@ -323,7 +338,7 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
                       right: 2,
                       child: GestureDetector(
                         onTap: () {
-                          _service.stopActivePlayback();
+                          MediaPlaybackCoordinator.instance.stopAll();
                         },
                         child: Container(
                           width: 26,
@@ -362,15 +377,27 @@ class _FloatingProgressPainter extends CustomPainter {
   final double progress;
   final Color color;
   final double strokeWidth;
+  final double inset;
 
   const _FloatingProgressPainter({
     required this.progress,
     required this.color,
     required this.strokeWidth,
+    this.inset = 0.0,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.max(0.0, (size.width - strokeWidth) / 2 - inset);
+
+    // Subtle background track ring
+    final trackPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22)
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke;
+    canvas.drawCircle(center, radius, trackPaint);
+
     if (progress <= 0.0) return;
 
     final paint = Paint()
@@ -379,8 +406,6 @@ class _FloatingProgressPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width - strokeWidth) / 2;
     const startAngle = -3.141592653589793 / 2; // 12 o'clock
     final sweepAngle = 2 * 3.141592653589793 * progress.clamp(0.0, 1.0);
 
@@ -397,6 +422,7 @@ class _FloatingProgressPainter extends CustomPainter {
   bool shouldRepaint(covariant _FloatingProgressPainter oldDelegate) {
     return oldDelegate.progress != progress ||
         oldDelegate.color != color ||
-        oldDelegate.strokeWidth != strokeWidth;
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.inset != inset;
   }
 }

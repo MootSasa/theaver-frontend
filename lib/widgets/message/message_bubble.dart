@@ -617,6 +617,7 @@ class MessageBubble extends StatelessWidget {
   final String currentUserId;
   final String? senderName;
   final String? chatType;
+  final String? chatTitle;
   final bool isHighlighted;
   final Map<String, int>? reactions;
   final String? myReaction;
@@ -634,6 +635,7 @@ class MessageBubble extends StatelessWidget {
     required this.currentUserId,
     this.senderName,
     this.chatType,
+    this.chatTitle,
     this.isHighlighted = false,
     this.reactions,
     this.myReaction,
@@ -1202,7 +1204,7 @@ class MessageBubble extends StatelessWidget {
       ),
       child: ViewportGradientBox(
         borderRadius: BorderRadius.circular(effectiveBubbleRadius),
-        gradientColors: useOutgoingGradient ? themeExt?.palette.chatBubbleOutgoingGradient : null,
+        gradientColors: useOutgoingGradient ? themeExt.palette.chatBubbleOutgoingGradient : null,
         solidColor: backgroundColor,
         child: Padding(
           padding: bubblePadding,
@@ -1271,6 +1273,9 @@ class MessageBubble extends StatelessWidget {
         timeText: formatTime(message.createdAt),
         senderName: isMe ? null : senderName,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        chatId: message.chatId,
+        chatType: chatType,
+        chatTitle: chatTitle ?? (isMe ? null : senderName),
       );
     }
 
@@ -1290,6 +1295,9 @@ class MessageBubble extends StatelessWidget {
         timeText: formatTime(message.createdAt),
         senderName: isMe ? null : senderName,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        chatId: message.chatId,
+        chatType: chatType,
+        chatTitle: chatTitle ?? (isMe ? null : senderName),
       );
     }
 

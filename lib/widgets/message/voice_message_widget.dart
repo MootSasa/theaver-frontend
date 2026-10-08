@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../models/theav_theme.dart';
 import '../../services/voice_playback_service.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/media_cache_manager.dart';
 import 'message_status_widget.dart';
 
@@ -26,6 +27,9 @@ class VoiceMessageWidget extends StatefulWidget {
   final String? senderName;
   final int? fileSize;
   final VoidCallback? onRetry;
+  final String? chatId;
+  final String? chatType;
+  final String? chatTitle;
 
   const VoiceMessageWidget({
     Key? key,
@@ -40,6 +44,9 @@ class VoiceMessageWidget extends StatefulWidget {
     this.senderName,
     this.fileSize,
     this.onRetry,
+    this.chatId,
+    this.chatType,
+    this.chatTitle,
   }) : super(key: key);
 
   @override
@@ -211,6 +218,14 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   }
 
   void _handlePlayPause() {
+    if (_isThisPlaying) {
+      _playbackService.pauseVoice();
+      return;
+    } else if (_isThisActive) {
+      _playbackService.resumeVoice();
+      return;
+    }
+
     if (!_isCached) {
       if (_isDownloading) {
         _cancelDownload();
@@ -220,18 +235,19 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
       return;
     }
 
-    if (_isThisPlaying) {
-      _playbackService.pauseVoice();
-    } else if (_isThisActive) {
-      _playbackService.resumeVoice();
-    } else {
-      _playbackService.playVoice(
+    MediaPlaybackCoordinator.instance.startPlayback(
+      track: PlaybackTrack(
         messageId: widget.messageId,
-        audioUrl: widget.audioUrl,
+        chatId: widget.chatId ?? '',
+        chatType: widget.chatType ?? 'private',
+        mediaType: 'voice',
+        mediaUrl: widget.audioUrl,
         senderName: widget.senderName,
-        initialDuration: widget.duration,
-      );
-    }
+        chatTitle: widget.chatTitle ?? widget.senderName,
+        duration: widget.duration,
+        waveform: widget.waveform,
+      ),
+    );
   }
 
   void _handleWaveformTap(double localDx, double totalWidth) {
@@ -244,11 +260,18 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
     final targetMs = (fraction * _effectiveDuration.inMilliseconds).round();
 
     if (!_isThisActive) {
-      _playbackService.playVoice(
-        messageId: widget.messageId,
-        audioUrl: widget.audioUrl,
-        senderName: widget.senderName,
-        initialDuration: widget.duration,
+      MediaPlaybackCoordinator.instance.startPlayback(
+        track: PlaybackTrack(
+          messageId: widget.messageId,
+          chatId: widget.chatId ?? '',
+          chatType: widget.chatType ?? 'private',
+          mediaType: 'voice',
+          mediaUrl: widget.audioUrl,
+          senderName: widget.senderName,
+          chatTitle: widget.chatTitle ?? widget.senderName,
+          duration: widget.duration,
+          waveform: widget.waveform,
+        ),
       ).then((_) {
         _playbackService.seekVoice(Duration(milliseconds: targetMs));
       });
@@ -484,6 +507,33 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
 
   Widget _buildButtonIcon(Color primaryColor) {
     final color = widget.isMe ? Colors.white : primaryColor;
+
+    if (_isThisActive) {
+      final icon = Icon(
+        _isThisPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+        size: 28,
+        color: color,
+      );
+      if (_isDownloading) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                value: _downloadProgress > 0.05 ? _downloadProgress : null,
+                strokeWidth: 2.2,
+                valueColor: AlwaysStoppedAnimation<Color>(color),
+              ),
+            ),
+            icon,
+          ],
+        );
+      }
+      return icon;
+    }
+
     if (_isDownloading) {
       return Stack(
         alignment: Alignment.center,

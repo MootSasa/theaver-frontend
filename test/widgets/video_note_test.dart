@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -103,6 +104,22 @@ void main() {
       final permDenied = await service.isPermanentlyDenied();
       expect(permDenied, isFalse);
     });
+
+    test('Zoom level state and clamping in VideoNoteRecorderService', () async {
+      final service = VideoNoteRecorderService();
+      expect(service.zoomLevel, equals(1.0));
+
+      await service.setZoom(2.5);
+      expect(service.zoomLevel, equals(2.5));
+
+      // Clamping upper bound
+      await service.setZoom(5.0);
+      expect(service.zoomLevel, equals(3.0));
+
+      // Clamping lower bound
+      await service.setZoom(0.5);
+      expect(service.zoomLevel, equals(1.0));
+    });
   });
 
   group('RoundVideoRecordingOverlay Widget Tests', () {
@@ -179,6 +196,80 @@ void main() {
       expect(find.byType(iconoir.Trash), findsOneWidget);
       expect(find.byType(iconoir.Refresh), findsOneWidget);
       expect(find.byType(iconoir.SendSolid), findsOneWidget);
+    });
+
+    testWidgets('Renders zoom badge and allows cycling zoom presets on tap',
+        (WidgetTester tester) async {
+      final recorderService = VideoNoteRecorderService();
+
+      await tester.pumpWidget(
+        createTestApp(
+          RoundVideoRecordingOverlay(
+            recorderService: recorderService,
+            onCancel: () {},
+            onSend: (_) {},
+            onTooShort: () {},
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Verify zoom badge starts at 1.0x
+      expect(find.text('1.0x'), findsOneWidget);
+
+      // Tap zoom badge -> cycles to 2.0x
+      await tester.tap(find.text('1.0x'));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('2.0x'), findsOneWidget);
+      expect(recorderService.zoomLevel, equals(2.0));
+
+      // Tap zoom badge -> cycles to 3.0x
+      await tester.tap(find.text('2.0x'));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('3.0x'), findsOneWidget);
+      expect(recorderService.zoomLevel, equals(3.0));
+
+      // Tap zoom badge -> cycles back to 1.0x
+      await tester.tap(find.text('3.0x'));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('1.0x'), findsOneWidget);
+      expect(recorderService.zoomLevel, equals(1.0));
+    });
+
+    testWidgets('Drag up past lock threshold adjusts zoom level',
+        (WidgetTester tester) async {
+      final recorderService = VideoNoteRecorderService();
+      final overlayKey = GlobalKey();
+
+      await tester.pumpWidget(
+        createTestApp(
+          RoundVideoRecordingOverlay(
+            key: overlayKey,
+            recorderService: recorderService,
+            onCancel: () {},
+            onSend: (_) {},
+            onTooShort: () {},
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final state = overlayKey.currentState as dynamic;
+      // Drag up to lock (-70)
+      state.updatePointerOffset(0.0, -70.0);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(state.currentZoom, equals(1.0));
+
+      // Drag up further (-145 -> halfway between 70 and 220)
+      state.updatePointerOffset(0.0, -145.0);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(state.currentZoom, closeTo(2.0, 0.1));
+
+      // Drag up to max zoom (-220)
+      state.updatePointerOffset(0.0, -220.0);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(state.currentZoom, equals(3.0));
+      expect(find.text('3.0x'), findsOneWidget);
     });
   });
 
@@ -563,6 +654,64 @@ void main() {
       expect(service.isInView, isTrue);
 
       service.stopActivePlayback();
+    });
+  });
+
+  group('Circular Scrubbing Geometry and Calculation Tests', () {
+    test('Calculates clockwise progress correctly starting from 12 o\'clock', () {
+      const center = Offset(100, 100);
+
+      // 12 o'clock (top) -> 0.0
+      const top = Offset(100, 0);
+      final angleTop = math.atan2(top.dy - center.dy, top.dx - center.dx);
+      var normTop = angleTop + math.pi / 2;
+      while (normTop < 0) {
+        normTop += 2 * math.pi;
+      }
+      while (normTop >= 2 * math.pi) {
+        normTop -= 2 * math.pi;
+      }
+      final progressTop = (normTop / (2 * math.pi)).clamp(0.0, 1.0);
+      expect(progressTop, closeTo(0.0, 0.001));
+
+      // 3 o'clock (right) -> 0.25
+      const right = Offset(200, 100);
+      final angleRight = math.atan2(right.dy - center.dy, right.dx - center.dx);
+      var normRight = angleRight + math.pi / 2;
+      while (normRight < 0) {
+        normRight += 2 * math.pi;
+      }
+      while (normRight >= 2 * math.pi) {
+        normRight -= 2 * math.pi;
+      }
+      final progressRight = (normRight / (2 * math.pi)).clamp(0.0, 1.0);
+      expect(progressRight, closeTo(0.25, 0.001));
+
+      // 6 o'clock (bottom) -> 0.5
+      const bottom = Offset(100, 200);
+      final angleBottom = math.atan2(bottom.dy - center.dy, bottom.dx - center.dx);
+      var normBottom = angleBottom + math.pi / 2;
+      while (normBottom < 0) {
+        normBottom += 2 * math.pi;
+      }
+      while (normBottom >= 2 * math.pi) {
+        normBottom -= 2 * math.pi;
+      }
+      final progressBottom = (normBottom / (2 * math.pi)).clamp(0.0, 1.0);
+      expect(progressBottom, closeTo(0.5, 0.001));
+
+      // 9 o'clock (left) -> 0.75
+      const left = Offset(0, 100);
+      final angleLeft = math.atan2(left.dy - center.dy, left.dx - center.dx);
+      var normLeft = angleLeft + math.pi / 2;
+      while (normLeft < 0) {
+        normLeft += 2 * math.pi;
+      }
+      while (normLeft >= 2 * math.pi) {
+        normLeft -= 2 * math.pi;
+      }
+      final progressLeft = (normLeft / (2 * math.pi)).clamp(0.0, 1.0);
+      expect(progressLeft, closeTo(0.75, 0.001));
     });
   });
 }

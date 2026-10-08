@@ -373,9 +373,11 @@ class SyncService {
   }
 
   /// Подтвердить отправку — заменить localId на serverId
-  Future<void> confirmMessageSent(String localId, String serverId) async {
+  Future<void> confirmMessageSent(String localId, String serverId,
+      {String? remoteFileUrl}) async {
     await _db.updateMessageSendStatus(
-        localId, serverId, MessageSendStatus.sent.index);
+        localId, serverId, MessageSendStatus.sent.index,
+        fileUrl: remoteFileUrl);
   }
 
   /// Пометить сообщение как failed

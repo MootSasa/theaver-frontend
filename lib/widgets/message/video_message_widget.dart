@@ -3,12 +3,17 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../services/media_cache_manager.dart';
 import '../../services/video_note_playback_service.dart';
+import '../../services/media_playback_coordinator.dart';
 import 'message_status_widget.dart';
 
 /// Static LRU pool for caching active video note controllers to avoid re-initialization
@@ -16,14 +21,29 @@ import 'message_status_widget.dart';
 class VideoNoteControllerPool {
   static final Map<String, VideoPlayerController> _pool = {};
   static final List<String> _order = [];
-  static const int _maxControllers = 12;
+  static const int _maxControllers = 4;
 
   static VideoPlayerController? get(String url) => _pool[url];
 
   static void put(String url, VideoPlayerController controller) {
     if (_pool.containsKey(url)) return;
-    if (_order.length >= _maxControllers) {
-      final oldest = _order.removeAt(0);
+    final activeUrl = VideoNotePlaybackService().activeVideoUrl;
+    final activeCtrl = VideoNotePlaybackService().activeController;
+
+    while (_order.length >= _maxControllers) {
+      int evictIndex = -1;
+      for (int i = 0; i < _order.length; i++) {
+        final candUrl = _order[i];
+        final candCtrl = _pool[candUrl];
+        if (candUrl != activeUrl && candCtrl != activeCtrl) {
+          evictIndex = i;
+          break;
+        }
+      }
+      if (evictIndex == -1) {
+        break;
+      }
+      final oldest = _order.removeAt(evictIndex);
       final oldCtrl = _pool.remove(oldest);
       try {
         oldCtrl?.dispose();
@@ -57,6 +77,9 @@ class VideoMessageWidget extends StatefulWidget {
   final String? timeText;
   final String? senderName;
   final VoidCallback? onRetry;
+  final String? chatId;
+  final String? chatType;
+  final String? chatTitle;
 
   const VideoMessageWidget({
     Key? key,
@@ -74,6 +97,9 @@ class VideoMessageWidget extends StatefulWidget {
     this.timeText,
     this.senderName,
     this.onRetry,
+    this.chatId,
+    this.chatType,
+    this.chatTitle,
   }) : super(key: key);
 
   @override
@@ -96,6 +122,12 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   double _downloadProgress = 0.0;
   ValueNotifier<double>? _progressNotifier;
 
+  bool _isScrubbing = false;
+  double _scrubProgress = 0.0;
+  bool _wasPlayingBeforeScrub = false;
+  DateTime _lastSeekThrottle = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _isInView = false;
+
   @override
   bool get wantKeepAlive => true;
 
@@ -116,6 +148,8 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       _controller = null;
       _hasError = false;
       _isPlayingWithSound = false;
+      _isScrubbing = false;
+      _scrubProgress = 0.0;
       _prevProgress = 0.0;
       _isCached = false;
       _isDownloading = false;
@@ -127,16 +161,45 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     if (!mounted || widget.messageId == null) return;
     final activeId = _playbackService.activeMessageId;
     final isThisActive = activeId == widget.messageId;
+    
+    if (isThisActive) {
+      final activeCtrl = _playbackService.activeController;
+      if (activeCtrl != null && _controller != activeCtrl) {
+        _controller?.removeListener(_onVideoUpdate);
+        _controller = activeCtrl;
+        _controller!.addListener(_onVideoUpdate);
+        _isCached = true;
+        _isPlayingWithSound = true;
+        if (_isDownloading) _cancelDownload();
+      }
+    }
+
     if (isThisActive) {
       if (!_isPlayingWithSound && _controller != null && _controller!.value.isInitialized) {
-        final isAlreadyPlaying = _controller!.value.isPlaying;
-        _startSoundPlayback(restart: !isAlreadyPlaying);
+        final bool isAlreadyPlayingWithSound = (_playbackService.activeController == _controller) &&
+            (_controller!.value.volume > 0 || _controller!.value.isPlaying);
+        if (isAlreadyPlayingWithSound) {
+          _isPlayingWithSound = true;
+          setState(() {});
+        } else {
+          _startSoundPlayback(restart: false);
+        }
       } else {
         setState(() {});
       }
     } else {
       if (_isPlayingWithSound) {
         _revertToMutedLoop();
+      } else if (_playbackService.hasActiveVideo) {
+        if (_controller != null && _controller!.value.isPlaying) {
+          _controller!.pause();
+        }
+      } else if (_isInView &&
+          _controller != null &&
+          _controller!.value.isInitialized &&
+          !_controller!.value.isPlaying &&
+          !_hasError) {
+        _controller!.play();
       }
     }
   }
@@ -164,7 +227,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
 
     // 1. Check Controller Pool for instantaneous zero-delay restore
     final cached = VideoNoteControllerPool.get(widget.videoUrl);
-    if (cached != null && cached.value.isInitialized) {
+    if (cached != null) {
       _controller = cached;
       _controller!.addListener(_onVideoUpdate);
       _isCached = true;
@@ -178,8 +241,10 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
           _hasError = false;
         });
       }
-      if (!_controller!.value.isPlaying) {
-        _controller!.play();
+      if (_controller!.value.isInitialized && !_controller!.value.isPlaying) {
+        if (isCurrentlyActive || !_playbackService.hasActiveVideo) {
+          _controller!.play();
+        }
       }
       return;
     }
@@ -189,10 +254,21 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
 
     if (!isNetwork) {
-      final filePath = url.startsWith('file://') ? url.replaceFirst('file://', '') : url;
+      final filePath = url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
       final file = File(filePath);
       if (!await file.exists()) {
         debugPrint('[VideoMessageWidget] File does not exist: $filePath');
+        final baseName = p.basename(filePath);
+        try {
+          final cacheDir = await MediaCacheManager.instance.getMediaCacheDirectory();
+          final candidate = File(p.join(cacheDir.path, baseName));
+          if (await candidate.exists()) {
+            _isCached = true;
+            await _initControllerFromFile(candidate, currentSession);
+            return;
+          }
+        } catch (_) {}
+
         if (mounted && currentSession == _initSession) {
           setState(() => _hasError = true);
         }
@@ -311,7 +387,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       setState(() {
         _hasError = false;
       });
-      _controller!.play();
+      if (isCurrentlyActive || !_playbackService.hasActiveVideo) {
+        _controller!.play();
+      }
     } catch (e) {
       debugPrint('[VideoMessageWidget] Controller init failed: $e');
       if (mounted && session == _initSession) {
@@ -323,6 +401,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   void _onVideoUpdate() {
     if (!mounted) return;
     if (!_isPlayingWithSound) return;
+    if (_isScrubbing) return;
 
     final controller = _controller;
     if (controller != null && controller.value.isInitialized) {
@@ -333,9 +412,6 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
           (position >= duration || (!controller.value.isPlaying && position >= duration - const Duration(milliseconds: 150)));
       if (isCompleted) {
         _revertToMutedLoop();
-        if (widget.messageId != null && _playbackService.activeMessageId == widget.messageId) {
-          _playbackService.onVideoCompleted(widget.messageId!);
-        }
         return;
       }
     }
@@ -343,34 +419,129 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     setState(() {});
   }
 
-  void _startSoundPlayback({bool restart = true}) {
-    if (_controller == null || !_controller!.value.isInitialized) return;
+  Future<void> _startSoundPlayback({bool restart = true}) async {
+    final ctrl = _controller;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
     if (restart) {
-      _controller?.pause();
-      _controller?.seekTo(Duration.zero);
+      await ctrl.pause();
+      await ctrl.seekTo(Duration.zero);
       _prevProgress = 0.0;
     }
-    _controller?.setLooping(false);
-    _controller?.setVolume(1.0);
-    if (!(_controller?.value.isPlaying ?? false)) {
-      _controller?.play();
+    await ctrl.setLooping(false);
+    await ctrl.setVolume(1.0);
+    await ctrl.play();
+    if (mounted) {
+      setState(() {
+        _isPlayingWithSound = true;
+      });
     }
-    setState(() {
-      _isPlayingWithSound = true;
-    });
   }
 
   void _revertToMutedLoop() {
+    _isScrubbing = false;
+    _scrubProgress = 0.0;
     if (_controller == null || !_controller!.value.isInitialized) return;
     _controller?.seekTo(Duration.zero);
     _controller?.setLooping(true);
     _controller?.setVolume(0.0);
     if (!_controller!.value.isPlaying) {
-      _controller?.play();
+      if (!_playbackService.hasActiveVideo) {
+        _controller?.play();
+      }
     }
     setState(() {
       _isPlayingWithSound = false;
       _prevProgress = 0.0;
+    });
+  }
+
+  double _calculateProgressFromOffset(Offset pos, Offset center) {
+    final dx = pos.dx - center.dx;
+    final dy = pos.dy - center.dy;
+    final angle = math.atan2(dy, dx);
+    var normalized = angle + math.pi / 2;
+    while (normalized < 0) {
+      normalized += 2 * math.pi;
+    }
+    while (normalized >= 2 * math.pi) {
+      normalized -= 2 * math.pi;
+    }
+    return (normalized / (2 * math.pi)).clamp(0.0, 1.0);
+  }
+
+  bool _isSeeking = false;
+  Duration? _pendingSeek;
+
+  void _performSeek(Duration target) async {
+    final ctrl = _controller;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    if (_isSeeking) {
+      _pendingSeek = target;
+      return;
+    }
+    _isSeeking = true;
+    try {
+      await ctrl.seekTo(target);
+    } catch (_) {
+    } finally {
+      _isSeeking = false;
+      if (_pendingSeek != null) {
+        final next = _pendingSeek!;
+        _pendingSeek = null;
+        _performSeek(next);
+      }
+    }
+  }
+
+  void _onScrubStart(Offset localPos, Offset center) {
+    final ctrl = _controller;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    final duration = ctrl.value.duration;
+    if (duration.inMilliseconds <= 0) return;
+
+    _wasPlayingBeforeScrub = ctrl.value.isPlaying;
+    if (_wasPlayingBeforeScrub) {
+      ctrl.pause();
+    }
+    _isScrubbing = true;
+    _scrubProgress = _calculateProgressFromOffset(localPos, center);
+    HapticFeedback.selectionClick();
+
+    final targetDuration = duration * _scrubProgress;
+    _performSeek(targetDuration);
+    setState(() {});
+  }
+
+  void _onScrubUpdate(Offset localPos, Offset center) {
+    final ctrl = _controller;
+    if (!_isScrubbing || ctrl == null || !ctrl.value.isInitialized) return;
+    final duration = ctrl.value.duration;
+    if (duration.inMilliseconds <= 0) return;
+
+    _scrubProgress = _calculateProgressFromOffset(localPos, center);
+
+    final now = DateTime.now();
+    if (now.difference(_lastSeekThrottle).inMilliseconds > 40) {
+      _lastSeekThrottle = now;
+      final targetDuration = duration * _scrubProgress;
+      _performSeek(targetDuration);
+    }
+    setState(() {});
+  }
+
+  void _onScrubEnd() {
+    if (!_isScrubbing) return;
+    final ctrl = _controller;
+    if (ctrl != null && ctrl.value.isInitialized) {
+      final duration = ctrl.value.duration;
+      final targetDuration = duration * _scrubProgress;
+      _performSeek(targetDuration);
+      if (_wasPlayingBeforeScrub) {
+        ctrl.play();
+      }
+    }
+    setState(() {
+      _isScrubbing = false;
     });
   }
 
@@ -388,31 +559,32 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   }
 
   void _handleTap() {
-    if (!_isCached) {
-      if (_isDownloading) {
-        _cancelDownload();
-      } else {
-        _startDownload();
-      }
-      return;
+    if (!_isCached && !_isDownloading) {
+      _startDownload();
     }
-
-    if (_controller == null || !_controller!.value.isInitialized) return;
 
     if (_isPlayingWithSound) {
       _playbackService.togglePlayPause();
     } else {
+      if (_controller != null && _controller!.value.isInitialized) {
+        VideoNoteControllerPool.put(widget.videoUrl, _controller!);
+      }
       if (widget.messageId != null) {
-        _playbackService.setActivePlayback(
-          messageId: widget.messageId!,
-          videoUrl: widget.videoUrl,
-          controller: _controller!,
-          senderName: widget.isMe ? null : widget.senderName,
-          initialInView: true,
+        MediaPlaybackCoordinator.instance.startPlayback(
+          track: PlaybackTrack(
+            messageId: widget.messageId!,
+            chatId: widget.chatId ?? '',
+            chatType: widget.chatType ?? 'private',
+            mediaType: 'video_note',
+            mediaUrl: widget.videoUrl,
+            senderName: widget.isMe ? null : widget.senderName,
+            chatTitle: widget.chatTitle ?? (widget.isMe ? null : widget.senderName),
+            duration: widget.duration,
+          ),
         );
       }
-      if (!_isPlayingWithSound) {
-        _startSoundPlayback();
+      if (!_isPlayingWithSound && _isCached && _controller != null) {
+        _startSoundPlayback(restart: true);
       }
     }
   }
@@ -529,18 +701,22 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     final duration = _controller?.value.duration ?? widget.duration ?? Duration.zero;
     final position = _controller?.value.position ?? Duration.zero;
 
-    final double progress;
-    if (duration.inMilliseconds > 0 && isInitialized) {
-      progress = (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
+    final double displayProgress;
+    if (_isScrubbing) {
+      displayProgress = _scrubProgress;
+    } else if (duration.inMilliseconds > 0 && isInitialized) {
+      displayProgress = (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
     } else {
-      progress = 0.0;
+      displayProgress = 0.0;
     }
 
-    final animatedBeginProgress = (progress < _prevProgress) ? 0.0 : _prevProgress;
-    _prevProgress = progress;
+    final animatedBeginProgress = (displayProgress < _prevProgress) ? 0.0 : _prevProgress;
+    _prevProgress = displayProgress;
 
     final String durationText;
-    if (_isPlayingWithSound && isInitialized) {
+    if (_isScrubbing && duration.inMilliseconds > 0) {
+      durationText = _formatDuration(duration * _scrubProgress);
+    } else if (_isPlayingWithSound && isInitialized) {
       durationText = _formatDuration(duration - position);
     } else if (duration.inSeconds > 0) {
       durationText = _formatDuration(duration);
@@ -554,10 +730,14 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
         widget.messageId != null &&
         _playbackService.activeMessageId == widget.messageId;
 
+    final double targetPauseInset =
+        (_isScrubbing ? !_wasPlayingBeforeScrub : _isPausedWithSound) ? 12.0 : 0.0;
+
     return VisibilityDetector(
       key: Key('vnote_${widget.messageId ?? widget.videoUrl}'),
       onVisibilityChanged: (info) {
         final inView = info.visibleFraction >= 0.15;
+        _isInView = inView;
         if (widget.messageId != null) {
           _playbackService.setInView(widget.messageId!, inView);
         }
@@ -566,13 +746,19 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
         // Active playback videos (with sound or in floating PiP) must NEVER be paused by visibility detector.
         final bool isActiveVideo = (widget.messageId != null && _playbackService.activeMessageId == widget.messageId) ||
             (_controller != null && _playbackService.activeController == _controller) ||
+            (_playbackService.activeVideoUrl != null && _playbackService.activeVideoUrl == widget.videoUrl) ||
+            (widget.messageId != null && MediaPlaybackCoordinator.instance.activeTrack?.messageId == widget.messageId) ||
             _isPlayingWithSound;
 
         if (!isActiveVideo && _controller != null && _controller!.value.isInitialized) {
-          if (!inView && _controller!.value.isPlaying) {
-            _controller!.pause();
+          if (!inView || _playbackService.hasActiveVideo) {
+            if (_controller!.value.isPlaying) {
+              _controller!.pause();
+            }
           } else if (inView && !_controller!.value.isPlaying && !_hasError) {
-            _controller!.play();
+            if (!_playbackService.hasActiveVideo) {
+              _controller!.play();
+            }
           }
         }
       },
@@ -584,127 +770,236 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
             GestureDetector(
               onTap: _handleTap,
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutCubic,
-                width: effectiveDiameter,
-                height: effectiveDiameter,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.28),
-                      blurRadius: 12,
-                      spreadRadius: 1,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // 1. Circular Video / Placeholder / Error (No spinning loader!)
-                    ClipOval(
-                      child: SizedBox(
-                        width: effectiveDiameter,
-                        height: effectiveDiameter,
-                        child: _hasError
-                            ? Container(
-                                color: Colors.black87,
-                                child: Center(
-                                  child: widget.onRetry != null
-                                      ? IconButton(
-                                          icon: const Icon(Icons.refresh, color: Colors.white70, size: 36),
-                                          onPressed: () {
-                                            setState(() {
-                                              _hasError = false;
-                                            });
-                                            _initializeVideoPlayer();
-                                          },
-                                        )
-                                      : const Icon(Icons.error_outline, color: Colors.white70, size: 36),
-                                ),
-                              )
-                            : (!_isCached || !isInitialized)
-                                ? _buildPlaceholder(effectiveDiameter)
-                                 : isFloatingActive
-                                     ? Container(
-                                         color: const Color(0xFF1C1C1E),
-                                         child: const Center(
-                                           child: Icon(
-                                             Icons.picture_in_picture_alt_rounded,
-                                             color: Colors.white54,
-                                             size: 38,
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  width: effectiveDiameter,
+                  height: effectiveDiameter,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.28),
+                        blurRadius: 12,
+                        spreadRadius: 1,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // 1. Circular Video / Placeholder / Error (No spinning loader!)
+                      ClipOval(
+                        child: SizedBox(
+                          width: effectiveDiameter,
+                          height: effectiveDiameter,
+                          child: _hasError
+                              ? Container(
+                                  color: Colors.black87,
+                                  child: Center(
+                                    child: widget.onRetry != null
+                                        ? IconButton(
+                                            icon: const Icon(Icons.refresh, color: Colors.white70, size: 36),
+                                            onPressed: () {
+                                              setState(() {
+                                                _hasError = false;
+                                              });
+                                              _initializeVideoPlayer();
+                                            },
+                                          )
+                                        : const Icon(Icons.error_outline, color: Colors.white70, size: 36),
+                                  ),
+                                )
+                              : !isInitialized
+                                  ? _buildPlaceholder(effectiveDiameter)
+                                   : isFloatingActive
+                                       ? Container(
+                                           color: const Color(0xFF1C1C1E),
+                                           child: const Center(
+                                             child: Icon(
+                                               Icons.picture_in_picture_alt_rounded,
+                                               color: Colors.white54,
+                                               size: 38,
+                                             ),
+                                           ),
+                                         )
+                                       : FittedBox(
+                                           fit: BoxFit.cover,
+                                           child: SizedBox(
+                                             width: _controller!.value.size.width > 0
+                                                 ? _controller!.value.size.width
+                                                 : effectiveDiameter,
+                                             height: _controller!.value.size.height > 0
+                                                 ? _controller!.value.size.height
+                                                 : effectiveDiameter,
+                                             child: VideoPlayer(_controller!),
                                            ),
                                          ),
-                                       )
-                                     : FittedBox(
-                                         fit: BoxFit.cover,
-                                         child: SizedBox(
-                                           width: _controller!.value.size.width > 0
-                                               ? _controller!.value.size.width
-                                               : effectiveDiameter,
-                                           height: _controller!.value.size.height > 0
-                                               ? _controller!.value.size.height
-                                               : effectiveDiameter,
-                                           child: VideoPlayer(_controller!),
-                                         ),
-                                       ),
-                      ),
-                    ),
-
-                    // 2. Play / Pause Overlay Icon when paused with sound
-                    if (_isPlayingWithSound && _isPausedWithSound)
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.55),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Center(
-                          child: Icon(Icons.play_arrow, color: Colors.white, size: 28),
                         ),
                       ),
 
-                    // 3. Smooth Circular Progress Ring around edge (Active during sound playback)
-                    if (_isPlayingWithSound && isInitialized)
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: TweenAnimationBuilder<double>(
-                            tween: Tween<double>(begin: animatedBeginProgress, end: progress),
-                            duration: const Duration(milliseconds: 250),
-                            curve: Curves.linear,
-                            builder: (context, smoothProgress, _) {
-                              return CustomPaint(
-                                painter: _CircularProgressPainter(
-                                  progress: smoothProgress,
+                      // Downloading Spinner Overlay
+                      if (!_isCached && isInitialized && !_isScrubbing)
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                value: _isDownloading && _downloadProgress > 0.05 ? _downloadProgress : null,
+                                strokeWidth: 2.5,
+                                valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            ),
+                          ),
+                        ),
+
+                      // 2. Play / Pause Overlay Icon when paused with sound
+                      if (_isPlayingWithSound && _isPausedWithSound && !_isScrubbing)
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.play_arrow, color: Colors.white, size: 28),
+                          ),
+                        ),
+
+                      // 2.1 Scrubbing Seek Indicator Pill Tooltip
+                      if (_isScrubbing && duration.inMilliseconds > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.25),
+                              width: 1,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.4),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.fast_forward_rounded, color: Colors.white, size: 14),
+                              const SizedBox(width: 4),
+                              Text(
+                                '${_formatDuration(duration * _scrubProgress)} / ${_formatDuration(duration)}',
+                                style: const TextStyle(
                                   color: Colors.white,
-                                  strokeWidth: 3.0,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                      // 3. Smooth Circular Progress Ring around edge with interactive ring scrubbing
+                      if (_isPlayingWithSound && isInitialized)
+                        Positioned.fill(
+                          child: TweenAnimationBuilder<double>(
+                            tween: Tween<double>(end: targetPauseInset),
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeOutCubic,
+                            builder: (context, animatedInset, _) {
+                              return _RingHitTestTarget(
+                                innerRadius: (effectiveDiameter / 2) - 34.0 - animatedInset,
+                                outerRadius: (effectiveDiameter / 2) + 24.0 - animatedInset,
+                                child: RawGestureDetector(
+                                  gestures: <Type, GestureRecognizerFactory>{
+                                    EagerGestureRecognizer:
+                                        GestureRecognizerFactoryWithHandlers<
+                                            EagerGestureRecognizer>(
+                                      () => EagerGestureRecognizer(),
+                                      (EagerGestureRecognizer instance) {},
+                                    ),
+                                  },
+                                  behavior: HitTestBehavior.opaque,
+                                  child: Listener(
+                                    behavior: HitTestBehavior.opaque,
+                                    onPointerDown: (event) {
+                                      _onScrubStart(
+                                        event.localPosition,
+                                        Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                      );
+                                    },
+                                    onPointerMove: (event) {
+                                      _onScrubUpdate(
+                                        event.localPosition,
+                                        Offset(effectiveDiameter / 2, effectiveDiameter / 2),
+                                      );
+                                    },
+                                    onPointerUp: (_) => _onScrubEnd(),
+                                    onPointerCancel: (_) => _onScrubEnd(),
+                                    child: _isScrubbing
+                                        ? CustomPaint(
+                                            painter: _CircularProgressPainter(
+                                              progress: _scrubProgress,
+                                              color: Colors.white,
+                                              strokeWidth: 3.2,
+                                              isScrubbing: true,
+                                              inset: animatedInset,
+                                            ),
+                                          )
+                                        : TweenAnimationBuilder<double>(
+                                            tween: Tween<double>(
+                                                begin: animatedBeginProgress,
+                                                end: displayProgress),
+                                            duration: const Duration(milliseconds: 250),
+                                            curve: Curves.linear,
+                                            builder: (context, smoothProgress, _) {
+                                              return CustomPaint(
+                                                painter: _CircularProgressPainter(
+                                                  progress: smoothProgress,
+                                                  color: Colors.white,
+                                                  strokeWidth: 3.2,
+                                                  isScrubbing: false,
+                                                  inset: animatedInset,
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                  ),
                                 ),
                               );
                             },
                           ),
                         ),
-                      ),
 
-                    // 4. Subtle Outer Border
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              width: 1.2,
+                      // 4. Subtle Outer Border
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.2),
+                                width: 1.2,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
             const SizedBox(height: 5.0),
             AnimatedContainer(
               duration: const Duration(milliseconds: 260),
@@ -849,25 +1144,38 @@ class _CircularProgressPainter extends CustomPainter {
   final double progress;
   final Color color;
   final double strokeWidth;
+  final bool isScrubbing;
+  final double inset;
 
   _CircularProgressPainter({
     required this.progress,
     required this.color,
     required this.strokeWidth,
+    this.isScrubbing = false,
+    this.inset = 0.0,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.max(0.0, (size.width - strokeWidth) / 2 - inset);
+
+    // 1. Subtle background track ring indicating 360-degree duration
+    final trackPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22)
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke;
+    canvas.drawCircle(center, radius, trackPaint);
+
     if (progress <= 0.0) return;
 
+    // 2. Active elapsed arc (Clockwise starting from 12 o'clock)
     final paint = Paint()
       ..color = color
       ..strokeWidth = strokeWidth
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width - strokeWidth) / 2;
     const startAngle = -math.pi / 2; // 12 o'clock
     final sweepAngle = 2 * math.pi * progress.clamp(0.0, 1.0);
 
@@ -878,12 +1186,99 @@ class _CircularProgressPainter extends CustomPainter {
       false,
       paint,
     );
+
+    // 3. Scrub knob / thumb handle at current progress angle
+    final thumbAngle = startAngle + sweepAngle;
+    final thumbCenter = Offset(
+      center.dx + radius * math.cos(thumbAngle),
+      center.dy + radius * math.sin(thumbAngle),
+    );
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.45)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+    canvas.drawCircle(thumbCenter, isScrubbing ? 6.5 : 5.0, shadowPaint);
+
+    final thumbPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(thumbCenter, isScrubbing ? 6.0 : 4.5, thumbPaint);
   }
 
   @override
   bool shouldRepaint(covariant _CircularProgressPainter oldDelegate) {
     return oldDelegate.progress != progress ||
         oldDelegate.color != color ||
-        oldDelegate.strokeWidth != strokeWidth;
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.isScrubbing != isScrubbing ||
+        oldDelegate.inset != inset;
+  }
+}
+
+/// Hit-test proxy widget that restricts touch events strictly to an annular ring
+/// between [innerRadius] and [outerRadius] centered on the widget.
+///
+/// Touches inside the inner radius (the center of the circle) pass through to
+/// underlying widgets (allowing center tap play/pause and vertical drag scrolling).
+class _RingHitTestTarget extends SingleChildRenderObjectWidget {
+  final double innerRadius;
+  final double outerRadius;
+
+  const _RingHitTestTarget({
+    required this.innerRadius,
+    required this.outerRadius,
+    required super.child,
+  });
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderRingHitTest(
+      innerRadius: innerRadius,
+      outerRadius: outerRadius,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+      BuildContext context, covariant _RenderRingHitTest renderObject) {
+    renderObject
+      ..innerRadius = innerRadius
+      ..outerRadius = outerRadius;
+  }
+}
+
+class _RenderRingHitTest extends RenderProxyBox {
+  _RenderRingHitTest({
+    required double innerRadius,
+    required double outerRadius,
+    RenderBox? child,
+  })  : _innerRadius = innerRadius,
+        _outerRadius = outerRadius,
+        super(child);
+
+  double _innerRadius;
+  double get innerRadius => _innerRadius;
+  set innerRadius(double value) {
+    if (_innerRadius != value) {
+      _innerRadius = value;
+    }
+  }
+
+  double _outerRadius;
+  double get outerRadius => _outerRadius;
+  set outerRadius(double value) {
+    if (_outerRadius != value) {
+      _outerRadius = value;
+    }
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final dist = (position - center).distance;
+    if (dist >= _innerRadius && dist <= _outerRadius) {
+      return super.hitTest(result, position: position);
+    }
+    return false;
   }
 }

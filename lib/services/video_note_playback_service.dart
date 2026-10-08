@@ -16,6 +16,9 @@ class VideoNotePlaybackService with ChangeNotifier {
   String? _activeMessageId;
   String? _activeVideoUrl;
   String? _activeSenderName;
+  String? _activeChatId;
+  String? _activeChatType;
+  String? _activeChatTitle;
   VideoPlayerController? _activeController;
   bool _isFloating = false;
   bool _isInView = true;
@@ -31,6 +34,9 @@ class VideoNotePlaybackService with ChangeNotifier {
   String? get activeMessageId => _activeMessageId;
   String? get activeVideoUrl => _activeVideoUrl;
   String? get activeSenderName => _activeSenderName;
+  String? get activeChatId => _activeChatId;
+  String? get activeChatType => _activeChatType;
+  String? get activeChatTitle => _activeChatTitle;
   VideoPlayerController? get activeController => _activeController;
   bool get isFloating => _isFloating && _activeController != null;
   bool get isInView => _isInView;
@@ -49,12 +55,16 @@ class VideoNotePlaybackService with ChangeNotifier {
     required String videoUrl,
     required VideoPlayerController controller,
     String? senderName,
+    String? chatId,
+    String? chatType,
+    String? chatTitle,
     bool? initialInView,
   }) {
     // 1. Mute/stop any active voice note to prevent audio clash
     VoicePlaybackService().stopVoice();
 
     if (_activeController != null && _activeController != controller) {
+      _activeController!.removeListener(_onControllerTick);
       try {
         _activeController!.setVolume(0.0);
       } catch (_) {}
@@ -62,7 +72,11 @@ class VideoNotePlaybackService with ChangeNotifier {
     _activeMessageId = messageId;
     _activeVideoUrl = videoUrl;
     _activeController = controller;
+    _activeController!.addListener(_onControllerTick);
     if (senderName != null) _activeSenderName = senderName;
+    if (chatId != null) _activeChatId = chatId;
+    if (chatType != null) _activeChatType = chatType;
+    if (chatTitle != null) _activeChatTitle = chatTitle;
 
     try {
       controller.setPlaybackSpeed(_playbackSpeed);
@@ -116,9 +130,26 @@ class VideoNotePlaybackService with ChangeNotifier {
     notifyListeners();
   }
 
+  void _onControllerTick() {
+    final ctrl = _activeController;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    
+    final position = ctrl.value.position;
+    final duration = ctrl.value.duration;
+    final isFinished = (duration.inMilliseconds > 0) &&
+        (position >= duration || (!ctrl.value.isPlaying && position >= duration - const Duration(milliseconds: 150)));
+        
+    if (isFinished && _activeMessageId != null) {
+      final finishedId = _activeMessageId!;
+      _activeController?.removeListener(_onControllerTick);
+      onVideoCompleted(finishedId);
+    }
+  }
+
   void stopActivePlayback([String? messageId]) {
     if (messageId != null && _activeMessageId != messageId) return;
     if (_activeController != null) {
+      _activeController!.removeListener(_onControllerTick);
       try {
         _activeController!.setVolume(0.0);
         _activeController!.pause();
@@ -128,6 +159,9 @@ class VideoNotePlaybackService with ChangeNotifier {
     _activeMessageId = null;
     _activeVideoUrl = null;
     _activeSenderName = null;
+    _activeChatId = null;
+    _activeChatType = null;
+    _activeChatTitle = null;
     _activeController = null;
     _isFloating = false;
     _isInView = true;

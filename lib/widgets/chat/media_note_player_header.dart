@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/voice_playback_service.dart';
 
@@ -42,6 +43,11 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
     _voiceService.addListener(_onServiceChange);
     _videoService.addListener(_onServiceChange);
     _attachVideoController();
+
+    final hasActive = _voiceService.hasActiveAudio || _videoService.hasActiveVideo;
+    if (hasActive) {
+      _slideController.value = 1.0;
+    }
   }
 
   @override
@@ -126,13 +132,13 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
       progress = (dur.inMilliseconds > 0)
           ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
           : 0.0;
-      speed = _videoService.playbackSpeed;
+      speed = MediaPlaybackCoordinator.instance.playbackSpeed;
       onPlayPause = _videoService.togglePlayPause;
-      onSpeed = _videoService.cyclePlaybackSpeed;
-      onClose = _videoService.stopActivePlayback;
+      onSpeed = MediaPlaybackCoordinator.instance.cyclePlaybackSpeed;
+      onClose = MediaPlaybackCoordinator.instance.stopAll;
       onTap = () {
         widget.onScrollToActive?.call();
-        _videoService.requestScrollToActive();
+        MediaPlaybackCoordinator.instance.navigateToActiveChat();
       };
     } else {
       title = _voiceService.activeSenderName ?? l10n?.translate('chat_voice_message') ?? 'Voice message';
@@ -146,13 +152,13 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
       progress = (dur.inMilliseconds > 0)
           ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
           : 0.0;
-      speed = _voiceService.playbackSpeed;
+      speed = MediaPlaybackCoordinator.instance.playbackSpeed;
       onPlayPause = _voiceService.togglePlayPause;
-      onSpeed = _voiceService.cyclePlaybackSpeed;
-      onClose = _voiceService.stopVoice;
+      onSpeed = MediaPlaybackCoordinator.instance.cyclePlaybackSpeed;
+      onClose = MediaPlaybackCoordinator.instance.stopAll;
       onTap = () {
         widget.onScrollToActive?.call();
-        _voiceService.requestScrollToActive();
+        MediaPlaybackCoordinator.instance.navigateToActiveChat();
       };
     }
 
@@ -162,6 +168,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
       sizeFactor: _slideAnimation,
       axisAlignment: -1.0,
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -238,6 +245,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
 
                     // 3. Playback Speed Selector (1X / 1.5X / 2X)
                     GestureDetector(
+                      behavior: HitTestBehavior.opaque,
                       onTap: onSpeed,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

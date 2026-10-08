@@ -405,12 +405,14 @@ class AppDatabase extends _$AppDatabase {
 
   /// Обновить статус отправки: заменить localId на serverId
   Future<void> updateMessageSendStatus(
-      String localId, String serverId, int status) async {
+      String localId, String serverId, int status,
+      {String? fileUrl}) async {
     await ensureInitialized();
     await (update(messages)..where((t) => t.localId.equals(localId)))
         .write(MessagesCompanion(
       serverId: Value(serverId),
       sendStatus: Value(status),
+      fileUrl: fileUrl != null ? Value(fileUrl) : const Value.absent(),
     ));
   }
 

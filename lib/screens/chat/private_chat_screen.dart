@@ -49,11 +49,9 @@ import '../../utils/date_time_utils.dart';
 import '../../services/video_note_recorder_service.dart';
 import '../../widgets/chat/round_video_recording_overlay.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:video_player/video_player.dart';
 import '../../config/app_config.dart';
+import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_playback_service.dart';
-import '../../widgets/chat/floating_video_note_overlay.dart';
-import '../../widgets/message/video_message_widget.dart';
 import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
@@ -225,13 +223,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     _scrollController.addListener(_onScroll);
     _inputFocusNode.addListener(_onFocusChanged);
 
-    // Connect continuous video note playback and PiP callbacks
-    VideoNotePlaybackService().onPlayNextRequested = _playNextVideoNote;
-    VideoNotePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
-
-    // Connect continuous voice note playback
-    VoicePlaybackService().onPlayNextRequested = _playNextVoiceNote;
-    VoicePlaybackService().onScrollToMessageRequested = (id) => _scrollToMessage(id);
+    // Connect continuous media playback (voice + video notes) with coordinator
+    MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
+    MediaPlaybackCoordinator.instance.onScrollToMessageRequested = (id) => _scrollToMessage(id);
+    MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
+    MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
 
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1248,7 +1244,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _messages.clear();
           _messageReactions.clear();
           _myReactions.clear();
-          _messages.addAll(merged.values.toSet());
+          final Map<String, Message> dedupedById = {};
+          for (final m in merged.values) {
+            dedupedById[m.id] = m;
+          }
+          _messages.addAll(dedupedById.values);
 
           for (final m in _messages) {
             if (m.reactions.isNotEmpty) {
@@ -2104,43 +2104,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           },
           appBar: Builder(
             builder: (context) {
-              final topBarHeight = MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight;
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned(
-                    top: topBarHeight,
-                    left: 0,
-                    right: 0,
-                    child: MediaNotePlayerHeader(
-                      onScrollToActive: () {
-                        final activeId = VoicePlaybackService().activeMessageId ??
-                            VideoNotePlaybackService().activeMessageId;
-                        if (activeId != null) {
-                          _scrollToMessage(activeId);
-                        }
-                      },
-                    ),
-                  ),
-                  FloatingGlassAppBar(
-                    name: displayName,
-                    avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
-                    isOnline: _isOtherUserOnline,
-                    lastSeen: _otherUserLastSeen,
-                    statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
-                    isChannel: false,
-                    isMuted: _isMuted,
-                    onBack: () => Navigator.pop(context),
-                    onTitleTap: _viewUserProfile,
-                    onViewProfile: _viewUserProfile,
-                    onVoiceCall: _startVoiceCall,
-                    onVideoCall: _startVideoCall,
-                    onSearch: _searchMessages,
-                    onToggleMute: _toggleMuteNotifications,
-                    onClearHistory: _showClearHistoryDialog,
-                    onReport: _showBlockUserDialog,
-                  ),
-                ],
+              return FloatingGlassAppBar(
+                name: displayName,
+                avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+                isOnline: _isOtherUserOnline,
+                lastSeen: _otherUserLastSeen,
+                statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
+                isChannel: false,
+                isMuted: _isMuted,
+                onBack: () => Navigator.pop(context),
+                onTitleTap: _viewUserProfile,
+                onViewProfile: _viewUserProfile,
+                onVoiceCall: _startVoiceCall,
+                onVideoCall: _startVideoCall,
+                onSearch: _searchMessages,
+                onToggleMute: _toggleMuteNotifications,
+                onClearHistory: _showClearHistoryDialog,
+                onReport: _showBlockUserDialog,
               );
             },
           ),
@@ -2375,6 +2355,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 ChatBottomScrollEdge(
                   height: math.max(safeBottom + 52.0, 52.0),
                 ),
+                // Плеер видео/аудио (помещаем в корневой Stack, чтобы hitTest работал)
+                Positioned(
+                  top: MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight,
+                  left: 0,
+                  right: 0,
+                  child: MediaNotePlayerHeader(
+                    onScrollToActive: () {
+                      final activeId = VoicePlaybackService().activeMessageId ??
+                          VideoNotePlaybackService().activeMessageId;
+                      if (activeId != null) {
+                        _scrollToMessage(activeId);
+                      }
+                    },
+                  ),
+                ),
                 // Кнопка прокрутки вниз (теперь здесь, в главном Stack чата)
                 Positioned(
                   right: 14,
@@ -2470,10 +2465,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                       onCancelReply: _cancelReply,
                     ),
                   ),
-                // Плавающий кружочек видеосообщения (PiP), если активный кружок ушел из поля зрения
-                const Positioned.fill(
-                  child: FloatingVideoNoteOverlay(),
-                ),
               ],
             ),
           ),
@@ -2616,6 +2607,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
       chatType: _chatType,
+      chatTitle: widget.otherUserName,
       isHighlighted: isHighlighted,
       reactions: _messageReactions[message.id] ?? (message.reactions.isNotEmpty ? message.reactions : null),
       myReactions: _myReactions[message.id] ?? (message.myReactions.isNotEmpty ? message.myReactions : null),
@@ -2860,22 +2852,27 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   }
 
   Future<void> _onStartVoiceRecord() async {
-    final hasPerm = await _voiceRecorderService.hasPermission();
+    var hasPerm = await _voiceRecorderService.hasPermission();
     if (!hasPerm) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_voice_permission_denied'),
+      final isPermanentlyDenied = await _voiceRecorderService.isPermanentlyDenied();
+      if (isPermanentlyDenied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.l10n.translate('chat_voice_permission_denied'),
+              ),
+              action: SnackBarAction(
+                label: context.l10n.translate('settings_title'),
+                onPressed: () => openAppSettings(),
+              ),
             ),
-            action: SnackBarAction(
-              label: context.l10n.translate('settings_title'),
-              onPressed: () => openAppSettings(),
-            ),
-          ),
-        );
+          );
+        }
+        return;
       }
-      return;
+      final granted = await _voiceRecorderService.requestPermissions();
+      if (!granted) return;
     }
 
     VoicePlaybackService().stopVoice();
@@ -3016,7 +3013,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         final sentMessage = sendResult['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId);
+          await syncService.confirmMessageSent(pendingLocalId, serverId,
+              remoteFileUrl: uploadResult.url);
           if (mounted) {
             setState(() {
               final idx =
@@ -3028,6 +3026,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     replyInfo: _messages[idx].replyInfo,
                     waveform: sentMessage.waveform ?? _messages[idx].waveform,
                     duration: sentMessage.duration ?? _messages[idx].duration,
+                    fileUrl: uploadResult.url,
                   );
                 } else {
                   _messages[idx] = _messages[idx].copyWith(
@@ -3183,7 +3182,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId);
+          await syncService.confirmMessageSent(pendingLocalId, serverId,
+              remoteFileUrl: uploadResult.url);
           if (mounted) {
             setState(() {
               final idx =
@@ -3194,12 +3194,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     localId: pendingLocalId,
                     sendStatus: 1,
                     isRound: true,
+                    fileUrl: uploadResult.url,
                   );
                 } else {
                   _messages[idx] = _messages[idx].copyWith(
                     id: serverId,
                     sendStatus: 1,
                     isRound: true,
+                    fileUrl: uploadResult.url,
                   );
                 }
               }
@@ -3795,102 +3797,68 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 
-    if (VideoNotePlaybackService().onPlayNextRequested == _playNextVideoNote) {
-      VideoNotePlaybackService().onPlayNextRequested = null;
-      VideoNotePlaybackService().onScrollToMessageRequested = null;
-      VideoNotePlaybackService().stopActivePlayback();
-    }
-
-    if (VoicePlaybackService().onPlayNextRequested == _playNextVoiceNote) {
-      VoicePlaybackService().onPlayNextRequested = null;
-      VoicePlaybackService().onScrollToMessageRequested = null;
-      VoicePlaybackService().stopVoice();
+    if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.chatId) {
+      MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
+      MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
+      MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
+      MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
     }
 
     super.dispose();
   }
 
-  void _playNextVoiceNote(String currentMessageId) {
-    if (!mounted) return;
-    final currentIndex = _messages.indexWhere(
-        (m) => m.id == currentMessageId || m.localId == currentMessageId);
-    if (currentIndex > 0) {
-      for (int i = currentIndex - 1; i >= 0; i--) {
+  List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {
+    final List<PlaybackTrack> playlist = [];
+    final startIndex = _messages.indexWhere(
+        (m) => m.id == startMessageId || m.localId == startMessageId);
+    if (startIndex >= 0) {
+      for (int i = startIndex - 1; i >= 0; i--) {
         final m = _messages[i];
+        final rawUrl = m.fileUrl ?? '';
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        if (resolvedUrl.isEmpty) continue;
+
         if (m.messageType == 'voice') {
-          final rawUrl = m.fileUrl ?? '';
-          final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-          if (resolvedUrl.isNotEmpty) {
-            VoicePlaybackService().playVoice(
-              messageId: m.id,
-              audioUrl: resolvedUrl,
-              senderName: m.senderName,
-            );
-            return;
-          }
+          playlist.add(PlaybackTrack(
+            messageId: m.id,
+            chatId: widget.chatId,
+            chatType: 'private',
+            mediaType: 'voice',
+            mediaUrl: resolvedUrl,
+            senderName: m.senderName,
+            chatTitle: widget.otherUserName,
+            duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
+            waveform: m.waveform,
+          ));
+        } else if (m.isRound || (m.messageType == 'video' && m.isRound)) {
+          playlist.add(PlaybackTrack(
+            messageId: m.id,
+            chatId: widget.chatId,
+            chatType: 'private',
+            mediaType: 'video_note',
+            mediaUrl: resolvedUrl,
+            senderName: m.senderName,
+            chatTitle: widget.otherUserName,
+            duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
+          ));
         }
       }
     }
-    // End of playback chain reached: clear active state and dismiss header
-    VoicePlaybackService().stopVoice();
+    return playlist;
   }
 
-  void _playNextVideoNote(String currentMessageId) {
+  void _playNextMediaNote(String currentMessageId) {
     if (!mounted) return;
-    final currentIndex = _messages.indexWhere(
-        (m) => m.id == currentMessageId || m.localId == currentMessageId);
-    if (currentIndex > 0) {
-      for (int i = currentIndex - 1; i >= 0; i--) {
-        final m = _messages[i];
-        if (m.isRound || (m.messageType == 'video' && m.isRound)) {
-          final rawUrl = m.fileUrl ?? '';
-          final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-          if (resolvedUrl.isNotEmpty) {
-            final cached = VideoNoteControllerPool.get(resolvedUrl);
-            if (cached != null && cached.value.isInitialized) {
-              cached.seekTo(Duration.zero);
-              cached.setLooping(false);
-              cached.setVolume(1.0);
-              cached.play();
-              VideoNotePlaybackService().setActivePlayback(
-                messageId: m.id,
-                videoUrl: resolvedUrl,
-                controller: cached,
-                senderName: m.senderName,
-                initialInView: VideoNotePlaybackService().isMessageInView(m.id),
-              );
-            } else {
-              final uri = Uri.tryParse(resolvedUrl);
-              final ctrl = uri != null && (uri.scheme == 'http' || uri.scheme == 'https')
-                  ? VideoPlayerController.networkUrl(uri)
-                  : VideoPlayerController.file(File(resolvedUrl.replaceFirst('file://', '')));
-              ctrl.initialize().then((_) {
-                if (!mounted) {
-                  ctrl.dispose();
-                  return;
-                }
-                ctrl.setLooping(false);
-                ctrl.setVolume(1.0);
-                ctrl.play();
-                VideoNoteControllerPool.put(resolvedUrl, ctrl);
-                VideoNotePlaybackService().setActivePlayback(
-                  messageId: m.id,
-                  videoUrl: resolvedUrl,
-                  controller: ctrl,
-                  senderName: m.senderName,
-                  initialInView: VideoNotePlaybackService().isMessageInView(m.id),
-                );
-              }).catchError((err) {
-                debugPrint('Play next init error: $err');
-                VideoNotePlaybackService().stopActivePlayback();
-              });
-            }
-            return;
-          }
-        }
-      }
+    final playlist = _buildPlaylistFrom(currentMessageId);
+    if (playlist.isNotEmpty) {
+      final nextTrack = playlist.removeAt(0);
+      MediaPlaybackCoordinator.instance.startPlayback(
+        track: nextTrack,
+        remainingQueue: playlist,
+      );
+      return;
     }
-    VideoNotePlaybackService().stopActivePlayback();
+    MediaPlaybackCoordinator.instance.stopAll();
   }
 
   void _updateInputHeight() {

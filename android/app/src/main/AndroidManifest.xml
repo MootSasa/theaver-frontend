@@ -23,6 +23,7 @@
 <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
 <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
 <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+<uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
 <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
 
 <!-- Hardware camera features (optional so app still installs on devices without rear camera or autofocus) -->
@@ -34,6 +35,7 @@ android:label="Theaver"
 android:name="${applicationName}"
 android:icon="@mipmap/ic_launcher"
 android:roundIcon="@mipmap/ic_launcher_round"
+android:largeHeap="true"
 android:usesCleartextTraffic="true"
 android:networkSecurityConfig="@xml/network_security_config">
         <!-- Default notification channel for FCM -->

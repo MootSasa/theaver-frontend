@@ -43,6 +43,7 @@ import '../../utils/date_time_utils.dart';
 import '../../services/update_service.dart';
 import '../settings/widgets/update_dialog.dart';
 import '../../widgets/chat/round_video_thumbnail.dart';
+import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
 import '../../services/notification_service.dart';
 
@@ -2670,6 +2671,8 @@ class _MainScreenState extends State<MainScreen>
                 ); // closes PageView
 
             final isDark = Theme.of(context).brightness == Brightness.dark;
+            final statusBarHeight = MediaQuery.of(context).padding.top;
+            final topBarHeight = statusBarHeight + 52.0;
             final reduceMotion = MediaQuery.disableAnimationsOf(context);
             final lightAngle =
                 glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
@@ -2765,7 +2768,17 @@ class _MainScreenState extends State<MainScreen>
                 body: Scaffold(
                   backgroundColor: Colors.transparent,
                   resizeToAvoidBottomInset: true,
-                  body: pageView,
+                  body: Stack(
+                    children: [
+                      pageView,
+                      Positioned(
+                        top: topBarHeight + 4.0,
+                        left: 0,
+                        right: 0,
+                        child: const MediaNotePlayerHeader(),
+                      ),
+                    ],
+                  ),
                 ),
                 actionMargin: actionMargin,
                 bottomNavigationBar: LiquidGlassTabBar(
@@ -2881,6 +2894,12 @@ class _MainScreenState extends State<MainScreen>
                         },
                       ),
                     ),
+                  Positioned(
+                    top: topBarHeight + 4.0,
+                    left: 0,
+                    right: 0,
+                    child: const MediaNotePlayerHeader(),
+                  ),
                   Positioned(
                     top: 0,
                     left: 0,

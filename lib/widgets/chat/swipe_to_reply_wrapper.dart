@@ -192,6 +192,8 @@ class _ReplyGestureRecognizer extends HorizontalDragGestureRecognizer {
       } else if (dx > 0.1 || dy.abs() > dx.abs() * 0.5) {
         // If moving right, or vertical movement is significant, reject
         resolve(GestureDisposition.rejected);
+        stopTrackingPointer(event.pointer);
+        return;
       }
     }
     super.handleEvent(event);

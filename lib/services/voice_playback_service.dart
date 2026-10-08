@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'video_note_playback_service.dart';
@@ -17,6 +18,9 @@ class VoicePlaybackService with ChangeNotifier {
   String? _activeMessageId;
   String? _activeAudioUrl;
   String? _activeSenderName;
+  String? _activeChatId;
+  String? _activeChatType;
+  String? _activeChatTitle;
   bool _isPlaying = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -32,6 +36,9 @@ class VoicePlaybackService with ChangeNotifier {
   String? get activeMessageId => _activeMessageId;
   String? get activeAudioUrl => _activeAudioUrl;
   String? get activeSenderName => _activeSenderName;
+  String? get activeChatId => _activeChatId;
+  String? get activeChatType => _activeChatType;
+  String? get activeChatTitle => _activeChatTitle;
   bool get isPlaying => _isPlaying;
   Duration get position => _position;
   Duration get duration => _duration;
@@ -84,6 +91,9 @@ class VoicePlaybackService with ChangeNotifier {
     required String audioUrl,
     String? senderName,
     Duration? initialDuration,
+    String? chatId,
+    String? chatType,
+    String? chatTitle,
   }) async {
     // 1. Mute/stop any active round video note to prevent audio clash
     VideoNotePlaybackService().stopActivePlayback();
@@ -98,6 +108,9 @@ class VoicePlaybackService with ChangeNotifier {
     _activeMessageId = messageId;
     _activeAudioUrl = audioUrl;
     if (senderName != null) _activeSenderName = senderName;
+    if (chatId != null) _activeChatId = chatId;
+    if (chatType != null) _activeChatType = chatType;
+    if (chatTitle != null) _activeChatTitle = chatTitle;
     if (initialDuration != null) _duration = initialDuration;
     _position = Duration.zero;
     notifyListeners();
@@ -109,11 +122,10 @@ class VoicePlaybackService with ChangeNotifier {
         if (cached != null && await cached.exists()) {
           playPath = cached.path;
         } else {
-          // Download to local cache asynchronously so repeated listening is instant & offline-ready
-          final downloaded = await MediaCacheManager.instance.downloadMedia(audioUrl);
-          if (downloaded != null && await downloaded.exists()) {
-            playPath = downloaded.path;
-          }
+          // Play directly from URL immediately to prevent blocking playback.
+          playPath = audioUrl;
+          // Download in the background for future use.
+          MediaCacheManager.instance.downloadMedia(audioUrl).catchError((_) => null);
         }
       }
 
@@ -121,8 +133,13 @@ class VoicePlaybackService with ChangeNotifier {
         await _player.setUrl(playPath);
       } else {
         final localFile = playPath.startsWith('file://')
-            ? playPath.replaceFirst('file://', '')
+            ? Uri.parse(playPath).toFilePath()
             : playPath;
+        if (!await File(localFile).exists()) {
+          debugPrint('[VoicePlaybackService] Local voice file not found: $localFile');
+          stopVoice(messageId);
+          return;
+        }
         await _player.setFilePath(localFile);
       }
       await _player.setSpeed(_playbackSpeed);
@@ -196,17 +213,21 @@ class VoicePlaybackService with ChangeNotifier {
   Future<void> stopVoice([String? messageId]) async {
     if (messageId != null && _activeMessageId != messageId) return;
 
+    _activeMessageId = null;
+    _activeAudioUrl = null;
+    _activeSenderName = null;
+    _activeChatId = null;
+    _activeChatType = null;
+    _activeChatTitle = null;
+    _isPlaying = false;
+    _position = Duration.zero;
+    _duration = Duration.zero;
+
     try {
       await _player.stop();
       await _player.seek(Duration.zero);
     } catch (_) {}
 
-    _activeMessageId = null;
-    _activeAudioUrl = null;
-    _activeSenderName = null;
-    _isPlaying = false;
-    _position = Duration.zero;
-    _duration = Duration.zero;
     notifyListeners();
   }
 
