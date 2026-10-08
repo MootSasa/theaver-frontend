@@ -202,7 +202,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
 
     // 1. Check Controller Pool for instantaneous zero-delay restore
     final cached = VideoNoteControllerPool.get(widget.videoUrl);
-    if (cached != null && cached.value.isInitialized) {
+    if (cached != null) {
       _controller = cached;
       _controller!.addListener(_onVideoUpdate);
       _isCached = true;
@@ -216,7 +216,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
           _hasError = false;
         });
       }
-      if (!_controller!.value.isPlaying) {
+      if (_controller!.value.isInitialized && !_controller!.value.isPlaying) {
         _controller!.play();
       }
       return;

@@ -122,11 +122,10 @@ class VoicePlaybackService with ChangeNotifier {
         if (cached != null && await cached.exists()) {
           playPath = cached.path;
         } else {
-          // Download to local cache asynchronously so repeated listening is instant & offline-ready
-          final downloaded = await MediaCacheManager.instance.downloadMedia(audioUrl);
-          if (downloaded != null && await downloaded.exists()) {
-            playPath = downloaded.path;
-          }
+          // Play directly from URL immediately to prevent blocking playback.
+          playPath = audioUrl;
+          // Download in the background for future use.
+          MediaCacheManager.instance.downloadMedia(audioUrl).catchError((_) => null);
         }
       }
 
