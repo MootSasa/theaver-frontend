@@ -20,6 +20,8 @@ class MediaAlbumWidget extends StatelessWidget {
   final String? senderName;
   final String Function(String)? formatTime;
   final Function(String url, String name, String type)? onFileTap;
+  final bool isHighlighted;
+  final String? highlightItemId;
 
   const MediaAlbumWidget({
     Key? key,
@@ -30,6 +32,8 @@ class MediaAlbumWidget extends StatelessWidget {
     this.senderName,
     this.formatTime,
     this.onFileTap,
+    this.isHighlighted = false,
+    this.highlightItemId,
   }) : super(key: key);
 
   void _openViewer(BuildContext context, int index) {
@@ -69,7 +73,7 @@ class MediaAlbumWidget extends StatelessWidget {
         ? theme.colorScheme.onPrimary
         : theme.colorScheme.onSecondaryContainer;
 
-    return Container(
+    final albumContent = Container(
       width: albumWidth,
       decoration: BoxDecoration(
         color: bubbleColor,
@@ -177,6 +181,22 @@ class MediaAlbumWidget extends StatelessWidget {
         ],
       ),
     );
+
+    final bool shouldHighlightAlbum =
+        isHighlighted || (highlightItemId != null && album.items.any((it) => it.id == highlightItemId));
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOut,
+      padding: shouldHighlightAlbum ? const EdgeInsets.all(3) : EdgeInsets.zero,
+      decoration: BoxDecoration(
+        color: shouldHighlightAlbum
+            ? theme.colorScheme.primary.withValues(alpha: 0.18)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(19),
+      ),
+      child: albumContent,
+    );
   }
 
   Widget _buildTile(
@@ -189,6 +209,7 @@ class MediaAlbumWidget extends StatelessWidget {
       item: item,
       pos: pos,
       index: index,
+      isHighlighted: highlightItemId != null && item.id == highlightItemId,
       onTap: () => _openViewer(context, index),
     );
   }
@@ -223,6 +244,7 @@ class _AlbumTileWidget extends StatefulWidget {
   final MediaAlbumItem item;
   final AlbumTilePosition pos;
   final int index;
+  final bool isHighlighted;
   final VoidCallback onTap;
 
   const _AlbumTileWidget({
@@ -230,6 +252,7 @@ class _AlbumTileWidget extends StatefulWidget {
     required this.item,
     required this.pos,
     required this.index,
+    this.isHighlighted = false,
     required this.onTap,
   }) : super(key: key);
 
@@ -402,6 +425,23 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
                             ),
                           ],
                         ],
+                      ),
+                    ),
+                  ),
+
+                // 6. Highlight border & glow overlay when this specific tile is targeted
+                if (widget.isHighlighted)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.35),
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.primary,
+                            width: 3.0,
+                          ),
+                          borderRadius: pos.borderRadius,
+                        ),
                       ),
                     ),
                   ),

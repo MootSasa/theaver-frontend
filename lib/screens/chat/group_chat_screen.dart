@@ -145,10 +145,41 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   // Feed items (messages grouped into albums by grouped_id)
   List<FeedItem> _feedItems = [];
+  int _unreadCount = 0;
+  String? _firstUnreadMessageId;
+  bool _showUnreadDivider = false;
+  int _dividerUnreadCount = 0;
+  int _firstUnreadFeedIndex = -1;
+  final GlobalKey _unreadSeparatorKey = GlobalKey();
+  bool _hasScrolledToUnread = false;
   double _newestMessageHeight = 150.0;
+
+  static final Map<String, (DateTime, DateTime)> _dateCache = {};
+
+  (DateTime, DateTime) _resolveDates(String createdAt) {
+    var cached = _dateCache[createdAt];
+    if (cached != null) return cached;
+    final dt = DateTime.tryParse(createdAt) ?? DateTime.now();
+    final startOfDay = DateTimeUtils.startOfDay(dt);
+    cached = (dt, startOfDay);
+    if (_dateCache.length > 500) _dateCache.clear();
+    _dateCache[createdAt] = cached;
+    return cached;
+  }
+
+  String _formatDateLabel(DateTime dt) =>
+      DateTimeUtils.formatDateSeparator(dt, context: context);
 
   void _updateFeedItems() {
     _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
+    if (_showUnreadDivider && _firstUnreadMessageId != null) {
+      _firstUnreadFeedIndex = _feedItems.indexWhere((item) =>
+          item.id == _firstUnreadMessageId ||
+          (item is FeedAlbumItem &&
+              item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+    } else {
+      _firstUnreadFeedIndex = -1;
+    }
     _pruneMessageKeys();
   }
 
@@ -267,6 +298,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
         if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
           _newestMessageHeight = renderBox.size.height;
+        }
+        if (_unreadCount > 0) {
+          _onMessageVisible(firstMsgId);
         }
       }
       final double threshold = _newestMessageHeight;
@@ -668,16 +702,31 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       });
     }
 
+    // Get unread info before loading messages
+    final unreadInfo = await ChatService.getUnreadInfo(chatId: widget.chatId);
+    if (unreadInfo['success'] == true && mounted) {
+      setState(() {
+        _unreadCount = unreadInfo['unread_count'] as int? ?? 0;
+        _firstUnreadMessageId = unreadInfo['first_unread_message_id'] as String?;
+        if (_unreadCount > 0 && _firstUnreadMessageId != null) {
+          _showUnreadDivider = true;
+          _dividerUnreadCount = _unreadCount;
+        }
+        _updateFeedItems();
+      });
+    }
+
     // Load messages
     await _loadMessages();
 
     // Scroll to initial message if specified
     if (widget.initialMessageId != null) {
       _scrollToMessage(widget.initialMessageId!);
+    } else if (_firstUnreadMessageId != null) {
+      _scrollToFirstUnread();
+    } else if (_unreadCount > 0) {
+      await _markMessagesAsRead();
     }
-
-    // Mark messages as read when opening chat
-    await _markMessagesAsRead();
   }
 
   Future<void> _loadMessages() async {
@@ -1854,6 +1903,98 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
+  /// Scroll to the first unread message with multi-batch prefetch and GlobalKey alignment
+  Future<void> _scrollToFirstUnread() async {
+    if (_firstUnreadMessageId == null || _hasScrolledToUnread) return;
+    _hasScrolledToUnread = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !_scrollController.hasClients) return;
+
+      // 1. If unread separator is already in view, align directly
+      if (_unreadSeparatorKey.currentContext != null) {
+        await Scrollable.ensureVisible(
+          _unreadSeparatorKey.currentContext!,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+          alignment: 0.15,
+        );
+        return;
+      }
+
+      // 2. Find target index in _feedItems
+      int targetFeedIndex = _firstUnreadFeedIndex;
+      if (targetFeedIndex == -1 && _firstUnreadMessageId != null) {
+        targetFeedIndex = _feedItems.indexWhere((item) =>
+            item.id == _firstUnreadMessageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      }
+
+      // If message is beyond current loaded page, prefetch older messages (up to 4 batches)
+      int retries = 0;
+      while (targetFeedIndex == -1 && _hasMoreMessages && retries < 4 && mounted) {
+        await _loadMoreMessages();
+        retries++;
+        targetFeedIndex = _feedItems.indexWhere((item) =>
+            item.id == _firstUnreadMessageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      }
+
+      if (!mounted || !_scrollController.hasClients) return;
+
+      if (targetFeedIndex == -1) {
+        if (_scrollController.position.hasContentDimensions) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+        return;
+      }
+
+      // 3. Approximate jump to divider position (_firstUnreadFeedIndex + 1)
+      final dividerItemIndex = targetFeedIndex + 1;
+      const estimatedItemHeight = 90.0;
+      final maxScroll = _scrollController.position.hasContentDimensions
+          ? _scrollController.position.maxScrollExtent
+          : 0.0;
+      final targetOffset =
+          (dividerItemIndex * estimatedItemHeight).clamp(0.0, maxScroll);
+
+      if ((_scrollController.offset - targetOffset).abs() > 1500) {
+        _scrollController.jumpTo(targetOffset);
+      } else {
+        await _scrollController.animateTo(
+          targetOffset,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+
+      await Future.delayed(const Duration(milliseconds: 60));
+      if (!mounted) return;
+
+      // 4. Precision alignment: ensureVisible on unread separator or first unread bubble
+      if (_unreadSeparatorKey.currentContext != null) {
+        await Scrollable.ensureVisible(
+          _unreadSeparatorKey.currentContext!,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          alignment: 0.15,
+        );
+      } else {
+        final key = _messageKeys[_firstUnreadMessageId];
+        if (key?.currentContext != null) {
+          await Scrollable.ensureVisible(
+            key!.currentContext!,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+            alignment: 0.15,
+          );
+        }
+      }
+    });
+  }
+
   /// Scroll to a specific message and highlight it
   Future<void> _scrollToMessage(String messageId, {int retryCount = 0}) async {
     if (!mounted) return;
@@ -1875,7 +2016,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         (item is FeedAlbumItem &&
             item.album.items.any((ai) => ai.id == messageId)));
     if (index == -1) {
-      if (_hasMoreMessages && retryCount < 5) {
+      if (_hasMoreMessages && retryCount < 12) {
         await _loadMoreMessages();
         return _scrollToMessage(messageId, retryCount: retryCount + 1);
       }
@@ -1883,7 +2024,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     const estimatedItemHeight = 110.0;
-    final targetOffset = index * estimatedItemHeight;
+    final maxScroll = _scrollController.position.hasContentDimensions
+        ? _scrollController.position.maxScrollExtent
+        : 0.0;
+    final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
 
     if ((_scrollController.offset - targetOffset).abs() > 2000) {
       _scrollController.jumpTo(targetOffset);
@@ -1897,7 +2041,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     await Future.delayed(const Duration(milliseconds: 100));
     
-    if (retryCount < 10) {
+    if (retryCount < 15) {
       return _scrollToMessage(messageId, retryCount: retryCount + 1);
     }
   }
@@ -2294,15 +2438,38 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final safeBottom = MediaQuery.paddingOf(context).bottom;
     final effectiveBottom = bottomInset > 0 ? bottomInset : safeBottom;
 
+    final bool hasUnreadDivider = _showUnreadDivider && _firstUnreadFeedIndex != -1;
+    final int totalCount = _feedItems.length + (hasUnreadDivider ? 1 : 0);
+
     final messageList = ChatMessagesListView(
       isLoading: _isLoading,
       isLoadingMore: _isLoadingMore,
-      itemCount: _feedItems.length,
+      itemCount: totalCount,
       scrollController: _scrollController,
       topPadding: topPadding,
       bottomPadding: _inputHeight + effectiveBottom + 8,
       typingIndicator: typingWidget,
-      itemBuilder: (context, index) => _buildFeedItem(index),
+      itemBuilder: (context, index) {
+        if (hasUnreadDivider) {
+          final dividerPosition = _firstUnreadFeedIndex + 1;
+          if (index == dividerPosition) {
+            return UnreadSeparator(
+              key: _unreadSeparatorKey,
+              count: _dividerUnreadCount,
+              onTap: () {},
+            );
+          }
+          if (index < dividerPosition) {
+            return _buildFeedItem(index);
+          }
+          final adjustedIndex = index - 1;
+          if (adjustedIndex >= 0 && adjustedIndex < _feedItems.length) {
+            return _buildFeedItem(adjustedIndex);
+          }
+          return const SizedBox.shrink();
+        }
+        return _buildFeedItem(index);
+      },
     );
 
     return Stack(
@@ -2329,7 +2496,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             valueListenable: _showScrollDownFabNotifier,
             builder: (context, showFab, _) => ScrollDownFab(
               visible: showFab,
-              unreadCount: 0,
+              unreadCount: _unreadCount,
               onPressed: () {
                 if (_jumpHistory.isNotEmpty) {
                   final lastId = _jumpHistory.removeLast();
@@ -2467,6 +2634,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
     final bool isMe = message.senderId == _currentUserId;
 
+    // Ensure all album item IDs map to this key so reply jumps locate the album
+    for (final ai in album.items) {
+      _messageKeys[ai.id] = key;
+    }
+
+    final bool isAlbumTargeted = _highlightMessageId == message.id ||
+        album.items.any((ai) => ai.id == _highlightMessageId);
+
     Widget albumWidget = MediaAlbumWidget(
       key: key,
       album: album,
@@ -2475,6 +2650,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       senderName: isMe ? null : message.senderName,
       formatTime: _formatTime,
       onFileTap: (url, name, type) => _openFile(url, name, type),
+      isHighlighted: isAlbumTargeted,
+      highlightItemId: _highlightMessageId,
     );
 
     albumWidget = Align(
@@ -2517,19 +2694,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final prevItem =
         index < _feedItems.length - 1 ? _feedItems[index + 1] : null;
-    final currentDt =
-        DateTimeUtils.parseUtcDateTime(message.createdAt) ?? DateTime.now();
-    final prevDt = prevItem != null
-        ? (DateTimeUtils.parseUtcDateTime(prevItem.createdAt) ?? DateTime.now())
-        : null;
-    final currentDate = DateTimeUtils.startOfDay(currentDt);
-    final prevDate = prevDt != null ? DateTimeUtils.startOfDay(prevDt) : null;
+    final (currentDt, currentDate) = _resolveDates(message.createdAt);
+    final prevDate = prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      items.add(DateSeparator(
-          dateLabel: DateTimeUtils.formatDateSeparator(currentDt,
-              context: context)));
+      items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
     }
     items.add(albumWidget);
 
@@ -2596,19 +2766,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final prevItem =
         index < _feedItems.length - 1 ? _feedItems[index + 1] : null;
-    final currentDt =
-        DateTimeUtils.parseUtcDateTime(message.createdAt) ?? DateTime.now();
-    final prevDt = prevItem != null
-        ? (DateTimeUtils.parseUtcDateTime(prevItem.createdAt) ?? DateTime.now())
-        : null;
-    final currentDate = DateTimeUtils.startOfDay(currentDt);
-    final prevDate = prevDt != null ? DateTimeUtils.startOfDay(prevDt) : null;
+    final (currentDt, currentDate) = _resolveDates(message.createdAt);
+    final prevDate = prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      items.add(DateSeparator(
-          dateLabel: DateTimeUtils.formatDateSeparator(currentDt,
-              context: context)));
+      items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
     }
     items.add(messageWidget);
 
@@ -3343,6 +3506,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
 
       if (mounted) {
+        setState(() {
+          _unreadCount = (_unreadCount - markedCount).clamp(0, _unreadCount);
+        });
         final provider = context.read<UnreadCountProvider>();
         provider.decrement(widget.chatId, markedCount);
       }

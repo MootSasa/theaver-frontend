@@ -621,7 +621,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
 
     final index = _messages.indexWhere((m) => m.id == messageId);
     if (index == -1) {
-      if (_hasMoreMessages && retryCount < 5) {
+      if (_hasMoreMessages && retryCount < 12) {
         await _loadMoreMessages();
         return _scrollToMessage(messageId, retryCount: retryCount + 1);
       }
@@ -629,7 +629,10 @@ class _ChannelScreenState extends State<ChannelScreen> {
     }
 
     const estimatedItemHeight = 120.0;
-    final targetOffset = index * estimatedItemHeight;
+    final maxScroll = _scrollController.position.hasContentDimensions
+        ? _scrollController.position.maxScrollExtent
+        : 0.0;
+    final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
 
     if ((_scrollController.offset - targetOffset).abs() > 2000) {
       _scrollController.jumpTo(targetOffset);
@@ -643,7 +646,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
 
     await Future.delayed(const Duration(milliseconds: 100));
     
-    if (retryCount < 10) {
+    if (retryCount < 15) {
       return _scrollToMessage(messageId, retryCount: retryCount + 1);
     }
   }

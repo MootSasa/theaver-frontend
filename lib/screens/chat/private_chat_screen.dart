@@ -99,23 +99,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   String _chatType = 'private'; // 'private', 'saved'
   bool _isOtherUserOnline = false;
   DateTime? _otherUserLastSeen;
-  bool _isSearchMode = false;
   bool _showEmojiPanel = false;
   bool _isKeyboardRising = false;
   bool _isKeyboardFalling = false;
   double _keyboardHeight = 280.0; // Better default height for most devices
   double _lastBottomInset = 0;
   Timer? _transitionTimer;
-  int _searchCurrentIndex = 0;
-  int _searchTotalCount = 0;
-  String _searchQuery = '';
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
   final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
   double _accumulatedScrollUp = 0;
-  List<int> _searchResultIndices = []; // indices of messages matching search
   final List<String> _jumpHistory = [];
 
   // Unread messages tracking
@@ -151,6 +146,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
   List<FeedItem> _feedItems = [];
   int _firstUnreadFeedIndex = -1;
+  final GlobalKey _unreadSeparatorKey = GlobalKey();
   double _newestMessageHeight = 150.0;
 
   void _updateFeedItems() {
@@ -929,7 +925,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     
     // If message not in list, try to load more
     if (index == -1) {
-      if (_hasMoreMessages && retryCount < 5) {
+      if (_hasMoreMessages && retryCount < 12) {
         await _loadMoreMessages();
         // Recurse to try finding it again
         return _scrollToMessage(messageId, retryCount: retryCount + 1);
@@ -941,7 +937,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     // In a reversed ListView, higher index means OLDER message = HIGHER scroll offset.
     // We'll jump close to the target then let it refine.
     const estimatedItemHeight = 110.0;
-    final targetOffset = index * estimatedItemHeight;
+    final maxScroll = _scrollController.position.hasContentDimensions
+        ? _scrollController.position.maxScrollExtent
+        : 0.0;
+    final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
 
     // Use jump if far, animate if close
     if ((_scrollController.offset - targetOffset).abs() > 2000) {
@@ -958,7 +957,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     await Future.delayed(const Duration(milliseconds: 100));
     
     // Retry to refine position if message is now built
-    if (retryCount < 10) {
+    if (retryCount < 15) {
       return _scrollToMessage(messageId, retryCount: retryCount + 1);
     }
   }
@@ -1079,6 +1078,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
         _newestMessageHeight = renderBox.size.height;
       }
+      if (_unreadCount > 0) {
+        _onMessageVisible(firstMsgId);
+      }
     }
     final double threshold = _newestMessageHeight;
     
@@ -1177,9 +1179,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       _scrollToFirstUnread();
     }
 
-    // Mark ALL unread messages as read after scrolling
-    // (use markMessagesAsRead which marks all, not just up to first unread)
-    if (_unreadCount > 0) {
+    // If user opened chat without an unread divider anchor, mark messages as read
+    if (_firstUnreadMessageId == null && _unreadCount > 0) {
       _markAllMessagesAsRead();
     }
   }
@@ -1498,35 +1499,97 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     );
   }
 
-  /// Scroll to the first unread message
-  void _scrollToFirstUnread() {
+  /// Scroll to the first unread message with multi-batch prefetch and GlobalKey alignment
+  Future<void> _scrollToFirstUnread() async {
     if (_firstUnreadMessageId == null || _hasScrolledToUnread) return;
+    _hasScrolledToUnread = true;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !_scrollController.hasClients) return;
 
-      final index = _messages.indexWhere((m) => m.id == _firstUnreadMessageId);
-      if (index == -1) {
-        _scrollToBottom();
+      // 1. If unread separator is already in view, align directly
+      if (_unreadSeparatorKey.currentContext != null) {
+        await Scrollable.ensureVisible(
+          _unreadSeparatorKey.currentContext!,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+          alignment: 0.15,
+        );
         return;
       }
 
-      // In reversed list, we need to calculate the offset
-      // Each message is approximately 60-100 pixels, we'll estimate
-      // Scroll to show the unread message with some context above
-      const estimatedItemHeight = 80.0;
+      // 2. Find target index in _feedItems
+      int targetFeedIndex = _firstUnreadFeedIndex;
+      if (targetFeedIndex == -1 && _firstUnreadMessageId != null) {
+        targetFeedIndex = _feedItems.indexWhere((item) =>
+            item.id == _firstUnreadMessageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      }
+
+      // If message is beyond current loaded page, prefetch older messages (up to 4 batches)
+      int retries = 0;
+      while (targetFeedIndex == -1 && _hasMoreMessages && retries < 4 && mounted) {
+        await _loadMoreMessages();
+        retries++;
+        targetFeedIndex = _feedItems.indexWhere((item) =>
+            item.id == _firstUnreadMessageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      }
+
+      if (!mounted || !_scrollController.hasClients) return;
+
+      if (targetFeedIndex == -1) {
+        // Unread messages are very far back; jump to oldest loaded message to bring user close
+        if (_scrollController.position.hasContentDimensions) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+        return;
+      }
+
+      // 3. Approximate jump to divider position (_firstUnreadFeedIndex + 1)
+      final dividerItemIndex = targetFeedIndex + 1;
+      const estimatedItemHeight = 90.0;
+      final maxScroll = _scrollController.position.hasContentDimensions
+          ? _scrollController.position.maxScrollExtent
+          : 0.0;
       final targetOffset =
-          (index - 2).clamp(0, _messages.length - 1) * estimatedItemHeight;
+          (dividerItemIndex * estimatedItemHeight).clamp(0.0, maxScroll);
 
-      _scrollController.animateTo(
-        targetOffset,
-        duration: const Duration(milliseconds: 500),
-        curve: Curves.easeOut,
-      );
+      if ((_scrollController.offset - targetOffset).abs() > 1500) {
+        _scrollController.jumpTo(targetOffset);
+      } else {
+        await _scrollController.animateTo(
+          targetOffset,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
 
-      setState(() {
-        _hasScrolledToUnread = true;
-      });
+      // Allow a brief frame for ListView.builder to instantiate the elements around targetOffset
+      await Future.delayed(const Duration(milliseconds: 60));
+      if (!mounted) return;
+
+      // 4. Precision alignment: ensureVisible on unread separator or first unread bubble
+      if (_unreadSeparatorKey.currentContext != null) {
+        await Scrollable.ensureVisible(
+          _unreadSeparatorKey.currentContext!,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          alignment: 0.15,
+        );
+      } else {
+        final key = _messageKeys[_firstUnreadMessageId];
+        if (key?.currentContext != null) {
+          await Scrollable.ensureVisible(
+            key!.currentContext!,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+            alignment: 0.15,
+          );
+        }
+      }
     });
   }
 
@@ -2202,7 +2265,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     }
 
     // The panel height should exactly match our best knowledge of the keyboard height
-    final double targetPanelHeight = _keyboardHeight;
+    final double targetPanelHeight = _keyboardHeight.clamp(0.0, maxPossibleHeight);
 
     // Keyboard-to-Emoji or Emoji-to-Keyboard stabilization:
     if (_isKeyboardFalling && bottomInset == 0) {
@@ -2349,6 +2412,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
                         if (index == dividerPosition) {
                           return UnreadSeparator(
+                            key: _unreadSeparatorKey,
                             count: _dividerUnreadCount,
                             onTap: () {},
                           );
@@ -2530,38 +2594,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     );
   }
 
-  Widget _buildUnreadDivider() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              height: 1,
-              color: Colors.grey[300],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              'Непрочитанные сообщения ($_dividerUnreadCount)',
-              style: TextStyle(
-                color: Colors.grey[600],
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Container(
-              height: 1,
-              color: Colors.grey[300],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   Widget _buildFeedItem(int index) {
     if (index < 0 || index >= _feedItems.length) {
@@ -2581,6 +2614,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
     final bool isMe = message.senderId == _currentUserId;
 
+    // Ensure all album item IDs map to this key so reply jumps locate the album
+    for (final ai in album.items) {
+      _messageKeys[ai.id] = key;
+    }
+
+    final bool isAlbumTargeted = _highlightMessageId == message.id ||
+        album.items.any((ai) => ai.id == _highlightMessageId);
+
     Widget albumWidget = MediaAlbumWidget(
       key: key,
       album: album,
@@ -2589,6 +2630,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       chatType: _chatType,
       formatTime: _formatTime,
       onFileTap: (url, name, type) => _openFile(url, name, type),
+      isHighlighted: isAlbumTargeted,
+      highlightItemId: _highlightMessageId,
     );
 
     albumWidget = Align(
