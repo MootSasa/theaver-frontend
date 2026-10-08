@@ -43,6 +43,11 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
     _voiceService.addListener(_onServiceChange);
     _videoService.addListener(_onServiceChange);
     _attachVideoController();
+
+    final hasActive = _voiceService.hasActiveAudio || _videoService.hasActiveVideo;
+    if (hasActive) {
+      _slideController.value = 1.0;
+    }
   }
 
   @override
@@ -163,6 +168,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
       sizeFactor: _slideAnimation,
       axisAlignment: -1.0,
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -239,6 +245,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
 
                     // 3. Playback Speed Selector (1X / 1.5X / 2X)
                     GestureDetector(
+                      behavior: HitTestBehavior.opaque,
                       onTap: onSpeed,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

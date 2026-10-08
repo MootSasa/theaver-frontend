@@ -2104,43 +2104,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           },
           appBar: Builder(
             builder: (context) {
-              final topBarHeight = MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight;
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned(
-                    top: topBarHeight,
-                    left: 0,
-                    right: 0,
-                    child: MediaNotePlayerHeader(
-                      onScrollToActive: () {
-                        final activeId = VoicePlaybackService().activeMessageId ??
-                            VideoNotePlaybackService().activeMessageId;
-                        if (activeId != null) {
-                          _scrollToMessage(activeId);
-                        }
-                      },
-                    ),
-                  ),
-                  FloatingGlassAppBar(
-                    name: displayName,
-                    avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
-                    isOnline: _isOtherUserOnline,
-                    lastSeen: _otherUserLastSeen,
-                    statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
-                    isChannel: false,
-                    isMuted: _isMuted,
-                    onBack: () => Navigator.pop(context),
-                    onTitleTap: _viewUserProfile,
-                    onViewProfile: _viewUserProfile,
-                    onVoiceCall: _startVoiceCall,
-                    onVideoCall: _startVideoCall,
-                    onSearch: _searchMessages,
-                    onToggleMute: _toggleMuteNotifications,
-                    onClearHistory: _showClearHistoryDialog,
-                    onReport: _showBlockUserDialog,
-                  ),
-                ],
+              return FloatingGlassAppBar(
+                name: displayName,
+                avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+                isOnline: _isOtherUserOnline,
+                lastSeen: _otherUserLastSeen,
+                statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
+                isChannel: false,
+                isMuted: _isMuted,
+                onBack: () => Navigator.pop(context),
+                onTitleTap: _viewUserProfile,
+                onViewProfile: _viewUserProfile,
+                onVoiceCall: _startVoiceCall,
+                onVideoCall: _startVideoCall,
+                onSearch: _searchMessages,
+                onToggleMute: _toggleMuteNotifications,
+                onClearHistory: _showClearHistoryDialog,
+                onReport: _showBlockUserDialog,
               );
             },
           ),
@@ -2374,6 +2354,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
                 ChatBottomScrollEdge(
                   height: math.max(safeBottom + 52.0, 52.0),
+                ),
+                // Плеер видео/аудио (помещаем в корневой Stack, чтобы hitTest работал)
+                Positioned(
+                  top: MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight,
+                  left: 0,
+                  right: 0,
+                  child: MediaNotePlayerHeader(
+                    onScrollToActive: () {
+                      final activeId = VoicePlaybackService().activeMessageId ??
+                          VideoNotePlaybackService().activeMessageId;
+                      if (activeId != null) {
+                        _scrollToMessage(activeId);
+                      }
+                    },
+                  ),
                 ),
                 // Кнопка прокрутки вниз (теперь здесь, в главном Stack чата)
                 Positioned(
