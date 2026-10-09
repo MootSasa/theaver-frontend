@@ -7,6 +7,8 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import '../../services/chat_service.dart';
+import '../../services/draft_service.dart';
+import '../../services/chat_actions_helper.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/file_service.dart';
@@ -256,6 +258,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     WidgetsBinding.instance.addObserver(this);
     _loadData();
     _initWebSocket();
+
+    // Restore draft if exists
+    final draft = DraftService().getDraft(widget.chatId);
+    if (draft != null && draft.isNotEmpty) {
+      _messageController.text = draft.text;
+      if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
+        _isQuote = draft.isQuote;
+        _quoteText = draft.quoteText;
+      }
+    }
 
     // Connect continuous media playback with coordinator
     MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
@@ -773,6 +785,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   bool _amITyping = false;
 
   void _onInputTextChanged(String text) {
+    if (!_isEditing) {
+      DraftService().saveDraft(
+        widget.chatId,
+        text: text,
+        replyToMessageId: _replyToMessage?.id,
+        quoteText: _quoteText,
+        isQuote: _isQuote,
+      );
+    }
+
     final bool hasText = text.trim().isNotEmpty;
     if (hasText) {
       if (!_amITyping) {
@@ -1250,6 +1272,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final replyQuoteLength = _quoteLength;
 
     _stopMyTyping();
+    DraftService().deleteDraft(widget.chatId);
     _messageController.clear();
     setState(() {
       _isSending = true;
@@ -2271,7 +2294,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
-    // Optional: focus field
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _messageController.text,
+      replyToMessageId: message.id,
+      isQuote: false,
+    );
   }
 
   void _startQuote(Message message, String selectedText, int offset, int length) {
@@ -2282,6 +2310,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _quoteOffset = offset;
       _quoteLength = length;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _messageController.text,
+      replyToMessageId: message.id,
+      quoteText: selectedText,
+      isQuote: true,
+    );
     _messageController.selection = TextSelection.collapsed(
       offset: _messageController.text.length,
     );
@@ -2295,6 +2330,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _messageController.text,
+    );
   }
 
   String _formatTime(String timestamp) {
@@ -2306,9 +2345,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     WidgetsBinding.instance.removeObserver(this);
     _syncDebounceTimer?.cancel();
 
-    // Flush any pending mark-as-read before leaving
+    // Flush any pending mark-as-read and draft before leaving
     _markReadTimer?.cancel();
     _flushMarkRead();
+    if (!_isEditing) {
+      DraftService().flushDraft(widget.chatId);
+    }
 
     _showScrollDownFabNotifier.dispose();
     _uploadProgressNotifier.dispose();
@@ -2508,15 +2550,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   /* TODO: Video call */
                 },
                 onSearch: () {
-                  /* TODO: Search */
+                  ChatActionsHelper.openSearch(
+                    context: context,
+                    chatId: widget.chatId,
+                    chatName: displayName,
+                  );
                 },
                 onToggleMute: () {
-                  setState(() => _isMuted = !_isMuted);
-                  ChatService.setMuteNotifications(
-                      chatId: widget.chatId, muted: _isMuted);
+                  ChatActionsHelper.toggleMute(
+                    chatId: widget.chatId,
+                    currentMuted: _isMuted,
+                    onMuteChanged: (newMuted) => setState(() => _isMuted = newMuted),
+                  );
                 },
                 onClearHistory: () {
-                  // TODO: Clear history dialog
+                  ChatActionsHelper.showClearHistoryDialog(
+                    context: context,
+                    chatId: widget.chatId,
+                    onHistoryCleared: () {
+                      if (mounted) {
+                        setState(() {
+                          _messages.clear();
+                          _updateFeedItems();
+                        });
+                      }
+                    },
+                  );
                 },
                 onReport: () {
                   // TODO: Report dialog
@@ -3629,79 +3688,43 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _confirmDeleteMessage(Message message) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(ctx.l10n.translate('chat_delete_message_title')),
-        content: Text(ctx.l10n.translate('chat_delete_message_confirm')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(ctx.l10n.translate('cancel')),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _deleteMessage(message);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text(ctx.l10n.translate('chat_action_delete')),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _deleteMessage(Message message) async {
     final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
-
-    // Optimistically remove from UI
-    setState(() {
-      _messages.removeWhere((m) => m.id == message.id);
-      _updateFeedItems();
-    });
-
-    // Call server API
-    final result = await ChatService.deleteMessage(
+    ChatActionsHelper.confirmAndDeleteMessage(
+      context: context,
       chatId: widget.chatId,
-      messageId: message.id,
+      message: message,
+      onOptimisticDelete: () {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.id == message.id);
+            _updateFeedItems();
+          });
+        }
+      },
+      onRollback: () {
+        if (mounted) {
+          setState(() {
+            if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
+              _messages.insert(deletedIndex, message);
+            } else {
+              _messages.add(message);
+              _messages.sort((a, b) {
+                try {
+                  final ta = DateTime.parse(a.createdAt);
+                  final tb = DateTime.parse(b.createdAt);
+                  final cmp = tb.compareTo(ta);
+                  if (cmp != 0) return cmp;
+                  return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+                } catch (_) {
+                  return 0;
+                }
+              });
+            }
+            _updateFeedItems();
+          });
+        }
+      },
     );
-
-    if (result['success'] == true) {
-      // Remove from local database on success
-      try {
-        await AppDatabase().deleteMessage(message.id);
-      } catch (e) {
-        debugPrint('GroupChatScreen: error deleting from DB: $e');
-      }
-    } else {
-      // Rollback on server error
-      if (mounted) {
-        setState(() {
-          if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
-            _messages.insert(deletedIndex, message);
-          } else {
-            _messages.add(message);
-            _messages.sort((a, b) {
-              try {
-                final ta = DateTime.parse(a.createdAt);
-                final tb = DateTime.parse(b.createdAt);
-                final cmp = tb.compareTo(ta);
-                if (cmp != 0) return cmp;
-                return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-              } catch (_) {
-                return 0;
-              }
-            });
-          }
-          _updateFeedItems();
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result['message'] ?? 'Не удалось удалить сообщение')),
-        );
-      }
-    }
   }
 
   /// Called when a message becomes visible — queues message for debounced read-up-to

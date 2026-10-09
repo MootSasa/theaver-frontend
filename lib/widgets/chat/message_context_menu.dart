@@ -59,8 +59,17 @@ class _MessageContextMenuState extends State<MessageContextMenu> with SingleTick
     super.dispose();
   }
 
-  void _handleDismiss() {
-    _controller.reverse().then((_) => Navigator.pop(context));
+  bool _isDismissing = false;
+
+  void _handleDismiss([VoidCallback? onDismissed]) {
+    if (_isDismissing) return;
+    _isDismissing = true;
+    _controller.reverse().then((_) {
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      onDismissed?.call();
+    });
   }
 
   @override
@@ -135,8 +144,7 @@ class _MessageContextMenuState extends State<MessageContextMenu> with SingleTick
           return InkWell(
             onTap: () {
               HapticUtils.tap();
-              widget.onReaction(emoji);
-              _handleDismiss();
+              _handleDismiss(() => widget.onReaction(emoji));
             },
             borderRadius: BorderRadius.circular(20),
             child: Container(
@@ -236,11 +244,12 @@ class _MessageContextMenuState extends State<MessageContextMenu> with SingleTick
   }) {
     final color = isDestructive ? Colors.red : (enabled ? theme.colorScheme.onSurface : theme.disabledColor);
     return InkWell(
-      onTap: enabled ? () {
-        HapticUtils.tap();
-        onTap();
-        _handleDismiss();
-      } : null,
+      onTap: enabled
+          ? () {
+              HapticUtils.tap();
+              _handleDismiss(onTap);
+            }
+          : null,
       borderRadius: BorderRadius.circular(20),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

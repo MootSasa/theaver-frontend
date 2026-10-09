@@ -39,6 +39,9 @@ import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/message/video_message_widget.dart';
 import '../../widgets/message/voice_message_widget.dart';
+import '../../services/draft_service.dart';
+import '../../services/chat_actions_helper.dart';
+import '../../services/message_context_menu_service.dart';
 
 
 
@@ -77,6 +80,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   String? _channelAvatar;
   int _subscriberCount = 0;
   bool _isAdmin = false;
+  bool _isMuted = false;
   bool _showScrollDownFab = false;
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
@@ -106,6 +110,17 @@ class _ChannelScreenState extends State<ChannelScreen>
     _highlightMessageId = widget.highlightMessageId;
     _loadData();
     _initWebSocket();
+
+    // Restore draft if exists
+    final draft = DraftService().getDraft(widget.channelId);
+    if (draft != null && draft.isNotEmpty) {
+      _messageController.text = draft.text;
+      if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
+        _isQuote = draft.isQuote;
+        _quoteText = draft.quoteText;
+      }
+    }
+    _messageController.addListener(_onInputTextChanged);
 
     // Connect continuous media playback with coordinator
     MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.channelId;
@@ -828,6 +843,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     final replyQuoteLength = _quoteLength;
 
     _messageController.clear();
+    DraftService().deleteDraft(widget.channelId);
     setState(() {
       _isSending = true;
       _replyToMessage = null;
@@ -1045,6 +1061,16 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
   }
 
+  void _onInputTextChanged() {
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+      replyToMessageId: _replyToMessage?.id,
+      quoteText: _quoteText,
+      isQuote: _isQuote,
+    );
+  }
+
   void _startReply(Message message) {
     setState(() {
       _replyToMessage = message;
@@ -1053,6 +1079,32 @@ class _ChannelScreenState extends State<ChannelScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+      replyToMessageId: message.id,
+      isQuote: false,
+    );
+  }
+
+  void _startQuote(Message message, String selectedText, int offset, int length) {
+    setState(() {
+      _replyToMessage = message;
+      _isQuote = true;
+      _quoteText = selectedText;
+      _quoteOffset = offset;
+      _quoteLength = length;
+    });
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+      replyToMessageId: message.id,
+      quoteText: selectedText,
+      isQuote: true,
+    );
+    _messageController.selection = TextSelection.collapsed(
+      offset: _messageController.text.length,
+    );
   }
 
   void _cancelReply() {
@@ -1063,6 +1115,10 @@ class _ChannelScreenState extends State<ChannelScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+    );
   }
 
   String _formatTime(String timestamp) {
@@ -1074,6 +1130,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     WidgetsBinding.instance.removeObserver(this);
     _syncDebounceTimer?.cancel();
 
+    DraftService().flushDraft(widget.channelId);
+    _messageController.removeListener(_onInputTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
     _wsSubscription?.cancel();
@@ -1193,7 +1251,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         isOnline: false, // Channel doesn't have online status
         statusText: subscriberText,
         isChannel: true, // Calls hidden in channel
-        isMuted: false, // TODO: Get muted state
+        isMuted: _isMuted,
         onBack: () => Navigator.pop(context),
         onTitleTap: () {
           // TODO: Open channel info
@@ -1202,13 +1260,31 @@ class _ChannelScreenState extends State<ChannelScreen>
           // TODO: View channel info
         },
         onSearch: () {
-          // TODO: Search
+          ChatActionsHelper.openSearch(
+            context: context,
+            chatId: widget.channelId,
+            chatName: displayName,
+          );
         },
         onToggleMute: () {
-          // TODO: Toggle notifications
+          ChatActionsHelper.toggleMute(
+            chatId: widget.channelId,
+            currentMuted: _isMuted,
+            onMuteChanged: (newMuted) => setState(() => _isMuted = newMuted),
+          );
         },
         onClearHistory: () {
-          // TODO: Clear history
+          ChatActionsHelper.showClearHistoryDialog(
+            context: context,
+            chatId: widget.channelId,
+            onHistoryCleared: () {
+              if (mounted) {
+                setState(() {
+                  _messages.clear();
+                });
+              }
+            },
+          );
         },
         onReport: () {
           // TODO: Report
@@ -1623,10 +1699,86 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
 
     // Wrap with SwipeToReplyWrapper for swipe-to-reply gesture
-    return SwipeToReplyWrapper(
+    messageWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
       enabled: _isAdmin, // Users can only reply if they can post (simple rule for now)
       child: messageWidget,
+    );
+
+    messageWidget = GestureDetector(
+      onTap: () {
+        _showContextMenu(message, message.senderId == _currentUserId || _isAdmin, key);
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: double.infinity,
+        color: Colors.transparent,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: messageWidget,
+      ),
+    );
+
+    return messageWidget;
+  }
+
+  void _confirmDeleteMessage(Message message) {
+    final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
+    ChatActionsHelper.confirmAndDeleteMessage(
+      context: context,
+      chatId: widget.channelId,
+      message: message,
+      onOptimisticDelete: () {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.id == message.id);
+          });
+        }
+      },
+      onRollback: () {
+        if (mounted) {
+          setState(() {
+            if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
+              _messages.insert(deletedIndex, message);
+            } else {
+              _messages.add(message);
+              _messages.sort((a, b) {
+                try {
+                  final ta = DateTime.parse(a.createdAt);
+                  final tb = DateTime.parse(b.createdAt);
+                  final cmp = tb.compareTo(ta);
+                  if (cmp != 0) return cmp;
+                  return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+                } catch (_) {
+                  return 0;
+                }
+              });
+            }
+          });
+        }
+      },
+    );
+  }
+
+  void _showContextMenu(Message message, bool isMe, GlobalKey key) {
+    if (message.messageType == 'text' && _isSingleEmoji(message.content)) {
+      if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
+        return;
+      }
+    }
+
+    final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
+    final bool isVoiceNote = message.messageType == 'voice';
+
+    MessageContextMenuService().show(
+      context: context,
+      message: message,
+      messageKey: key,
+      isMe: isMe,
+      onReply: () => _startReply(message),
+      onQuote: (!isVideoNote && !isVoiceNote) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
+      onPin: () {},
+      onDelete: (msg) => _confirmDeleteMessage(msg),
+      onReaction: (msgId, emoji) {},
     );
   }
 

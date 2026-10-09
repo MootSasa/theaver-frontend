@@ -12,6 +12,7 @@ import 'screens/auth/splash_screen.dart';
 import 'services/settings_service.dart';
 import 'services/account_manager.dart';
 import 'services/cache_service.dart';
+import 'services/draft_service.dart';
 import 'services/liquid_glass_provider.dart';
 import 'services/unread_count_provider.dart';
 import 'services/deep_link_service.dart';
@@ -121,6 +122,7 @@ void main() async {
   await SettingsService().init();
   await AccountManager().init();
   await CacheService().init();
+  await DraftService().init();
 
   // Initialize deep link service
   await DeepLinkService().init();

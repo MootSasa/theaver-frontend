@@ -13,6 +13,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../services/chat_service.dart';
+import '../../services/draft_service.dart';
+import '../../services/chat_actions_helper.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/file_service.dart';
@@ -244,6 +246,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _initWebSocket();
     _scrollController.addListener(_onScroll);
     _inputFocusNode.addListener(_onFocusChanged);
+
+    // Restore draft if exists
+    final draft = DraftService().getDraft(widget.chatId);
+    if (draft != null && draft.isNotEmpty) {
+      _textController.text = draft.text;
+      if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
+        _isQuote = draft.isQuote;
+        _quoteText = draft.quoteText;
+      }
+    }
 
     // Connect continuous media playback (voice + video notes) with coordinator
     MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
@@ -871,6 +883,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   bool _amITyping = false;
 
   void _onInputTextChanged(String text) {
+    if (!_isEditing) {
+      DraftService().saveDraft(
+        widget.chatId,
+        text: text,
+        replyToMessageId: _replyToMessage?.id,
+        quoteText: _quoteText,
+        isQuote: _isQuote,
+      );
+    }
+
     final bool hasText = text.trim().isNotEmpty;
     if (hasText) {
       if (!_amITyping) {
@@ -1020,6 +1042,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _textController.text,
+      replyToMessageId: message.id,
+      isQuote: false,
+    );
     // Focus the input field
     _textController.selection = TextSelection.collapsed(
       offset: _textController.text.length,
@@ -1035,6 +1063,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _quoteOffset = offset;
       _quoteLength = length;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _textController.text,
+      replyToMessageId: message.id,
+      quoteText: selectedText,
+      isQuote: true,
+    );
     // Focus the input field
     _textController.selection = TextSelection.collapsed(
       offset: _textController.text.length,
@@ -1050,6 +1085,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _textController.text,
+    );
   }
 
   /// Cancel current message editing
@@ -1826,6 +1865,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final replyQuoteLength = _quoteLength;
 
     _stopMyTyping();
+    DraftService().deleteDraft(widget.chatId);
     _textController.clear();
     setState(() {
       _isSending = true;
@@ -3541,48 +3581,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Show confirmation dialog for clearing chat history
   void _showClearHistoryDialog() {
-    showDialog(
+    ChatActionsHelper.showClearHistoryDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Clear History'),
-        content: Text('Delete all messages in this chat with $_chatName?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _clearChatHistory();
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
+      chatId: widget.chatId,
+      onHistoryCleared: () {
+        if (mounted) {
+          setState(() {
+            _messages.clear();
+            _updateFeedItems();
+          });
+        }
+      },
     );
-  }
-
-  /// Clear all messages in this chat
-  Future<void> _clearChatHistory() async {
-    final result = await ChatService.clearChatHistory(chatId: widget.chatId);
-    if (mounted) {
-      if (result['success'] == true) {
-        setState(() {
-          _messages.clear();
-          _updateFeedItems();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Chat history cleared')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(result['message'] ?? 'Failed to clear history')),
-        );
-      }
-    }
   }
 
   /// Show confirmation dialog for blocking user
@@ -4042,9 +4052,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     // Stop typing indicator if active
     _stopMyTyping();
 
-    // Flush any pending mark-as-read before leaving
+    // Flush any pending mark-as-read and draft before leaving
     _markReadTimer?.cancel();
     _flushMarkRead();
+    if (!_isEditing) {
+      DraftService().flushDraft(widget.chatId);
+    }
 
     _textController.dispose();
     _scrollController.dispose();
@@ -4330,79 +4343,43 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _confirmDeleteMessage(Message message) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(ctx.l10n.translate('chat_delete_message_title')),
-        content: Text(ctx.l10n.translate('chat_delete_message_confirm')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(ctx.l10n.translate('cancel')),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _deleteMessage(message);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text(ctx.l10n.translate('chat_action_delete')),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _deleteMessage(Message message) async {
     final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
-
-    // Optimistically remove from UI
-    setState(() {
-      _messages.removeWhere((m) => m.id == message.id);
-      _updateFeedItems();
-    });
-
-    // Call server API
-    final result = await ChatService.deleteMessage(
+    ChatActionsHelper.confirmAndDeleteMessage(
+      context: context,
       chatId: widget.chatId,
-      messageId: message.id,
+      message: message,
+      onOptimisticDelete: () {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.id == message.id);
+            _updateFeedItems();
+          });
+        }
+      },
+      onRollback: () {
+        if (mounted) {
+          setState(() {
+            if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
+              _messages.insert(deletedIndex, message);
+            } else {
+              _messages.add(message);
+              _messages.sort((a, b) {
+                try {
+                  final ta = DateTime.parse(a.createdAt);
+                  final tb = DateTime.parse(b.createdAt);
+                  final cmp = tb.compareTo(ta);
+                  if (cmp != 0) return cmp;
+                  return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+                } catch (_) {
+                  return 0;
+                }
+              });
+            }
+            _updateFeedItems();
+          });
+        }
+      },
     );
-
-    if (result['success'] == true) {
-      // Remove from local database on success
-      try {
-        await AppDatabase().deleteMessage(message.id);
-      } catch (e) {
-        debugPrint('PrivateChatScreen: error deleting from DB: $e');
-      }
-    } else {
-      // Rollback on server error
-      if (mounted) {
-        setState(() {
-          if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
-            _messages.insert(deletedIndex, message);
-          } else {
-            _messages.add(message);
-            _messages.sort((a, b) {
-              try {
-                final ta = DateTime.parse(a.createdAt);
-                final tb = DateTime.parse(b.createdAt);
-                final cmp = tb.compareTo(ta);
-                if (cmp != 0) return cmp;
-                return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-              } catch (_) {
-                return 0;
-              }
-            });
-          }
-          _updateFeedItems();
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result['message'] ?? 'Не удалось удалить сообщение')),
-        );
-      }
-    }
   }
 
   /// Helper to check if string is exactly one emoji

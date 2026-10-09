@@ -1,4 +1,5 @@
 import '../../utils/image_utils.dart';
+import '../../utils/emoji_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -20,6 +21,7 @@ import '../../screens/chat/system_notifications_screen.dart';
 import '../../services/search_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/draft_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
@@ -147,6 +149,7 @@ class _MainScreenState extends State<MainScreen>
     );
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
+    DraftService().draftsNotifier.addListener(_onDraftsChanged);
 
     // Инициализация: сначала Drift, потом загрузка чатов и WebSocket
     _initApp();
@@ -677,6 +680,7 @@ class _MainScreenState extends State<MainScreen>
           _isLoadingChats = false;
           if (result['success'] == true) {
             _chats = result['chats'] as List<Chat>;
+            DraftService().populateFromChats(_chats);
             _sortChats();
 
             // Сохранить в Drift для offline-доступа
@@ -829,6 +833,7 @@ class _MainScreenState extends State<MainScreen>
     _morphSafetyTimer?.cancel();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
+    DraftService().draftsNotifier.removeListener(_onDraftsChanged);
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
@@ -852,6 +857,10 @@ class _MainScreenState extends State<MainScreen>
       context.read<UnreadCountProvider>().removeListener(_onUnreadCountProviderChanged);
     } catch (_) {}
     super.dispose();
+  }
+
+  void _onDraftsChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onSearchChanged() {
@@ -2080,6 +2089,44 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Widget? _buildChatSubtitle(Chat chat, bool hasUnread) {
+    final draft = DraftService().getDraft(chat.id) ?? chat.draft;
+    if (draft != null && draft.isNotEmpty) {
+      final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft_prefix') ?? 'Черновик';
+      final draftText = draft.text.trim().isNotEmpty ? draft.text : '...';
+      return RichText(
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: '$draftPrefix: ',
+              style: const TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            ...EmojiUtils.buildEmojiTextSpan(
+              draftText,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+                fontSize: 14,
+              ),
+            ).children ??
+                [
+                  TextSpan(
+                    text: draftText,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+          ],
+        ),
+      );
+    }
+
     if (chat.isLastMessageRoundVideo) {
       final primary = Theme.of(context).colorScheme.primary;
       return Row(

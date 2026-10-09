@@ -29,6 +29,7 @@ enum WebSocketEventType {
   messageReactionUpdated,
   userAvatarUpdated,
   userAppearanceUpdated,
+  draftUpdated,
 }
 
 /// WebSocket event data
@@ -88,6 +89,8 @@ class WebSocketEvent {
         return WebSocketEventType.userAvatarUpdated;
       case 'user_appearance_updated':
         return WebSocketEventType.userAppearanceUpdated;
+      case 'draft_updated':
+        return WebSocketEventType.draftUpdated;
       default:
         return WebSocketEventType.connected;
     }
