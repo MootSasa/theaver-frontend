@@ -565,10 +565,14 @@ class _MainScreenState extends State<MainScreen>
       if (chatIndex != -1) {
         final chat = _chats[chatIndex];
 
-        // If private chat has no messages and no draft and is unpinned, purge it
+        // A chat has messages if either the local DB returned a message, or the chat model itself already had a last message
+        final hasMessages = lastMsg != null || (chat.lastMessage != null && chat.lastMessage!.isNotEmpty);
+        final hasDraft = draft != null && draft.text.trim().isNotEmpty;
+
+        // Only purge empty private chats if there are genuinely NO messages anywhere, NO draft, and it's not pinned
         if (chat.chatType == 'private' &&
-            lastMsg == null &&
-            (draft == null || draft.text.trim().isEmpty) &&
+            !hasMessages &&
+            !hasDraft &&
             !chat.isPinned) {
           setState(() {
             _chats.removeAt(chatIndex);
@@ -578,19 +582,21 @@ class _MainScreenState extends State<MainScreen>
           return;
         }
 
-        final isRound = lastMsg?.isRound ?? (lastMsg?.messageType == 'round');
+        final isRound = lastMsg != null
+            ? (lastMsg.isRound || lastMsg.messageType == 'round')
+            : chat.lastMessageIsRound;
         setState(() {
           _chats[chatIndex] = Chat(
             id: chat.id,
             chatType: chat.chatType,
             name: chat.name,
             avatarUrl: chat.avatarUrl,
-            lastMessage: lastMsg?.content,
-            lastMessageTime: lastMsg?.createdAt,
-            lastMessageType: lastMsg?.messageType,
+            lastMessage: lastMsg?.content ?? chat.lastMessage,
+            lastMessageTime: lastMsg?.createdAt ?? chat.lastMessageTime,
+            lastMessageType: lastMsg?.messageType ?? chat.lastMessageType,
             lastMessageIsRound: isRound,
-            lastMessageFileUrl: lastMsg?.fileUrl,
-            lastMessageGroupedId: lastMsg?.groupedId,
+            lastMessageFileUrl: lastMsg?.fileUrl ?? chat.lastMessageFileUrl,
+            lastMessageGroupedId: lastMsg?.groupedId ?? chat.lastMessageGroupedId,
             updatedAt: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
                 ? lastMsg.createdAt
                 : chat.updatedAt,
