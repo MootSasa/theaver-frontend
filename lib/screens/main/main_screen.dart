@@ -309,6 +309,14 @@ class _MainScreenState extends State<MainScreen>
 
     if (chatData != null) {
       final newChat = Chat.fromJson(chatData);
+      // Ignore empty private chats without messages or drafts that are not pinned
+      if (newChat.chatType == 'private' &&
+          (newChat.lastMessage == null || newChat.lastMessage!.isEmpty) &&
+          (newChat.draft == null || newChat.draft!.text.isEmpty) &&
+          !newChat.isPinned) {
+        return;
+      }
+
       if (mounted) {
         setState(() {
           // Check if chat already exists
@@ -319,10 +327,8 @@ class _MainScreenState extends State<MainScreen>
           } else {
             // Update existing chat
             _chats[existingIndex] = newChat;
-            // Move to top
-            _chats.removeAt(existingIndex);
-            _chats.insert(0, newChat);
           }
+          _sortChats();
         });
         // Save to local storage
         _localStorage.saveChats(_chats);
@@ -345,9 +351,8 @@ class _MainScreenState extends State<MainScreen>
       // here — that would cause double-counting.
 
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
-      setState(() {
-        // Find the chat and update it
-        if (chatIndex != -1) {
+      if (chatIndex != -1) {
+        setState(() {
           final chat = _chats[chatIndex];
 
           // Get unread count from provider (authoritative, already incremented)
@@ -362,36 +367,52 @@ class _MainScreenState extends State<MainScreen>
             newUnreadCount = isFromMe ? chat.unreadCount : chat.unreadCount + 1;
           }
 
-          final msgType = messageData?['message_type'] as String?;
-          final isRound = messageData?['is_round'] == true || msgType == 'round';
+          final msgType = messageData?['message_type'] as String? ?? 'text';
+          final isRound =
+              messageData?['is_round'] == true || msgType == 'round';
           final fileUrl = messageData?['file_url'] as String?;
-          final updatedChat = chat.copyWith(
-            lastMessage: messageData?['content'] as String? ?? chat.lastMessage,
+          final groupedId = messageData?['grouped_id'] as String?;
+          final content = messageData?['content'] as String? ?? '';
+
+          final updatedChat = Chat(
+            id: chat.id,
+            chatType: chat.chatType,
+            name: chat.name,
+            avatarUrl: chat.avatarUrl,
+            lastMessage: content,
             lastMessageTime:
                 messageData?['created_at'] as String? ?? chat.lastMessageTime,
-            lastMessageType: msgType ?? chat.lastMessageType,
-            lastMessageIsRound: isRound || chat.lastMessageIsRound,
-            lastMessageFileUrl: fileUrl ?? chat.lastMessageFileUrl,
+            lastMessageType: msgType,
+            lastMessageIsRound: isRound,
+            lastMessageFileUrl: fileUrl,
+            lastMessageGroupedId: groupedId,
             updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
             unreadCount: newUnreadCount,
+            isOnline: chat.isOnline,
+            lastSeen: chat.lastSeen,
+            isPinned: chat.isPinned,
+            otherUserId: chat.otherUserId,
+            draft: chat.draft,
           );
+
           // Update the chat in place
           _chats[chatIndex] = updatedChat;
           // Re-sort: pinned/saved chats stay in their fixed positions,
           // unpinned chats sort by updated_at
           _sortChats();
-        }
-      });
-      // Save to local storage
-      _localStorage.saveChats(_chats);
+        });
+        // Save to local storage
+        _localStorage.saveChats(_chats);
 
-      // Сохранить в Drift
-      final db = AppDatabase();
-      try {
-        if (chatIndex != -1) {
+        // Сохранить в Drift
+        final db = AppDatabase();
+        try {
           db.saveChat(_chatToCompanion(_chats[chatIndex]));
-        }
-      } catch (_) {}
+        } catch (_) {}
+      } else {
+        // Chat was not in the list yet, reload chats seamlessly
+        _loadChats(silent: true);
+      }
     }
   }
 
@@ -538,27 +559,52 @@ class _MainScreenState extends State<MainScreen>
     try {
       final db = AppDatabase();
       final lastMsg = await db.getLastMessageForChat(chatId);
+      final draft = DraftService().getDraft(chatId);
       if (!mounted) return;
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
       if (chatIndex != -1) {
+        final chat = _chats[chatIndex];
+
+        // If private chat has no messages and no draft and is unpinned, purge it
+        if (chat.chatType == 'private' &&
+            lastMsg == null &&
+            (draft == null || draft.text.trim().isEmpty) &&
+            !chat.isPinned) {
+          setState(() {
+            _chats.removeAt(chatIndex);
+          });
+          await db.deleteChat(chatId);
+          _localStorage.saveChats(_chats);
+          return;
+        }
+
+        final isRound = lastMsg?.isRound ?? (lastMsg?.messageType == 'round');
         setState(() {
-          final chat = _chats[chatIndex];
-          _chats[chatIndex] = chat.copyWith(
-            lastMessage: (lastMsg != null && lastMsg.content.isNotEmpty)
-                ? lastMsg.content
-                : chat.lastMessage,
-            lastMessageTime: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
-                ? lastMsg.createdAt
-                : chat.lastMessageTime,
-            lastMessageType: lastMsg?.messageType ?? chat.lastMessageType,
-            lastMessageIsRound: lastMsg?.isRound ?? chat.lastMessageIsRound,
-            lastMessageFileUrl: lastMsg?.fileUrl ?? chat.lastMessageFileUrl,
+          _chats[chatIndex] = Chat(
+            id: chat.id,
+            chatType: chat.chatType,
+            name: chat.name,
+            avatarUrl: chat.avatarUrl,
+            lastMessage: lastMsg?.content,
+            lastMessageTime: lastMsg?.createdAt,
+            lastMessageType: lastMsg?.messageType,
+            lastMessageIsRound: isRound,
+            lastMessageFileUrl: lastMsg?.fileUrl,
+            lastMessageGroupedId: lastMsg?.groupedId,
             updatedAt: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
                 ? lastMsg.createdAt
                 : chat.updatedAt,
+            unreadCount: chat.unreadCount,
+            isOnline: chat.isOnline,
+            lastSeen: chat.lastSeen,
+            isPinned: chat.isPinned,
+            otherUserId: chat.otherUserId,
+            draft: draft,
           );
+          _sortChats();
         });
         _localStorage.saveChats(_chats);
+        await db.saveChat(_chatToCompanion(_chats[chatIndex]));
       }
     } catch (e) {
       debugPrint('Error refreshing last message for chat $chatId: $e');
@@ -799,6 +845,11 @@ class _MainScreenState extends State<MainScreen>
       avatarUrl: model.avatarUrl,
       lastMessage: model.lastMessage,
       lastMessageTime: model.lastMessageTime,
+      lastMessageType: model.lastMessageType,
+      lastMessageIsRound: model.lastMessageIsRound,
+      lastMessageFileUrl: model.lastMessageFileUrl,
+      lastMessageGroupedId: model.lastMessageGroupedId,
+      otherUserId: model.otherUserId,
       updatedAt: model.updatedAt,
       unreadCount: model.unreadCount,
       isOnline: model.isOnline,
@@ -816,6 +867,11 @@ class _MainScreenState extends State<MainScreen>
       avatarUrl: Value(chat.avatarUrl),
       lastMessage: Value(chat.lastMessage),
       lastMessageTime: Value(chat.lastMessageTime),
+      lastMessageType: Value(chat.lastMessageType),
+      lastMessageIsRound: Value(chat.lastMessageIsRound),
+      lastMessageFileUrl: Value(chat.lastMessageFileUrl),
+      lastMessageGroupedId: Value(chat.lastMessageGroupedId),
+      otherUserId: Value(chat.otherUserId),
       updatedAt: Value(chat.updatedAt),
       unreadCount: Value(chat.unreadCount),
       isOnline: Value(chat.isOnline),
@@ -3155,7 +3211,9 @@ class _MainScreenState extends State<MainScreen>
                   otherUserId: result.id,
                 ),
               ),
-            ).then((_) {});
+            ).then((_) {
+              if (mounted) _refreshChatLastMessage(chat.id);
+            });
           } else if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -3167,7 +3225,6 @@ class _MainScreenState extends State<MainScreen>
         break;
       case 'group':
         if (result is SearchResultGroup) {
-          
           Navigator.push(
             context,
             SwipeBackPageRoute(
@@ -3177,12 +3234,13 @@ class _MainScreenState extends State<MainScreen>
                 groupAvatar: null,
               ),
             ),
-          ).then((_) {});
+          ).then((_) {
+            if (mounted) _refreshChatLastMessage(result.id);
+          });
         }
         break;
       case 'channel':
         if (result is SearchResultChannel) {
-          
           Navigator.push(
             context,
             SwipeBackPageRoute(
@@ -3192,7 +3250,9 @@ class _MainScreenState extends State<MainScreen>
                 channelAvatar: null,
               ),
             ),
-          ).then((_) {});
+          ).then((_) {
+            if (mounted) _refreshChatLastMessage(result.id);
+          });
         }
         break;
       case 'message':

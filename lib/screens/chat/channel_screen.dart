@@ -10,6 +10,7 @@ import '../../services/websocket_service.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
+import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import 'package:drift/drift.dart' show Value;
@@ -99,9 +100,9 @@ class _ChannelScreenState extends State<ChannelScreen>
   int _quoteOffset = 0;
   int _quoteLength = 0;
 
-  // WebSocket
+  // WebSocket & Realtime
   final WebSocketService _wsService = WebSocketService();
-  StreamSubscription<WebSocketEvent>? _wsSubscription;
+  ChatSubscription? _chatSubscription;
 
   @override
   void initState() {
@@ -203,9 +204,13 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _initWebSocket() {
-    // Subscribe to WebSocket events for this channel
-    // Note: We only use eventStream.listen, not subscribe() to avoid duplicate handling
-    _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
+    _chatSubscription = ChatRealtimeManager().bindChat(
+      chatId: widget.channelId,
+      onNewMessage: _onNewMessage,
+      onMessageEdited: _onMessageEdited,
+      onMessageDeleted: _onMessageDeleted,
+      onReconnect: _triggerSilentSync,
+    );
   }
 
   @override
@@ -295,29 +300,6 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
-  void _handleWebSocketEvent(WebSocketEvent event) {
-    if (event.type == WebSocketEventType.connected) {
-      _triggerSilentSync();
-      return;
-    }
-
-    if (event.type == WebSocketEventType.newMessage) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.channelId) {
-        _onNewMessage(event);
-      }
-    } else if (event.type == WebSocketEventType.messageEdited) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.channelId) {
-        _onMessageEdited(event);
-      }
-    } else if (event.type == WebSocketEventType.messageDeleted) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.channelId) {
-        _onMessageDeleted(event);
-      }
-    }
-  }
 
   void _onMessageDeleted(WebSocketEvent event) {
     final messageId = event.data['message_id']?.toString();
@@ -1134,7 +1116,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _messageController.removeListener(_onInputTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
-    _wsSubscription?.cancel();
+    _chatSubscription?.cancel();
 
     if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.channelId) {
       MediaPlaybackCoordinator.instance.currentForegroundChatId = null;

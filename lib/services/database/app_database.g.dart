@@ -82,6 +82,40 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_pinned" IN (0, 1))'),
       defaultValue: const Constant(false));
+  static const VerificationMeta _lastMessageTypeMeta =
+      const VerificationMeta('lastMessageType');
+  @override
+  late final GeneratedColumn<String> lastMessageType = GeneratedColumn<String>(
+      'last_message_type', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastMessageIsRoundMeta =
+      const VerificationMeta('lastMessageIsRound');
+  @override
+  late final GeneratedColumn<bool> lastMessageIsRound = GeneratedColumn<bool>(
+      'last_message_is_round', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("last_message_is_round" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _lastMessageFileUrlMeta =
+      const VerificationMeta('lastMessageFileUrl');
+  @override
+  late final GeneratedColumn<String> lastMessageFileUrl =
+      GeneratedColumn<String>('last_message_file_url', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastMessageGroupedIdMeta =
+      const VerificationMeta('lastMessageGroupedId');
+  @override
+  late final GeneratedColumn<String> lastMessageGroupedId =
+      GeneratedColumn<String>('last_message_grouped_id', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _otherUserIdMeta =
+      const VerificationMeta('otherUserId');
+  @override
+  late final GeneratedColumn<String> otherUserId = GeneratedColumn<String>(
+      'other_user_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -94,7 +128,12 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         unreadCount,
         isOnline,
         lastSeen,
-        isPinned
+        isPinned,
+        lastMessageType,
+        lastMessageIsRound,
+        lastMessageFileUrl,
+        lastMessageGroupedId,
+        otherUserId
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -164,6 +203,36 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
       context.handle(_isPinnedMeta,
           isPinned.isAcceptableOrUnknown(data['is_pinned']!, _isPinnedMeta));
     }
+    if (data.containsKey('last_message_type')) {
+      context.handle(
+          _lastMessageTypeMeta,
+          lastMessageType.isAcceptableOrUnknown(
+              data['last_message_type']!, _lastMessageTypeMeta));
+    }
+    if (data.containsKey('last_message_is_round')) {
+      context.handle(
+          _lastMessageIsRoundMeta,
+          lastMessageIsRound.isAcceptableOrUnknown(
+              data['last_message_is_round']!, _lastMessageIsRoundMeta));
+    }
+    if (data.containsKey('last_message_file_url')) {
+      context.handle(
+          _lastMessageFileUrlMeta,
+          lastMessageFileUrl.isAcceptableOrUnknown(
+              data['last_message_file_url']!, _lastMessageFileUrlMeta));
+    }
+    if (data.containsKey('last_message_grouped_id')) {
+      context.handle(
+          _lastMessageGroupedIdMeta,
+          lastMessageGroupedId.isAcceptableOrUnknown(
+              data['last_message_grouped_id']!, _lastMessageGroupedIdMeta));
+    }
+    if (data.containsKey('other_user_id')) {
+      context.handle(
+          _otherUserIdMeta,
+          otherUserId.isAcceptableOrUnknown(
+              data['other_user_id']!, _otherUserIdMeta));
+    }
     return context;
   }
 
@@ -195,6 +264,17 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           .read(DriftSqlType.string, data['${effectivePrefix}last_seen']),
       isPinned: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}is_pinned'])!,
+      lastMessageType: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}last_message_type']),
+      lastMessageIsRound: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}last_message_is_round'])!,
+      lastMessageFileUrl: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}last_message_file_url']),
+      lastMessageGroupedId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}last_message_grouped_id']),
+      otherUserId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}other_user_id']),
     );
   }
 
@@ -216,6 +296,11 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final bool isOnline;
   final String? lastSeen;
   final bool isPinned;
+  final String? lastMessageType;
+  final bool lastMessageIsRound;
+  final String? lastMessageFileUrl;
+  final String? lastMessageGroupedId;
+  final String? otherUserId;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -227,7 +312,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       required this.unreadCount,
       required this.isOnline,
       this.lastSeen,
-      required this.isPinned});
+      required this.isPinned,
+      this.lastMessageType,
+      required this.lastMessageIsRound,
+      this.lastMessageFileUrl,
+      this.lastMessageGroupedId,
+      this.otherUserId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -250,6 +340,19 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       map['last_seen'] = Variable<String>(lastSeen);
     }
     map['is_pinned'] = Variable<bool>(isPinned);
+    if (!nullToAbsent || lastMessageType != null) {
+      map['last_message_type'] = Variable<String>(lastMessageType);
+    }
+    map['last_message_is_round'] = Variable<bool>(lastMessageIsRound);
+    if (!nullToAbsent || lastMessageFileUrl != null) {
+      map['last_message_file_url'] = Variable<String>(lastMessageFileUrl);
+    }
+    if (!nullToAbsent || lastMessageGroupedId != null) {
+      map['last_message_grouped_id'] = Variable<String>(lastMessageGroupedId);
+    }
+    if (!nullToAbsent || otherUserId != null) {
+      map['other_user_id'] = Variable<String>(otherUserId);
+    }
     return map;
   }
 
@@ -274,6 +377,19 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ? const Value.absent()
           : Value(lastSeen),
       isPinned: Value(isPinned),
+      lastMessageType: lastMessageType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastMessageType),
+      lastMessageIsRound: Value(lastMessageIsRound),
+      lastMessageFileUrl: lastMessageFileUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastMessageFileUrl),
+      lastMessageGroupedId: lastMessageGroupedId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastMessageGroupedId),
+      otherUserId: otherUserId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(otherUserId),
     );
   }
 
@@ -292,6 +408,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isOnline: serializer.fromJson<bool>(json['isOnline']),
       lastSeen: serializer.fromJson<String?>(json['lastSeen']),
       isPinned: serializer.fromJson<bool>(json['isPinned']),
+      lastMessageType: serializer.fromJson<String?>(json['lastMessageType']),
+      lastMessageIsRound: serializer.fromJson<bool>(json['lastMessageIsRound']),
+      lastMessageFileUrl:
+          serializer.fromJson<String?>(json['lastMessageFileUrl']),
+      lastMessageGroupedId:
+          serializer.fromJson<String?>(json['lastMessageGroupedId']),
+      otherUserId: serializer.fromJson<String?>(json['otherUserId']),
     );
   }
   @override
@@ -309,6 +432,11 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'isOnline': serializer.toJson<bool>(isOnline),
       'lastSeen': serializer.toJson<String?>(lastSeen),
       'isPinned': serializer.toJson<bool>(isPinned),
+      'lastMessageType': serializer.toJson<String?>(lastMessageType),
+      'lastMessageIsRound': serializer.toJson<bool>(lastMessageIsRound),
+      'lastMessageFileUrl': serializer.toJson<String?>(lastMessageFileUrl),
+      'lastMessageGroupedId': serializer.toJson<String?>(lastMessageGroupedId),
+      'otherUserId': serializer.toJson<String?>(otherUserId),
     };
   }
 
@@ -323,7 +451,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           int? unreadCount,
           bool? isOnline,
           Value<String?> lastSeen = const Value.absent(),
-          bool? isPinned}) =>
+          bool? isPinned,
+          Value<String?> lastMessageType = const Value.absent(),
+          bool? lastMessageIsRound,
+          Value<String?> lastMessageFileUrl = const Value.absent(),
+          Value<String?> lastMessageGroupedId = const Value.absent(),
+          Value<String?> otherUserId = const Value.absent()}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -338,6 +471,17 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         isOnline: isOnline ?? this.isOnline,
         lastSeen: lastSeen.present ? lastSeen.value : this.lastSeen,
         isPinned: isPinned ?? this.isPinned,
+        lastMessageType: lastMessageType.present
+            ? lastMessageType.value
+            : this.lastMessageType,
+        lastMessageIsRound: lastMessageIsRound ?? this.lastMessageIsRound,
+        lastMessageFileUrl: lastMessageFileUrl.present
+            ? lastMessageFileUrl.value
+            : this.lastMessageFileUrl,
+        lastMessageGroupedId: lastMessageGroupedId.present
+            ? lastMessageGroupedId.value
+            : this.lastMessageGroupedId,
+        otherUserId: otherUserId.present ? otherUserId.value : this.otherUserId,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -356,6 +500,20 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isOnline: data.isOnline.present ? data.isOnline.value : this.isOnline,
       lastSeen: data.lastSeen.present ? data.lastSeen.value : this.lastSeen,
       isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
+      lastMessageType: data.lastMessageType.present
+          ? data.lastMessageType.value
+          : this.lastMessageType,
+      lastMessageIsRound: data.lastMessageIsRound.present
+          ? data.lastMessageIsRound.value
+          : this.lastMessageIsRound,
+      lastMessageFileUrl: data.lastMessageFileUrl.present
+          ? data.lastMessageFileUrl.value
+          : this.lastMessageFileUrl,
+      lastMessageGroupedId: data.lastMessageGroupedId.present
+          ? data.lastMessageGroupedId.value
+          : this.lastMessageGroupedId,
+      otherUserId:
+          data.otherUserId.present ? data.otherUserId.value : this.otherUserId,
     );
   }
 
@@ -372,7 +530,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('unreadCount: $unreadCount, ')
           ..write('isOnline: $isOnline, ')
           ..write('lastSeen: $lastSeen, ')
-          ..write('isPinned: $isPinned')
+          ..write('isPinned: $isPinned, ')
+          ..write('lastMessageType: $lastMessageType, ')
+          ..write('lastMessageIsRound: $lastMessageIsRound, ')
+          ..write('lastMessageFileUrl: $lastMessageFileUrl, ')
+          ..write('lastMessageGroupedId: $lastMessageGroupedId, ')
+          ..write('otherUserId: $otherUserId')
           ..write(')'))
         .toString();
   }
@@ -389,7 +552,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       unreadCount,
       isOnline,
       lastSeen,
-      isPinned);
+      isPinned,
+      lastMessageType,
+      lastMessageIsRound,
+      lastMessageFileUrl,
+      lastMessageGroupedId,
+      otherUserId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -404,7 +572,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.unreadCount == this.unreadCount &&
           other.isOnline == this.isOnline &&
           other.lastSeen == this.lastSeen &&
-          other.isPinned == this.isPinned);
+          other.isPinned == this.isPinned &&
+          other.lastMessageType == this.lastMessageType &&
+          other.lastMessageIsRound == this.lastMessageIsRound &&
+          other.lastMessageFileUrl == this.lastMessageFileUrl &&
+          other.lastMessageGroupedId == this.lastMessageGroupedId &&
+          other.otherUserId == this.otherUserId);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -419,6 +592,11 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<bool> isOnline;
   final Value<String?> lastSeen;
   final Value<bool> isPinned;
+  final Value<String?> lastMessageType;
+  final Value<bool> lastMessageIsRound;
+  final Value<String?> lastMessageFileUrl;
+  final Value<String?> lastMessageGroupedId;
+  final Value<String?> otherUserId;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -432,6 +610,11 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isOnline = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.isPinned = const Value.absent(),
+    this.lastMessageType = const Value.absent(),
+    this.lastMessageIsRound = const Value.absent(),
+    this.lastMessageFileUrl = const Value.absent(),
+    this.lastMessageGroupedId = const Value.absent(),
+    this.otherUserId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -446,6 +629,11 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isOnline = const Value.absent(),
     this.lastSeen = const Value.absent(),
     this.isPinned = const Value.absent(),
+    this.lastMessageType = const Value.absent(),
+    this.lastMessageIsRound = const Value.absent(),
+    this.lastMessageFileUrl = const Value.absent(),
+    this.lastMessageGroupedId = const Value.absent(),
+    this.otherUserId = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -463,6 +651,11 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<bool>? isOnline,
     Expression<String>? lastSeen,
     Expression<bool>? isPinned,
+    Expression<String>? lastMessageType,
+    Expression<bool>? lastMessageIsRound,
+    Expression<String>? lastMessageFileUrl,
+    Expression<String>? lastMessageGroupedId,
+    Expression<String>? otherUserId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -477,6 +670,14 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       if (isOnline != null) 'is_online': isOnline,
       if (lastSeen != null) 'last_seen': lastSeen,
       if (isPinned != null) 'is_pinned': isPinned,
+      if (lastMessageType != null) 'last_message_type': lastMessageType,
+      if (lastMessageIsRound != null)
+        'last_message_is_round': lastMessageIsRound,
+      if (lastMessageFileUrl != null)
+        'last_message_file_url': lastMessageFileUrl,
+      if (lastMessageGroupedId != null)
+        'last_message_grouped_id': lastMessageGroupedId,
+      if (otherUserId != null) 'other_user_id': otherUserId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -493,6 +694,11 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<bool>? isOnline,
       Value<String?>? lastSeen,
       Value<bool>? isPinned,
+      Value<String?>? lastMessageType,
+      Value<bool>? lastMessageIsRound,
+      Value<String?>? lastMessageFileUrl,
+      Value<String?>? lastMessageGroupedId,
+      Value<String?>? otherUserId,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -506,6 +712,11 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       isOnline: isOnline ?? this.isOnline,
       lastSeen: lastSeen ?? this.lastSeen,
       isPinned: isPinned ?? this.isPinned,
+      lastMessageType: lastMessageType ?? this.lastMessageType,
+      lastMessageIsRound: lastMessageIsRound ?? this.lastMessageIsRound,
+      lastMessageFileUrl: lastMessageFileUrl ?? this.lastMessageFileUrl,
+      lastMessageGroupedId: lastMessageGroupedId ?? this.lastMessageGroupedId,
+      otherUserId: otherUserId ?? this.otherUserId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -546,6 +757,22 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     if (isPinned.present) {
       map['is_pinned'] = Variable<bool>(isPinned.value);
     }
+    if (lastMessageType.present) {
+      map['last_message_type'] = Variable<String>(lastMessageType.value);
+    }
+    if (lastMessageIsRound.present) {
+      map['last_message_is_round'] = Variable<bool>(lastMessageIsRound.value);
+    }
+    if (lastMessageFileUrl.present) {
+      map['last_message_file_url'] = Variable<String>(lastMessageFileUrl.value);
+    }
+    if (lastMessageGroupedId.present) {
+      map['last_message_grouped_id'] =
+          Variable<String>(lastMessageGroupedId.value);
+    }
+    if (otherUserId.present) {
+      map['other_user_id'] = Variable<String>(otherUserId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -566,6 +793,11 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('isOnline: $isOnline, ')
           ..write('lastSeen: $lastSeen, ')
           ..write('isPinned: $isPinned, ')
+          ..write('lastMessageType: $lastMessageType, ')
+          ..write('lastMessageIsRound: $lastMessageIsRound, ')
+          ..write('lastMessageFileUrl: $lastMessageFileUrl, ')
+          ..write('lastMessageGroupedId: $lastMessageGroupedId, ')
+          ..write('otherUserId: $otherUserId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2775,6 +3007,11 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isOnline,
   Value<String?> lastSeen,
   Value<bool> isPinned,
+  Value<String?> lastMessageType,
+  Value<bool> lastMessageIsRound,
+  Value<String?> lastMessageFileUrl,
+  Value<String?> lastMessageGroupedId,
+  Value<String?> otherUserId,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -2789,6 +3026,11 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isOnline,
   Value<String?> lastSeen,
   Value<bool> isPinned,
+  Value<String?> lastMessageType,
+  Value<bool> lastMessageIsRound,
+  Value<String?> lastMessageFileUrl,
+  Value<String?> lastMessageGroupedId,
+  Value<String?> otherUserId,
   Value<int> rowid,
 });
 
@@ -2833,6 +3075,25 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<bool> get isPinned => $composableBuilder(
       column: $table.isPinned, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastMessageType => $composableBuilder(
+      column: $table.lastMessageType,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get lastMessageIsRound => $composableBuilder(
+      column: $table.lastMessageIsRound,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastMessageFileUrl => $composableBuilder(
+      column: $table.lastMessageFileUrl,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastMessageGroupedId => $composableBuilder(
+      column: $table.lastMessageGroupedId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get otherUserId => $composableBuilder(
+      column: $table.otherUserId, builder: (column) => ColumnFilters(column));
 }
 
 class $$ChatsTableOrderingComposer
@@ -2877,6 +3138,25 @@ class $$ChatsTableOrderingComposer
 
   ColumnOrderings<bool> get isPinned => $composableBuilder(
       column: $table.isPinned, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastMessageType => $composableBuilder(
+      column: $table.lastMessageType,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get lastMessageIsRound => $composableBuilder(
+      column: $table.lastMessageIsRound,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastMessageFileUrl => $composableBuilder(
+      column: $table.lastMessageFileUrl,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastMessageGroupedId => $composableBuilder(
+      column: $table.lastMessageGroupedId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get otherUserId => $composableBuilder(
+      column: $table.otherUserId, builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -2920,6 +3200,21 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<bool> get isPinned =>
       $composableBuilder(column: $table.isPinned, builder: (column) => column);
+
+  GeneratedColumn<String> get lastMessageType => $composableBuilder(
+      column: $table.lastMessageType, builder: (column) => column);
+
+  GeneratedColumn<bool> get lastMessageIsRound => $composableBuilder(
+      column: $table.lastMessageIsRound, builder: (column) => column);
+
+  GeneratedColumn<String> get lastMessageFileUrl => $composableBuilder(
+      column: $table.lastMessageFileUrl, builder: (column) => column);
+
+  GeneratedColumn<String> get lastMessageGroupedId => $composableBuilder(
+      column: $table.lastMessageGroupedId, builder: (column) => column);
+
+  GeneratedColumn<String> get otherUserId => $composableBuilder(
+      column: $table.otherUserId, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -2956,6 +3251,11 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isOnline = const Value.absent(),
             Value<String?> lastSeen = const Value.absent(),
             Value<bool> isPinned = const Value.absent(),
+            Value<String?> lastMessageType = const Value.absent(),
+            Value<bool> lastMessageIsRound = const Value.absent(),
+            Value<String?> lastMessageFileUrl = const Value.absent(),
+            Value<String?> lastMessageGroupedId = const Value.absent(),
+            Value<String?> otherUserId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -2970,6 +3270,11 @@ class $$ChatsTableTableManager extends RootTableManager<
             isOnline: isOnline,
             lastSeen: lastSeen,
             isPinned: isPinned,
+            lastMessageType: lastMessageType,
+            lastMessageIsRound: lastMessageIsRound,
+            lastMessageFileUrl: lastMessageFileUrl,
+            lastMessageGroupedId: lastMessageGroupedId,
+            otherUserId: otherUserId,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2984,6 +3289,11 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isOnline = const Value.absent(),
             Value<String?> lastSeen = const Value.absent(),
             Value<bool> isPinned = const Value.absent(),
+            Value<String?> lastMessageType = const Value.absent(),
+            Value<bool> lastMessageIsRound = const Value.absent(),
+            Value<String?> lastMessageFileUrl = const Value.absent(),
+            Value<String?> lastMessageGroupedId = const Value.absent(),
+            Value<String?> otherUserId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -2998,6 +3308,11 @@ class $$ChatsTableTableManager extends RootTableManager<
             isOnline: isOnline,
             lastSeen: lastSeen,
             isPinned: isPinned,
+            lastMessageType: lastMessageType,
+            lastMessageIsRound: lastMessageIsRound,
+            lastMessageFileUrl: lastMessageFileUrl,
+            lastMessageGroupedId: lastMessageGroupedId,
+            otherUserId: otherUserId,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

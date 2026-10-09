@@ -175,6 +175,9 @@ class WebSocketService {
       StreamController<WebSocketEvent>.broadcast();
   Stream<WebSocketEvent> get eventStream => _eventController.stream;
 
+  @visibleForTesting
+  void emitForTesting(WebSocketEvent event) => _eventController.add(event);
+
   final Map<WebSocketEventType, List<WebSocketEventCallback>> _callbacks = {};
 
   String? _currentUserId;

@@ -19,6 +19,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
+import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/message_context_menu_service.dart';
@@ -119,7 +120,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   // WebSocket
   final WebSocketService _wsService = WebSocketService();
-  StreamSubscription<WebSocketEvent>? _wsSubscription;
+  ChatSubscription? _chatSubscription;
   bool _isTyping = false;
   Timer? _typingTimer;
   String? _typingUserName;
@@ -352,9 +353,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _initWebSocket() {
-    // Subscribe to WebSocket events for this chat
-    // Note: We only use eventStream.listen, not subscribe() to avoid duplicate handling
-    _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
+    _chatSubscription = ChatRealtimeManager().bindChat(
+      chatId: widget.chatId,
+      onNewMessage: _onNewMessage,
+      onMessageEdited: _onMessageEdited,
+      onMessageDeleted: _onMessageDeleted,
+      onReactionUpdated: _onMessageReactionUpdated,
+      onMessageRead: _onMessageRead,
+      onTyping: _onTypingIndicator,
+      onUserStatus: _onUserStatusUpdate,
+      onReconnect: _triggerSilentSync,
+    );
   }
 
   @override
@@ -492,47 +501,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
-  void _handleWebSocketEvent(WebSocketEvent event) {
-    if (event.type == WebSocketEventType.connected) {
-      _triggerSilentSync();
-      return;
-    }
-
-    // Handle events specific to this chat
-    if (event.type == WebSocketEventType.newMessage) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onNewMessage(event);
-      }
-    } else if (event.type == WebSocketEventType.messageRead) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageRead(event);
-      }
-    } else if (event.type == WebSocketEventType.typing) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onTypingIndicator(event);
-      }
-    } else if (event.type == WebSocketEventType.messageEdited) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageEdited(event);
-      }
-    } else if (event.type == WebSocketEventType.messageDeleted) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageDeleted(event);
-      }
-    } else if (event.type == WebSocketEventType.userStatus) {
-      _onUserStatusUpdate(event);
-    } else if (event.type == WebSocketEventType.messageReactionUpdated) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageReactionUpdated(event);
-      }
-    }
-  }
 
   void _onMessageReactionUpdated(WebSocketEvent event) {
     final messageId = event.data['message_id']?.toString();
@@ -2358,7 +2326,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _tabController.dispose();
     _messageController.dispose();
     _scrollController.dispose();
-    _wsSubscription?.cancel();
+    _chatSubscription?.cancel();
     _typingTimer?.cancel();
 
     // Clear the open chat indicator in the provider

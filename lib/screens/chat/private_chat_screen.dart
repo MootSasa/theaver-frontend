@@ -21,6 +21,7 @@ import '../../services/file_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/sync_service.dart';
+import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
@@ -132,9 +133,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Timer? _markReadTimer; // Debounce timer for batch mark-as-read
   bool _isMarkingRead = false; // Prevent concurrent mark-as-read calls
 
-  // WebSocket
+  // WebSocket & Realtime
   final WebSocketService _wsService = WebSocketService();
-  StreamSubscription<WebSocketEvent>? _wsSubscription;
+  ChatSubscription? _chatSubscription;
   bool _isTyping = false;
   Timer? _typingTimer;
   // ignore: unused_field
@@ -434,9 +435,31 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _initWebSocket() {
-    // Subscribe to WebSocket events for this chat
-    // Note: We only use eventStream.listen, not subscribe() to avoid duplicate handling
-    _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
+    _chatSubscription = ChatRealtimeManager().bindChat(
+      chatId: widget.chatId,
+      onNewMessage: _onNewMessage,
+      onMessageEdited: _onMessageEdited,
+      onMessageDeleted: _onMessageDeleted,
+      onReactionUpdated: _onMessageReactionUpdated,
+      onMessageRead: _onMessageRead,
+      onTyping: _onTypingIndicator,
+      onUserStatus: _onUserStatusUpdate,
+      onUnreadCountUpdated: _onUnreadCountUpdated,
+      onUserAppearanceUpdated: _onUserAppearanceUpdated,
+      onUserAvatarUpdated: (event) {
+        final userId = event.data['user_id']?.toString();
+        final avatarUrl = event.data['avatar_url']?.toString();
+        if ((userId == widget.otherUserId || userId == _otherUserId) &&
+            mounted) {
+          PaintingBinding.instance.imageCache.clear();
+          PaintingBinding.instance.imageCache.clearLiveImages();
+          setState(() {
+            _chatAvatar = avatarUrl;
+          });
+        }
+      },
+      onReconnect: _triggerSilentSync,
+    );
   }
 
   Future<void> _saveKeyboardHeight(double height) async {
@@ -445,65 +468,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       await prefs.setDouble('keyboard_height', height);
     } catch (e) {
       debugPrint('Error saving keyboard height: $e');
-    }
-  }
-
-  void _handleWebSocketEvent(WebSocketEvent event) {
-    if (event.type == WebSocketEventType.connected) {
-      _triggerSilentSync();
-      return;
-    }
-
-    // Handle events specific to this chat
-    if (event.type == WebSocketEventType.newMessage) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onNewMessage(event);
-      }
-    } else if (event.type == WebSocketEventType.messageRead) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageRead(event);
-      }
-    } else if (event.type == WebSocketEventType.typing) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onTypingIndicator(event);
-      }
-    } else if (event.type == WebSocketEventType.userStatus) {
-      _onUserStatusUpdate(event);
-    } else if (event.type == WebSocketEventType.unreadCountUpdated) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onUnreadCountUpdated(event);
-      }
-    } else if (event.type == WebSocketEventType.messageEdited) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageEdited(event);
-      }
-    } else if (event.type == WebSocketEventType.messageDeleted) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageDeleted(event);
-      }
-    } else if (event.type == WebSocketEventType.messageReactionUpdated) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageReactionUpdated(event);
-      }
-    } else if (event.type == WebSocketEventType.userAvatarUpdated) {
-      final userId = event.data['user_id']?.toString();
-      final avatarUrl = event.data['avatar_url']?.toString();
-      if ((userId == widget.otherUserId || userId == _otherUserId) && mounted) {
-        PaintingBinding.instance.imageCache.clear();
-        PaintingBinding.instance.imageCache.clearLiveImages();
-        setState(() {
-          _chatAvatar = avatarUrl;
-        });
-      }
-    } else if (event.type == WebSocketEventType.userAppearanceUpdated) {
-      _onUserAppearanceUpdated(event);
     }
   }
 
@@ -4064,7 +4028,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _inputFocusNode.dispose();
     _showScrollDownFabNotifier.dispose();
     _uploadProgressNotifier.dispose();
-    _wsSubscription?.cancel();
+    _chatSubscription?.cancel();
     _typingTimer?.cancel();
     _highlightTimer?.cancel();
 

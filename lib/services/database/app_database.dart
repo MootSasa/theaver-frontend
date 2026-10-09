@@ -26,6 +26,11 @@ class Chats extends Table {
   BoolColumn get isOnline => boolean().withDefault(const Constant(false))();
   TextColumn get lastSeen => text().nullable()();
   BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
+  TextColumn get lastMessageType => text().nullable()();
+  BoolColumn get lastMessageIsRound => boolean().withDefault(const Constant(false))();
+  TextColumn get lastMessageFileUrl => text().nullable()();
+  TextColumn get lastMessageGroupedId => text().nullable()();
+  TextColumn get otherUserId => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -128,7 +133,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -214,6 +219,23 @@ class AppDatabase extends _$AppDatabase {
           if (from < 8) {
             await customStatement(
               'ALTER TABLE messages ADD COLUMN media_payload TEXT',
+            );
+          }
+          if (from < 9) {
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_message_type TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_message_is_round INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_message_file_url TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_message_grouped_id TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN other_user_id TEXT',
             );
           }
         },
