@@ -1810,7 +1810,7 @@ class _RoundHeaderButton extends StatelessWidget {
       final glassStyle = glassProvider.createStyle(
         context: context,
         refractionIndex: 1.25,
-        refractionWidth: 10.0,
+        refractionWidth: 12.0,
         blur: 6.0,
         color: isDark
             ? const Color.fromARGB(12, 20, 20, 35)
@@ -2157,7 +2157,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
       context: context,
       cornerRadius: _ctrlSize / 2,
       refractionIndex: 1.02,
-      refractionWidth: 10.0,
+      refractionWidth: 12.0,
       isLiteOverride: widget.isLite,
     );
 
@@ -2186,7 +2186,10 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
                   ? LiquidGlassMorph(
                       key: const ValueKey<String>('profile_header_menu_morph'),
                       alignment: Alignment.topRight,
-                      motion: LiquidGlassMorphMotion.plain,
+                      motion: LiquidGlassMorphMotion.plain.copyWith(
+                        clearAnchor: true,
+                        stretch: 0.0,
+                      ),
                       smoothness: 28,
                       style: morphStyle,
                       child: _isOpen

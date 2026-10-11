@@ -191,7 +191,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       context: context,
       cornerRadius: _kAppBarBorderRadius,
       refractionIndex: 1.02,
-      refractionWidth: 10,
+      refractionWidth: 12,
     );
 
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
@@ -1219,7 +1219,7 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
       cornerRadius: _kAppBarBorderRadius,
       color: isDark ? const Color(0x44202025) : const Color(0x9EFFFFFF),
       refractionIndex: 1.025,
-      refractionWidth: 10,
+      refractionWidth: 12,
     );
 
     return LiquidGlassLens(

@@ -573,30 +573,53 @@ class ChatSettingsScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 16),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              l10n.translate('theme_glass_blur').replaceAll('{value}', provider.blur.toStringAsFixed(1)),
-                              style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: AdaptiveSlider(
-                          value: provider.blur,
-                          min: 0,
-                          max: 30,
-                          divisions: 60,
-                          activeColor: activePrimary,
-                          label: provider.blur.toStringAsFixed(1),
-                          onChanged: (val) => provider.setBlur(val),
-                        ),
+                      Builder(
+                        builder: (context) {
+                          const blurSteps = [0.0, 4.0, 8.0, 16.0, 24.0];
+                          int currentStepIndex = 0;
+                          double minDiff = double.infinity;
+                          for (int i = 0; i < blurSteps.length; i++) {
+                            final diff = (blurSteps[i] - provider.blur).abs();
+                            if (diff < minDiff) {
+                              minDiff = diff;
+                              currentStepIndex = i;
+                            }
+                          }
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      l10n.translate('theme_glass_blur').replaceAll('{value}', blurSteps[currentStepIndex].toInt().toString()),
+                                      style: TextStyle(fontSize: 13, color: Colors.grey[700], fontWeight: FontWeight.w500),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                child: AdaptiveSlider(
+                                  value: currentStepIndex.toDouble(),
+                                  min: 0,
+                                  max: (blurSteps.length - 1).toDouble(),
+                                  divisions: blurSteps.length - 1,
+                                  activeColor: activePrimary,
+                                  label: blurSteps[currentStepIndex].toInt().toString(),
+                                  onChanged: (val) {
+                                    final idx = val.round().clamp(0, blurSteps.length - 1);
+                                    provider.setBlur(blurSteps[idx]);
+                                  },
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ],

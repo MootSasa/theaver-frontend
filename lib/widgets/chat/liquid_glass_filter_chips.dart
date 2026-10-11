@@ -141,7 +141,7 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
         intensity: 0.8,
       ),
       refractionIndex: 1.02,
-      refractionWidth: 10,
+      refractionWidth: 12,
       liteGlass: widget.isLite,
     );
 

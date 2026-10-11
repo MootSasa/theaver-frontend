@@ -1440,7 +1440,7 @@ class _StorageScreenState extends State<StorageScreen> {
     if (glassEnabled) {
       final glassStyle = context.read<LiquidGlassProvider>().createStyle(
         refractionIndex: 1.1,
-        refractionWidth: 10.0,
+        refractionWidth: 12.0,
         blur: 14.0,
         color: isDark
             ? const Color.fromARGB(80, 20, 20, 30)

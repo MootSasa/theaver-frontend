@@ -349,7 +349,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       context: context,
       cornerRadius: _kInputFillBorderRadius,
       refractionIndex: 1.02,
-      refractionWidth: 10,
+      refractionWidth: 12,
       isLiteOverride: widget.isLite,
     );
 

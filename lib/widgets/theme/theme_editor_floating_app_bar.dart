@@ -57,7 +57,7 @@ class ThemeEditorFloatingAppBar extends StatelessWidget implements PreferredSize
       context: context,
       cornerRadius: _kAppBarBorderRadius,
       refractionIndex: 1.02,
-      refractionWidth: 10,
+      refractionWidth: 12,
     );
 
     return SafeArea(

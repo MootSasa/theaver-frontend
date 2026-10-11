@@ -96,7 +96,7 @@ class _MainScreenState extends State<MainScreen>
 
   void _startMorphSafetyTimer() {
     _morphSafetyTimer?.cancel();
-    _morphSafetyTimer = Timer(const Duration(milliseconds: 350), () {
+    _morphSafetyTimer = Timer(const Duration(milliseconds: 500), () {
       if (mounted) {
         setState(() {
           _isTopMenuWide = _isTopMenuOpen;
@@ -1098,7 +1098,6 @@ class _MainScreenState extends State<MainScreen>
     _classicTopMenuController.reverse();
     setState(() {
       _isTopMenuOpen = false;
-      _isTopMenuWide = false;
     });
   }
 
@@ -1131,7 +1130,6 @@ class _MainScreenState extends State<MainScreen>
     _classicFolderMenuController.reverse();
     setState(() {
       _isFolderMenuOpen = false;
-      _isFolderMenuWide = false;
     });
   }
 
@@ -1437,10 +1435,14 @@ class _MainScreenState extends State<MainScreen>
       context: context,
       cornerRadius: barRadius,
       refractionIndex: 1.02,
-      refractionWidth: 10,
+      refractionWidth: 12,
     );
 
     final morphStyle = pillStyle;
+    final morphMotion = LiquidGlassMorphMotion.plain.copyWith(
+      clearAnchor: true,
+      stretch: 0.0,
+    );
 
     final double closedPillWidth =
         math.max(130.0, _calculateTitleWidth(context) + 48.0);
@@ -1469,7 +1471,7 @@ class _MainScreenState extends State<MainScreen>
                 height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
                 child: LiquidGlassMorph(
                   alignment: Alignment.topCenter,
-                  motion: LiquidGlassMorphMotion.plain,
+                  motion: morphMotion,
                   smoothness: 28,
                   style: pillStyle,
                   onEnd: () {
@@ -1519,7 +1521,7 @@ class _MainScreenState extends State<MainScreen>
             height: _isTopMenuWide ? menuHeight : ctrlSize,
             child: LiquidGlassMorph(
               alignment: Alignment.topRight,
-              motion: LiquidGlassMorphMotion.plain,
+              motion: morphMotion,
               smoothness: 28,
               style: morphStyle,
               onEnd: () {
@@ -2784,7 +2786,7 @@ class _MainScreenState extends State<MainScreen>
                 context: context,
                 cornerRadius: barHeight / 2,
                 refractionIndex: 1.02,
-                refractionWidth: 10,
+                refractionWidth: 12,
               );
 
               final actionStyle = barStyle;

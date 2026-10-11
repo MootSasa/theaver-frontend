@@ -506,7 +506,7 @@ class _TabIndicatorState extends State<_TabIndicator>
                           style: widget.glassStyle.copyWith(
                             color: const Color.fromARGB(25, 255, 255, 255),
                             refractionIndex: 1.15,
-                            refractionWidth: 10.0,
+                            refractionWidth: 12.0,
                             blur: 0.0,
                             shape:
                                 const LiquidGlassShape.continuousRoundedRectangle(

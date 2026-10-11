@@ -164,7 +164,7 @@ class ScrollDownFab extends StatelessWidget {
       context: context,
       cornerRadius: 24,
       refractionIndex: 1.025,
-      refractionWidth: 10,
+      refractionWidth: 12,
     );
 
     return LiquidGlassLens(
