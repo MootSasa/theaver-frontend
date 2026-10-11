@@ -474,7 +474,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
             : const Color.fromARGB(50, 255, 255, 255),
         blur: 8.0,
         refractionIndex: 1.15,
-        refractionWidth: 12.0,
+        refractionWidth: 20.0,
         shape: const LiquidGlassShape.continuousRoundedRectangle(
           cornerRadius: kInputFillBorderRadius,
         ),

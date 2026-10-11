@@ -71,7 +71,7 @@ class LiquidGlassProvider extends ChangeNotifier {
     double? blur,
     LiquidGlassShadow? shadow,
     double refractionIndex = 1.02,
-    double refractionWidth = 12.0,
+    double refractionWidth = 20.0,
     double borderWidth = 0.35,
     bool includeGlow = false,
     bool? isLiteOverride,

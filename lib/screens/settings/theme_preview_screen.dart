@@ -514,7 +514,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               context: context,
               cornerRadius: 22.0,
               refractionIndex: 1.02,
-              refractionWidth: 12,
+              refractionWidth: 20,
             )
           : LiquidGlassStyle(
               shape: const LiquidGlassShape.continuousRoundedRectangle(
@@ -524,7 +524,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
               blur: 8.0,
               refractionIndex: 1.02,
-              refractionWidth: 12,
+              refractionWidth: 20,
               liteGlass: isLite,
             );
 
@@ -627,7 +627,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               context: context,
               cornerRadius: 30.0,
               refractionIndex: 1.02,
-              refractionWidth: 12,
+              refractionWidth: 20,
             )
           : LiquidGlassStyle(
               shape: const LiquidGlassShape.continuousRoundedRectangle(
@@ -637,7 +637,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
               blur: 8.0,
               refractionIndex: 1.02,
-              refractionWidth: 12,
+              refractionWidth: 20,
               liteGlass: isLite,
             );
 

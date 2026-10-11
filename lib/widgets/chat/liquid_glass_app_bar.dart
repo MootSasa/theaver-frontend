@@ -67,7 +67,7 @@ class LiquidGlassAppBar extends StatelessWidget
           : const Color.fromARGB(80, 200, 200, 210),
       blur: 12.0,
       refractionIndex: 1.02,
-      refractionWidth: 12,
+      refractionWidth: 20,
       liteGlass: isLite,
     );
 

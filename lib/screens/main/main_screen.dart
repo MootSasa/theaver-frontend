@@ -79,11 +79,13 @@ class _MainScreenState extends State<MainScreen>
 
   // Top glass bar & morph context menu
   bool _isTopMenuOpen = false;
-  bool _isTopMenuWide = false;
+  final LayerLink _topMenuLayerLink = LayerLink();
+  final OverlayPortalController _topMenuOverlayController = OverlayPortalController();
 
   // Central folder morph menu
   bool _isFolderMenuOpen = false;
-  bool _isFolderMenuWide = false;
+  final LayerLink _folderMenuLayerLink = LayerLink();
+  final OverlayPortalController _folderMenuOverlayController = OverlayPortalController();
 
   // Animation controllers for Material mode top bar morphing
   late final AnimationController _classicTopMenuController;
@@ -91,20 +93,6 @@ class _MainScreenState extends State<MainScreen>
   late final CurvedAnimation _classicTopMenuAnimation;
   late final CurvedAnimation _classicFolderMenuAnimation;
   int _topMenuTabIndex = 1;
-
-  Timer? _morphSafetyTimer;
-
-  void _startMorphSafetyTimer() {
-    _morphSafetyTimer?.cancel();
-    _morphSafetyTimer = Timer(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        setState(() {
-          _isTopMenuWide = _isTopMenuOpen;
-          _isFolderMenuWide = _isFolderMenuOpen;
-        });
-      }
-    });
-  }
 
   // Search results
   List<SearchResultUser> _users = [];
@@ -148,6 +136,8 @@ class _MainScreenState extends State<MainScreen>
       reverseCurve: Curves.easeInOutCubic,
     );
     WidgetsBinding.instance.addObserver(this);
+    _topMenuOverlayController.show();
+    _folderMenuOverlayController.show();
     _searchController.addListener(_onSearchChanged);
     DraftService().draftsNotifier.addListener(_onDraftsChanged);
 
@@ -892,7 +882,6 @@ class _MainScreenState extends State<MainScreen>
     _classicFolderMenuAnimation.dispose();
     _classicTopMenuController.dispose();
     _classicFolderMenuController.dispose();
-    _morphSafetyTimer?.cancel();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     DraftService().draftsNotifier.removeListener(_onDraftsChanged);
@@ -1084,17 +1073,14 @@ class _MainScreenState extends State<MainScreen>
     }
     _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
-    _startMorphSafetyTimer();
     _classicTopMenuController.forward();
     setState(() {
-      _isTopMenuWide = true;
       _isTopMenuOpen = true;
     });
   }
 
   void _closeTopMenu() {
     if (!_isTopMenuOpen) return;
-    _startMorphSafetyTimer();
     _classicTopMenuController.reverse();
     setState(() {
       _isTopMenuOpen = false;
@@ -1116,17 +1102,14 @@ class _MainScreenState extends State<MainScreen>
       _closeTopMenu();
     }
     HapticUtils.tap();
-    _startMorphSafetyTimer();
     _classicFolderMenuController.forward();
     setState(() {
-      _isFolderMenuWide = true;
       _isFolderMenuOpen = true;
     });
   }
 
   void _closeFolderMenu() {
     if (!_isFolderMenuOpen) return;
-    _startMorphSafetyTimer();
     _classicFolderMenuController.reverse();
     setState(() {
       _isFolderMenuOpen = false;
@@ -1426,35 +1409,25 @@ class _MainScreenState extends State<MainScreen>
   ) {
     const double ctrlSize = 44.0;
     const double menuWidth = 200.0;
-    final double menuHeight = _getMenuHeight(_currentIndex);
     const double folderMenuWidth = 220.0;
-    const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
     const double barRadius = ctrlSize / 2; // 22.0 — stadium capsule ratio
 
     final pillStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: barRadius,
       refractionIndex: 1.02,
-      refractionWidth: 12,
+      refractionWidth: 20.0,
     );
 
     final morphStyle = pillStyle;
-    final morphMotion = LiquidGlassMorphMotion.plain.copyWith(
-      clearAnchor: true,
-      stretch: 0.0,
-    );
+    const morphMotion = LiquidGlassMorphMotion.fluid;
 
     final double closedPillWidth =
         math.max(130.0, _calculateTitleWidth(context) + 48.0);
 
-    final double maxActiveMenuHeight = math.max(
-      _isTopMenuWide ? menuHeight : 0,
-      _isFolderMenuWide ? folderMenuHeight : 0,
-    );
-
     return SizedBox(
       width: double.infinity,
-      height: maxActiveMenuHeight > 0 ? maxActiveMenuHeight + 8 : ctrlSize + 4,
+      height: ctrlSize + 4,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -1463,51 +1436,68 @@ class _MainScreenState extends State<MainScreen>
             top: 2,
             left: 0,
             right: 0,
-            height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
             child: Align(
               alignment: Alignment.topCenter,
-              child: SizedBox(
-                width: _isFolderMenuWide ? folderMenuWidth : closedPillWidth,
-                height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
-                child: LiquidGlassMorph(
-                  alignment: Alignment.topCenter,
-                  motion: morphMotion,
-                  smoothness: 28,
-                  style: pillStyle,
-                  onEnd: () {
-                    _morphSafetyTimer?.cancel();
-                    if (mounted) {
-                      setState(() {
-                        if (_isFolderMenuWide != _isFolderMenuOpen) {
-                          _isFolderMenuWide = _isFolderMenuOpen;
-                        }
-                      });
-                    }
-                  },
-                  child: _isFolderMenuOpen
-                      ? _FolderMorphMenu(
-                          key: const ValueKey<String>('folder_menu'),
-                          width: folderMenuWidth,
-                          activeFilter: _activeFilter,
-                          unreadCounts: [
-                            _getUnreadCountForFilter(0),
-                            _getUnreadCountForFilter(1),
-                            _getUnreadCountForFilter(2),
-                            _getUnreadCountForFilter(3),
-                          ],
-                          onSelectFolder: (index) {
-                            HapticUtils.selection();
-                            setState(() => _activeFilter = index);
-                            _closeFolderMenu();
-                          },
-                        )
-                      : _TitlePillContent(
-                          key: const ValueKey<String>('title_pill'),
-                          title: _currentTitleText,
-                          titleKey: _currentTitleKey,
-                          isConnected: _isTitleConnected,
-                          onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+              child: OverlayPortal(
+                controller: _folderMenuOverlayController,
+                overlayChildBuilder: (context) {
+                  return Stack(
+                    children: [
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          ignoring: !_isFolderMenuOpen,
+                          child: GestureDetector(
+                            onTap: _closeFolderMenu,
+                            behavior: HitTestBehavior.opaque,
+                          ),
                         ),
+                      ),
+                      CompositedTransformFollower(
+                        link: _folderMenuLayerLink,
+                        showWhenUnlinked: false,
+                        targetAnchor: Alignment.topCenter,
+                        followerAnchor: Alignment.topCenter,
+                        child: LiquidGlassMorph(
+                          key: const ValueKey<String>('main_folder_menu_morph'),
+                          alignment: Alignment.topCenter,
+                          motion: morphMotion,
+                          smoothness: 28,
+                          style: pillStyle,
+                          child: _isFolderMenuOpen
+                              ? _FolderMorphMenu(
+                                  key: const ValueKey<String>('folder_menu'),
+                                  width: folderMenuWidth,
+                                  activeFilter: _activeFilter,
+                                  unreadCounts: [
+                                    _getUnreadCountForFilter(0),
+                                    _getUnreadCountForFilter(1),
+                                    _getUnreadCountForFilter(2),
+                                    _getUnreadCountForFilter(3),
+                                  ],
+                                  onSelectFolder: (index) {
+                                    HapticUtils.selection();
+                                    setState(() => _activeFilter = index);
+                                    _closeFolderMenu();
+                                  },
+                                )
+                              : _TitlePillContent(
+                                  key: const ValueKey<String>('title_pill'),
+                                  title: _currentTitleText,
+                                  titleKey: _currentTitleKey,
+                                  isConnected: _isTitleConnected,
+                                  onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+                                ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+                child: CompositedTransformTarget(
+                  link: _folderMenuLayerLink,
+                  child: SizedBox(
+                    width: closedPillWidth,
+                    height: ctrlSize,
+                  ),
                 ),
               ),
             ),
@@ -1517,35 +1507,55 @@ class _MainScreenState extends State<MainScreen>
           Positioned(
             top: 2,
             right: 16,
-            width: _isTopMenuWide ? menuWidth : ctrlSize,
-            height: _isTopMenuWide ? menuHeight : ctrlSize,
-            child: LiquidGlassMorph(
-              alignment: Alignment.topRight,
-              motion: morphMotion,
-              smoothness: 28,
-              style: morphStyle,
-              onEnd: () {
-                _morphSafetyTimer?.cancel();
-                if (mounted) {
-                  setState(() {
-                    if (_isTopMenuWide != _isTopMenuOpen) {
-                      _isTopMenuWide = _isTopMenuOpen;
-                    }
-                  });
-                }
-              },
-              child: _isTopMenuOpen
-                  ? _TopMorphMenu(
-                      key: const ValueKey<String>('menu'),
-                      width: menuWidth,
-                      items: _getMenuItems(_currentIndex),
-                      onItemTap: _handleMenuAction,
-                    )
-                  : _ThreeDotsGlyph(
-                      key: const ValueKey<String>('glyph'),
-                      size: ctrlSize,
-                      onTap: _toggleTopMenu,
+            child: OverlayPortal(
+              controller: _topMenuOverlayController,
+              overlayChildBuilder: (context) {
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        ignoring: !_isTopMenuOpen,
+                        child: GestureDetector(
+                          onTap: _closeTopMenu,
+                          behavior: HitTestBehavior.opaque,
+                        ),
+                      ),
                     ),
+                    CompositedTransformFollower(
+                      link: _topMenuLayerLink,
+                      showWhenUnlinked: false,
+                      targetAnchor: Alignment.topRight,
+                      followerAnchor: Alignment.topRight,
+                      child: LiquidGlassMorph(
+                        key: const ValueKey<String>('main_top_menu_morph'),
+                        alignment: Alignment.topRight,
+                        motion: morphMotion,
+                        smoothness: 28,
+                        style: morphStyle,
+                        child: _isTopMenuOpen
+                            ? _TopMorphMenu(
+                                key: const ValueKey<String>('menu'),
+                                width: menuWidth,
+                                items: _getMenuItems(_currentIndex),
+                                onItemTap: _handleMenuAction,
+                              )
+                            : _ThreeDotsGlyph(
+                                key: const ValueKey<String>('glyph'),
+                                size: ctrlSize,
+                                onTap: _toggleTopMenu,
+                              ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+              child: CompositedTransformTarget(
+                link: _topMenuLayerLink,
+                child: const SizedBox(
+                  width: ctrlSize,
+                  height: ctrlSize,
+                ),
+              ),
             ),
           ),
         ],
@@ -2786,7 +2796,7 @@ class _MainScreenState extends State<MainScreen>
                 context: context,
                 cornerRadius: barHeight / 2,
                 refractionIndex: 1.02,
-                refractionWidth: 12,
+                refractionWidth: 20.0,
               );
 
               final actionStyle = barStyle;

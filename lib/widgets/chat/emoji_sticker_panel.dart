@@ -261,7 +261,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
                         cornerRadius: 0,
                         borderWidth: 0,
                         refractionIndex: 1.02,
-                        refractionWidth: 12,
+                        refractionWidth: 20,
                       ),
                       child: const SizedBox.expand(),
                     )
@@ -410,7 +410,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       cornerRadius: 24,
       borderWidth: 0.35,
       refractionIndex: 1.02,
-      refractionWidth: 12,
+      refractionWidth: 20,
     );
 
     return Container(
@@ -518,7 +518,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
             cornerRadius: 24,
             borderWidth: 0.35,
             refractionIndex: 1.02,
-            refractionWidth: 12,
+            refractionWidth: 20,
           );
 
           return SizedBox(
@@ -768,7 +768,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       cornerRadius: 24,
       borderWidth: 0.35,
       refractionIndex: 1.02,
-      refractionWidth: 12,
+      refractionWidth: 20,
     );
 
     return Container(
@@ -1150,7 +1150,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         cornerRadius: 32,
         borderWidth: 0.35,
         refractionIndex: 1.02,
-        refractionWidth: 12,
+        refractionWidth: 20,
       );
 
       return LiquidGlassLens(
@@ -1220,7 +1220,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         cornerRadius: 20,
         borderWidth: 0.35,
         refractionIndex: 1.02,
-        refractionWidth: 12,
+        refractionWidth: 20,
       );
 
       return LiquidGlassLens(
