@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
 import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
 import 'package:inspire_blur/inspire_blur.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -1881,6 +1882,148 @@ class _RoundHeaderButton extends StatelessWidget {
   }
 }
 
+class _MorphMenuItemData {
+  final String id;
+  final String label;
+  final Widget Function(Color color, double size) iconBuilder;
+
+  const _MorphMenuItemData({
+    required this.id,
+    required this.label,
+    required this.iconBuilder,
+  });
+}
+
+class _ThreeDotsGlyph extends StatelessWidget {
+  final double size;
+  final Color? color;
+  final VoidCallback onTap;
+
+  const _ThreeDotsGlyph({
+    super.key,
+    required this.size,
+    this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final iconColor = color ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Center(
+          child: iconoir.MoreVert(
+            width: 22.0,
+            height: 22.0,
+            color: iconColor,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TopMorphMenu extends StatelessWidget {
+  final double width;
+  final List<_MorphMenuItemData> items;
+  final ValueChanged<String> onItemTap;
+
+  const _TopMorphMenu({
+    super.key,
+    required this.width,
+    required this.items,
+    required this.onItemTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final double totalHeight = items.length * 44.0 + 12.0;
+    return SizedBox(
+      width: width,
+      height: totalHeight,
+      child: OverflowBox(
+        minWidth: width,
+        maxWidth: width,
+        minHeight: 0,
+        maxHeight: totalHeight,
+        alignment: Alignment.topCenter,
+        child: Material(
+          color: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6.0),
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < items.length; i++)
+                    _MorphMenuRow(
+                      key: ValueKey(items[i].id),
+                      item: items[i],
+                      onTap: () => onItemTap(items[i].id),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MorphMenuRow extends StatelessWidget {
+  final _MorphMenuItemData item;
+  final VoidCallback onTap;
+
+  const _MorphMenuRow({
+    super.key,
+    required this.item,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final itemColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        height: 44.0,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14.0),
+          child: Row(
+            children: [
+              item.iconBuilder(itemColor, 20.0),
+              const SizedBox(width: 10.0),
+              Expanded(
+                child: Text(
+                  item.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15.0,
+                    fontWeight: FontWeight.w500,
+                    color: itemColor,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MorphingHeaderMenuButton extends StatefulWidget {
   final Color iconColor;
   final bool isDark;
@@ -1913,7 +2056,8 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
   final LayerLink _layerLink = LayerLink();
   final OverlayPortalController _overlayPortalController = OverlayPortalController();
   bool _isOpen = false;
-  double _targetWidth = 245.0;
+  static const double _ctrlSize = 42.0;
+  static const double _menuWidth = 200.0;
 
   @override
   void initState() {
@@ -1921,54 +2065,17 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
     _overlayPortalController.show();
   }
 
-  double _calculateMenuWidth(AppLocalizations l10n) {
-    final texts = [
-      l10n.translate('profile_menu_edit_info'),
-      l10n.translate('profile_menu_choose_photo'),
-      l10n.translate('profile_menu_choose_music'),
-      l10n.translate('profile_menu_change_color'),
-      l10n.translate('profile_menu_copy_link'),
-    ];
-
-    double maxWidth = 0.0;
-    const baseWidth = 4.0 + 4.0 + 10.0 + 10.0 + 20.0 + 12.0;
-
-    for (int i = 0; i < texts.length; i++) {
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: texts[i],
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-
-      double itemWidth = baseWidth + textPainter.width;
-
-      if (i == 2 || i == 3) {
-        final todoPainter = TextPainter(
-          text: const TextSpan(
-            text: 'TODO',
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-
-        itemWidth += 6.0 + 6.0 + 6.0 + todoPainter.width;
-      }
-
-      if (itemWidth > maxWidth) {
-        maxWidth = itemWidth;
-      }
+  void _toggleMenu() {
+    if (_isOpen) {
+      _closeMenu();
+    } else {
+      _openMenu();
     }
-
-    maxWidth += 12.0;
-    return maxWidth.clamp(180.0, MediaQuery.of(context).size.width - 32.0);
   }
 
   void _openMenu() {
     if (_isOpen) return;
-    HapticUtils.selection();
-    _targetWidth = _calculateMenuWidth(context.l10n);
+    HapticUtils.tap();
     setState(() {
       _isOpen = true;
     });
@@ -1976,7 +2083,6 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
 
   void _closeMenu() {
     if (!_isOpen) return;
-    HapticUtils.selection();
     setState(() {
       _isOpen = false;
     });
@@ -1993,122 +2099,55 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
     callback();
   }
 
-  Widget _buildMenuItem({
-    required IconData icon,
-    required String title,
-    bool isTodo = false,
-    required VoidCallback onTap,
-  }) {
-    final textColor = widget.isDark ? Colors.white.withValues(alpha: 0.95) : const Color(0xFF1C1C1E);
-    final iconColor = widget.isDark ? Colors.white.withValues(alpha: 0.85) : const Color(0xFF0088CC);
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      splashColor: widget.isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
-      highlightColor: widget.isDark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.02),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        child: Row(
-          children: [
-            Icon(icon, size: 20, color: iconColor),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (isTodo)
-              Container(
-                margin: const EdgeInsets.only(left: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: widget.isDark
-                      ? const Color(0xFF0088CC).withValues(alpha: 0.25)
-                      : const Color(0xFF0088CC).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'TODO',
-                  style: TextStyle(
-                    color: widget.isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC),
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
+  void _handleMenuAction(String id) {
+    switch (id) {
+      case 'edit_info':
+        _closeMenuWithCallback(widget.onEditProfile);
+        break;
+      case 'choose_photo':
+        _closeMenuWithCallback(widget.onChoosePhoto);
+        break;
+      case 'choose_music':
+        _closeMenuWithCallback(widget.onChooseMusic);
+        break;
+      case 'change_color':
+        _closeMenuWithCallback(widget.onChangeColor);
+        break;
+      case 'copy_link':
+        _closeMenuWithCallback(widget.onCopyLink);
+        break;
+    }
   }
 
-  Widget _buildCollapsedButton() {
-    return GestureDetector(
-      key: const ValueKey<String>('profile_header_menu_collapsed'),
-      onTap: _openMenu,
-      behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: 42,
-        height: 42,
-        child: Center(
-          child: Icon(
-            Icons.more_horiz,
-            size: 22,
-            color: widget.iconColor,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMenuContent(double width) {
+  List<_MorphMenuItemData> _getMenuItems(BuildContext context) {
     final l10n = context.l10n;
-    return SizedBox(
-      key: const ValueKey<String>('profile_header_menu_expanded'),
-      width: width,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildMenuItem(
-              icon: Icons.edit_outlined,
-              title: l10n.translate('profile_menu_edit_info'),
-              onTap: () => _closeMenuWithCallback(widget.onEditProfile),
-            ),
-            _buildMenuItem(
-              icon: Icons.photo_camera_outlined,
-              title: l10n.translate('profile_menu_choose_photo'),
-              onTap: () => _closeMenuWithCallback(widget.onChoosePhoto),
-            ),
-            _buildMenuItem(
-              icon: Icons.music_note_outlined,
-              title: l10n.translate('profile_menu_choose_music'),
-              isTodo: true,
-              onTap: () => _closeMenuWithCallback(widget.onChooseMusic),
-            ),
-            _buildMenuItem(
-              icon: Icons.palette_outlined,
-              title: l10n.translate('profile_menu_change_color'),
-              onTap: () => _closeMenuWithCallback(widget.onChangeColor),
-            ),
-            _buildMenuItem(
-              icon: Icons.link_rounded,
-              title: l10n.translate('profile_menu_copy_link'),
-              onTap: () => _closeMenuWithCallback(widget.onCopyLink),
-            ),
-          ],
-        ),
+    return [
+      _MorphMenuItemData(
+        id: 'edit_info',
+        label: l10n.translate('profile_menu_edit_info'),
+        iconBuilder: (color, size) => iconoir.EditPencil(color: color, width: size, height: size),
       ),
-    );
+      _MorphMenuItemData(
+        id: 'choose_photo',
+        label: l10n.translate('profile_menu_choose_photo'),
+        iconBuilder: (color, size) => iconoir.Camera(color: color, width: size, height: size),
+      ),
+      _MorphMenuItemData(
+        id: 'choose_music',
+        label: l10n.translate('profile_menu_choose_music'),
+        iconBuilder: (color, size) => iconoir.MusicDoubleNote(color: color, width: size, height: size),
+      ),
+      _MorphMenuItemData(
+        id: 'change_color',
+        label: l10n.translate('profile_menu_change_color'),
+        iconBuilder: (color, size) => iconoir.Palette(color: color, width: size, height: size),
+      ),
+      _MorphMenuItemData(
+        id: 'copy_link',
+        label: l10n.translate('profile_menu_copy_link'),
+        iconBuilder: (color, size) => iconoir.Link(color: color, width: size, height: size),
+      ),
+    ];
   }
 
   @override
@@ -2116,17 +2155,13 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
     final glassProvider = context.watch<LiquidGlassProvider>();
     final morphStyle = glassProvider.createStyle(
       context: context,
-      cornerRadius: 18,
-      shadow: LiquidGlassShadow(
-        blur: 16,
-        opacity: widget.isDark ? 0.35 : 0.15,
-        offset: const Offset(0, 4),
-        color: Colors.black,
-      ),
-      refractionIndex: 1.05,
-      refractionWidth: 20.0,
+      cornerRadius: _ctrlSize / 2,
+      refractionIndex: 1.02,
+      refractionWidth: 10.0,
       isLiteOverride: widget.isLite,
     );
+
+    final menuItems = _getMenuItems(context);
 
     return OverlayPortal(
       controller: _overlayPortalController,
@@ -2151,12 +2186,22 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
                   ? LiquidGlassMorph(
                       key: const ValueKey<String>('profile_header_menu_morph'),
                       alignment: Alignment.topRight,
-                      motion: LiquidGlassMorphMotion.fluid,
+                      motion: LiquidGlassMorphMotion.plain,
                       smoothness: 28,
                       style: morphStyle,
                       child: _isOpen
-                          ? _buildMenuContent(_targetWidth)
-                          : _buildCollapsedButton(),
+                          ? _TopMorphMenu(
+                              key: const ValueKey<String>('profile_menu'),
+                              width: _menuWidth,
+                              items: menuItems,
+                              onItemTap: _handleMenuAction,
+                            )
+                          : _ThreeDotsGlyph(
+                              key: const ValueKey<String>('profile_glyph'),
+                              size: _ctrlSize,
+                              color: widget.iconColor,
+                              onTap: _toggleMenu,
+                            ),
                     )
                   : AnimatedContainer(
                       key: const ValueKey<String>('profile_header_menu_matte'),
@@ -2168,18 +2213,27 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
                           color: widget.isDark
                               ? const Color(0xFA2C2C2E)
                               : const Color(0xFAFFFFFF),
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.18),
-                              blurRadius: 16,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
+                          borderRadius: BorderRadius.circular(_ctrlSize / 2),
+                          border: Border.all(
+                            color: widget.isDark
+                                ? Colors.white.withValues(alpha: 0.1)
+                                : Colors.black.withValues(alpha: 0.08),
+                            width: 0.5,
+                          ),
                         ),
                         child: _isOpen
-                            ? _buildMenuContent(_targetWidth)
-                            : _buildCollapsedButton(),
+                            ? _TopMorphMenu(
+                                key: const ValueKey<String>('profile_menu'),
+                                width: _menuWidth,
+                                items: menuItems,
+                                onItemTap: _handleMenuAction,
+                              )
+                            : _ThreeDotsGlyph(
+                                key: const ValueKey<String>('profile_glyph'),
+                                size: _ctrlSize,
+                                color: widget.iconColor,
+                                onTap: _toggleMenu,
+                              ),
                       ),
                     ),
             ),
@@ -2189,8 +2243,8 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
       child: CompositedTransformTarget(
         link: _layerLink,
         child: const SizedBox(
-          width: 42,
-          height: 42,
+          width: _ctrlSize,
+          height: _ctrlSize,
         ),
       ),
     );

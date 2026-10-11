@@ -344,19 +344,12 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
 
   Widget _buildGlassInput(BuildContext context) {
     final glassProvider = context.watch<LiquidGlassProvider>();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final style = glassProvider.createStyle(
       context: context,
       cornerRadius: _kInputFillBorderRadius,
-      shadow: LiquidGlassShadow(
-        blur: 16,
-        opacity: isDark ? 0.40 : 0.18,
-        offset: const Offset(0, 4),
-        color: Colors.black,
-      ),
       refractionIndex: 1.02,
-      refractionWidth: 26,
+      refractionWidth: 10,
       isLiteOverride: widget.isLite,
     );
 

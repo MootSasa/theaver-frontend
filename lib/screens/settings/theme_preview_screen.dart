@@ -513,14 +513,8 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
           ? glassProvider.createStyle(
               context: context,
               cornerRadius: 22.0,
-              shadow: LiquidGlassShadow(
-                blur: 16,
-                opacity: isDark ? 0.40 : 0.18,
-                offset: const Offset(0, 4),
-                color: Colors.black,
-              ),
               refractionIndex: 1.02,
-              refractionWidth: 26,
+              refractionWidth: 10,
             )
           : LiquidGlassStyle(
               shape: const LiquidGlassShape.continuousRoundedRectangle(
@@ -529,14 +523,8 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               ),
               color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
               blur: 8.0,
-              shadow: LiquidGlassShadow(
-                blur: 16,
-                opacity: isDark ? 0.40 : 0.18,
-                offset: const Offset(0, 4),
-                color: Colors.black,
-              ),
               refractionIndex: 1.02,
-              refractionWidth: 26,
+              refractionWidth: 10,
               liteGlass: isLite,
             );
 
@@ -638,14 +626,8 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
           ? glassProvider.createStyle(
               context: context,
               cornerRadius: 30.0,
-              shadow: LiquidGlassShadow(
-                blur: 16,
-                opacity: isDark ? 0.40 : 0.18,
-                offset: const Offset(0, 8),
-                color: Colors.black,
-              ),
               refractionIndex: 1.02,
-              refractionWidth: 26,
+              refractionWidth: 10,
             )
           : LiquidGlassStyle(
               shape: const LiquidGlassShape.continuousRoundedRectangle(
@@ -654,14 +636,8 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               ),
               color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
               blur: 8.0,
-              shadow: LiquidGlassShadow(
-                blur: 16,
-                opacity: isDark ? 0.40 : 0.18,
-                offset: const Offset(0, 8),
-                color: Colors.black,
-              ),
               refractionIndex: 1.02,
-              refractionWidth: 26,
+              refractionWidth: 10,
               liteGlass: isLite,
             );
 

@@ -163,14 +163,8 @@ class ScrollDownFab extends StatelessWidget {
     final style = glassProvider.createStyle(
       context: context,
       cornerRadius: 24,
-      shadow: const LiquidGlassShadow(
-        blur: 12,
-        opacity: 0.3,
-        offset: Offset(0, 3),
-        color: Colors.black,
-      ),
       refractionIndex: 1.025,
-      refractionWidth: 24,
+      refractionWidth: 10,
     );
 
     return LiquidGlassLens(

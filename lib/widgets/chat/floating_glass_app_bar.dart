@@ -190,14 +190,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final morphStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: _kAppBarBorderRadius,
-      shadow: LiquidGlassShadow(
-        blur: 16,
-        opacity: isDark ? 0.40 : 0.18,
-        offset: const Offset(0, 4),
-        color: Colors.black,
-      ),
       refractionIndex: 1.02,
-      refractionWidth: 26,
+      refractionWidth: 10,
     );
 
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
@@ -1224,14 +1218,8 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
       context: context,
       cornerRadius: _kAppBarBorderRadius,
       color: isDark ? const Color(0x44202025) : const Color(0x9EFFFFFF),
-      shadow: LiquidGlassShadow(
-        blur: 20,
-        opacity: isDark ? 0.45 : 0.22,
-        offset: const Offset(0, 6),
-        color: Colors.black,
-      ),
       refractionIndex: 1.025,
-      refractionWidth: 24,
+      refractionWidth: 10,
     );
 
     return LiquidGlassLens(

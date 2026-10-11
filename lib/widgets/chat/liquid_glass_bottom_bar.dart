@@ -120,7 +120,7 @@ class _LiquidGlassBottomBarState extends State<LiquidGlassBottomBar> {
           context: context,
           cornerRadius: 32,
           refractionIndex: 1.21,
-          refractionWidth: 30.0,
+          refractionWidth: 12.0,
           blur: 8.0,
           color: isDark
               ? const Color.fromARGB(60, 30, 30, 40)
@@ -506,7 +506,7 @@ class _TabIndicatorState extends State<_TabIndicator>
                           style: widget.glassStyle.copyWith(
                             color: const Color.fromARGB(25, 255, 255, 255),
                             refractionIndex: 1.15,
-                            refractionWidth: 20.0,
+                            refractionWidth: 10.0,
                             blur: 0.0,
                             shape:
                                 const LiquidGlassShape.continuousRoundedRectangle(

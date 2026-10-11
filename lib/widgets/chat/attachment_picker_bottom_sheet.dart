@@ -1257,14 +1257,8 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
       color: isDark
           ? const Color(0x3D24242C)
           : const Color(0x9EFFFFFF),
-      shadow: LiquidGlassShadow(
-        blur: 16,
-        opacity: isDark ? 0.35 : 0.12,
-        offset: const Offset(0, 4),
-        color: Colors.black,
-      ),
       refractionIndex: 1.02,
-      refractionWidth: 26,
+      refractionWidth: 10,
     );
 
     return Padding(

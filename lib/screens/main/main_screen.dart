@@ -1426,7 +1426,6 @@ class _MainScreenState extends State<MainScreen>
     BuildContext context,
     LiquidGlassProvider glassProvider,
   ) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     const double ctrlSize = 44.0;
     const double menuWidth = 200.0;
     final double menuHeight = _getMenuHeight(_currentIndex);
@@ -1437,14 +1436,8 @@ class _MainScreenState extends State<MainScreen>
     final pillStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: barRadius,
-      shadow: LiquidGlassShadow(
-        blur: 16,
-        opacity: isDark ? 0.40 : 0.18,
-        offset: const Offset(0, 4),
-        color: Colors.black,
-      ),
       refractionIndex: 1.02,
-      refractionWidth: 26,
+      refractionWidth: 10,
     );
 
     final morphStyle = pillStyle;
@@ -2790,14 +2783,8 @@ class _MainScreenState extends State<MainScreen>
               final barStyle = glassProvider.createStyle(
                 context: context,
                 cornerRadius: barHeight / 2,
-                shadow: LiquidGlassShadow(
-                  blur: 16,
-                  opacity: isDark ? 0.40 : 0.18,
-                  offset: const Offset(0, 8),
-                  color: Colors.black,
-                ),
                 refractionIndex: 1.02,
-                refractionWidth: 26,
+                refractionWidth: 10,
               );
 
               final actionStyle = barStyle;

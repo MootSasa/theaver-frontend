@@ -71,9 +71,9 @@ class LiquidGlassProvider extends ChangeNotifier {
     double? blur,
     LiquidGlassShadow? shadow,
     double refractionIndex = 1.02,
-    double refractionWidth = 24.0,
-    double borderWidth = 0.7,
-    bool includeGlow = true,
+    double refractionWidth = 10.0,
+    double borderWidth = 0.25,
+    bool includeGlow = false,
     bool? isLiteOverride,
     bool? isDarkOverride,
   }) {
@@ -99,18 +99,18 @@ class LiquidGlassProvider extends ChangeNotifier {
 
     final specular = borderWidth > 0
         ? LiquidGlassLight.specular(
-            thickness: borderWidth * 5.4,
-            sharpness: 0.95,
+            thickness: borderWidth * 3.0,
+            sharpness: 0.98,
             angle: angle,
-            intensity: isDark ? 0.7 : 0.95,
+            intensity: isDark ? 0.6 : 0.85,
           )
         : null;
 
     final glow = (borderWidth > 0 && includeGlow)
         ? LiquidGlassLight.glow(
-            thickness: borderWidth * 29.4,
+            thickness: borderWidth * 8.0,
             angle: angle + 90,
-            intensity: 0.85,
+            intensity: 0.3,
           )
         : null;
 
@@ -118,7 +118,7 @@ class LiquidGlassProvider extends ChangeNotifier {
       shape: effectiveShape,
       color: color ?? defaultColor,
       blur: blur ?? _blur,
-      shadow: shadow,
+      shadow: null,
       specular: specular,
       glow: glow,
       refractionIndex: refractionIndex,

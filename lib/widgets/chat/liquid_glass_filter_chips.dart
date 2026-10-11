@@ -134,20 +134,14 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
       ),
       color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
       blur: 5.0,
-      shadow: const LiquidGlassShadow(blur: 8, opacity: 0.12),
       specular: LiquidGlassLight.specular(
-        thickness: 0.7 * 5.4,
-        sharpness: 0.95,
+        thickness: 0.8,
+        sharpness: 0.98,
         angle: widget.lightAngle ?? 62.0,
-        intensity: 0.9,
-      ),
-      glow: LiquidGlassLight.glow(
-        thickness: 0.7 * 29.4,
-        angle: (widget.lightAngle ?? 62.0) + 90,
-        intensity: 0.85,
+        intensity: 0.8,
       ),
       refractionIndex: 1.02,
-      refractionWidth: 20,
+      refractionWidth: 10,
       liteGlass: widget.isLite,
     );
 
