@@ -1416,7 +1416,7 @@ class _MainScreenState extends State<MainScreen>
       context: context,
       cornerRadius: barRadius,
       refractionIndex: 1.02,
-      refractionWidth: 20.0,
+      refractionWidth: 24.0,
     );
 
     final morphStyle = pillStyle;
@@ -2796,7 +2796,7 @@ class _MainScreenState extends State<MainScreen>
                 context: context,
                 cornerRadius: barHeight / 2,
                 refractionIndex: 1.02,
-                refractionWidth: 20.0,
+                refractionWidth: 24.0,
               );
 
               final actionStyle = barStyle;

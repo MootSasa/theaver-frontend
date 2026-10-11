@@ -114,7 +114,7 @@ class ReplyPreviewBar extends StatelessWidget {
       context: context,
       cornerRadius: 16,
       refractionIndex: 1.02,
-      refractionWidth: 20,
+      refractionWidth: 24,
       isLiteOverride: isLite,
     );
 

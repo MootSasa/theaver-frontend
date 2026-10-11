@@ -1810,7 +1810,7 @@ class _RoundHeaderButton extends StatelessWidget {
       final glassStyle = glassProvider.createStyle(
         context: context,
         refractionIndex: 1.25,
-        refractionWidth: 20.0,
+        refractionWidth: 24.0,
         blur: 6.0,
         color: isDark
             ? const Color.fromARGB(12, 20, 20, 35)
@@ -2157,7 +2157,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
       context: context,
       cornerRadius: _ctrlSize / 2,
       refractionIndex: 1.02,
-      refractionWidth: 20.0,
+      refractionWidth: 24.0,
       isLiteOverride: widget.isLite,
     );
 

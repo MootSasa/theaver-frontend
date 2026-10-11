@@ -71,11 +71,13 @@ class LiquidGlassProvider extends ChangeNotifier {
     double? blur,
     LiquidGlassShadow? shadow,
     double refractionIndex = 1.02,
-    double refractionWidth = 20.0,
-    double borderWidth = 0.35,
+    double refractionWidth = 24.0,
+    double borderWidth = 0.55,
+    Color? borderColor,
     bool includeGlow = false,
     bool? isLiteOverride,
     bool? isDarkOverride,
+    LiquidGlassAdaptivity? adaptivity,
   }) {
     final isDark = isDarkOverride ??
         (context != null
@@ -97,22 +99,43 @@ class LiquidGlassProvider extends ChangeNotifier {
           clipQuality: clipQuality,
         );
 
+    // В светлой теме белый specular (+150L) пересвечивает стекло и окантовка становится белой.
+    // На светлом фоне окантовка адаптируется под тёмный графитовый тон, устраняя белый ореол.
+    final specularColor = borderColor ??
+        (isDark ? null : const Color(0xFF3A3A3C));
+
     final specular = borderWidth > 0
         ? LiquidGlassLight.specular(
             thickness: borderWidth * 3.0,
             sharpness: 0.98,
             angle: angle,
-            intensity: isDark ? 0.6 : 0.85,
+            intensity: isDark ? 0.6 : 0.55,
+            color: specularColor,
           )
         : null;
+
+    final glowColor = borderColor ??
+        (isDark ? null : const Color(0xFF3A3A3C));
 
     final glow = (borderWidth > 0 && includeGlow)
         ? LiquidGlassLight.glow(
             thickness: borderWidth * 8.0,
             angle: angle + 90,
-            intensity: 0.3,
+            intensity: isDark ? 0.3 : 0.2,
+            color: glowColor,
           )
         : null;
+
+    final effectiveAdaptivity = adaptivity ??
+        (color == null
+            ? const LiquidGlassAdaptivity(
+                glassColorOnDark: Color(0x33202025),
+                contentColorOnDark: Colors.white,
+                glassColorOnLight: Color(0x8FFFFFFF),
+                contentColorOnLight: Color(0xFF1C1C1E),
+                brightnessFallback: LiquidGlassBrightnessFallback.appTheme,
+              )
+            : null);
 
     return LiquidGlassStyle(
       shape: effectiveShape,
@@ -123,6 +146,7 @@ class LiquidGlassProvider extends ChangeNotifier {
       glow: glow,
       refractionIndex: refractionIndex,
       refractionWidth: refractionWidth,
+      adaptivity: effectiveAdaptivity,
       liteGlass: lite,
     );
   }
