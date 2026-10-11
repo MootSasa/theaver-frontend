@@ -159,39 +159,18 @@ class ScrollDownFab extends StatelessWidget {
 
   Widget _buildGlassButton(BuildContext context, bool isDark, Widget child) {
     final glassProvider = context.watch<LiquidGlassProvider>();
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
 
-    final shape = LiquidGlassShape.continuousRoundedRectangle(
+    final style = glassProvider.createStyle(
+      context: context,
       cornerRadius: 24,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: lightAngle,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
+      shadow: const LiquidGlassShadow(
+        blur: 12,
+        opacity: 0.3,
+        offset: Offset(0, 3),
+        color: Colors.black,
       ),
-    );
-
-    final style = LiquidGlassStyle(
-      shape: shape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: const LiquidGlassShadow(
-          blur: 12,
-          opacity: 0.3,
-          offset: Offset(0, 3),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.08,
-        distortionWidth: 24,
-      ),
-      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+      refractionIndex: 1.025,
+      refractionWidth: 24,
     );
 
     return LiquidGlassLens(

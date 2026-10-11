@@ -127,31 +127,28 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
     final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
 
-    final shape = LiquidGlassShape.continuousRoundedRectangle(
-      cornerRadius: 18,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: 0.9,
-      lightDirection: widget.lightAngle ?? 62.0,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
-      ),
-    );
-
     final style = LiquidGlassStyle(
-      shape: shape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
-        shadow: const LiquidGlassShadow(blur: 8, opacity: 0.12),
+      shape: const LiquidGlassShape.continuousRoundedRectangle(
+        cornerRadius: 18,
+        clipQuality: LiquidGlassClipQuality.exact,
       ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.05,
-        distortionWidth: 20,
+      color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+      blur: 5.0,
+      shadow: const LiquidGlassShadow(blur: 8, opacity: 0.12),
+      specular: LiquidGlassLight.specular(
+        thickness: 0.7 * 5.4,
+        sharpness: 0.95,
+        angle: widget.lightAngle ?? 62.0,
+        intensity: 0.9,
       ),
-      liteGlass: widget.isLite ? LiquidGlassLitePickup.surface : null,
+      glow: LiquidGlassLight.glow(
+        thickness: 0.7 * 29.4,
+        angle: (widget.lightAngle ?? 62.0) + 90,
+        intensity: 0.85,
+      ),
+      refractionIndex: 1.02,
+      refractionWidth: 20,
+      liteGlass: widget.isLite,
     );
 
     return Padding(

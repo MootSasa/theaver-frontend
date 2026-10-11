@@ -47,45 +47,23 @@ class ThemeEditorFloatingAppBar extends StatelessWidget implements PreferredSize
   Widget build(BuildContext context) {
     final glassProvider = Provider.of<LiquidGlassProvider>(context);
     final isGlassEnabled = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
     final themeExt = theme.extension<TheavThemeExtension>();
     final foregroundColor = themeExt?.palette.appBarForeground ??
         (isDark ? Colors.white : const Color(0xFF1C1C1E));
 
-    final morphShape = LiquidGlassShape.continuousRoundedRectangle(
+    final morphStyle = glassProvider.createStyle(
+      context: context,
       cornerRadius: _kAppBarBorderRadius,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: lightAngle,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
+      shadow: LiquidGlassShadow(
+        blur: 16,
+        opacity: isDark ? 0.40 : 0.18,
+        offset: const Offset(0, 4),
+        color: Colors.black,
       ),
-    );
-
-    final morphStyle = LiquidGlassStyle(
-      shape: morphShape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.40 : 0.18,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-      liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
+      refractionIndex: 1.02,
+      refractionWidth: 26,
     );
 
     return SafeArea(

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:provider/provider.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import '../../services/liquid_glass_provider.dart';
 
 /// Горизонтальная стеклянная плашка музыкального статуса.
 ///
@@ -49,67 +51,69 @@ class LiquidGlassMusicStatus extends StatelessWidget {
   /// Стеклянная плашка
   Widget _buildGlassStatus(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    const shape = LiquidRoundedSuperellipse(borderRadius: 24);
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassStyle = glassProvider.createStyle(
+      context: context,
+      isLiteOverride: isLite,
+    );
 
-    final glassChild = GlassGlow(
-      child: Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: isDark
-            ? null
-            : BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  width: 0.5,
-                ),
+    final statusContent = Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: isDark
+          ? null
+          : BoxDecoration(
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: Colors.black.withValues(alpha: 0.12),
+                width: 0.5,
               ),
-        child: Row(
-          children: [
-            // Иконка ноты
-            Icon(
-              Icons.music_note,
-              size: 20,
-              color: isDark ? Colors.white70 : const Color(0xFF0088CC),
             ),
-            const SizedBox(width: 12),
-            // Название трека + автор
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
+      child: Row(
+        children: [
+          // Иконка ноты
+          Icon(
+            Icons.music_note,
+            size: 20,
+            color: isDark ? Colors.white70 : const Color(0xFF0088CC),
+          ),
+          const SizedBox(width: 12),
+          // Название трека + автор
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  trackTitle!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: isDark ? Colors.white : Colors.black87,
+                  ),
+                ),
+                if (trackAuthor != null && trackAuthor!.isNotEmpty)
                   Text(
-                    trackTitle!,
+                    trackAuthor!,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: isDark ? Colors.white : Colors.black87,
+                      fontSize: 12,
+                      color: isDark ? Colors.white54 : Colors.black54,
                     ),
                   ),
-                  if (trackAuthor != null && trackAuthor!.isNotEmpty)
-                    Text(
-                        trackAuthor!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isDark ? Colors.white54 : Colors.black54,
-                        ),
-                    ),
-                ],
-              ),
+              ],
             ),
-            // Иконка «play» — задел на будущее
-            Icon(
-              Icons.play_circle_outline,
-              size: 24,
-              color: isDark ? Colors.white38 : const Color(0xFF0088CC).withValues(alpha: 0.5),
-            ),
-          ],
-        ),
+          ),
+          // Иконка «play» — задел на будущее
+          Icon(
+            Icons.play_circle_outline,
+            size: 24,
+            color: isDark ? Colors.white38 : const Color(0xFF0088CC).withValues(alpha: 0.5),
+          ),
+        ],
       ),
     );
 
@@ -118,9 +122,14 @@ class LiquidGlassMusicStatus extends StatelessWidget {
       onTap: () {
         // TODO: реализовать воспроизведение музыки
       },
-      child: isLite
-          ? FakeGlass.inLayer(shape: shape, child: glassChild)
-          : LiquidGlass.grouped(shape: shape, child: glassChild),
+      child: LiquidGlassLens(
+        style: glassStyle.copyWith(
+          shape: const LiquidGlassShape.continuousRoundedRectangle(
+            cornerRadius: 24,
+          ),
+        ),
+        child: statusContent,
+      ),
     );
   }
 

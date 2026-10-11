@@ -1427,9 +1427,6 @@ class _MainScreenState extends State<MainScreen>
     LiquidGlassProvider glassProvider,
   ) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle =
-        glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
     const double ctrlSize = 44.0;
     const double menuWidth = 200.0;
     final double menuHeight = _getMenuHeight(_currentIndex);
@@ -1437,41 +1434,20 @@ class _MainScreenState extends State<MainScreen>
     const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
     const double barRadius = ctrlSize / 2; // 22.0 — stadium capsule ratio
 
-    final pillStyle = LiquidGlassStyle(
-      shape: _glassShape(barRadius, lightAngle),
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.40 : 0.18,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
+    final pillStyle = glassProvider.createStyle(
+      context: context,
+      cornerRadius: barRadius,
+      shadow: LiquidGlassShadow(
+        blur: 16,
+        opacity: isDark ? 0.40 : 0.18,
+        offset: const Offset(0, 4),
+        color: Colors.black,
       ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
+      refractionIndex: 1.02,
+      refractionWidth: 26,
     );
 
-    final morphStyle = LiquidGlassStyle(
-      shape: _glassShape(barRadius, lightAngle),
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.40 : 0.18,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-    );
+    final morphStyle = pillStyle;
 
     final double closedPillWidth =
         math.max(130.0, _calculateTitleWidth(context) + 48.0);
@@ -2782,9 +2758,6 @@ class _MainScreenState extends State<MainScreen>
             final isDark = Theme.of(context).brightness == Brightness.dark;
             final statusBarHeight = MediaQuery.of(context).padding.top;
             final topBarHeight = statusBarHeight + 52.0;
-            final reduceMotion = MediaQuery.disableAnimationsOf(context);
-            final lightAngle =
-                glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
 
             if (glassProvider.enabled) {
               final double screen = MediaQuery.sizeOf(context).width;
@@ -2814,43 +2787,20 @@ class _MainScreenState extends State<MainScreen>
                 barWidth = maxGroupWidth - actionSize - spacing;
               }
 
-              final shape = _glassShape(barHeight / 2, lightAngle);
-
-              final barStyle = LiquidGlassStyle(
-                shape: shape,
-                appearance: LiquidGlassAppearance(
-                  color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-                  blur: glassProvider.blurEffect,
-                  shadow: LiquidGlassShadow(
-                    blur: 16,
-                    opacity: isDark ? 0.40 : 0.18,
-                    offset: const Offset(0, 8),
-                    color: Colors.black,
-                  ),
+              final barStyle = glassProvider.createStyle(
+                context: context,
+                cornerRadius: barHeight / 2,
+                shadow: LiquidGlassShadow(
+                  blur: 16,
+                  opacity: isDark ? 0.40 : 0.18,
+                  offset: const Offset(0, 8),
+                  color: Colors.black,
                 ),
-                refraction: const LiquidGlassRefraction(
-                  distortion: 0.06,
-                  distortionWidth: 26,
-                ),
+                refractionIndex: 1.02,
+                refractionWidth: 26,
               );
 
-              final actionStyle = LiquidGlassStyle(
-                shape: _glassShape(barHeight / 2, lightAngle),
-                appearance: LiquidGlassAppearance(
-                  color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-                  blur: glassProvider.blurEffect,
-                  shadow: LiquidGlassShadow(
-                    blur: 16,
-                    opacity: isDark ? 0.40 : 0.18,
-                    offset: const Offset(0, 8),
-                    color: Colors.black,
-                  ),
-                ),
-                refraction: const LiquidGlassRefraction(
-                  distortion: 0.06,
-                  distortionWidth: 26,
-                ),
-              );
+              final actionStyle = barStyle;
 
               final double effectiveBottomMargin = keyboardHeight > 0
                   ? (bottomMargin + keyboardHeight - safeBottom)
@@ -2889,7 +2839,8 @@ class _MainScreenState extends State<MainScreen>
                     ],
                   ),
                 ),
-                actionMargin: actionMargin,
+                bottomNavigationBarActionMargin: actionMargin,
+                floatingActionButtonMargin: actionMargin,
                 bottomNavigationBar: LiquidGlassTabBar(
                   items: [
                     _buildTabBarItem(
@@ -2947,12 +2898,10 @@ class _MainScreenState extends State<MainScreen>
                     animated: true,
                     growHeight: 7,
                     rest: LiquidGlassStyle(
-                      shape: _glassShape(28, lightAngle),
-                      appearance: LiquidGlassAppearance(
-                        color: isDark
-                            ? const Color(0x38FFFFFF)
-                            : const Color(0x2EAEAEB2),
-                      ),
+                      shape: _glassShape(28),
+                      color: isDark
+                          ? const Color(0x38FFFFFF)
+                          : const Color(0x2EAEAEB2),
                     ),
                   ),
                 ),
@@ -3042,18 +2991,10 @@ class _MainScreenState extends State<MainScreen>
     ); // closes AnnotatedRegion
   }
 
-  LiquidGlassShape _glassShape(double cornerRadius, double lightAngle) =>
+  LiquidGlassShape _glassShape(double cornerRadius) =>
       LiquidGlassShape.continuousRoundedRectangle(
         cornerRadius: cornerRadius,
         clipQuality: LiquidGlassClipQuality.exact,
-        borderWidth: 0.7,
-        lightIntensity: 0.9,
-        lightDirection: lightAngle,
-        borderType: const OpticalBorder(
-          borderSaturation: 1.1,
-          ambientIntensity: 0.85,
-          borderSolidity: 0.95,
-        ),
       );
 
   LiquidGlassTabBarItem _buildTabBarItem({

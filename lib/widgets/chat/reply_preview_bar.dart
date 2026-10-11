@@ -110,39 +110,19 @@ class ReplyPreviewBar extends StatelessWidget {
   Widget _buildGlassBar(BuildContext context) {
     final glassProvider = context.watch<LiquidGlassProvider>();
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
 
-    final shape = LiquidGlassShape.continuousRoundedRectangle(
+    final style = glassProvider.createStyle(
+      context: context,
       cornerRadius: 16,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: lightAngle,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
+      shadow: LiquidGlassShadow(
+        blur: 16,
+        opacity: isDark ? 0.40 : 0.18,
+        offset: const Offset(0, 4),
+        color: Colors.black,
       ),
-    );
-
-    final style = LiquidGlassStyle(
-      shape: shape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.40 : 0.18,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-      liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
+      refractionIndex: 1.02,
+      refractionWidth: 26,
+      isLiteOverride: isLite,
     );
 
     return Container(

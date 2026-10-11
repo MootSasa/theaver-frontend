@@ -47,8 +47,8 @@ class LiquidGlassProvider extends ChangeNotifier {
   /// Степень размытия заднего плана (blur sigma)
   double get blur => _blur;
 
-  /// Эффект размытия заднего плана для передачи в LiquidGlassLens
-  LiquidGlassBlur get blurEffect => LiquidGlassBlur(sigmaX: _blur, sigmaY: _blur);
+  /// Степень размытия заднего плана (blur sigma) для передачи в LiquidGlassLens
+  double get blurEffect => _blur;
 
   /// Вычисляет итоговый угол освещения для передачи в шейдеры/виджеты.
   /// Стабилен и не вызывает ненужных перерисовок.
@@ -57,6 +57,74 @@ class LiquidGlassProvider extends ChangeNotifier {
       return 62.0;
     }
     return _lightAngle;
+  }
+
+  /// Создает унифицированный [LiquidGlassStyle] для приложения Miptgram,
+  /// адаптированный под текущую тему, угол освещения и режим (full/lite).
+  LiquidGlassStyle createStyle({
+    BuildContext? context,
+    double cornerRadius = 0,
+    LiquidGlassCornerStyle cornerStyle = LiquidGlassCornerStyle.continuousRoundedRectangle,
+    LiquidGlassClipQuality clipQuality = LiquidGlassClipQuality.exact,
+    LiquidGlassShape? shape,
+    Color? color,
+    double? blur,
+    LiquidGlassShadow? shadow,
+    double refractionIndex = 1.02,
+    double refractionWidth = 24.0,
+    double borderWidth = 0.7,
+    bool includeGlow = true,
+    bool? isLiteOverride,
+    bool? isDarkOverride,
+  }) {
+    final isDark = isDarkOverride ??
+        (context != null
+            ? Theme.of(context).brightness == Brightness.dark
+            : true);
+    final reduceMotion =
+        context != null ? MediaQuery.disableAnimationsOf(context) : false;
+    final angle = getEffectiveLightAngle(reduceMotion: reduceMotion);
+    final lite = isLiteOverride ?? isLite;
+
+    final defaultColor = isDark
+        ? const Color(0x33202025)
+        : const Color(0x8FFFFFFF);
+
+    final effectiveShape = shape ??
+        LiquidGlassShape(
+          cornerRadius: cornerRadius,
+          cornerStyle: cornerStyle,
+          clipQuality: clipQuality,
+        );
+
+    final specular = borderWidth > 0
+        ? LiquidGlassLight.specular(
+            thickness: borderWidth * 5.4,
+            sharpness: 0.95,
+            angle: angle,
+            intensity: isDark ? 0.7 : 0.95,
+          )
+        : null;
+
+    final glow = (borderWidth > 0 && includeGlow)
+        ? LiquidGlassLight.glow(
+            thickness: borderWidth * 29.4,
+            angle: angle + 90,
+            intensity: 0.85,
+          )
+        : null;
+
+    return LiquidGlassStyle(
+      shape: effectiveShape,
+      color: color ?? defaultColor,
+      blur: blur ?? _blur,
+      shadow: shadow,
+      specular: specular,
+      glow: glow,
+      refractionIndex: refractionIndex,
+      refractionWidth: refractionWidth,
+      liteGlass: lite,
+    );
   }
 
   /// Инициализация из SettingsService

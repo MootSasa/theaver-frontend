@@ -1,8 +1,8 @@
 import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
-import '../../services/liquid_glass_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import '../../services/liquid_glass_provider.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 /// Модель данных для in-app баннера уведомления
 class InAppNotificationData {
@@ -239,7 +239,7 @@ class _InAppNotificationBannerState extends State<InAppNotificationBanner>
               );
             },
             child: glassProvider.enabled
-                ? _buildGlassBanner(context)
+                ? _buildGlassBanner(context, glassProvider)
                 : _buildClassicBanner(context),
           ),
         );
@@ -247,14 +247,18 @@ class _InAppNotificationBannerState extends State<InAppNotificationBanner>
     );
   }
 
-  Widget _buildGlassBanner(BuildContext context) {
-    return LiquidGlass.withOwnLayer(
-      settings: const LiquidGlassSettings(
-        thickness: 15,
-        blur: 10,
-        refractiveIndex: 1.15,
+  Widget _buildGlassBanner(BuildContext context, LiquidGlassProvider glassProvider) {
+    final style = glassProvider.createStyle(
+      blur: 10.0,
+      refractionIndex: 1.15,
+      refractionWidth: 15.0,
+      shape: const LiquidGlassShape.continuousRoundedRectangle(
+        cornerRadius: 16,
       ),
-      shape: const LiquidRoundedSuperellipse(borderRadius: 16),
+    );
+
+    return LiquidGlassLens(
+      style: style,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: _buildBannerContent(context),

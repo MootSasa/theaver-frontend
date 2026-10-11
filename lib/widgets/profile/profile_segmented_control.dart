@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+
+import '../../services/liquid_glass_provider.dart';
 
 import '../../services/profile_theme_provider.dart';
 import '../../utils/haptic_utils.dart';
@@ -188,7 +190,6 @@ class ProfileSegmentedControl extends StatelessWidget {
     final preset = customPreset ?? profileTheme.currentPreset;
     final hasCustom = preset != null || profileTheme.hasCustomColor;
 
-    const shape = LiquidRoundedSuperellipse(borderRadius: 15);
 
     final glassIndicatorColor = customPreset != null
         ? Colors.white.withValues(alpha: 0.25)
@@ -218,8 +219,7 @@ class ProfileSegmentedControl extends StatelessWidget {
             ? (isDark ? Colors.white.withValues(alpha: 0.65) : Colors.black.withValues(alpha: 0.6))
             : (isDark ? Colors.white.withValues(alpha: 0.55) : Colors.black.withValues(alpha: 0.55)));
 
-    final glassChild = GlassGlow(
-      child: Container(
+    final glassContent = Container(
         height: 30,
         width: double.infinity,
         padding: const EdgeInsets.all(2),
@@ -311,12 +311,21 @@ class ProfileSegmentedControl extends StatelessWidget {
             );
           },
         ),
+      );
+
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassStyle = glassProvider.createStyle(
+      context: context,
+      isLiteOverride: isLite,
+      shape: const LiquidGlassShape.roundedRectangle(
+        cornerRadius: 15,
       ),
     );
 
-    return isLite
-        ? FakeGlass.inLayer(shape: shape, child: glassChild)
-        : LiquidGlass.grouped(shape: shape, child: glassChild);
+    return LiquidGlassLens(
+      style: glassStyle,
+      child: glassContent,
+    );
   }
 }
 

@@ -177,11 +177,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   Widget build(BuildContext context) {
     final glassProvider = context.watch<LiquidGlassProvider>();
     final isGlassEnabled = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
     final statusBarHeight = MediaQuery.of(context).padding.top;
     final screenSize = MediaQuery.sizeOf(context);
 
@@ -190,36 +187,17 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
         hasCall ? _kRightPillChatWidth : _kRightPillChannelWidth;
     final double adaptiveMenuWidth = _calculateAdaptiveMenuWidth(context);
 
-    final morphShape = LiquidGlassShape.continuousRoundedRectangle(
+    final morphStyle = glassProvider.createStyle(
+      context: context,
       cornerRadius: _kAppBarBorderRadius,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: lightAngle,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
+      shadow: LiquidGlassShadow(
+        blur: 16,
+        opacity: isDark ? 0.40 : 0.18,
+        offset: const Offset(0, 4),
+        color: Colors.black,
       ),
-    );
-
-    final morphStyle = LiquidGlassStyle(
-      shape: morphShape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.40 : 0.18,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-      liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
+      refractionIndex: 1.02,
+      refractionWidth: 26,
     );
 
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
@@ -1241,39 +1219,19 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
 
   Widget _buildGlassMenu(bool isDark, ThemeData theme) {
     final glassProvider = Provider.of<LiquidGlassProvider>(context, listen: false);
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
 
-    final shape = LiquidGlassShape.continuousRoundedRectangle(
+    final style = glassProvider.createStyle(
+      context: context,
       cornerRadius: _kAppBarBorderRadius,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: lightAngle,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
+      color: isDark ? const Color(0x44202025) : const Color(0x9EFFFFFF),
+      shadow: LiquidGlassShadow(
+        blur: 20,
+        opacity: isDark ? 0.45 : 0.22,
+        offset: const Offset(0, 6),
+        color: Colors.black,
       ),
-    );
-
-    final style = LiquidGlassStyle(
-      shape: shape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x44202025) : const Color(0x9EFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 20,
-          opacity: isDark ? 0.45 : 0.22,
-          offset: const Offset(0, 6),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.08,
-        distortionWidth: 24,
-      ),
-      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+      refractionIndex: 1.025,
+      refractionWidth: 24,
     );
 
     return LiquidGlassLens(

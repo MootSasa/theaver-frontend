@@ -9,7 +9,7 @@ import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:inspire_blur/inspire_blur.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/account_manager.dart';
@@ -1001,18 +1001,6 @@ class ProfileScreenState extends State<ProfileScreen>
       _expandFactor,
     );
 
-    final glassSettings = LiquidGlassSettings(
-      refractiveIndex: 1.25,
-      thickness: 10,
-      blur: 6,
-      saturation: 1.4,
-      lightIntensity: isDark ? 0.6 : 0.9,
-      ambientStrength: isDark ? 0.15 : 0.35,
-      lightAngle: math.pi / 2,
-      glassColor: isDark
-          ? const Color.fromARGB(20, 20, 20, 35)
-          : const Color.fromARGB(25, 240, 240, 250),
-    );
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayStyle,
@@ -1224,68 +1212,62 @@ class ProfileScreenState extends State<ProfileScreen>
                       offset: Offset(0, contentTranslation),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: LiquidGlassLayer(
-                          settings: glassSettings,
-                          child: LiquidGlassBlendGroup(
-                            blend: 10,
-                            child: SingleChildScrollView(
-                              padding: const EdgeInsets.only(bottom: 32),
-                              child: Column(
-                                children: [
-                                  LiquidGlassProfileButtons(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    onChoosePhoto: _pickImage,
-                                    onQrCode: _showQrCode,
-                                    onEdit: _openEditProfile,
-                                    onDeletePhoto: _deleteAvatar,
-                                    hasAvatar: _avatarUrl != null || _avatarFile != null,
-                                    collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
-                                    choosePhotoLabel: l10n.translate('profile_choose_photo'),
-                                    qrCodeLabel: l10n.translate('profile_qr_code'),
-                                    editLabel: l10n.translate('profile_edit_btn'),
-                                    deletePhotoLabel: l10n.translate('profile_delete_photo'),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  LiquidGlassMusicStatus(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    trackTitle: null,
-                                    trackAuthor: null,
-                                    musicLabel: l10n.translate('profile_music'),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  LiquidGlassInfoPanel(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
-                                    bio: null,
-                                    username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
-                                    birthday: null,
-                                    age: null,
-                                    phoneLabel: l10n.translate('profile_phone'),
-                                    bioLabel: l10n.translate('profile_bio'),
-                                    usernameLabel: l10n.translate('profile_username'),
-                                    birthdayLabel: l10n.translate('profile_birthday'),
-                                    ageLabel: l10n.translate('profile_age'),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  ProfileSegmentedControl(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    selectedIndex: _selectedSegment,
-                                    onTabChanged: (index) {
-                                      setState(() {
-                                        _selectedSegment = index;
-                                      });
-                                    },
-                                    wallLabel: l10n.translate('profile_tab_wall'),
-                                    giftsLabel: l10n.translate('profile_tab_gifts'),
-                                  ),
-                                  SizedBox(height: math.max(250.0, MediaQuery.of(context).size.height * 0.6)),
-                                ],
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.only(bottom: 32),
+                          child: Column(
+                            children: [
+                              LiquidGlassProfileButtons(
+                                enabled: true,
+                                isLite: isLite,
+                                onChoosePhoto: _pickImage,
+                                onQrCode: _showQrCode,
+                                onEdit: _openEditProfile,
+                                onDeletePhoto: _deleteAvatar,
+                                hasAvatar: _avatarUrl != null || _avatarFile != null,
+                                collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
+                                choosePhotoLabel: l10n.translate('profile_choose_photo'),
+                                qrCodeLabel: l10n.translate('profile_qr_code'),
+                                editLabel: l10n.translate('profile_edit_btn'),
+                                deletePhotoLabel: l10n.translate('profile_delete_photo'),
                               ),
-                            ),
+                              const SizedBox(height: 12),
+                              LiquidGlassMusicStatus(
+                                enabled: true,
+                                isLite: isLite,
+                                trackTitle: null,
+                                trackAuthor: null,
+                                musicLabel: l10n.translate('profile_music'),
+                              ),
+                              const SizedBox(height: 12),
+                              LiquidGlassInfoPanel(
+                                enabled: true,
+                                isLite: isLite,
+                                phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
+                                bio: null,
+                                username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
+                                birthday: null,
+                                age: null,
+                                phoneLabel: l10n.translate('profile_phone'),
+                                bioLabel: l10n.translate('profile_bio'),
+                                usernameLabel: l10n.translate('profile_username'),
+                                birthdayLabel: l10n.translate('profile_birthday'),
+                                ageLabel: l10n.translate('profile_age'),
+                              ),
+                              const SizedBox(height: 12),
+                              ProfileSegmentedControl(
+                                enabled: true,
+                                isLite: isLite,
+                                selectedIndex: _selectedSegment,
+                                onTabChanged: (index) {
+                                  setState(() {
+                                    _selectedSegment = index;
+                                  });
+                                },
+                                wallLabel: l10n.translate('profile_tab_wall'),
+                                giftsLabel: l10n.translate('profile_tab_gifts'),
+                              ),
+                              SizedBox(height: math.max(250.0, MediaQuery.of(context).size.height * 0.6)),
+                            ],
                           ),
                         ),
                       ),
@@ -1823,54 +1805,43 @@ class _RoundHeaderButton extends StatelessWidget {
     Widget buttonContent;
 
     if (glassEnabled) {
-      // Liquid Glass / FakeGlass более прозрачный вариант
-      final glassChild = GlassGlow(
-        child: Container(
-          width: size,
-          height: size,
-          alignment: Alignment.center,
-          decoration: isDark
-              ? null
-              : BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    width: 0.5,
-                  ),
-                ),
-          child: Icon(icon, size: 22, color: iconColor),
+      final glassProvider = context.watch<LiquidGlassProvider>();
+      final glassStyle = glassProvider.createStyle(
+        context: context,
+        refractionIndex: 1.25,
+        refractionWidth: 10.0,
+        blur: 6.0,
+        color: isDark
+            ? const Color.fromARGB(12, 20, 20, 35)
+            : const Color.fromARGB(15, 240, 240, 250),
+        isLiteOverride: isLite,
+        shape: const LiquidGlassShape.roundedRectangle(
+          cornerRadius: size / 2,
         ),
       );
 
-      final glassSettings = LiquidGlassSettings(
-        refractiveIndex: 1.25,
-        thickness: 10,
-        blur: 6,
-        glassColor: isDark
-            ? const Color.fromARGB(12, 20, 20, 35)
-            : const Color.fromARGB(15, 240, 240, 250),
+      final buttonChild = Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        decoration: isDark
+            ? null
+            : BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  width: 0.5,
+                ),
+              ),
+        child: Icon(icon, size: 22, color: iconColor),
       );
 
-      buttonContent = isLite
-          ? FakeGlass(
-              shape: const LiquidOval(),
-              settings: glassSettings,
-              child: glassChild,
-            )
-          : LiquidGlass.withOwnLayer(
-              shape: const LiquidOval(),
-              settings: glassSettings,
-              child: glassChild,
-            );
-
-      // В стеклянном режиме включаем LiquidStretch
-      return LiquidStretch(
-        stretch: 0.3,
-        interactionScale: 1.06,
-        child: GestureDetector(
-          onTap: onTap,
-          behavior: HitTestBehavior.opaque,
-          child: buttonContent,
+      return GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: LiquidGlassLens(
+          style: glassStyle,
+          child: buttonChild,
         ),
       );
     } else {
@@ -1938,40 +1909,16 @@ class _MorphingHeaderMenuButton extends StatefulWidget {
   State<_MorphingHeaderMenuButton> createState() => _MorphingHeaderMenuButtonState();
 }
 
-class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
-    with SingleTickerProviderStateMixin {
+class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
   final LayerLink _layerLink = LayerLink();
   final OverlayPortalController _overlayPortalController = OverlayPortalController();
-  late AnimationController _animController;
-  late Animation<double> _expandAnimation;
-  late Animation<double> _fadeAnimation;
   bool _isOpen = false;
   double _targetWidth = 245.0;
-  final double _targetHeight = 202.0;
 
   @override
   void initState() {
     super.initState();
-    _animController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    );
-    _expandAnimation = CurvedAnimation(
-      parent: _animController,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
-    );
-    _fadeAnimation = CurvedAnimation(
-      parent: _animController,
-      curve: const Interval(0.2, 1.0, curve: Curves.easeOut),
-      reverseCurve: const Interval(0.0, 0.4, curve: Curves.easeIn),
-    );
-  }
-
-  @override
-  void dispose() {
-    _animController.dispose();
-    super.dispose();
+    _overlayPortalController.show();
   }
 
   double _calculateMenuWidth(AppLocalizations l10n) {
@@ -2005,7 +1952,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
           ),
           textDirection: TextDirection.ltr,
         )..layout();
-        
+
         itemWidth += 6.0 + 6.0 + 6.0 + todoPainter.width;
       }
 
@@ -2021,15 +1968,10 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
   void _openMenu() {
     if (_isOpen) return;
     HapticUtils.selection();
-    
-    final l10n = context.l10n;
-    _targetWidth = _calculateMenuWidth(l10n);
-
+    _targetWidth = _calculateMenuWidth(context.l10n);
     setState(() {
       _isOpen = true;
     });
-    _overlayPortalController.show();
-    _animController.forward(from: 0.0);
   }
 
   void _closeMenu() {
@@ -2037,11 +1979,6 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
     HapticUtils.selection();
     setState(() {
       _isOpen = false;
-    });
-    _animController.reverse().then((_) {
-      if (mounted) {
-        _overlayPortalController.hide();
-      }
     });
   }
 
@@ -2053,12 +1990,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
     setState(() {
       _isOpen = false;
     });
-    _animController.reverse().then((_) {
-      if (mounted) {
-        _overlayPortalController.hide();
-      }
-      callback();
-    });
+    callback();
   }
 
   Widget _buildMenuItem({
@@ -2118,235 +2050,149 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
     );
   }
 
+  Widget _buildCollapsedButton() {
+    return GestureDetector(
+      key: const ValueKey<String>('profile_header_menu_collapsed'),
+      onTap: _openMenu,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 42,
+        height: 42,
+        child: Center(
+          child: Icon(
+            Icons.more_horiz,
+            size: 22,
+            color: widget.iconColor,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenuContent(double width) {
+    final l10n = context.l10n;
+    return SizedBox(
+      key: const ValueKey<String>('profile_header_menu_expanded'),
+      width: width,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildMenuItem(
+              icon: Icons.edit_outlined,
+              title: l10n.translate('profile_menu_edit_info'),
+              onTap: () => _closeMenuWithCallback(widget.onEditProfile),
+            ),
+            _buildMenuItem(
+              icon: Icons.photo_camera_outlined,
+              title: l10n.translate('profile_menu_choose_photo'),
+              onTap: () => _closeMenuWithCallback(widget.onChoosePhoto),
+            ),
+            _buildMenuItem(
+              icon: Icons.music_note_outlined,
+              title: l10n.translate('profile_menu_choose_music'),
+              isTodo: true,
+              onTap: () => _closeMenuWithCallback(widget.onChooseMusic),
+            ),
+            _buildMenuItem(
+              icon: Icons.palette_outlined,
+              title: l10n.translate('profile_menu_change_color'),
+              onTap: () => _closeMenuWithCallback(widget.onChangeColor),
+            ),
+            _buildMenuItem(
+              icon: Icons.link_rounded,
+              title: l10n.translate('profile_menu_copy_link'),
+              onTap: () => _closeMenuWithCallback(widget.onCopyLink),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final l10n = context.l10n;
-
-    Widget buildMenuContent(double progress, double width, double height) {
-      if (progress < 0.25) {
-        return const SizedBox();
-      } else {
-        return SizedBox(
-          width: width,
-          height: height,
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildMenuItem(
-                      icon: Icons.edit_outlined,
-                      title: l10n.translate('profile_menu_edit_info'),
-                      onTap: () => _closeMenuWithCallback(widget.onEditProfile),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.photo_camera_outlined,
-                      title: l10n.translate('profile_menu_choose_photo'),
-                      onTap: () => _closeMenuWithCallback(widget.onChoosePhoto),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.music_note_outlined,
-                      title: l10n.translate('profile_menu_choose_music'),
-                      isTodo: true,
-                      onTap: () => _closeMenuWithCallback(widget.onChooseMusic),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.palette_outlined,
-                      title: l10n.translate('profile_menu_change_color'),
-                      onTap: () => _closeMenuWithCallback(widget.onChangeColor),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.link_rounded,
-                      title: l10n.translate('profile_menu_copy_link'),
-                      onTap: () => _closeMenuWithCallback(widget.onCopyLink),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-    }
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final morphStyle = glassProvider.createStyle(
+      context: context,
+      cornerRadius: 18,
+      shadow: LiquidGlassShadow(
+        blur: 16,
+        opacity: widget.isDark ? 0.35 : 0.15,
+        offset: const Offset(0, 4),
+        color: Colors.black,
+      ),
+      refractionIndex: 1.05,
+      refractionWidth: 20.0,
+      isLiteOverride: widget.isLite,
+    );
 
     return OverlayPortal(
       controller: _overlayPortalController,
       overlayChildBuilder: (context) {
         return Stack(
           children: [
-            GestureDetector(
-              onTap: _closeMenu,
-              behavior: HitTestBehavior.opaque,
-              child: const SizedBox.expand(),
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: !_isOpen,
+                child: GestureDetector(
+                  onTap: _closeMenu,
+                  behavior: HitTestBehavior.opaque,
+                ),
+              ),
             ),
             CompositedTransformFollower(
               link: _layerLink,
               showWhenUnlinked: false,
               targetAnchor: Alignment.topRight,
               followerAnchor: Alignment.topRight,
-              child: AnimatedBuilder(
-                animation: _animController,
-                builder: (context, child) {
-                  final progress = _expandAnimation.value;
-                  final width = ui.lerpDouble(42.0, _targetWidth, progress)!;
-                  final height = ui.lerpDouble(42.0, _targetHeight, progress)!;
-                  final borderRadius = ui.lerpDouble(21.0, 18.0, progress)!;
-
-                  return SizedBox(
-                    width: width,
-                    height: height,
-                    child: Material(
-                      color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(borderRadius),
-                      clipBehavior: Clip.antiAlias,
-                      child: buildMenuContent(progress, width, height),
+              child: widget.glassEnabled
+                  ? LiquidGlassMorph(
+                      key: const ValueKey<String>('profile_header_menu_morph'),
+                      alignment: Alignment.topRight,
+                      motion: LiquidGlassMorphMotion.fluid,
+                      smoothness: 28,
+                      style: morphStyle,
+                      child: _isOpen
+                          ? _buildMenuContent(_targetWidth)
+                          : _buildCollapsedButton(),
+                    )
+                  : AnimatedContainer(
+                      key: const ValueKey<String>('profile_header_menu_matte'),
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOutCubic,
+                      alignment: Alignment.topRight,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: widget.isDark
+                              ? const Color(0xFA2C2C2E)
+                              : const Color(0xFAFFFFFF),
+                          borderRadius: BorderRadius.circular(18),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.18),
+                              blurRadius: 16,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: _isOpen
+                            ? _buildMenuContent(_targetWidth)
+                            : _buildCollapsedButton(),
+                      ),
                     ),
-                  );
-                },
-              ),
             ),
           ],
         );
       },
       child: CompositedTransformTarget(
         link: _layerLink,
-        child: SizedBox(
+        child: const SizedBox(
           width: 42,
           height: 42,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              AnimatedBuilder(
-                animation: _animController,
-                builder: (context, child) {
-                  final progress = _expandAnimation.value;
-                  final width = ui.lerpDouble(42.0, _targetWidth, progress)!;
-                  final height = ui.lerpDouble(42.0, _targetHeight, progress)!;
-                  final borderRadius = ui.lerpDouble(21.0, 18.0, progress)!;
-
-                  final restIcon = progress < 0.25
-                      ? Center(
-                          child: Opacity(
-                            opacity: (1.0 - progress / 0.25).clamp(0.0, 1.0),
-                            child: Icon(
-                              Icons.more_horiz,
-                              size: 22,
-                              color: widget.iconColor,
-                            ),
-                          ),
-                        )
-                      : const SizedBox();
-
-                  Widget containerWidget;
-
-                  if (widget.glassEnabled) {
-                    final glassThickness = ui.lerpDouble(10.0, 12.0, progress)!;
-                    final glassBlur = ui.lerpDouble(6.0, 10.0, progress)!;
-                    final glassAlpha = widget.isDark
-                        ? ui.lerpDouble(12.0, 22.0, progress)!.round()
-                        : ui.lerpDouble(15.0, 35.0, progress)!.round();
-
-                    final glassChild = GlassGlow(
-                      child: Container(
-                        width: width,
-                        height: height,
-                        decoration: widget.isDark
-                            ? BoxDecoration(
-                                borderRadius: BorderRadius.circular(borderRadius),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: ui.lerpDouble(0.0, 0.12, progress)!),
-                                  width: 0.5,
-                                ),
-                              )
-                            : BoxDecoration(
-                                borderRadius: BorderRadius.circular(borderRadius),
-                                border: Border.all(
-                                  color: Colors.black.withValues(alpha: ui.lerpDouble(0.04, 0.08, progress)!),
-                                  width: 0.5,
-                                ),
-                              ),
-                        child: restIcon,
-                      ),
-                    );
-
-                    final glassSettings = LiquidGlassSettings(
-                      refractiveIndex: 1.25,
-                      thickness: glassThickness,
-                      blur: glassBlur,
-                      glassColor: widget.isDark
-                          ? Color.fromARGB(glassAlpha, 20, 20, 35)
-                          : Color.fromARGB(glassAlpha, 240, 240, 250),
-                    );
-
-                    final glassWidget = widget.isLite
-                        ? FakeGlass(
-                            shape: LiquidRoundedSuperellipse(borderRadius: borderRadius),
-                            settings: glassSettings,
-                            child: glassChild,
-                          )
-                        : LiquidGlass.withOwnLayer(
-                            shape: LiquidRoundedSuperellipse(borderRadius: borderRadius),
-                            settings: glassSettings,
-                            child: glassChild,
-                          );
-
-                    containerWidget = LiquidStretch(
-                      stretch: 0.15,
-                      interactionScale: 1.02,
-                      child: glassWidget,
-                    );
-                  } else {
-                    final darkAlpha = ui.lerpDouble(180.0, 245.0, progress)!.round();
-                    final lightAlpha = ui.lerpDouble(220.0, 248.0, progress)!.round();
-                    containerWidget = Container(
-                      width: width,
-                      height: height,
-                      decoration: BoxDecoration(
-                        color: widget.isDark
-                            ? Color.fromARGB(darkAlpha, 44, 44, 46)
-                            : Color.fromARGB(lightAlpha, 255, 255, 255),
-                        borderRadius: BorderRadius.circular(borderRadius),
-                        border: Border.all(
-                          color: widget.isDark
-                              ? Colors.white.withValues(alpha: 0.12)
-                              : Colors.black.withValues(alpha: 0.08),
-                          width: 0.5,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.18),
-                            blurRadius: 16,
-                            spreadRadius: 1,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: restIcon,
-                    );
-                  }
-
-                  return Positioned(
-                    top: 0,
-                    right: 0,
-                    width: width,
-                    height: height,
-                    child: GestureDetector(
-                      onTap: _isOpen ? null : _openMenu,
-                      behavior: HitTestBehavior.opaque,
-                      child: containerWidget,
-                    ),
-                  );
-                },
-
-            ),
-          ],
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 }

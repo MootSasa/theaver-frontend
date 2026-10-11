@@ -1,10 +1,10 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:motor/motor.dart';
+import 'package:provider/provider.dart';
 
+import '../../services/liquid_glass_provider.dart';
 import '../../utils/haptic_utils.dart';
 
 /// Создаёт матрицу jelly-трансформации на основе скорости для органичного
@@ -49,11 +49,9 @@ class LiquidGlassBottomBarTab {
   final Widget Function(Color color, double size)? iconBuilder;
 }
 
-/// Плавающий нижний бар с Liquid Glass эффектом, реализованный по примеру
-/// из liquid_glass_renderer.
+/// Плавающий нижний бар с Liquid Glass эффектом на liquid_glass_easy.
 ///
-/// Использует [LiquidGlassLayer] + [LiquidGlassBlendGroup] +
-/// [LiquidGlass.grouped] для основного бара, и скользящий glass-индикатор
+/// Использует [LiquidGlassLens] для основного бара, и скользящий glass-индикатор
 /// с пружинными анимациями через [motor].
 class LiquidGlassBottomBar extends StatefulWidget {
   const LiquidGlassBottomBar({
@@ -65,7 +63,7 @@ class LiquidGlassBottomBar extends StatefulWidget {
     this.horizontalPadding = 20,
     this.bottomPadding = 20,
     this.barHeight = 64,
-    this.glassSettings,
+    this.glassStyle,
     this.isLite = false,
   }) : super(key: key);
 
@@ -82,9 +80,9 @@ class LiquidGlassBottomBar extends StatefulWidget {
   final double horizontalPadding;
   final double bottomPadding;
   final double barHeight;
-  final LiquidGlassSettings? glassSettings;
+  final LiquidGlassStyle? glassStyle;
 
-  /// Включён ли облегчённый режим (FakeGlass вместо LiquidGlass)
+  /// Включён ли облегчённый режим
   final bool isLite;
 
   @override
@@ -116,177 +114,112 @@ class _LiquidGlassBottomBarState extends State<LiquidGlassBottomBar> {
     final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
 
-    final glassSettings = widget.glassSettings ??
-        LiquidGlassSettings(
-          refractiveIndex: 1.21,
-          thickness: 30,
-          blur: 8,
-          saturation: 1.5,
-          lightIntensity: isDark ? 0.7 : 1.0,
-          ambientStrength: isDark ? 0.2 : 0.5,
-          lightAngle: math.pi / 2,
-          glassColor: isDark
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final effectiveStyle = widget.glassStyle ??
+        glassProvider.createStyle(
+          context: context,
+          cornerRadius: 32,
+          refractionIndex: 1.21,
+          refractionWidth: 30.0,
+          blur: 8.0,
+          color: isDark
               ? const Color.fromARGB(60, 30, 30, 40)
               : const Color.fromARGB(80, 200, 200, 210),
+          isLiteOverride: widget.isLite,
         );
 
-    return LiquidGlassLayer(
-      settings: glassSettings,
-      child: LiquidGlassBlendGroup(
-        blend: 10,
-        child: Padding(
-          padding: EdgeInsets.only(
-            left: widget.horizontalPadding,
-            right: widget.horizontalPadding,
-            bottom: widget.bottomPadding,
-            top: widget.bottomPadding,
-          ),
-          child: Row(
-            spacing: widget.spacing,
-            children: [
-              // Основной бар с вкладками (занимает всё свободное пространство)
-              Expanded(
-                child: _TabIndicator(
-                  tabIndex: widget.selectedIndex,
-                  tabCount: _tabs.length,
-                  onTabChanged: widget.onTabSelected,
-                  child: widget.isLite
-                      ? FakeGlass.inLayer(
-                          shape: const LiquidRoundedSuperellipse(borderRadius: 32),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            height: widget.barHeight,
-                            decoration: isDark
-                                ? null
-                                : BoxDecoration(
-                                    borderRadius: BorderRadius.circular(32),
-                                    border: Border.all(
-                                      color: Colors.black.withValues(alpha: 0.12),
-                                      width: 0.5,
-                                    ),
-                                  ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                for (var i = 0; i < _tabs.length; i++)
-                                  Expanded(
-                                    child: _BottomBarTab(
-                                      tab: _tabs[i],
-                                      selected: widget.selectedIndex == i,
-                                      onTap: () {
-                                        HapticUtils.selection();
-                                        widget.onTabSelected(i);
-                                      },
-                                      isDark: isDark,
-                                      theme: theme,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : LiquidGlass.grouped(
-                          clipBehavior: Clip.none,
-                          shape: const LiquidRoundedSuperellipse(borderRadius: 32),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            height: widget.barHeight,
-                            decoration: isDark
-                                ? null
-                                : BoxDecoration(
-                                    borderRadius: BorderRadius.circular(32),
-                                    border: Border.all(
-                                      color: Colors.black.withValues(alpha: 0.12),
-                                      width: 0.5,
-                                    ),
-                                  ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                for (var i = 0; i < _tabs.length; i++)
-                                  Expanded(
-                                    child: _BottomBarTab(
-                                      tab: _tabs[i],
-                                      selected: widget.selectedIndex == i,
-                                      onTap: () {
-                                        HapticUtils.selection();
-                                        widget.onTabSelected(i);
-                                      },
-                                      isDark: isDark,
-                                      theme: theme,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                ),
+    final barContent = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      height: widget.barHeight,
+      decoration: isDark
+          ? null
+          : BoxDecoration(
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(
+                color: Colors.black.withValues(alpha: 0.12),
+                width: 0.5,
               ),
-              // Кнопка "+" — как в примере LiquidOval + LiquidStretch
-              if (widget.onAddTap != null)
-                if (widget.isLite)
-                  FakeGlass.inLayer(
-                    shape: const LiquidOval(),
-                    child: GlassGlow(
-                      child: GestureDetector(
-                        onTap: widget.onAddTap,
-                        child: Container(
-                          height: widget.barHeight,
-                          width: widget.barHeight,
-                          decoration: isDark
-                              ? null
-                              : BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.black.withValues(alpha: 0.12),
-                                    width: 0.5,
-                                  ),
-                                ),
-                          child: Center(
-                            child: iconoir.Plus(
-                              width: 28,
-                              height: 28,
-                              color: isDark ? Colors.white70 : Colors.black54,
-                            ),
+            ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          for (var i = 0; i < _tabs.length; i++)
+            Expanded(
+              child: _BottomBarTab(
+                tab: _tabs[i],
+                selected: widget.selectedIndex == i,
+                onTap: () {
+                  HapticUtils.selection();
+                  widget.onTabSelected(i);
+                },
+                isDark: isDark,
+                theme: theme,
+              ),
+            ),
+        ],
+      ),
+    );
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: widget.horizontalPadding,
+        right: widget.horizontalPadding,
+        bottom: widget.bottomPadding,
+        top: widget.bottomPadding,
+      ),
+      child: Row(
+        spacing: widget.spacing,
+        children: [
+          // Основной бар с вкладками (занимает всё свободное пространство)
+          Expanded(
+            child: _TabIndicator(
+              tabIndex: widget.selectedIndex,
+              tabCount: _tabs.length,
+              onTabChanged: widget.onTabSelected,
+              glassStyle: effectiveStyle,
+              child: LiquidGlassLens(
+                style: effectiveStyle.copyWith(
+                  shape: const LiquidGlassShape.continuousRoundedRectangle(
+                    cornerRadius: 32,
+                  ),
+                ),
+                child: barContent,
+              ),
+            ),
+          ),
+          // Кнопка "+"
+          if (widget.onAddTap != null)
+            GestureDetector(
+              onTap: widget.onAddTap,
+              child: LiquidGlassLens(
+                style: effectiveStyle.copyWith(
+                  shape: LiquidGlassShape.roundedRectangle(
+                    cornerRadius: widget.barHeight / 2,
+                  ),
+                ),
+                child: Container(
+                  height: widget.barHeight,
+                  width: widget.barHeight,
+                  decoration: isDark
+                      ? null
+                      : BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.black.withValues(alpha: 0.12),
+                            width: 0.5,
                           ),
                         ),
-                      ),
-                    ),
-                  )
-                else
-                  LiquidStretch(
-                    child: LiquidGlass.grouped(
-                      shape: const LiquidOval(),
-                      child: GlassGlow(
-                        child: GestureDetector(
-                          onTap: widget.onAddTap,
-                          child: Container(
-                            height: widget.barHeight,
-                            width: widget.barHeight,
-                            decoration: isDark
-                                ? null
-                                : BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.black.withValues(alpha: 0.12),
-                                      width: 0.5,
-                                    ),
-                                  ),
-                            child: Center(
-                              child: iconoir.Plus(
-                                width: 28,
-                                height: 28,
-                                color: isDark ? Colors.white70 : Colors.black54,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
+                  child: Center(
+                    child: iconoir.Plus(
+                      width: 28,
+                      height: 28,
+                      color: isDark ? Colors.white70 : Colors.black54,
                     ),
                   ),
-            ],
-          ),
-        ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -359,19 +292,20 @@ class _BottomBarTab extends StatelessWidget {
 }
 
 /// Скользящий glass-индикатор с пружинными анимациями и поддержкой перетаскивания.
-/// Реализован по примеру _TabIndicator из liquid_glass_renderer.
 class _TabIndicator extends StatefulWidget {
   const _TabIndicator({
     required this.child,
     required this.tabIndex,
     required this.tabCount,
     required this.onTabChanged,
+    required this.glassStyle,
   });
 
   final int tabIndex;
   final int tabCount;
   final Widget child;
   final ValueChanged<int> onTabChanged;
+  final LiquidGlassStyle glassStyle;
 
   @override
   State<_TabIndicator> createState() => _TabIndicatorState();
@@ -566,21 +500,21 @@ class _TabIndicatorState extends State<_TabIndicator>
                       tabCount: widget.tabCount,
                       alignment: alignment,
                       thickness: thickness,
-                      child: LiquidGlass.withOwnLayer(
-                        settings: LiquidGlassSettings(
-                          visibility: thickness,
-                          glassColor: const Color.fromARGB(25, 255, 255, 255),
-                          saturation: 1.5,
-                          refractiveIndex: 1.15,
-                          thickness: 20,
-                          lightIntensity: 2,
-                          chromaticAberration: 0.5,
-                          blur: 0,
+                      child: Opacity(
+                        opacity: thickness.clamp(0.0, 1.0),
+                        child: LiquidGlassLens(
+                          style: widget.glassStyle.copyWith(
+                            color: const Color.fromARGB(25, 255, 255, 255),
+                            refractionIndex: 1.15,
+                            refractionWidth: 20.0,
+                            blur: 0.0,
+                            shape:
+                                const LiquidGlassShape.continuousRoundedRectangle(
+                              cornerRadius: 64,
+                            ),
+                          ),
+                          child: const SizedBox.expand(),
                         ),
-                        shape: const LiquidRoundedSuperellipse(
-                          borderRadius: 64,
-                        ),
-                        child: const GlassGlow(child: SizedBox.expand()),
                       ),
                     ),
                 ],

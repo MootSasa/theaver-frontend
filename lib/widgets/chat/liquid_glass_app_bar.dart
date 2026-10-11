@@ -61,22 +61,14 @@ class LiquidGlassAppBar extends StatelessWidget
     final totalHeight = kToolbarHeight + statusBarHeight + bottomHeight;
 
     final barStyle = LiquidGlassStyle(
-      shape: LiquidGlassShape.roundedRectangle(
-        cornerRadius: 0,
-        borderWidth: 0,
-        lightDirection: lightAngle ?? 62.0,
-      ),
-      appearance: LiquidGlassAppearance(
-        color: isDark
-            ? const Color.fromARGB(80, 20, 20, 30)
-            : const Color.fromARGB(80, 200, 200, 210),
-        blur: const LiquidGlassBlur(sigmaX: 12, sigmaY: 12),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.05,
-        distortionWidth: 20,
-      ),
-      liteGlass: isLite ? LiquidGlassLitePickup.surface : null,
+      shape: const LiquidGlassShape.roundedRectangle(cornerRadius: 0),
+      color: isDark
+          ? const Color.fromARGB(80, 20, 20, 30)
+          : const Color.fromARGB(80, 200, 200, 210),
+      blur: 12.0,
+      refractionIndex: 1.02,
+      refractionWidth: 20,
+      liteGlass: isLite,
     );
 
     // Делаем статус-бар прозрачным чтобы glass-эффект AppBar

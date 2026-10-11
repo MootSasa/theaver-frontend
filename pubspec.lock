@@ -1073,18 +1073,10 @@ packages:
     dependency: "direct main"
     description:
       name: liquid_glass_easy
-      sha256: "0900af82971da23f1f2a28ea038c13d28fab6bd1e57c2492c005a8dae3ca8f90"
+      sha256: e867c5592ce9511aa8e3a9f7d755449d59a7f07044bf44b996b905138c84da1c
       url: "https://pub.dev"
     source: hosted
-    version: "4.3.2"
-  liquid_glass_renderer:
-    dependency: "direct main"
-    description:
-      name: liquid_glass_renderer
-      sha256: "789be157494b38cdef7607bb9b63e7fe3fab76fae16149e52fa313c2d858cb3f"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.0-dev.4"
+    version: "5.0.0"
   local_auth:
     dependency: "direct main"
     description:
