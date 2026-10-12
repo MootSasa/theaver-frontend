@@ -153,5 +153,31 @@ void main() {
       expect(find.text('Pavel Durov'), findsOneWidget);
       expect(find.byType(LiquidGlassScreenMorphLauncher), findsOneWidget);
     });
+
+    testWidgets('Tapping center pill in FloatingGlassAppBar navigates to profile screen', (tester) async {
+      await tester.pumpWidget(
+        _wrapWithApp(
+          FloatingGlassAppBar(
+            name: 'Pavel Durov',
+            isOnline: true,
+            onBack: () {},
+            onTitleTap: () {},
+            profileScreenBuilder: (context) => const Scaffold(
+              body: Text('Durov Profile Screen Target'),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pump();
+      expect(find.text('Pavel Durov'), findsOneWidget);
+      expect(find.text('Durov Profile Screen Target'), findsNothing);
+
+      // Tap center pill (which previously was swallowed by inner GestureDetector)
+      await tester.tap(find.text('Pavel Durov'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Durov Profile Screen Target'), findsOneWidget);
+    });
   });
 }

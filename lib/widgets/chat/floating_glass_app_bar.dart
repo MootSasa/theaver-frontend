@@ -426,32 +426,34 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final hasMorphLauncher = widget.profileScreenBuilder != null;
 
     return GestureDetector(
-      onTap: () {
-        if (_isMenuOpen) {
-          _closeMenu();
-        } else if (!hasMorphLauncher) {
-          widget.onTitleTap();
-        }
-      },
-      behavior: hasMorphLauncher ? HitTestBehavior.translucent : HitTestBehavior.opaque,
+      onTap: hasMorphLauncher
+          ? null
+          : () {
+              if (_isMenuOpen) {
+                _closeMenu();
+              } else {
+                widget.onTitleTap();
+              }
+            },
+      behavior: HitTestBehavior.opaque,
       child: Padding(
         padding: const EdgeInsets.only(left: 2.0, right: 10.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             GestureDetector(
-              behavior: hasMorphLauncher ? HitTestBehavior.translucent : HitTestBehavior.opaque,
-              onTap: () {
-                if (_isMenuOpen) {
-                  _closeMenu();
-                } else if (!hasMorphLauncher) {
-                  if (widget.onAvatarTap != null) {
-                    widget.onAvatarTap!();
-                  } else {
-                    widget.onTitleTap();
-                  }
-                }
-              },
+              behavior: HitTestBehavior.opaque,
+              onTap: hasMorphLauncher
+                  ? null
+                  : () {
+                      if (_isMenuOpen) {
+                        _closeMenu();
+                      } else if (widget.onAvatarTap != null) {
+                        widget.onAvatarTap!();
+                      } else {
+                        widget.onTitleTap();
+                      }
+                    },
               child: widget.avatarWidget ??
                   AvatarWithStatus(
                     avatarUrl: widget.avatarUrl,

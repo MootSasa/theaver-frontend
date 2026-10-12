@@ -221,7 +221,7 @@ class _LiquidGlassScreenMorphLauncherState
       fit: StackFit.expand,
       children: [
         // Фоновый перехватчик жестов на время полета
-        Positioned.fill(
+        const Positioned.fill(
           child: ModalBarrier(
             dismissible: false,
             color: Colors.transparent,
@@ -233,6 +233,8 @@ class _LiquidGlassScreenMorphLauncherState
           child: LiquidGlassMorph(
             key: const ValueKey<String>('screen_morph_container'),
             alignment: anchor,
+            width: _isExpanded ? screenSize.width : initial.width,
+            height: _isExpanded ? screenSize.height : initial.height,
             motion: widget.motion,
             smoothness: widget.smoothness,
             onEnd: _onMorphEnd,
@@ -257,7 +259,6 @@ class _LiquidGlassScreenMorphLauncherState
                     key: const ValueKey<String>('collapsed_preview_step'),
                     width: initial.width,
                     height: initial.height,
-                    child: widget.child,
                   ),
           ),
         ),
