@@ -29,6 +29,8 @@ import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'screens/call/voice_call_screen.dart';
 import 'screens/call/video_call_screen.dart';
+import 'screens/chat/user_profile_screen.dart';
+import 'utils/swipe_back_route.dart';
 import 'widgets/chat/floating_video_note_overlay.dart';
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
@@ -214,6 +216,20 @@ class TheaverApp extends StatelessWidget {
                   builder: (_) => VideoCallScreen(
                     callId: chatId,
                     isCaller: true,
+                  ),
+                  settings: settings,
+                );
+              }
+              if (settings.name == '/profile') {
+                final args = settings.arguments as Map<String, dynamic>? ?? {};
+                final userId = args['userId']?.toString() ?? '';
+                final name = args['name']?.toString();
+                final avatarUrl = args['avatarUrl']?.toString();
+                return SwipeBackPageRoute(
+                  builder: (_) => UserProfileScreen(
+                    userId: userId,
+                    initialName: name,
+                    initialAvatarUrl: avatarUrl,
                   ),
                   settings: settings,
                 );

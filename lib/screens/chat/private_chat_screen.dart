@@ -38,6 +38,8 @@ import '../../widgets/chat/unread_separator.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'user_profile_screen.dart';
+import '../../utils/swipe_back_route.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../widgets/message/message_bubble.dart';
@@ -2393,6 +2395,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 onBack: () => Navigator.pop(context),
                 onTitleTap: _viewUserProfile,
                 onViewProfile: _viewUserProfile,
+                profileScreenBuilder: (routeContext) => UserProfileScreen(
+                  userId: _otherUserId ?? '',
+                  initialName: displayName,
+                  initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+                  isOnline: _isOtherUserOnline,
+                  lastSeen: _otherUserLastSeen,
+                  chatId: widget.chatId,
+                  onVoiceCall: _startVoiceCall,
+                  onVideoCall: _startVideoCall,
+                ),
                 onVoiceCall: _startVoiceCall,
                 onVideoCall: _startVideoCall,
                 onSearch: _searchMessages,
@@ -3523,10 +3535,20 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   /// Navigate to user profile screen
   void _viewUserProfile() {
     if (_otherUserId != null) {
-      Navigator.pushNamed(
+      Navigator.push(
         context,
-        '/profile',
-        arguments: {'userId': _otherUserId},
+        SwipeBackPageRoute(
+          builder: (_) => UserProfileScreen(
+            userId: _otherUserId!,
+            initialName: _chatName.isNotEmpty ? _chatName : widget.otherUserName,
+            initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+            isOnline: _isOtherUserOnline,
+            lastSeen: _otherUserLastSeen,
+            chatId: widget.chatId,
+            onVoiceCall: _startVoiceCall,
+            onVideoCall: _startVideoCall,
+          ),
+        ),
       );
     }
   }

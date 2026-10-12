@@ -13,6 +13,7 @@ import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../user/avatar_with_status.dart';
 import 'animated_ellipsis_text.dart';
+import 'liquid_glass_screen_morph_launcher.dart';
 
 // --- НАСТРОЙКИ СТИЛЯ ПАНЕЛИ ---
 /// Высота панели без учета отступов и статус-бара (Apple HIG standard).
@@ -84,6 +85,7 @@ class FloatingGlassAppBar extends StatefulWidget {
   final VoidCallback? onClearHistory;
   final VoidCallback? onReport;
   final VoidCallback? onViewProfile;
+  final WidgetBuilder? profileScreenBuilder;
 
   const FloatingGlassAppBar({
     Key? key,
@@ -108,6 +110,7 @@ class FloatingGlassAppBar extends StatefulWidget {
     this.onClearHistory,
     this.onReport,
     this.onViewProfile,
+    this.profileScreenBuilder,
   }) : super(key: key);
 
   @override
@@ -221,15 +224,33 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               left: _kAppBarHorizontalPadding + _kBackPillWidth + _kPillSpacing,
               right: _kAppBarHorizontalPadding + rightCollapsedWidth + _kPillSpacing,
               height: _kAppBarHeight,
-              child: isGlassEnabled
-                  ? LiquidGlassLens(
+              child: widget.profileScreenBuilder != null
+                  ? LiquidGlassScreenMorphLauncher(
+                      destinationBuilder: widget.profileScreenBuilder!,
+                      enabled: isGlassEnabled,
                       style: morphStyle,
-                      child: _buildCenterPillContent(context, isDark, theme),
+                      onTap: () {
+                        if (_isMenuOpen) _closeMenu();
+                      },
+                      child: isGlassEnabled
+                          ? LiquidGlassLens(
+                              style: morphStyle,
+                              child: _buildCenterPillContent(context, isDark, theme),
+                            )
+                          : _buildMattePill(
+                              isDark: isDark,
+                              child: _buildCenterPillContent(context, isDark, theme),
+                            ),
                     )
-                  : _buildMattePill(
-                      isDark: isDark,
-                      child: _buildCenterPillContent(context, isDark, theme),
-                    ),
+                  : (isGlassEnabled
+                      ? LiquidGlassLens(
+                          style: morphStyle,
+                          child: _buildCenterPillContent(context, isDark, theme),
+                        )
+                      : _buildMattePill(
+                          isDark: isDark,
+                          child: _buildCenterPillContent(context, isDark, theme),
+                        )),
             ),
 
             // 3. Right Pill: Actions (Call + Three Dots), fluidly morphing into the menu via OverlayPortal
@@ -402,29 +423,33 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final secondaryTextColor = themeExt?.palette.subtext ??
         (isDark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF4A4A4C));
 
+    final hasMorphLauncher = widget.profileScreenBuilder != null;
+
     return GestureDetector(
       onTap: () {
         if (_isMenuOpen) {
           _closeMenu();
-        } else {
+        } else if (!hasMorphLauncher) {
           widget.onTitleTap();
         }
       },
-      behavior: HitTestBehavior.opaque,
+      behavior: hasMorphLauncher ? HitTestBehavior.translucent : HitTestBehavior.opaque,
       child: Padding(
         padding: const EdgeInsets.only(left: 2.0, right: 10.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             GestureDetector(
-              behavior: HitTestBehavior.opaque,
+              behavior: hasMorphLauncher ? HitTestBehavior.translucent : HitTestBehavior.opaque,
               onTap: () {
                 if (_isMenuOpen) {
                   _closeMenu();
-                } else if (widget.onAvatarTap != null) {
-                  widget.onAvatarTap!();
-                } else {
-                  widget.onTitleTap();
+                } else if (!hasMorphLauncher) {
+                  if (widget.onAvatarTap != null) {
+                    widget.onAvatarTap!();
+                  } else {
+                    widget.onTitleTap();
+                  }
                 }
               },
               child: widget.avatarWidget ??
