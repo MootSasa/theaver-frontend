@@ -11,9 +11,9 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../user/avatar_with_status.dart';
 import 'animated_ellipsis_text.dart';
-import 'liquid_glass_screen_morph_launcher.dart';
 
 // --- НАСТРОЙКИ СТИЛЯ ПАНЕЛИ ---
 /// Высота панели без учета отступов и статус-бара (Apple HIG standard).
@@ -86,6 +86,7 @@ class FloatingGlassAppBar extends StatefulWidget {
   final VoidCallback? onReport;
   final VoidCallback? onViewProfile;
   final WidgetBuilder? profileScreenBuilder;
+  final String? heroTag;
 
   const FloatingGlassAppBar({
     Key? key,
@@ -111,6 +112,7 @@ class FloatingGlassAppBar extends StatefulWidget {
     this.onReport,
     this.onViewProfile,
     this.profileScreenBuilder,
+    this.heroTag,
   }) : super(key: key);
 
   @override
@@ -224,33 +226,19 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               left: _kAppBarHorizontalPadding + _kBackPillWidth + _kPillSpacing,
               right: _kAppBarHorizontalPadding + rightCollapsedWidth + _kPillSpacing,
               height: _kAppBarHeight,
-              child: widget.profileScreenBuilder != null
-                  ? LiquidGlassScreenMorphLauncher(
-                      destinationBuilder: widget.profileScreenBuilder!,
-                      enabled: isGlassEnabled,
-                      style: morphStyle,
-                      onTap: () {
-                        if (_isMenuOpen) _closeMenu();
-                      },
-                      child: isGlassEnabled
-                          ? LiquidGlassLens(
-                              style: morphStyle,
-                              child: _buildCenterPillContent(context, isDark, theme),
-                            )
-                          : _buildMattePill(
-                              isDark: isDark,
-                              child: _buildCenterPillContent(context, isDark, theme),
-                            ),
-                    )
-                  : (isGlassEnabled
-                      ? LiquidGlassLens(
-                          style: morphStyle,
-                          child: _buildCenterPillContent(context, isDark, theme),
-                        )
-                      : _buildMattePill(
-                          isDark: isDark,
-                          child: _buildCenterPillContent(context, isDark, theme),
-                        )),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _handleCenterPillTap,
+                child: isGlassEnabled
+                    ? LiquidGlassLens(
+                        style: morphStyle,
+                        child: _buildCenterPillContent(context, isDark, theme),
+                      )
+                    : _buildMattePill(
+                        isDark: isDark,
+                        child: _buildCenterPillContent(context, isDark, theme),
+                      ),
+              ),
             ),
 
             // 3. Right Pill: Actions (Call + Three Dots), fluidly morphing into the menu via OverlayPortal
@@ -417,43 +405,90 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     );
   }
 
+  void _handleCenterPillTap() {
+    if (_isMenuOpen) {
+      _closeMenu();
+      return;
+    }
+    if (widget.profileScreenBuilder != null) {
+      Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: widget.profileScreenBuilder!,
+        ),
+      );
+    } else {
+      widget.onTitleTap();
+    }
+  }
+
+  Widget _avatarFlightShuttleBuilder(
+    BuildContext flightContext,
+    Animation<double> animation,
+    HeroFlightDirection flightDirection,
+    BuildContext fromHeroContext,
+    BuildContext toHeroContext,
+  ) {
+    final targetWidget = flightDirection == HeroFlightDirection.push
+        ? toHeroContext.widget
+        : fromHeroContext.widget;
+    return ClipOval(
+      child: Material(
+        type: MaterialType.transparency,
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: targetWidget,
+        ),
+      ),
+    );
+  }
+
+  Widget _textHeroFlightShuttleBuilder(
+    BuildContext flightContext,
+    Animation<double> animation,
+    HeroFlightDirection flightDirection,
+    BuildContext fromHeroContext,
+    BuildContext toHeroContext,
+  ) {
+    final targetWidget = flightDirection == HeroFlightDirection.push
+        ? toHeroContext.widget
+        : fromHeroContext.widget;
+    return Material(
+      type: MaterialType.transparency,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: targetWidget,
+      ),
+    );
+  }
+
   Widget _buildCenterPillContent(BuildContext context, bool isDark, ThemeData theme) {
     final themeExt = theme.extension<TheavThemeExtension>();
     final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
     final secondaryTextColor = themeExt?.palette.subtext ??
         (isDark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF4A4A4C));
 
-    final hasMorphLauncher = widget.profileScreenBuilder != null;
+    final heroKey = widget.heroTag ?? widget.name;
 
-    return GestureDetector(
-      onTap: hasMorphLauncher
-          ? null
-          : () {
-              if (_isMenuOpen) {
-                _closeMenu();
-              } else {
-                widget.onTitleTap();
-              }
-            },
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 2.0, right: 10.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: hasMorphLauncher
-                  ? null
-                  : () {
-                      if (_isMenuOpen) {
-                        _closeMenu();
-                      } else if (widget.onAvatarTap != null) {
-                        widget.onAvatarTap!();
-                      } else {
-                        widget.onTitleTap();
-                      }
-                    },
+    return Padding(
+      padding: const EdgeInsets.only(left: 2.0, right: 10.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: (widget.onAvatarTap != null && widget.profileScreenBuilder == null)
+                ? () {
+                    if (_isMenuOpen) {
+                      _closeMenu();
+                    } else {
+                      widget.onAvatarTap!();
+                    }
+                  }
+                : null,
+            child: Hero(
+              tag: 'profile_avatar_$heroKey',
+              flightShuttleBuilder: _avatarFlightShuttleBuilder,
               child: widget.avatarWidget ??
                   AvatarWithStatus(
                     avatarUrl: widget.avatarUrl,
@@ -462,73 +497,88 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                     isOnline: false,
                   ),
             ),
-            const SizedBox(width: 8.0),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _MarqueeScrollWrapper(
-                    child: widget.titleWidget ??
-                        Text(
-                          widget.name,
-                          style: TextStyle(
-                            fontSize: _kTitleFontSize,
-                            fontWeight: FontWeight.w600,
-                            color: primaryTextColor,
-                            fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+          ),
+          const SizedBox(width: 8.0),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Hero(
+                  tag: 'profile_name_$heroKey',
+                  flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: _MarqueeScrollWrapper(
+                      child: widget.titleWidget ??
+                          Text(
+                            widget.name,
+                            style: TextStyle(
+                              fontSize: _kTitleFontSize,
+                              fontWeight: FontWeight.w600,
+                              color: primaryTextColor,
+                              fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+                            ),
+                            maxLines: 1,
+                            textAlign: TextAlign.left,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          textAlign: TextAlign.left,
-                        ),
-                  ),
-                  const SizedBox(height: 1.0),
-                  _MarqueeScrollWrapper(
-                    child: ValueListenableBuilder<bool>(
-                      valueListenable: WebSocketService().isConnectedNotifier,
-                      builder: (context, wsConnected, _) {
-                        final bool serverAvailable = widget.isConnected ?? wsConnected;
-                        if (!serverAvailable) {
-                          return AnimatedEllipsisText(
-                            text: context.l10n.translate('chat_status_connecting'),
-                            style: TextStyle(
-                              fontSize: _kStatusFontSize,
-                              color: secondaryTextColor,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          );
-                        }
-                        if (widget.statusText != null) {
-                          final isHardcodedGrey = widget.statusColor == Colors.grey[600] ||
-                              widget.statusColor == Colors.grey;
-                          final defaultAccent = isDark
-                              ? const Color(0xFF5CB8E6)
-                              : theme.colorScheme.primary;
-                          final effectiveColor = (widget.statusColor == null || isHardcodedGrey)
-                              ? secondaryTextColor
-                              : (widget.statusColor == theme.colorScheme.primary ? defaultAccent : widget.statusColor);
-                          return AnimatedEllipsisText(
-                            text: widget.statusText!,
-                            style: TextStyle(
-                              fontSize: _kStatusFontSize,
-                              color: effectiveColor,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          );
-                        }
-                        return _AutoRefreshingLastSeenText(
-                          isOnline: widget.isOnline,
-                          lastSeen: widget.lastSeen,
-                        );
-                      },
                     ),
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 1.0),
+                Hero(
+                  tag: 'profile_status_$heroKey',
+                  flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: _MarqueeScrollWrapper(
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: WebSocketService().isConnectedNotifier,
+                        builder: (context, wsConnected, _) {
+                          final bool serverAvailable = widget.isConnected ?? wsConnected;
+                          if (!serverAvailable) {
+                            return AnimatedEllipsisText(
+                              text: context.l10n.translate('chat_status_connecting'),
+                              style: TextStyle(
+                                fontSize: _kStatusFontSize,
+                                color: secondaryTextColor,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            );
+                          }
+                          if (widget.statusText != null) {
+                            final isHardcodedGrey = widget.statusColor == Colors.grey[600] ||
+                                widget.statusColor == Colors.grey;
+                            final defaultAccent = isDark
+                                ? const Color(0xFF5CB8E6)
+                                : theme.colorScheme.primary;
+                            final effectiveColor = (widget.statusColor == null || isHardcodedGrey)
+                                ? secondaryTextColor
+                                : (widget.statusColor == theme.colorScheme.primary ? defaultAccent : widget.statusColor);
+                            return AnimatedEllipsisText(
+                              text: widget.statusText!,
+                              style: TextStyle(
+                                fontSize: _kStatusFontSize,
+                                color: effectiveColor,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            );
+                          }
+                          return _AutoRefreshingLastSeenText(
+                            isOnline: widget.isOnline,
+                            lastSeen: widget.lastSeen,
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

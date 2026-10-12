@@ -46,6 +46,9 @@ class ExpandableAvatar extends StatefulWidget {
   /// Префикс для Hero анимации перехода в галерею
   final String? heroTagPrefix;
 
+  /// Опциональный тег для плавной Hero анимации между чатом и экраном профиля
+  final String? chatAvatarHeroTag;
+
   /// Опциональный контроллер страниц для синхронизации свайпов
   final PageController? pageController;
 
@@ -63,6 +66,7 @@ class ExpandableAvatar extends StatefulWidget {
     this.backgroundColor,
     this.displayName = '',
     this.heroTagPrefix = 'avatar_hero',
+    this.chatAvatarHeroTag,
     this.pageController,
     this.initialPage,
   }) : super(key: key);
@@ -207,8 +211,10 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
 
     Widget avatarContent;
 
+    final bool enableInnerHero = widget.chatAvatarHeroTag == null;
+
     if (isFullyExpanded && widget.avatarUrls.length > 1) {
-      avatarContent = _buildPageView(size, size, iconSize, bgColor, isDark, Alignment.topCenter, true);
+      avatarContent = _buildPageView(size, size, iconSize, bgColor, isDark, Alignment.topCenter, enableInnerHero);
     } else if (_currentPage != 0 && targetUrl != null && primaryUrl != null && targetUrl != primaryUrl) {
       avatarContent = AnimatedSwitcher(
         duration: const Duration(milliseconds: 350),
@@ -216,12 +222,12 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         switchOutCurve: Curves.easeInOutCubic,
         child: SizedBox.expand(
           key: ValueKey(targetUrl),
-          child: _buildAvatarImage(targetUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, true),
+          child: _buildAvatarImage(targetUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, enableInnerHero),
         ),
       );
     } else {
       avatarContent = (displayUrl != null && displayUrl.isNotEmpty
-          ? _buildAvatarImage(displayUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, true)
+          ? _buildAvatarImage(displayUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, enableInnerHero)
           : (widget.avatarFile != null
               ? Image.file(
                   widget.avatarFile!,
@@ -233,7 +239,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
               : const SizedBox.expand()));
     }
 
-    return GestureDetector(
+    Widget avatarWidget = GestureDetector(
       onTap: widget.onTap,
       behavior: HitTestBehavior.opaque,
       child: Container(
@@ -322,6 +328,35 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         ),
       ),
     );
+
+    if (widget.chatAvatarHeroTag != null) {
+      avatarWidget = Hero(
+        tag: widget.chatAvatarHeroTag!,
+        flightShuttleBuilder: (
+          flightContext,
+          animation,
+          flightDirection,
+          fromHeroContext,
+          toHeroContext,
+        ) {
+          final targetWidget = flightDirection == HeroFlightDirection.push
+              ? toHeroContext.widget
+              : fromHeroContext.widget;
+          return ClipOval(
+            child: Material(
+              type: MaterialType.transparency,
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: targetWidget,
+              ),
+            ),
+          );
+        },
+        child: avatarWidget,
+      );
+    }
+
+    return avatarWidget;
   }
 
   /// Строит PageView для свайпа аватарок в развёрнутом режиме

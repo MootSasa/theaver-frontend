@@ -31,22 +31,39 @@ import '../../widgets/profile/qr_code_dialog.dart';
 import '../../widgets/notifications/in_app_notification_banner.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../config/app_config.dart';
+import '../../utils/date_time_utils.dart';
 import 'edit_profile_screen.dart';
 import 'profile_color_screen.dart';
 
-/// Экран профиля пользователя с двумя режимами дизайна.
+/// Универсальный экран профиля пользователя (как для себя в настройках, так и для собеседников).
 ///
 /// - **Liquid Glass включён** — премиальный дизайн со стеклянными элементами
 /// - **Liquid Glass выключен/недоступен** — премиальный дизайн с полупрозрачными карточками
-///
-/// Фото сохраняется автоматически при выборе/удалении.
-/// Оба режима поддерживают светлую и тёмную тему приложения.
+/// - Поддерживает нативную Hero-анимацию аватарки, имени и статуса между чатом и профилем.
 class ProfileScreen extends StatefulWidget {
   final Function()? onUpdate;
+  final String? userId;
+  final String? initialName;
+  final String? initialAvatarUrl;
+  final bool? initialIsOnline;
+  final DateTime? initialLastSeen;
+  final String? chatId;
+  final String? heroTag;
+  final VoidCallback? onVoiceCall;
+  final VoidCallback? onVideoCall;
 
   const ProfileScreen({
     Key? key,
     this.onUpdate,
+    this.userId,
+    this.initialName,
+    this.initialAvatarUrl,
+    this.initialIsOnline,
+    this.initialLastSeen,
+    this.chatId,
+    this.heroTag,
+    this.onVoiceCall,
+    this.onVideoCall,
   }) : super(key: key);
 
   @override
@@ -69,6 +86,19 @@ class ProfileScreenState extends State<ProfileScreen>
   bool _isLoading = true;
   bool _isProcessing = false;
   final AccountManager _accountManager = AccountManager();
+
+  bool get _isSelf {
+    if (widget.userId == null || widget.userId!.isEmpty) return true;
+    final currentUserId = _accountManager.currentAccount?.userId;
+    return currentUserId != null && currentUserId == widget.userId;
+  }
+
+  String get _heroKey => widget.heroTag ?? widget.userId ?? 'self';
+
+  String? _bio;
+  bool _isOnline = false;
+  DateTime? _lastSeen;
+  bool _isMuted = false;
 
   /// Выбранная вкладка сегментированного переключателя (0 = Стена, 1 = Подарки)
   int _selectedSegment = 0;
@@ -195,8 +225,13 @@ class ProfileScreenState extends State<ProfileScreen>
       });
     });
 
-    AvatarSyncService().addListener(_onAvatarSyncChanged);
-    _loadUserProfile();
+    if (_isSelf) {
+      AvatarSyncService().addListener(_onAvatarSyncChanged);
+      _loadUserProfile();
+    } else {
+      _initOtherUserData();
+      _loadOtherUserProfile();
+    }
   }
 
   void _onScroll() {
@@ -315,9 +350,149 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  void _initOtherUserData() {
+    _isLoading = false;
+    if (widget.initialName != null && widget.initialName!.isNotEmpty) {
+      final parts = widget.initialName!.trim().split(' ');
+      _nameController.text = parts.first;
+      if (parts.length > 1) {
+        _surnameController.text = parts.sublist(1).join(' ');
+      }
+    }
+    if (widget.initialAvatarUrl != null && widget.initialAvatarUrl!.isNotEmpty) {
+      _avatarUrl = widget.initialAvatarUrl;
+      _avatarUrls = [widget.initialAvatarUrl!];
+    }
+    _isOnline = widget.initialIsOnline ?? false;
+    _lastSeen = widget.initialLastSeen;
+    _updateTopLuminance();
+  }
+
+  Future<void> _loadOtherUserProfile() async {
+    if (widget.userId == null || widget.userId!.isEmpty) return;
+    try {
+      final res = await AuthService.getUserProfile(widget.userId!);
+      if (res['success'] == true && res['user'] != null && mounted) {
+        final u = res['user'] as Map<String, dynamic>;
+        setState(() {
+          final displayName = u['display_name']?.toString() ?? u['name']?.toString();
+          if (displayName != null && displayName.isNotEmpty) {
+            final parts = displayName.trim().split(' ');
+            _nameController.text = parts.first;
+            _surnameController.text = parts.length > 1 ? parts.sublist(1).join(' ') : (u['surname']?.toString() ?? '');
+          }
+          if (u['username'] != null) {
+            _usernameController.text = u['username'].toString();
+          }
+          if (u['phone'] != null) {
+            _phoneController.text = u['phone'].toString();
+          }
+          if (u['bio'] != null) {
+            _bio = u['bio'].toString();
+          }
+          if (u['avatar_url'] != null && u['avatar_url'].toString().isNotEmpty) {
+            final serverUrl = u['avatar_url'].toString();
+            _avatarUrl = serverUrl;
+            if (!_avatarUrls.contains(serverUrl)) {
+              _avatarUrls = [serverUrl, ..._avatarUrls];
+            }
+          }
+          if (u['avatars'] != null) {
+            final list = u['avatars'] as List<dynamic>;
+            final urls = list.map((a) => a['avatar_url'].toString()).toList();
+            if (urls.isNotEmpty) {
+              _avatarUrls = urls;
+            }
+          }
+        });
+        _updateTopLuminance();
+      }
+    } catch (e) {
+      debugPrint('[ProfileScreen] Error loading peer user profile: $e');
+    }
+  }
+
+  String _getStatusText(AppLocalizations l10n) {
+    if (_isSelf) {
+      return l10n.translate('profile_online');
+    }
+    if (_isOnline) {
+      return l10n.translate('chat_online');
+    } else if (_lastSeen != null) {
+      return DateTimeUtils.formatLastSeen(_lastSeen, context);
+    } else {
+      return l10n.translate('chat_offline');
+    }
+  }
+
+  Color _getStatusColor(BuildContext context, Color fallbackColor) {
+    if (_isSelf) {
+      return context.watch<ProfileThemeProvider>().hasCustomColor
+          ? context.watch<ProfileThemeProvider>().statusColor
+          : fallbackColor;
+    }
+    if (_isOnline) {
+      return const Color(0xFF34C759);
+    }
+    return Theme.of(context).brightness == Brightness.dark
+        ? Colors.white.withValues(alpha: 0.6)
+        : const Color(0xFF8E8E93);
+  }
+
+  List<ProfileActionButtonItem>? _getOtherUserActionButtons(BuildContext context) {
+    final l10n = context.l10n;
+    return [
+      ProfileActionButtonItem(
+        icon: Icons.chat_bubble_outline_rounded,
+        label: l10n.translate('chat_title'),
+        onTap: () {
+          if (widget.chatId != null) {
+            Navigator.maybePop(context);
+          } else {
+            Navigator.pushNamed(context, '/chat', arguments: {
+              'userId': widget.userId,
+              'name': _getDisplayName(),
+              'avatarUrl': _avatarUrl,
+            });
+          }
+        },
+      ),
+      ProfileActionButtonItem(
+        icon: Icons.phone_outlined,
+        label: l10n.translate('call'),
+        onTap: widget.onVoiceCall ??
+            () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(l10n.translate('call_not_supported'))),
+              );
+            },
+      ),
+      ProfileActionButtonItem(
+        icon: Icons.videocam_outlined,
+        label: l10n.translate('video'),
+        onTap: widget.onVideoCall ??
+            () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(l10n.translate('call_not_supported'))),
+              );
+            },
+      ),
+      ProfileActionButtonItem(
+        icon: _isMuted ? Icons.notifications_off_outlined : Icons.notifications_none_outlined,
+        label: l10n.translate(_isMuted ? 'chat_unmute' : 'chat_mute'),
+        onTap: () {
+          setState(() => _isMuted = !_isMuted);
+          HapticUtils.selection();
+        },
+      ),
+    ];
+  }
+
   @override
   void dispose() {
-    AvatarSyncService().removeListener(_onAvatarSyncChanged);
+    if (_isSelf) {
+      AvatarSyncService().removeListener(_onAvatarSyncChanged);
+    }
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _nameController.dispose();
@@ -891,9 +1066,29 @@ class ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _textHeroFlightShuttleBuilder(
+    BuildContext flightContext,
+    Animation<double> animation,
+    HeroFlightDirection flightDirection,
+    BuildContext fromHeroContext,
+    BuildContext toHeroContext,
+  ) {
+    final targetWidget = flightDirection == HeroFlightDirection.push
+        ? toHeroContext.widget
+        : fromHeroContext.widget;
+    return Material(
+      type: MaterialType.transparency,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.center,
+        child: targetWidget,
+      ),
+    );
+  }
+
   void _openFullAvatarViewer() async {
     if (_avatarUrls.isEmpty) {
-      _pickImage();
+      if (_isSelf) _pickImage();
       return;
     }
 
@@ -906,18 +1101,20 @@ class ProfileScreenState extends State<ProfileScreen>
       avatarUrls: _avatarUrls,
       initialIndex: currentIndex,
       displayName: _getDisplayName(),
-      onChoosePhoto: _pickImage,
-      onDelete: (index) {
-        _deleteAvatar();
+      onChoosePhoto: _isSelf ? _pickImage : null,
+      onDelete: _isSelf
+          ? (index) {
+              _deleteAvatar();
+            }
+          : null,
+      onPageChanged: (index) {
+        setState(() {
+          _currentAvatarIndex = index;
+        });
+        if (_avatarPageController.hasClients) {
+          _avatarPageController.jumpToPage(index);
+        }
       },
-    onPageChanged: (index) {
-      setState(() {
-        _currentAvatarIndex = index;
-      });
-      if (_avatarPageController.hasClients) {
-        _avatarPageController.jumpToPage(index);
-      }
-    },
     );
 
     // При закрытии полноэкранного просмотра: если мы в свёрнутом режиме (круглая аватарка)
@@ -1087,6 +1284,7 @@ class ProfileScreenState extends State<ProfileScreen>
                             tintColor: avatarBgColor,
                             backgroundColor: avatarBgColor,
                             displayName: _getDisplayName(),
+                            chatAvatarHeroTag: 'profile_avatar_$_heroKey',
                             onTap: _openFullAvatarViewer,
                           );
                         },
@@ -1187,18 +1385,37 @@ class ProfileScreenState extends State<ProfileScreen>
                               : (1.0 - (scrollOffset / 75.0)).clamp(0.0, 1.0),
                           child: Column(
                             children: [
-                              Text(
-                                _getDisplayName(),
-                                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                              Hero(
+                                tag: 'profile_name_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getDisplayName(),
+                                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 4),
-                              Text(
-                                l10n.translate('profile_online'),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: context.watch<ProfileThemeProvider>().hasCustomColor
-                                      ? context.watch<ProfileThemeProvider>().statusColor
-                                      : const Color(0xFF0088CC).withValues(alpha: 0.8),
+                              Hero(
+                                tag: 'profile_status_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getStatusText(l10n),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: _getStatusColor(
+                                        context,
+                                        const Color(0xFF0088CC).withValues(alpha: 0.8),
+                                      ),
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                               ),
                             ],
@@ -1220,10 +1437,11 @@ class ProfileScreenState extends State<ProfileScreen>
                               LiquidGlassProfileButtons(
                                 enabled: true,
                                 isLite: isLite,
-                                onChoosePhoto: _pickImage,
-                                onQrCode: _showQrCode,
-                                onEdit: _openEditProfile,
-                                onDeletePhoto: _deleteAvatar,
+                                customButtons: _isSelf ? null : _getOtherUserActionButtons(context),
+                                onChoosePhoto: _isSelf ? _pickImage : null,
+                                onQrCode: _isSelf ? _showQrCode : null,
+                                onEdit: _isSelf ? _openEditProfile : null,
+                                onDeletePhoto: _isSelf ? _deleteAvatar : null,
                                 hasAvatar: _avatarUrl != null || _avatarFile != null,
                                 collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
                                 choosePhotoLabel: l10n.translate('profile_choose_photo'),
@@ -1244,7 +1462,7 @@ class ProfileScreenState extends State<ProfileScreen>
                                 enabled: true,
                                 isLite: isLite,
                                 phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
-                                bio: null,
+                                bio: _bio,
                                 username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
                                 birthday: null,
                                 age: null,
@@ -1469,6 +1687,7 @@ class ProfileScreenState extends State<ProfileScreen>
                       tintColor: backgroundColor,
                       backgroundColor: backgroundColor,
                       displayName: _getDisplayName(),
+                      chatAvatarHeroTag: 'profile_avatar_$_heroKey',
                       onTap: _openFullAvatarViewer,
                     ),
                   ),
@@ -1554,18 +1773,34 @@ class ProfileScreenState extends State<ProfileScreen>
                               : (1.0 - (scrollOffset / 75.0)).clamp(0.0, 1.0),
                           child: Column(
                             children: [
-                              Text(
-                                _getDisplayName(),
-                                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                              Hero(
+                                tag: 'profile_name_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getDisplayName(),
+                                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 4),
-                              Text(
-                                l10n.translate('profile_online'),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: context.watch<ProfileThemeProvider>().hasCustomColor
-                                      ? context.watch<ProfileThemeProvider>().statusColor
-                                      : brandColor,
+                              Hero(
+                                tag: 'profile_status_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getStatusText(l10n),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: _getStatusColor(context, brandColor),
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                               ),
                             ],
@@ -1604,7 +1839,7 @@ class ProfileScreenState extends State<ProfileScreen>
                               LiquidGlassInfoPanel(
                                 enabled: false,
                                 phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
-                                bio: null,
+                                bio: _bio,
                                 username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
                                 birthday: null,
                                 age: null,
@@ -1685,10 +1920,11 @@ class ProfileScreenState extends State<ProfileScreen>
   }) {
     return LiquidGlassProfileButtons(
       enabled: false,
-      onChoosePhoto: _pickImage,
-      onQrCode: _showQrCode,
-      onEdit: _openEditProfile,
-      onDeletePhoto: _deleteAvatar,
+      customButtons: _isSelf ? null : _getOtherUserActionButtons(context),
+      onChoosePhoto: _isSelf ? _pickImage : null,
+      onQrCode: _isSelf ? _showQrCode : null,
+      onEdit: _isSelf ? _openEditProfile : null,
+      onDeletePhoto: _isSelf ? _deleteAvatar : null,
       hasAvatar: _avatarUrl != null || _avatarFile != null,
       collapseProgress: collapseProgress,
       choosePhotoLabel: l10n.translate('profile_choose_photo'),
@@ -1751,17 +1987,27 @@ class ProfileScreenState extends State<ProfileScreen>
             )
           else
             const Spacer(),
-          _MorphingHeaderMenuButton(
-            iconColor: effectiveIconColor,
-            isDark: isDark,
-            glassEnabled: glassEnabled,
-            isLite: isLite,
-            onEditProfile: _openEditProfile,
-            onChoosePhoto: _pickImage,
-            onChooseMusic: () => _showTodoFeatureBanner(l10n.translate('profile_menu_choose_music')),
-            onChangeColor: _openColorSettings,
-            onCopyLink: _copyProfileLink,
-          ),
+          if (_isSelf)
+            _MorphingHeaderMenuButton(
+              iconColor: effectiveIconColor,
+              isDark: isDark,
+              glassEnabled: glassEnabled,
+              isLite: isLite,
+              onEditProfile: _openEditProfile,
+              onChoosePhoto: _pickImage,
+              onChooseMusic: () => _showTodoFeatureBanner(l10n.translate('profile_menu_choose_music')),
+              onChangeColor: _openColorSettings,
+              onCopyLink: _copyProfileLink,
+            )
+          else
+            _RoundHeaderButton(
+              icon: Icons.share_outlined,
+              iconColor: effectiveIconColor,
+              isDark: isDark,
+              glassEnabled: glassEnabled,
+              isLite: isLite,
+              onTap: _copyProfileLink,
+            ),
         ],
       ),
     );

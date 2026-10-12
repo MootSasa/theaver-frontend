@@ -3,8 +3,24 @@ import 'package:provider/provider.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../services/liquid_glass_provider.dart';
 
+/// Описание отдельной кнопки действия для профиля.
+class ProfileActionButtonItem {
+  final IconData icon;
+  final VoidCallback? onTap;
+  final bool isDestructive;
+  final String? label;
+
+  const ProfileActionButtonItem({
+    required this.icon,
+    this.onTap,
+    this.isDestructive = false,
+    this.label,
+  });
+}
+
 /// Круглые кнопки действий под именем пользователя:
-/// «Выбрать фото», «QR-код», «Изменить», «Удалить фото».
+/// «Выбрать фото», «QR-код», «Изменить», «Удалить фото»
+/// или кастомный список кнопок для профилей других пользователей.
 ///
 /// Отображаются исключительно иконки в увеличенных круглых кнопках (без текста).
 /// В режиме liquid glass используется эффект `LiquidStretch` и повышенная прозрачность.
@@ -15,6 +31,9 @@ class LiquidGlassProfileButtons extends StatelessWidget {
 
   /// Включён ли облегчённый режим (FakeGlass вместо LiquidGlass)
   final bool isLite;
+
+  /// Кастомный список кнопок действий (например, для собеседника: чат, звонок, видео, заглушить)
+  final List<ProfileActionButtonItem>? customButtons;
 
   /// Коллбэк при нажатии «Выбрать фото»
   final VoidCallback? onChoosePhoto;
@@ -44,6 +63,7 @@ class LiquidGlassProfileButtons extends StatelessWidget {
     Key? key,
     required this.enabled,
     this.isLite = false,
+    this.customButtons,
     this.onChoosePhoto,
     this.onQrCode,
     this.onEdit,
@@ -78,57 +98,80 @@ class LiquidGlassProfileButtons extends StatelessWidget {
         opacity: opacity,
         child: Transform.scale(
           scale: scale,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Transform.translate(
-                offset: Offset(leftOffset, 0),
-                child: _RoundActionButton(
-                  icon: Icons.photo_camera_rounded,
-                  isDark: isDark,
-                  enabled: enabled,
-                  isLite: isLite,
-                  onTap: onChoosePhoto,
+          child: customButtons != null
+              ? Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    for (int i = 0; i < customButtons!.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 14),
+                      Transform.translate(
+                        offset: Offset(
+                          (i - (customButtons!.length - 1) / 2.0) * progress * 24.0,
+                          0,
+                        ),
+                        child: _RoundActionButton(
+                          icon: customButtons![i].icon,
+                          isDark: isDark,
+                          enabled: enabled,
+                          isLite: isLite,
+                          onTap: customButtons![i].onTap,
+                          isDestructive: customButtons![i].isDestructive,
+                        ),
+                      ),
+                    ],
+                  ],
+                )
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Transform.translate(
+                      offset: Offset(leftOffset, 0),
+                      child: _RoundActionButton(
+                        icon: Icons.photo_camera_rounded,
+                        isDark: isDark,
+                        enabled: enabled,
+                        isLite: isLite,
+                        onTap: onChoosePhoto,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Transform.translate(
+                      offset: Offset(leftOffset * 0.4, 0),
+                      child: _RoundActionButton(
+                        icon: Icons.qr_code_rounded,
+                        isDark: isDark,
+                        enabled: enabled,
+                        isLite: isLite,
+                        onTap: onQrCode,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Transform.translate(
+                      offset: Offset(rightOffset * 0.4, 0),
+                      child: _RoundActionButton(
+                        icon: Icons.edit_rounded,
+                        isDark: isDark,
+                        enabled: enabled,
+                        isLite: isLite,
+                        onTap: onEdit,
+                      ),
+                    ),
+                    if (hasAvatar) ...[
+                      const SizedBox(width: 14),
+                      Transform.translate(
+                        offset: Offset(rightOffset, 0),
+                        child: _RoundActionButton(
+                          icon: Icons.delete_outline_rounded,
+                          isDark: isDark,
+                          enabled: enabled,
+                          isLite: isLite,
+                          onTap: onDeletePhoto,
+                          isDestructive: true,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-              const SizedBox(width: 14),
-              Transform.translate(
-                offset: Offset(leftOffset * 0.4, 0),
-                child: _RoundActionButton(
-                  icon: Icons.qr_code_rounded,
-                  isDark: isDark,
-                  enabled: enabled,
-                  isLite: isLite,
-                  onTap: onQrCode,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Transform.translate(
-                offset: Offset(rightOffset * 0.4, 0),
-                child: _RoundActionButton(
-                  icon: Icons.edit_rounded,
-                  isDark: isDark,
-                  enabled: enabled,
-                  isLite: isLite,
-                  onTap: onEdit,
-                ),
-              ),
-              if (hasAvatar) ...[
-                const SizedBox(width: 14),
-                Transform.translate(
-                  offset: Offset(rightOffset, 0),
-                  child: _RoundActionButton(
-                    icon: Icons.delete_outline_rounded,
-                    isDark: isDark,
-                    enabled: enabled,
-                    isLite: isLite,
-                    onTap: onDeletePhoto,
-                    isDestructive: true,
-                  ),
-                ),
-              ],
-            ],
-          ),
         ),
       ),
     );

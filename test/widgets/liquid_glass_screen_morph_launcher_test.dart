@@ -151,7 +151,7 @@ void main() {
 
       await tester.pump();
       expect(find.text('Pavel Durov'), findsOneWidget);
-      expect(find.byType(LiquidGlassScreenMorphLauncher), findsOneWidget);
+      expect(find.byKey(const ValueKey<String>('chat_appbar_center_pill')), findsOneWidget);
     });
 
     testWidgets('Tapping center pill in FloatingGlassAppBar navigates to profile screen', (tester) async {

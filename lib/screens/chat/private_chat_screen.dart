@@ -46,7 +46,6 @@ import '../../widgets/message/message_bubble.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/media_album.dart';
 import '../../widgets/message/media_album_widget.dart';
-import '../../utils/swipe_back_route.dart';
 import '../../utils/entity_parser.dart';
 import 'group_chat_screen.dart';
 import 'channel_screen.dart';
@@ -2384,6 +2383,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           },
           appBar: Builder(
             builder: (context) {
+              final heroTag = _otherUserId ?? displayName;
               return FloatingGlassAppBar(
                 name: displayName,
                 avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
@@ -2392,6 +2392,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
                 isChannel: false,
                 isMuted: _isMuted,
+                heroTag: heroTag,
                 onBack: () => Navigator.pop(context),
                 onTitleTap: _viewUserProfile,
                 onViewProfile: _viewUserProfile,
@@ -2402,6 +2403,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                   isOnline: _isOtherUserOnline,
                   lastSeen: _otherUserLastSeen,
                   chatId: widget.chatId,
+                  heroTag: heroTag,
                   onVoiceCall: _startVoiceCall,
                   onVideoCall: _startVideoCall,
                 ),
@@ -3535,16 +3537,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   /// Navigate to user profile screen
   void _viewUserProfile() {
     if (_otherUserId != null) {
+      final displayName = _chatName.isNotEmpty ? _chatName : widget.otherUserName;
+      final heroTag = _otherUserId ?? displayName;
       Navigator.push(
         context,
         SwipeBackPageRoute(
           builder: (_) => UserProfileScreen(
             userId: _otherUserId!,
-            initialName: _chatName.isNotEmpty ? _chatName : widget.otherUserName,
+            initialName: displayName,
             initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
             isOnline: _isOtherUserOnline,
             lastSeen: _otherUserLastSeen,
             chatId: widget.chatId,
+            heroTag: heroTag,
             onVoiceCall: _startVoiceCall,
             onVideoCall: _startVideoCall,
           ),
