@@ -101,18 +101,23 @@ class LiquidGlassProvider extends ChangeNotifier {
           clipQuality: clipQuality,
         );
 
-    // Оптический specular-блик по образцу экрана adaptivity библиотеки liquid_glass_easy:
-    // При color == null шейдер автоматически берет цвет фона под гранью (с учетом dispersion и saturation)
-    // и высветляет его через rimLift без искусственных белых или темно-серых линий.
+    // Адаптивная окантовка (specular):
+    // - На тёмной теме: borderColor ?? null (при null шейдер автоматически берёт
+    //   цвет фона под гранью и высветляет его через rimLift, создавая естественный блик)
+    // - На светлой теме: borderColor ?? const Color(0xCC2C2C2E) (тёмно-графитовая окантовка,
+    //   устраняющая белый ореол и формирующая тёмный оптический контур)
+    final effectiveBorderColor =
+        borderColor ?? (isDark ? null : const Color(0xCC2C2C2E));
+
     final specular = borderWidth > 0
         ? LiquidGlassLight.specular(
             thickness: borderWidth * 4.0,
             sharpness: 0.5,
             angle: angle,
             spread: 0.9,
-            intensity: 1.0,
+            intensity: isDark ? 1.0 : 0.75,
             oppositeIntensity: 1.0,
-            color: borderColor,
+            color: effectiveBorderColor,
           )
         : const LiquidGlassLight.specular(thickness: 0);
 
@@ -122,9 +127,17 @@ class LiquidGlassProvider extends ChangeNotifier {
             angle: angle + 90,
             spread: 0.5,
             intensity: isDark ? 0.3 : 0.2,
-            color: borderColor,
+            color: effectiveBorderColor,
           )
         : null;
+
+    final effectiveShadow = shadow ??
+        (!isDark
+            ? const LiquidGlassShadow(
+                blur: 8.0,
+                opacity: 0.14,
+              )
+            : null);
 
     final effectiveAdaptivity = adaptivity ??
         (color == null
@@ -144,7 +157,7 @@ class LiquidGlassProvider extends ChangeNotifier {
       shape: effectiveShape,
       color: color ?? defaultColor,
       blur: blur ?? _blur,
-      shadow: shadow,
+      shadow: effectiveShadow,
       specular: specular,
       glow: glow,
       refractionIndex: refractionIndex,

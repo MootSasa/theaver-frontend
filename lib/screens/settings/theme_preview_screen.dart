@@ -523,6 +523,20 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               ),
               color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
               blur: 8.0,
+              shadow: isDark
+                  ? null
+                  : const LiquidGlassShadow(
+                      blur: 8.0,
+                      opacity: 0.14,
+                    ),
+              specular: LiquidGlassLight.specular(
+                thickness: 5.0,
+                sharpness: 0.5,
+                spread: 0.9,
+                intensity: isDark ? 1.0 : 0.75,
+                oppositeIntensity: 1.0,
+                color: isDark ? null : const Color(0xCC2C2C2E),
+              ),
               refractionIndex: 1.1,
               refractionWidth: 24,
               dispersion: 1.32,
@@ -638,6 +652,20 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
               ),
               color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
               blur: 8.0,
+              shadow: isDark
+                  ? null
+                  : const LiquidGlassShadow(
+                      blur: 8.0,
+                      opacity: 0.14,
+                    ),
+              specular: LiquidGlassLight.specular(
+                thickness: 5.0,
+                sharpness: 0.5,
+                spread: 0.9,
+                intensity: isDark ? 1.0 : 0.75,
+                oppositeIntensity: 1.0,
+                color: isDark ? null : const Color(0xCC2C2C2E),
+              ),
               refractionIndex: 1.1,
               refractionWidth: 24,
               dispersion: 1.32,
