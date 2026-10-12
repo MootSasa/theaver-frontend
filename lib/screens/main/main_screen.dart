@@ -136,8 +136,8 @@ class _MainScreenState extends State<MainScreen>
       reverseCurve: Curves.easeInOutCubic,
     );
     WidgetsBinding.instance.addObserver(this);
-    _topMenuOverlayController.show();
     _folderMenuOverlayController.show();
+    _topMenuOverlayController.show();
     _searchController.addListener(_onSearchChanged);
     DraftService().draftsNotifier.addListener(_onDraftsChanged);
 
@@ -1074,6 +1074,7 @@ class _MainScreenState extends State<MainScreen>
     _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
     _classicTopMenuController.forward();
+    _topMenuOverlayController.show();
     setState(() {
       _isTopMenuOpen = true;
     });
@@ -1103,6 +1104,7 @@ class _MainScreenState extends State<MainScreen>
     }
     HapticUtils.tap();
     _classicFolderMenuController.forward();
+    _folderMenuOverlayController.show();
     setState(() {
       _isFolderMenuOpen = true;
     });
@@ -1665,6 +1667,184 @@ class _MainScreenState extends State<MainScreen>
           math.max(currentTopHeight, currentFolderHeight) + 8,
         );
 
+        final folderPillWidget = Positioned(
+          top: 2,
+          left: 0,
+          right: 0,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Container(
+              width: currentFolderWidth,
+              height: currentFolderHeight,
+              decoration: BoxDecoration(
+                color: barBackgroundColor,
+                borderRadius: BorderRadius.circular(22.0),
+                border: Border.all(color: borderColor, width: 0.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(
+                      alpha: (baseShadowAlpha *
+                              (0.6 + 0.4 * folderProgress))
+                          .clamp(0.0, 1.0),
+                    ),
+                    blurRadius: 10 + 6 * folderProgress,
+                    offset: Offset(0, 3 + 3 * folderProgress),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  // Folder menu items
+                  if (folderProgress > 0.01)
+                    Positioned(
+                      top: 0,
+                      left: (currentFolderWidth - folderMenuWidth) / 2,
+                      width: folderMenuWidth,
+                      height: folderMenuHeight,
+                      child: Opacity(
+                        opacity: ((folderProgress - 0.15) / 0.85)
+                            .clamp(0.0, 1.0),
+                        child: Transform.translate(
+                          offset:
+                              Offset(0, -10.0 * (1.0 - folderProgress)),
+                          child: IgnorePointer(
+                            ignoring: folderProgress < 0.9,
+                            child: _FolderMorphMenu(
+                              key: const ValueKey<String>('folder_menu'),
+                              width: folderMenuWidth,
+                              activeFilter: _activeFilter,
+                              unreadCounts: [
+                                _getUnreadCountForFilter(0),
+                                _getUnreadCountForFilter(1),
+                                _getUnreadCountForFilter(2),
+                                _getUnreadCountForFilter(3),
+                              ],
+                              onSelectFolder: (index) {
+                                HapticUtils.selection();
+                                setState(() => _activeFilter = index);
+                                _closeFolderMenu();
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // Title pill content ("Theaver")
+                  if (folderProgress < 0.99)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: ctrlSize,
+                      child: Opacity(
+                        opacity: (1.0 - (folderProgress / 0.35))
+                            .clamp(0.0, 1.0),
+                        child: Transform.scale(
+                          scale: 1.0 - 0.15 * folderProgress,
+                          child: IgnorePointer(
+                            ignoring: folderProgress > 0.1,
+                            child: _TitlePillContent(
+                              key: const ValueKey<String>('title_pill'),
+                              title: _currentTitleText,
+                              titleKey: _currentTitleKey,
+                              isConnected: _isTitleConnected,
+                              onTap: _currentIndex == 1
+                                  ? _toggleFolderMenu
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+
+        final threeDotsWidget = Positioned(
+          top: 2,
+          right: 16,
+          child: Container(
+            width: currentTopWidth,
+            height: currentTopHeight,
+            decoration: BoxDecoration(
+              color: barBackgroundColor,
+              borderRadius: BorderRadius.circular(22.0),
+              border: Border.all(color: borderColor, width: 0.5),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                    alpha:
+                        (baseShadowAlpha * (0.6 + 0.4 * topProgress))
+                            .clamp(0.0, 1.0),
+                  ),
+                  blurRadius: 10 + 6 * topProgress,
+                  offset: Offset(0, 3 + 3 * topProgress),
+                ),
+              ],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                // Menu items
+                if (topProgress > 0.01)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    width: menuWidth,
+                    height: menuHeight,
+                    child: Opacity(
+                      opacity: ((topProgress - 0.15) / 0.85)
+                          .clamp(0.0, 1.0),
+                      child: Transform.translate(
+                        offset:
+                            Offset(0, -10.0 * (1.0 - topProgress)),
+                        child: IgnorePointer(
+                          ignoring: topProgress < 0.9,
+                          child: _TopMorphMenu(
+                            key: const ValueKey<String>('menu'),
+                            width: menuWidth,
+                            items: _getMenuItems(menuTabIndex),
+                            onItemTap: _handleMenuAction,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Three dots glyph
+                if (topProgress < 0.99)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    width: ctrlSize,
+                    height: ctrlSize,
+                    child: Opacity(
+                      opacity: (1.0 - (topProgress / 0.35))
+                          .clamp(0.0, 1.0),
+                      child: Transform.scale(
+                        scale: 1.0 - 0.2 * topProgress,
+                        child: IgnorePointer(
+                          ignoring: topProgress > 0.1,
+                          child: _ThreeDotsGlyph(
+                            key: const ValueKey<String>('glyph'),
+                            size: ctrlSize,
+                            onTap: _toggleTopMenu,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+
         return SafeArea(
           bottom: false,
           child: Padding(
@@ -1674,187 +1854,9 @@ class _MainScreenState extends State<MainScreen>
               height: currentBarHeight,
               child: Stack(
                 clipBehavior: Clip.none,
-                children: [
-                  // Centered title pill / morph folder dropdown menu
-                  Positioned(
-                    top: 2,
-                    left: 0,
-                    right: 0,
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Container(
-                        width: currentFolderWidth,
-                        height: currentFolderHeight,
-                        decoration: BoxDecoration(
-                          color: barBackgroundColor,
-                          borderRadius: BorderRadius.circular(22.0),
-                          border: Border.all(color: borderColor, width: 0.5),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(
-                                alpha: (baseShadowAlpha *
-                                        (0.6 + 0.4 * folderProgress))
-                                    .clamp(0.0, 1.0),
-                              ),
-                              blurRadius: 10 + 6 * folderProgress,
-                              offset: Offset(0, 3 + 3 * folderProgress),
-                            ),
-                          ],
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: Stack(
-                          clipBehavior: Clip.hardEdge,
-                          children: [
-                            // Folder menu items
-                            if (folderProgress > 0.01)
-                              Positioned(
-                                top: 0,
-                                left: (currentFolderWidth - folderMenuWidth) / 2,
-                                width: folderMenuWidth,
-                                height: folderMenuHeight,
-                                child: Opacity(
-                                  opacity: ((folderProgress - 0.15) / 0.85)
-                                      .clamp(0.0, 1.0),
-                                  child: Transform.translate(
-                                    offset:
-                                        Offset(0, -10.0 * (1.0 - folderProgress)),
-                                    child: IgnorePointer(
-                                      ignoring: folderProgress < 0.9,
-                                      child: _FolderMorphMenu(
-                                        key: const ValueKey<String>('folder_menu'),
-                                        width: folderMenuWidth,
-                                        activeFilter: _activeFilter,
-                                        unreadCounts: [
-                                          _getUnreadCountForFilter(0),
-                                          _getUnreadCountForFilter(1),
-                                          _getUnreadCountForFilter(2),
-                                          _getUnreadCountForFilter(3),
-                                        ],
-                                        onSelectFolder: (index) {
-                                          HapticUtils.selection();
-                                          setState(() => _activeFilter = index);
-                                          _closeFolderMenu();
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                            // Title pill content ("Theaver")
-                            if (folderProgress < 0.99)
-                              Positioned(
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                height: ctrlSize,
-                                child: Opacity(
-                                  opacity: (1.0 - (folderProgress / 0.35))
-                                      .clamp(0.0, 1.0),
-                                  child: Transform.scale(
-                                    scale: 1.0 - 0.15 * folderProgress,
-                                    child: IgnorePointer(
-                                      ignoring: folderProgress > 0.1,
-                                      child: _TitlePillContent(
-                                        key: const ValueKey<String>('title_pill'),
-                                        title: _currentTitleText,
-                                        titleKey: _currentTitleKey,
-                                        isConnected: _isTitleConnected,
-                                        onTap: _currentIndex == 1
-                                            ? _toggleFolderMenu
-                                            : null,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Persistent three dots button and morph context menu
-                  Positioned(
-                    top: 2,
-                    right: 16,
-                    child: Container(
-                      width: currentTopWidth,
-                      height: currentTopHeight,
-                      decoration: BoxDecoration(
-                        color: barBackgroundColor,
-                        borderRadius: BorderRadius.circular(22.0),
-                        border: Border.all(color: borderColor, width: 0.5),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(
-                              alpha:
-                                  (baseShadowAlpha * (0.6 + 0.4 * topProgress))
-                                      .clamp(0.0, 1.0),
-                            ),
-                            blurRadius: 10 + 6 * topProgress,
-                            offset: Offset(0, 3 + 3 * topProgress),
-                          ),
-                        ],
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Stack(
-                        clipBehavior: Clip.hardEdge,
-                        children: [
-                          // Menu items
-                          if (topProgress > 0.01)
-                            Positioned(
-                              top: 0,
-                              right: 0,
-                              width: menuWidth,
-                              height: menuHeight,
-                              child: Opacity(
-                                opacity: ((topProgress - 0.15) / 0.85)
-                                    .clamp(0.0, 1.0),
-                                child: Transform.translate(
-                                  offset:
-                                      Offset(0, -10.0 * (1.0 - topProgress)),
-                                  child: IgnorePointer(
-                                    ignoring: topProgress < 0.9,
-                                    child: _TopMorphMenu(
-                                      key: const ValueKey<String>('menu'),
-                                      width: menuWidth,
-                                      items: _getMenuItems(menuTabIndex),
-                                      onItemTap: _handleMenuAction,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                          // Three dots glyph
-                          if (topProgress < 0.99)
-                            Positioned(
-                              top: 0,
-                              right: 0,
-                              width: ctrlSize,
-                              height: ctrlSize,
-                              child: Opacity(
-                                opacity: (1.0 - (topProgress / 0.35))
-                                    .clamp(0.0, 1.0),
-                                child: Transform.scale(
-                                  scale: 1.0 - 0.2 * topProgress,
-                                  child: IgnorePointer(
-                                    ignoring: topProgress > 0.1,
-                                    child: _ThreeDotsGlyph(
-                                      key: const ValueKey<String>('glyph'),
-                                      size: ctrlSize,
-                                      onTap: _toggleTopMenu,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                children: folderProgress > 0
+                    ? [threeDotsWidget, folderPillWidget]
+                    : [folderPillWidget, threeDotsWidget],
               ),
             ),
           ),
