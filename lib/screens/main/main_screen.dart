@@ -1415,7 +1415,7 @@ class _MainScreenState extends State<MainScreen>
     final pillStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: barRadius,
-      refractionIndex: 1.02,
+      refractionIndex: 1.1,
       refractionWidth: 24.0,
     );
 
@@ -2795,7 +2795,7 @@ class _MainScreenState extends State<MainScreen>
               final barStyle = glassProvider.createStyle(
                 context: context,
                 cornerRadius: barHeight / 2,
-                refractionIndex: 1.02,
+                refractionIndex: 1.1,
                 refractionWidth: 24.0,
               );
 

@@ -348,7 +348,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final style = glassProvider.createStyle(
       context: context,
       cornerRadius: _kInputFillBorderRadius,
-      refractionIndex: 1.02,
+      refractionIndex: 1.1,
       refractionWidth: 24,
       isLiteOverride: widget.isLite,
     );

@@ -2156,7 +2156,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
     final morphStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: _ctrlSize / 2,
-      refractionIndex: 1.02,
+      refractionIndex: 1.1,
       refractionWidth: 24.0,
       isLiteOverride: widget.isLite,
     );

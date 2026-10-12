@@ -56,7 +56,7 @@ class ThemeEditorFloatingAppBar extends StatelessWidget implements PreferredSize
     final morphStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: _kAppBarBorderRadius,
-      refractionIndex: 1.02,
+      refractionIndex: 1.1,
       refractionWidth: 24,
     );
 

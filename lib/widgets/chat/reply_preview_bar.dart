@@ -113,7 +113,7 @@ class ReplyPreviewBar extends StatelessWidget {
     final style = glassProvider.createStyle(
       context: context,
       cornerRadius: 16,
-      refractionIndex: 1.02,
+      refractionIndex: 1.1,
       refractionWidth: 24,
       isLiteOverride: isLite,
     );

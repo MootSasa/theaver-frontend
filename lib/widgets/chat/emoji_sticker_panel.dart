@@ -408,8 +408,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     final searchStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: 24,
-      borderWidth: 0.55,
-      refractionIndex: 1.02,
       refractionWidth: 24,
     );
 
@@ -516,8 +514,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           final sharedStyle = glassProvider.createStyle(
             context: context,
             cornerRadius: 24,
-            borderWidth: 0.55,
-            refractionIndex: 1.02,
             refractionWidth: 24,
           );
 
@@ -766,8 +762,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     final selectorStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: 24,
-      borderWidth: 0.55,
-      refractionIndex: 1.02,
       refractionWidth: 24,
     );
 
@@ -1148,8 +1142,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       final navStyle = glassProvider.createStyle(
         context: context,
         cornerRadius: 32,
-        borderWidth: 0.55,
-        refractionIndex: 1.02,
         refractionWidth: 24,
       );
 
@@ -1218,8 +1210,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       final buttonStyle = glassProvider.createStyle(
         context: context,
         cornerRadius: 20,
-        borderWidth: 0.55,
-        refractionIndex: 1.02,
         refractionWidth: 24,
       );
 

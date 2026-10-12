@@ -163,7 +163,7 @@ class ScrollDownFab extends StatelessWidget {
     final style = glassProvider.createStyle(
       context: context,
       cornerRadius: 24,
-      refractionIndex: 1.025,
+      refractionIndex: 1.1,
       refractionWidth: 24,
     );
 

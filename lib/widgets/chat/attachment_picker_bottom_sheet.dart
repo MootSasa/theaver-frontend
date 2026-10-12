@@ -1257,7 +1257,7 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
       color: isDark
           ? const Color(0x3D24242C)
           : const Color(0x9EFFFFFF),
-      refractionIndex: 1.02,
+      refractionIndex: 1.1,
       refractionWidth: 24,
     );
 

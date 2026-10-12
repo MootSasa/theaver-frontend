@@ -171,7 +171,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final morphStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: _kAppBarBorderRadius,
-      refractionIndex: 1.02,
+      refractionIndex: 1.1,
       refractionWidth: 24,
     );
 
@@ -1191,7 +1191,7 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
       context: context,
       cornerRadius: _kAppBarBorderRadius,
       color: isDark ? const Color(0x44202025) : const Color(0x9EFFFFFF),
-      refractionIndex: 1.025,
+      refractionIndex: 1.1,
       refractionWidth: 24,
     );
 

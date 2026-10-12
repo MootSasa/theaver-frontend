@@ -513,7 +513,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
           ? glassProvider.createStyle(
               context: context,
               cornerRadius: 22.0,
-              refractionIndex: 1.02,
+              refractionIndex: 1.1,
               refractionWidth: 24,
             )
           : LiquidGlassStyle(
@@ -521,10 +521,12 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                 cornerRadius: 22.0,
                 clipQuality: LiquidGlassClipQuality.exact,
               ),
-              color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+              color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
               blur: 8.0,
-              refractionIndex: 1.02,
+              refractionIndex: 1.1,
               refractionWidth: 24,
+              dispersion: 1.32,
+              saturation: 1.2,
               liteGlass: isLite,
             );
 
@@ -626,7 +628,7 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
           ? glassProvider.createStyle(
               context: context,
               cornerRadius: 30.0,
-              refractionIndex: 1.02,
+              refractionIndex: 1.1,
               refractionWidth: 24,
             )
           : LiquidGlassStyle(
@@ -634,10 +636,12 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                 cornerRadius: 30.0,
                 clipQuality: LiquidGlassClipQuality.exact,
               ),
-              color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
+              color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
               blur: 8.0,
-              refractionIndex: 1.02,
+              refractionIndex: 1.1,
               refractionWidth: 24,
+              dispersion: 1.32,
+              saturation: 1.2,
               liteGlass: isLite,
             );
 

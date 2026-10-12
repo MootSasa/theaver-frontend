@@ -70,9 +70,11 @@ class LiquidGlassProvider extends ChangeNotifier {
     Color? color,
     double? blur,
     LiquidGlassShadow? shadow,
-    double refractionIndex = 1.02,
+    double refractionIndex = 1.1,
     double refractionWidth = 24.0,
-    double borderWidth = 0.55,
+    double dispersion = 1.32,
+    double saturation = 1.2,
+    double borderWidth = 1.25,
     Color? borderColor,
     bool includeGlow = false,
     bool? isLiteOverride,
@@ -90,7 +92,7 @@ class LiquidGlassProvider extends ChangeNotifier {
 
     final defaultColor = isDark
         ? const Color(0x33202025)
-        : const Color(0x8FFFFFFF);
+        : const Color(0x66FFFFFF);
 
     final effectiveShape = shape ??
         LiquidGlassShape(
@@ -99,30 +101,28 @@ class LiquidGlassProvider extends ChangeNotifier {
           clipQuality: clipQuality,
         );
 
-    // В светлой теме белый specular (+150L) пересвечивает стекло и окантовка становится белой.
-    // На светлом фоне окантовка адаптируется под тёмный графитовый тон, устраняя белый ореол.
-    final specularColor = borderColor ??
-        (isDark ? null : const Color(0xFF3A3A3C));
-
+    // Оптический specular-блик по образцу экрана adaptivity библиотеки liquid_glass_easy:
+    // При color == null шейдер автоматически берет цвет фона под гранью (с учетом dispersion и saturation)
+    // и высветляет его через rimLift без искусственных белых или темно-серых линий.
     final specular = borderWidth > 0
         ? LiquidGlassLight.specular(
-            thickness: borderWidth * 3.0,
-            sharpness: 0.98,
+            thickness: borderWidth * 4.0,
+            sharpness: 0.5,
             angle: angle,
-            intensity: isDark ? 0.6 : 0.55,
-            color: specularColor,
+            spread: 0.9,
+            intensity: 1.0,
+            oppositeIntensity: 1.0,
+            color: borderColor,
           )
-        : null;
-
-    final glowColor = borderColor ??
-        (isDark ? null : const Color(0xFF3A3A3C));
+        : const LiquidGlassLight.specular(thickness: 0);
 
     final glow = (borderWidth > 0 && includeGlow)
         ? LiquidGlassLight.glow(
             thickness: borderWidth * 8.0,
             angle: angle + 90,
+            spread: 0.5,
             intensity: isDark ? 0.3 : 0.2,
-            color: glowColor,
+            color: borderColor,
           )
         : null;
 
@@ -131,8 +131,11 @@ class LiquidGlassProvider extends ChangeNotifier {
             ? const LiquidGlassAdaptivity(
                 glassColorOnDark: Color(0x33202025),
                 contentColorOnDark: Colors.white,
-                glassColorOnLight: Color(0x8FFFFFFF),
+                glassColorOnLight: Color(0x66FFFFFF),
                 contentColorOnLight: Color(0xFF1C1C1E),
+                duration: Duration(milliseconds: 300),
+                darkBelow: 0.6,
+                lightAbove: 0.6,
                 brightnessFallback: LiquidGlassBrightnessFallback.appTheme,
               )
             : null);
@@ -141,11 +144,13 @@ class LiquidGlassProvider extends ChangeNotifier {
       shape: effectiveShape,
       color: color ?? defaultColor,
       blur: blur ?? _blur,
-      shadow: null,
+      shadow: shadow,
       specular: specular,
       glow: glow,
       refractionIndex: refractionIndex,
       refractionWidth: refractionWidth,
+      dispersion: dispersion,
+      saturation: saturation,
       adaptivity: effectiveAdaptivity,
       liteGlass: lite,
     );
