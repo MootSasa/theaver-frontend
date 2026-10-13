@@ -16,3 +16,8 @@ QueryExecutor openConnection([String? name]) {
 Future<void> deleteDatabaseFile(String name) async {
   // Web does not delete files directly
 }
+
+Future<void> deleteAllDatabaseFiles() async {
+  // Web does not delete files directly
+}
+

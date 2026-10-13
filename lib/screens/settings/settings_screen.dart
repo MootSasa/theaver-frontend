@@ -30,7 +30,6 @@ import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
 import 'package:http/http.dart' as http;
 import '../auth/login_screen.dart';
-import '../main/main_screen.dart';
 import '../../services/database/app_database.dart';
 import '../../services/cache_service.dart';
 import '../../services/websocket_service.dart';
@@ -907,7 +906,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
       // 3. Clear SQLite database (all chats, messages, sync states, cards)
       try {
-        await AppDatabase().clearAllData();
+        await AppDatabase.deleteAllDatabases();
       } catch (e) {
         debugPrint('_clearAllData: error clearing AppDatabase: $e');
       }

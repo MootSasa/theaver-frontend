@@ -245,11 +245,24 @@ class SyncService {
     final existing = await _db.getChat(chatId);
     if (existing != null) return;
 
+    final chatType = payload['chat_type']?.toString() ?? 'private';
+    String name = payload['name']?.toString() ?? '';
+    if (name.trim().isEmpty || name.trim() == '?') {
+      if (chatType == 'saved') {
+        name = 'Избранное';
+      } else if (chatType == 'private') {
+        name = 'Пользователь';
+      } else {
+        name = 'Чат';
+      }
+    }
+
     await _db.saveChat(ChatsCompanion(
       chatId: Value(chatId),
-      chatType: Value(payload['chat_type']?.toString() ?? 'private'),
-      name: Value(payload['name']?.toString() ?? ''),
+      chatType: Value(chatType),
+      name: Value(name),
       avatarUrl: Value(payload['avatar_url']?.toString()),
+      otherUserId: Value(payload['other_user_id']?.toString()),
       updatedAt: Value(payload['updated_at']?.toString() ??
           DateTime.now().toIso8601String()),
       unreadCount: const Value(0),

@@ -5,3 +5,5 @@ QueryExecutor openConnection([String? name]) {
 }
 
 Future<void> deleteDatabaseFile(String name) async {}
+Future<void> deleteAllDatabaseFiles() async {}
+

@@ -184,6 +184,14 @@ class AppDatabase extends _$AppDatabase {
     _instances.clear();
   }
 
+  /// Closes all open database instances and deletes all database files on disk
+  static Future<void> deleteAllDatabases() async {
+    await closeAll();
+    try {
+      await impl.deleteAllDatabaseFiles();
+    } catch (_) {}
+  }
+
   @override
   int get schemaVersion => 9;
 
@@ -300,6 +308,21 @@ class AppDatabase extends _$AppDatabase {
       await customSelect('SELECT 1').getSingle();
       _isInitialized = true;
       debugPrint('AppDatabase: Initialized');
+
+      // 1. Очистка пустых приватных чатов-«призраков» (без сообщений, без черновиков, не закреплены, пустое имя)
+      try {
+        await customStatement(
+          "DELETE FROM chats WHERE chat_type = 'private' AND (name = '' OR name = '?' OR name IS NULL) AND (last_message IS NULL OR last_message = '') AND (is_pinned IS NULL OR is_pinned = 0)",
+        );
+        await customStatement(
+          "UPDATE chats SET name = 'Пользователь' WHERE (name = '' OR name = '?' OR name IS NULL) AND chat_type = 'private'",
+        );
+      } catch (_) {}
+
+      // 2. Дедупликация чатов «Избранное»
+      try {
+        await _cleanupDuplicateSavedChats();
+      } catch (_) {}
     } catch (e) {
       debugPrint('AppDatabase initialize error: $e');
     }
@@ -320,6 +343,12 @@ class AppDatabase extends _$AppDatabase {
   /// 3) По дате последнего сообщения / обновления (updatedAt DESC)
   Stream<List<DbChat>> watchChats({int filter = 0}) {
     final query = select(chats);
+    // Скрываем пустые приватные чаты-«призраки» (должно быть сообщение или закрепление)
+    query.where((t) =>
+        t.chatType.isNotValue('private') |
+        t.isPinned.equals(true) |
+        (t.lastMessage.isNotNull() & t.lastMessage.isNotValue('')));
+
     if (filter == 1) {
       // Личные чаты (private и saved)
       query.where((t) => t.chatType.equals('private') | t.chatType.equals('saved'));
@@ -390,6 +419,9 @@ class AppDatabase extends _$AppDatabase {
     await batch((b) {
       b.insertAllOnConflictUpdate(chats, chatCompanions);
     });
+    if (chatCompanions.any((c) => c.chatType.value == 'saved')) {
+      await _cleanupDuplicateSavedChats();
+    }
   }
 
   /// Удалить чат по server chatId
@@ -516,11 +548,37 @@ class AppDatabase extends _$AppDatabase {
         .write(MessagesCompanion(senderAvatarUrl: Value(avatarUrl)));
   }
 
+  /// Дедупликация чатов "Избранное": оставляет один канонический чат, переносит сообщения и удаляет дубликаты
+  Future<void> _cleanupDuplicateSavedChats([String? userId]) async {
+    final savedChatsList = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
+    if (savedChatsList.length <= 1) return;
+
+    // Предпочитаем серверный ID (не начинающийся на 'saved_') как канонический
+    final canonicalChat = savedChatsList.firstWhere(
+      (c) => !c.chatId.startsWith('saved_'),
+      orElse: () => savedChatsList.first,
+    );
+
+    for (final c in savedChatsList) {
+      if (c.chatId != canonicalChat.chatId) {
+        // Переносим сообщения на канонический чат
+        await customStatement(
+          'UPDATE messages SET chat_id = ? WHERE chat_id = ?',
+          [canonicalChat.chatId, c.chatId],
+        );
+        // Удаляем лишнюю запись чата
+        await (delete(chats)..where((t) => t.chatId.equals(c.chatId))).go();
+      }
+    }
+    debugPrint('AppDatabase: Cleaned up duplicate saved chats, kept ${canonicalChat.chatId}');
+  }
+
   /// Убедиться, что чат "Избранное" существует локально
   Future<void> ensureSavedChatExists(String userId) async {
     await ensureInitialized();
-    final existing = await (select(chats)..where((t) => t.chatType.equals('saved'))).getSingleOrNull();
-    if (existing == null) {
+    await _cleanupDuplicateSavedChats(userId);
+    final existing = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
+    if (existing.isEmpty) {
       await saveChat(ChatsCompanion(
         chatId: Value('saved_$userId'),
         chatType: const Value('saved'),
@@ -535,14 +593,26 @@ class AppDatabase extends _$AppDatabase {
   Future<void> migrateSavedChatId(String localSavedId, String serverSavedId) async {
     if (localSavedId == serverSavedId) return;
     await ensureInitialized();
-    await customStatement(
-      'UPDATE chats SET chat_id = ? WHERE chat_id = ?',
-      [serverSavedId, localSavedId],
-    );
+
+    // Сначала переносим сообщения
     await customStatement(
       'UPDATE messages SET chat_id = ? WHERE chat_id = ?',
       [serverSavedId, localSavedId],
     );
+
+    // Проверяем, существует ли уже серверный чат в базе
+    final serverChat = await (select(chats)..where((t) => t.chatId.equals(serverSavedId))).getSingleOrNull();
+    if (serverChat != null) {
+      // Серверный чат уже вставлен, удаляем локальный плейсхолдер во избежание дубликатов
+      await (delete(chats)..where((t) => t.chatId.equals(localSavedId))).go();
+    } else {
+      // Серверного чата еще нет, переименовываем локальный плейсхолдер
+      await customStatement(
+        'UPDATE chats SET chat_id = ? WHERE chat_id = ?',
+        [serverSavedId, localSavedId],
+      );
+    }
+    await _cleanupDuplicateSavedChats();
   }
 
   // === СООБЩЕНИЯ ===

@@ -101,8 +101,26 @@ class _MainScreenState extends State<MainScreen>
           }
         } catch (_) {}
       }
+      final mappedChats = <Chat>[];
+      bool hasSaved = false;
+      for (final dbChat in dbChats) {
+        final chat = _dbChatToChat(dbChat);
+        // Only keep one saved chat
+        if (chat.chatType == 'saved') {
+          if (hasSaved) continue;
+          hasSaved = true;
+        }
+        // Exclude empty private chats with no message, no draft, not pinned
+        if (chat.chatType == 'private' &&
+            (chat.lastMessage == null || chat.lastMessage!.isEmpty) &&
+            (chat.draft == null || chat.draft!.text.isEmpty) &&
+            !chat.isPinned) {
+          continue;
+        }
+        mappedChats.add(chat);
+      }
       setState(() {
-        _chats = dbChats.map(_dbChatToChat).toList();
+        _chats = mappedChats;
         if (_isLoadingChats && _chats.isNotEmpty) {
           _isLoadingChats = false;
         }
@@ -746,10 +764,20 @@ class _MainScreenState extends State<MainScreen>
 
   /// Конвертация DbChat (Drift) → Chat (для UI)
   Chat _dbChatToChat(DbChat model) {
+    String name = model.name;
+    if (name.trim().isEmpty || name.trim() == '?') {
+      if (model.chatType == 'saved') {
+        name = 'Избранное';
+      } else if (model.chatType == 'private') {
+        name = 'Пользователь';
+      } else {
+        name = 'Чат';
+      }
+    }
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
-      name: model.name,
+      name: name,
       avatarUrl: model.avatarUrl,
       lastMessage: model.lastMessage,
       lastMessageTime: model.lastMessageTime,
@@ -1328,7 +1356,7 @@ class _MainScreenState extends State<MainScreen>
               try {
                 WebSocketService().disconnect();
                 await AuthService.logout();
-                await AppDatabase().clearAllData();
+                await AppDatabase.deleteAllDatabases();
                 await CacheService().clearCache();
                 await _accountManager.clearAll();
                 final prefs = await SharedPreferences.getInstance();

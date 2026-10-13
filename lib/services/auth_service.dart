@@ -12,7 +12,6 @@ import 'deep_link_service.dart';
 import 'websocket_service.dart';
 import 'notification_service.dart';
 import '../screens/auth/login_screen.dart';
-import '../screens/main/main_screen.dart';
 import '../utils/swipe_back_route.dart';
 import '../l10n/app_localizations.dart';
 
@@ -218,7 +217,9 @@ class AuthService {
 
       // 3. Clear local SQLite database and media cache
       try {
-        if (currentUserId != null) {
+        if (accountManager.accounts.isEmpty) {
+          await AppDatabase.deleteAllDatabases();
+        } else if (currentUserId != null) {
           await AppDatabase.removeUserDatabase(currentUserId);
         } else {
           await AppDatabase().clearAllData();
@@ -332,7 +333,6 @@ class AuthService {
       final accountManager = AccountManager();
       final terminatedAccount = accountManager.currentAccount;
       final currentUserId = terminatedAccount?.userId;
-      final terminatedUsername = terminatedAccount?.username ?? terminatedAccount?.displayName ?? '';
       if (currentUserId != null) {
         await accountManager.removeAccount(currentUserId);
       }
