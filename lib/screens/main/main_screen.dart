@@ -376,6 +376,7 @@ class _MainScreenState extends State<MainScreen>
 
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
       if (chatIndex != -1) {
+        Chat? updatedChat;
         setState(() {
           final chat = _chats[chatIndex];
 
@@ -398,7 +399,7 @@ class _MainScreenState extends State<MainScreen>
           final groupedId = messageData?['grouped_id'] as String?;
           final content = messageData?['content'] as String? ?? '';
 
-          final updatedChat = Chat(
+          final newChat = Chat(
             id: chat.id,
             chatType: chat.chatType,
             name: chat.name,
@@ -418,9 +419,10 @@ class _MainScreenState extends State<MainScreen>
             otherUserId: chat.otherUserId,
             draft: chat.draft,
           );
+          updatedChat = newChat;
 
           // Update the chat in place
-          _chats[chatIndex] = updatedChat;
+          _chats[chatIndex] = newChat;
           // Re-sort: pinned/saved chats stay in their fixed positions,
           // unpinned chats sort by updated_at
           _sortChats();
@@ -429,10 +431,12 @@ class _MainScreenState extends State<MainScreen>
         _localStorage.saveChats(_chats);
 
         // Сохранить в Drift
-        final db = AppDatabase();
-        try {
-          db.saveChat(_chatToCompanion(updatedChat));
-        } catch (_) {}
+        if (updatedChat != null) {
+          final db = AppDatabase();
+          try {
+            db.saveChat(_chatToCompanion(updatedChat!));
+          } catch (_) {}
+        }
       } else {
         // Chat was not in the list yet, reload chats seamlessly
         _loadChats(silent: true);
@@ -1925,7 +1929,6 @@ class _MainScreenState extends State<MainScreen>
                   color: Colors.white,
                   width: 11,
                   height: 11,
-                  strokeWidth: 2.5,
                 ),
               ),
             ),
@@ -3295,7 +3298,7 @@ class _MainScreenState extends State<MainScreen>
                 builder: (_) => PrivateChatScreen(
                   chatId: targetChatId,
                   otherUserName: dbChat?.name ?? '',
-                  highlightMessageId: result.id,
+                  initialMessageId: result.id,
                 ),
               ),
             );
@@ -3306,7 +3309,7 @@ class _MainScreenState extends State<MainScreen>
                 builder: (_) => GroupChatScreen(
                   chatId: targetChatId,
                   groupName: dbChat?.name ?? '',
-                  highlightMessageId: result.id,
+                  initialMessageId: result.id,
                 ),
               ),
             );
