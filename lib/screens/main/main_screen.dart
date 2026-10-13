@@ -140,6 +140,7 @@ class _MainScreenState extends State<MainScreen>
     _topMenuOverlayController.show();
     _searchController.addListener(_onSearchChanged);
     DraftService().draftsNotifier.addListener(_onDraftsChanged);
+    _accountManager.addListener(_onAccountChanged);
 
     // Инициализация: сначала Drift, потом загрузка чатов и WebSocket
     _initApp();
@@ -215,6 +216,7 @@ class _MainScreenState extends State<MainScreen>
   void _startConnectionCheck() {
     // Check connection status every 5 seconds
     _connectionCheckTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
       final isConnected = _wsService.isConnected;
       if (isConnected != _isWsConnected) {
         setState(() {
@@ -397,7 +399,7 @@ class _MainScreenState extends State<MainScreen>
         // Сохранить в Drift
         final db = AppDatabase();
         try {
-          db.saveChat(_chatToCompanion(_chats[chatIndex]));
+          db.saveChat(_chatToCompanion(updatedChat));
         } catch (_) {}
       } else {
         // Chat was not in the list yet, reload chats seamlessly
@@ -528,7 +530,7 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  void _onMessageDeleted(WebSocketEvent event) {
+  void _onMessageDeleted(WebSocketEvent event) async {
     debugPrint('Message deleted received in MainScreen: ${event.data}');
     final chatId = event.data['chat_id']?.toString();
     final messageId =
@@ -536,11 +538,11 @@ class _MainScreenState extends State<MainScreen>
     if (chatId != null) {
       if (messageId != null) {
         try {
-          AppDatabase().deleteMessage(messageId);
+          await AppDatabase().deleteMessage(messageId);
         } catch (_) {}
       }
       if (mounted) {
-        _refreshChatLastMessage(chatId);
+        await _refreshChatLastMessage(chatId);
       }
     }
   }
@@ -575,32 +577,33 @@ class _MainScreenState extends State<MainScreen>
         final isRound = lastMsg != null
             ? (lastMsg.isRound || lastMsg.messageType == 'round')
             : chat.lastMessageIsRound;
+        final updatedChat = Chat(
+          id: chat.id,
+          chatType: chat.chatType,
+          name: chat.name,
+          avatarUrl: chat.avatarUrl,
+          lastMessage: lastMsg?.content ?? chat.lastMessage,
+          lastMessageTime: lastMsg?.createdAt ?? chat.lastMessageTime,
+          lastMessageType: lastMsg?.messageType ?? chat.lastMessageType,
+          lastMessageIsRound: isRound,
+          lastMessageFileUrl: lastMsg?.fileUrl ?? chat.lastMessageFileUrl,
+          lastMessageGroupedId: lastMsg?.groupedId ?? chat.lastMessageGroupedId,
+          updatedAt: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
+              ? lastMsg.createdAt
+              : chat.updatedAt,
+          unreadCount: chat.unreadCount,
+          isOnline: chat.isOnline,
+          lastSeen: chat.lastSeen,
+          isPinned: chat.isPinned,
+          otherUserId: chat.otherUserId,
+          draft: draft,
+        );
         setState(() {
-          _chats[chatIndex] = Chat(
-            id: chat.id,
-            chatType: chat.chatType,
-            name: chat.name,
-            avatarUrl: chat.avatarUrl,
-            lastMessage: lastMsg?.content ?? chat.lastMessage,
-            lastMessageTime: lastMsg?.createdAt ?? chat.lastMessageTime,
-            lastMessageType: lastMsg?.messageType ?? chat.lastMessageType,
-            lastMessageIsRound: isRound,
-            lastMessageFileUrl: lastMsg?.fileUrl ?? chat.lastMessageFileUrl,
-            lastMessageGroupedId: lastMsg?.groupedId ?? chat.lastMessageGroupedId,
-            updatedAt: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
-                ? lastMsg.createdAt
-                : chat.updatedAt,
-            unreadCount: chat.unreadCount,
-            isOnline: chat.isOnline,
-            lastSeen: chat.lastSeen,
-            isPinned: chat.isPinned,
-            otherUserId: chat.otherUserId,
-            draft: draft,
-          );
+          _chats[chatIndex] = updatedChat;
           _sortChats();
         });
         _localStorage.saveChats(_chats);
-        await db.saveChat(_chatToCompanion(_chats[chatIndex]));
+        await db.saveChat(_chatToCompanion(updatedChat));
       }
     } catch (e) {
       debugPrint('Error refreshing last message for chat $chatId: $e');
@@ -813,16 +816,20 @@ class _MainScreenState extends State<MainScreen>
           await AppDatabase().migrateSavedChatId('saved_$userId', savedChat.id);
         }
 
-        // Add to list if not already present
-        if (!_chats.any((c) => c.id == savedChat.id)) {
-          if (mounted) {
-            setState(() {
+        // Add to list or replace temporary placeholder if not already present with same data
+        if (mounted) {
+          setState(() {
+            _chats.removeWhere((c) => c.chatType == 'saved' && c.id != savedChat.id);
+            final existingIndex = _chats.indexWhere((c) => c.id == savedChat.id);
+            if (existingIndex == -1) {
               _chats.insert(0, savedChat);
-              _sortChats();
-              _localStorage.saveChats(_chats);
-            });
-          }
-          debugPrint('Added saved chat to list');
+            } else {
+              _chats[existingIndex] = savedChat;
+            }
+            _sortChats();
+            _localStorage.saveChats(_chats);
+          });
+          debugPrint('Added or synchronized saved chat in list');
         }
       } else {
         debugPrint('Failed to get saved chat: ${result['message']}');
@@ -885,6 +892,7 @@ class _MainScreenState extends State<MainScreen>
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     DraftService().draftsNotifier.removeListener(_onDraftsChanged);
+    _accountManager.removeListener(_onAccountChanged);
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
@@ -908,6 +916,22 @@ class _MainScreenState extends State<MainScreen>
       context.read<UnreadCountProvider>().removeListener(_onUnreadCountProviderChanged);
     } catch (_) {}
     super.dispose();
+  }
+
+  void _onAccountChanged() {
+    if (!mounted) return;
+    debugPrint('[MainScreen] Active account changed! Refreshing state and WS...');
+    setState(() {
+      _chats = [];
+      _isLoadingChats = true;
+    });
+    // Disconnect old WebSocket, reconnect with new account token, reload chats
+    _wsService.disconnect();
+    _initWebSocket();
+    _loadChats();
+    try {
+      SyncService().syncFromServer();
+    } catch (_) {}
   }
 
   void _onDraftsChanged() {
@@ -2387,15 +2411,22 @@ class _MainScreenState extends State<MainScreen>
     }
 
     if (mounted) {
+      final updatedList = <Chat>[];
       setState(() {
         for (final chat in [...toPin, ...toUnpin]) {
           final index = _chats.indexWhere((c) => c.id == chat.id);
           if (index != -1) {
-            _chats[index] = chat.copyWith(isPinned: !chat.isPinned);
+            final updated = chat.copyWith(isPinned: !chat.isPinned);
+            _chats[index] = updated;
+            updatedList.add(updated);
           }
         }
         _sortChats();
       });
+      _localStorage.saveChats(_chats);
+      try {
+        AppDatabase().saveChats(updatedList.map(_chatToCompanion).toList());
+      } catch (_) {}
       _exitSelectMode();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Обновлено $successCount чатов')),
@@ -2423,6 +2454,16 @@ class _MainScreenState extends State<MainScreen>
       }
     }
     if (mounted) {
+      final db = AppDatabase();
+      for (final chat in chats) {
+        if (chat.unreadCount > 0) {
+          try {
+            db.updateUnreadCount(chat.id, 0);
+            context.read<UnreadCountProvider>().setCount(chat.id, 0);
+          } catch (_) {}
+        }
+      }
+      _localStorage.saveChats(_chats);
       _exitSelectMode();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -2457,10 +2498,15 @@ class _MainScreenState extends State<MainScreen>
       // Call API to delete/leave each chat
       int deleted = 0;
       int failed = 0;
+      final db = AppDatabase();
       for (final chat in chats) {
         final result = await ChatService.deleteChat(chat.id);
         if (result['success'] == true) {
           deleted++;
+          try {
+            await db.deleteChat(chat.id);
+            await db.deleteMessagesForChat(chat.id);
+          } catch (_) {}
         } else {
           failed++;
         }
@@ -2472,6 +2518,7 @@ class _MainScreenState extends State<MainScreen>
           _chats.removeWhere((c) => c.id == chat.id);
         }
       });
+      _localStorage.saveChats(_chats);
       _exitSelectMode();
       // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2485,8 +2532,18 @@ class _MainScreenState extends State<MainScreen>
   }
 
   void _openChat(Chat chat) {
-    // Track currently open chat to avoid incrementing unread for it
-    
+    try {
+      context.read<UnreadCountProvider>().setOpenChat(chat.id);
+    } catch (_) {}
+    NotificationService().setActiveChat(chat.id);
+
+    final VoidCallback onReturn = () {
+      try {
+        context.read<UnreadCountProvider>().setOpenChat(null);
+      } catch (_) {}
+      NotificationService().setActiveChat(null);
+      if (mounted) _refreshChatLastMessage(chat.id);
+    };
 
     switch (chat.chatType) {
       case 'private':
@@ -2503,9 +2560,7 @@ class _MainScreenState extends State<MainScreen>
               otherUserId: chat.otherUserId,
             ),
           ),
-        ).then((_) {
-          if (mounted) _refreshChatLastMessage(chat.id);
-        });
+        ).then((_) => onReturn());
         break;
       case 'saved':
         // Open saved chat as a special chat with yourself
@@ -2514,13 +2569,13 @@ class _MainScreenState extends State<MainScreen>
           SwipeBackPageRoute(
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              otherUserName: 'Избранное',
+              otherUserName: context.l10n.translate('chat_saved_messages').isNotEmpty
+                  ? context.l10n.translate('chat_saved_messages')
+                  : 'Избранное',
               otherUserAvatar: null,
             ),
           ),
-        ).then((_) {
-          if (mounted) _refreshChatLastMessage(chat.id);
-        });
+        ).then((_) => onReturn());
         break;
       case 'system':
         Navigator.push(
@@ -2533,9 +2588,7 @@ class _MainScreenState extends State<MainScreen>
                   : context.l10n.translate('system_notifications_title'),
             ),
           ),
-        ).then((_) {
-          if (mounted) _refreshChatLastMessage(chat.id);
-        });
+        ).then((_) => onReturn());
         break;
       case 'group':
         Navigator.push(
@@ -2547,9 +2600,7 @@ class _MainScreenState extends State<MainScreen>
               groupAvatar: chat.avatarUrl,
             ),
           ),
-        ).then((_) {
-          if (mounted) _refreshChatLastMessage(chat.id);
-        });
+        ).then((_) => onReturn());
         break;
       case 'channel':
         Navigator.push(
@@ -2561,9 +2612,7 @@ class _MainScreenState extends State<MainScreen>
               channelAvatar: chat.avatarUrl,
             ),
           ),
-        ).then((_) {
-          if (mounted) _refreshChatLastMessage(chat.id);
-        });
+        ).then((_) => onReturn());
         break;
     }
   }
@@ -2597,15 +2646,21 @@ class _MainScreenState extends State<MainScreen>
   void _sortChats() {
     _chats.sort((a, b) {
       // Saved chat always first
+      if (a.chatType == 'saved' && b.chatType == 'saved') return 0;
       if (a.chatType == 'saved') return -1;
       if (b.chatType == 'saved') return 1;
 
       // Pinned chats next
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
+      if (a.isPinned != b.isPinned) {
+        return a.isPinned ? -1 : 1;
+      }
 
-      // Then by updated_at
-      return b.updatedAt.compareTo(a.updatedAt);
+      // Then by parsed updated_at to ensure accurate chronological ordering
+      final dtA = DateTimeUtils.parseUtcDateTime(a.updatedAt) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final dtB = DateTimeUtils.parseUtcDateTime(b.updatedAt) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return dtB.compareTo(dtA);
     });
   }
 
@@ -3205,20 +3260,49 @@ class _MainScreenState extends State<MainScreen>
         break;
       case 'message':
         if (result is SearchResultMessage) {
-          // Navigate to the channel where the message is located
-          // The message will be highlighted/scrolled to via the messageId parameter
-          
-          Navigator.push(
-            context,
-            SwipeBackPageRoute(
-              builder: (_) => ChannelScreen(
-                channelId: result.channelId,
-                channelName: null,
-                channelAvatar: null,
-                highlightMessageId: result.id,
+          final targetChatId = result.channelId.isNotEmpty
+              ? result.channelId
+              : result.groupId;
+          final dbChat = await AppDatabase().getChat(targetChatId);
+          final chatType = dbChat?.chatType ??
+              (result.channelId.isNotEmpty ? 'channel' : 'group');
+
+          if (!mounted) return;
+          if (chatType == 'private') {
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(
+                builder: (_) => PrivateChatScreen(
+                  chatId: targetChatId,
+                  otherUserName: dbChat?.name ?? '',
+                  highlightMessageId: result.id,
+                ),
               ),
-            ),
-          ).then((_) {});
+            );
+          } else if (chatType == 'group') {
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(
+                builder: (_) => GroupChatScreen(
+                  chatId: targetChatId,
+                  groupName: dbChat?.name ?? '',
+                  highlightMessageId: result.id,
+                ),
+              ),
+            );
+          } else {
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(
+                builder: (_) => ChannelScreen(
+                  channelId: targetChatId,
+                  channelName: dbChat?.name,
+                  channelAvatar: dbChat?.avatarUrl,
+                  highlightMessageId: result.id,
+                ),
+              ),
+            );
+          }
         }
         break;
       default:
