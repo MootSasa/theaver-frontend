@@ -11,6 +11,8 @@ import 'theme/theme_provider.dart';
 import 'screens/auth/splash_screen.dart';
 import 'services/settings_service.dart';
 import 'services/account_manager.dart';
+import 'services/chat_folder_service.dart';
+import 'services/chat_swipe_service.dart';
 import 'services/cache_service.dart';
 import 'services/draft_service.dart';
 import 'services/chat_realtime_manager.dart';
@@ -124,6 +126,8 @@ void main() async {
   // Initialize services
   await SettingsService().init();
   await AccountManager().init();
+  await ChatFolderService().init();
+  await ChatSwipeService().init();
   await CacheService().init();
   await DraftService().init();
   ChatRealtimeManager().init();

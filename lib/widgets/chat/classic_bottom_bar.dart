@@ -35,6 +35,7 @@ class ClassicBottomBar extends StatefulWidget {
     this.horizontalPadding = 16,
     this.bottomPadding = 12,
     this.barHeight = 60,
+    this.unreadCount = 0,
   }) : super(key: key);
 
   /// Индекс активной вкладки
@@ -50,6 +51,7 @@ class ClassicBottomBar extends StatefulWidget {
   final double horizontalPadding;
   final double bottomPadding;
   final double barHeight;
+  final int unreadCount;
 
   @override
   State<ClassicBottomBar> createState() => _ClassicBottomBarState();
@@ -76,9 +78,8 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = MediaQuery.platformBrightnessOf(context);
-    final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final themeExt = theme.extension<TheavThemeExtension>();
     final p = themeExt?.palette;
 
@@ -157,6 +158,7 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
                           child: _ClassicBottomBarTabButton(
                             tab: _tabs[i],
                             selected: widget.selectedIndex == i,
+                            badgeCount: i == 1 ? widget.unreadCount : 0,
                             onTap: () {
                               HapticUtils.selection();
                               widget.onTabSelected(i);
@@ -226,6 +228,7 @@ class _ClassicBottomBarTabButton extends StatelessWidget {
     required this.onTap,
     required this.isDark,
     required this.theme,
+    this.badgeCount = 0,
   });
 
   final ClassicBottomBarTab tab;
@@ -233,6 +236,7 @@ class _ClassicBottomBarTabButton extends StatelessWidget {
   final VoidCallback onTap;
   final bool isDark;
   final ThemeData theme;
+  final int badgeCount;
 
   @override
   Widget build(BuildContext context) {
@@ -242,6 +246,18 @@ class _ClassicBottomBarTabButton extends StatelessWidget {
         ? (p?.primary ?? theme.colorScheme.primary)
         : (p?.subtext ?? (isDark ? Colors.white54 : Colors.black54));
 
+    final iconWidget = AnimatedScale(
+      scale: selected ? 1.08 : 1.0,
+      duration: const Duration(milliseconds: 150),
+      child: tab.iconBuilder != null
+          ? tab.iconBuilder!(iconColor, 26)
+          : Icon(
+              selected ? (tab.selectedIcon ?? tab.icon) : tab.icon,
+              color: iconColor,
+              size: 26,
+            ),
+    );
+
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -249,16 +265,34 @@ class _ClassicBottomBarTabButton extends StatelessWidget {
         button: true,
         label: tab.label,
         child: Center(
-          child: AnimatedScale(
-            scale: selected ? 1.08 : 1.0,
-            duration: const Duration(milliseconds: 150),
-            child: tab.iconBuilder != null
-                ? tab.iconBuilder!(iconColor, 26)
-                : Icon(
-                    selected ? (tab.selectedIcon ?? tab.icon) : tab.icon,
-                    color: iconColor,
-                    size: 26,
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              iconWidget,
+              if (badgeCount > 0)
+                Positioned(
+                  top: -5,
+                  right: -10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: p?.unreadBadge ?? theme.colorScheme.primary,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    child: Text(
+                      badgeCount > 99 ? '99+' : badgeCount.toString(),
+                      style: TextStyle(
+                        color: p?.unreadBadgeText ?? theme.colorScheme.onPrimary,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
+                ),
+            ],
           ),
         ),
       ),

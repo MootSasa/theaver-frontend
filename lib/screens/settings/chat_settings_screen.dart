@@ -22,6 +22,7 @@ import '../../l10n/app_localizations.dart';
 import 'advanced_theme_colors_screen.dart';
 import 'theme_editor_screen.dart';
 import 'wallpaper_screen.dart';
+import '../../widgets/settings/chat_swipe_setting_card.dart';
 import '../../utils/swipe_back_route.dart';
 
 /// Screen for chat settings: wallpaper constructor, themes carousel,
@@ -481,6 +482,11 @@ class ChatSettingsScreen extends StatelessWidget {
                 ),
               ],
             ),
+
+            const SizedBox(height: 12),
+
+            // Chat Swipe Gesture Setting (Telegram style)
+            const ChatSwipeSettingCard(),
 
             const SizedBox(height: 12),
 

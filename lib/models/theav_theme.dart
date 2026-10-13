@@ -375,6 +375,8 @@ class TheavPalette {
   Color get unreadBadgeText => _unreadBadgeText ?? onPrimary;
   Color get onlineIndicator => _onlineIndicator ?? const Color(0xFF4CAF50);
   Color get subtext => _subtext ?? onSurface.withValues(alpha: 0.6);
+  Color get chatSubtitle => subtext;
+  Color get chatSubtitleUnread => onSurface;
   Color get divider => _divider ?? onSurface.withValues(alpha: 0.12);
   Color get accent => primary;
   Color get error => _error ?? (primary.computeLuminance() > 0.5 ? const Color(0xFFD32F2F) : const Color(0xFFEF5350));
