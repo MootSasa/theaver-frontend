@@ -72,6 +72,21 @@ class _MainScreenState extends State<MainScreen>
   // Chats list
   List<Chat> _chats = [];
   bool _isLoadingChats = true;
+  StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
+
+  void _initChatsStream() {
+    _chatsStreamSubscription?.cancel();
+    _chatsStreamSubscription = AppDatabase().watchChats().listen((dbChats) {
+      if (!mounted) return;
+      setState(() {
+        _chats = dbChats.map(_dbChatToChat).toList();
+        if (_isLoadingChats && _chats.isNotEmpty) {
+          _isLoadingChats = false;
+        }
+      });
+      DraftService().populateFromChats(_chats);
+    });
+  }
 
   // Multi-select mode
   bool _isSelectMode = false;
@@ -156,12 +171,15 @@ class _MainScreenState extends State<MainScreen>
     });
   }
 
-  /// Последовательная инициализация: Drift → чаты → WebSocket
+  /// Последовательная инициализация: Drift → стрим чатов → чаты с сервера → WebSocket
   Future<void> _initApp() async {
     // 1. Инициализация Drift (обязательно до _loadChats!)
     await _initOfflineFirst();
 
-    // 2. Загрузка чатов (теперь Drift уже инициализирован)
+    // 2. Реактивная подписка на стрим чатов из SQLite
+    _initChatsStream();
+
+    // 3. Загрузка чатов (фоновый запрос к серверу)
     _loadChats();
 
     // 3. WebSocket (параллельно, не блокирует UI)
@@ -550,61 +568,7 @@ class _MainScreenState extends State<MainScreen>
   Future<void> _refreshChatLastMessage(String chatId) async {
     try {
       final db = AppDatabase();
-      final lastMsg = await db.getLastMessageForChat(chatId);
-      final draft = DraftService().getDraft(chatId);
-      if (!mounted) return;
-      final chatIndex = _chats.indexWhere((c) => c.id == chatId);
-      if (chatIndex != -1) {
-        final chat = _chats[chatIndex];
-
-        // A chat has messages if either the local DB returned a message, or the chat model itself already had a last message
-        final hasMessages = lastMsg != null || (chat.lastMessage != null && chat.lastMessage!.isNotEmpty);
-        final hasDraft = draft != null && draft.text.trim().isNotEmpty;
-
-        // Only purge empty private chats if there are genuinely NO messages anywhere, NO draft, and it's not pinned
-        if (chat.chatType == 'private' &&
-            !hasMessages &&
-            !hasDraft &&
-            !chat.isPinned) {
-          setState(() {
-            _chats.removeAt(chatIndex);
-          });
-          await db.deleteChat(chatId);
-          _localStorage.saveChats(_chats);
-          return;
-        }
-
-        final isRound = lastMsg != null
-            ? (lastMsg.isRound || lastMsg.messageType == 'round')
-            : chat.lastMessageIsRound;
-        final updatedChat = Chat(
-          id: chat.id,
-          chatType: chat.chatType,
-          name: chat.name,
-          avatarUrl: chat.avatarUrl,
-          lastMessage: lastMsg?.content ?? chat.lastMessage,
-          lastMessageTime: lastMsg?.createdAt ?? chat.lastMessageTime,
-          lastMessageType: lastMsg?.messageType ?? chat.lastMessageType,
-          lastMessageIsRound: isRound,
-          lastMessageFileUrl: lastMsg?.fileUrl ?? chat.lastMessageFileUrl,
-          lastMessageGroupedId: lastMsg?.groupedId ?? chat.lastMessageGroupedId,
-          updatedAt: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
-              ? lastMsg.createdAt
-              : chat.updatedAt,
-          unreadCount: chat.unreadCount,
-          isOnline: chat.isOnline,
-          lastSeen: chat.lastSeen,
-          isPinned: chat.isPinned,
-          otherUserId: chat.otherUserId,
-          draft: draft,
-        );
-        setState(() {
-          _chats[chatIndex] = updatedChat;
-          _sortChats();
-        });
-        _localStorage.saveChats(_chats);
-        await db.saveChat(_chatToCompanion(updatedChat));
-      }
+      await db.refreshChatLastMessageFromDb(chatId);
     } catch (e) {
       debugPrint('Error refreshing last message for chat $chatId: $e');
     }
@@ -678,97 +642,41 @@ class _MainScreenState extends State<MainScreen>
     }
 
     final db = AppDatabase();
-    bool loadedFromLocal = false;
+    await db.ensureInitialized();
 
-    // 1. При холодном старте (когда _chats ещё пуст) мгновенно загрузить из локального кэша
-    if (isInitialLoad) {
-      try {
-        final localChats = await db.getChats();
-        if (localChats.isNotEmpty && mounted) {
-          setState(() {
-            _chats = localChats.map(_dbChatToChat).toList();
-            _isLoadingChats = false;
-          });
-          _sortChats();
-          loadedFromLocal = true;
-          debugPrint('MainScreen: Loaded ${localChats.length} chats from Drift');
-        }
-      } catch (e) {
-        debugPrint('MainScreen: Error loading from Drift: $e');
-      }
-
-      // 2. Fallback: SharedPreferences если Drift пуст
-      if (!loadedFromLocal) {
-        try {
-          final prefsChats = await _localStorage.loadChats();
-          if (prefsChats.isNotEmpty && mounted) {
-            setState(() {
-              _chats = prefsChats;
-              _isLoadingChats = false;
-            });
-            _sortChats();
-            loadedFromLocal = true;
-            debugPrint('MainScreen: Loaded ${prefsChats.length} chats from SharedPreferences');
-          }
-        } catch (e) {
-          debugPrint('MainScreen: Error loading from SharedPreferences: $e');
-        }
-      }
-    }
-
-    // 3. Фоновая загрузка с сервера (бесшовное обновление)
+    // Фоновая загрузка с сервера (бесшовное обновление локальной БД)
     try {
       final result = await ChatService.getChats();
 
       if (mounted) {
-        setState(() {
-          _isLoadingChats = false;
-          if (result['success'] == true) {
-            _chats = result['chats'] as List<Chat>;
-            DraftService().populateFromChats(_chats);
-            _sortChats();
+        if (result['success'] == true && result['chats'] is List<Chat>) {
+          final serverChats = result['chats'] as List<Chat>;
+          DraftService().populateFromChats(serverChats);
 
-            // Сохранить в Drift для offline-доступа
-            try {
-              final chatModels = _chats.map(_chatToCompanion).toList();
-              db.saveChats(chatModels);
-            } catch (e) {
-              debugPrint('MainScreen: Error saving to Drift: $e');
-            }
-
-            // Сохранить в SharedPreferences как fallback
-            _localStorage.saveChats(_chats);
-
-            // Обновить провайдер
-            try {
-              context.read<UnreadCountProvider>().loadFromChats(_chats);
-            } catch (_) {}
-          } else {
-            debugPrint('Failed to load chats: ${result['message']}');
-            if (result['message'] == 'Not authenticated') {
-              _chats = [];
-              _localStorage.clearUserData();
-            }
+          // Сохранить в Drift — это автоматически обновит _chats через reactive stream!
+          try {
+            final chatModels = serverChats.map(_chatToCompanion).toList();
+            await db.saveChats(chatModels);
+          } catch (e) {
+            debugPrint('MainScreen: Error saving to Drift: $e');
           }
-        });
+
+          // Обновить провайдер
+          try {
+            context.read<UnreadCountProvider>().loadFromChats(serverChats);
+          } catch (_) {}
+        } else {
+          debugPrint('Failed to load chats: ${result['message']}');
+          if (result['message'] == 'Not authenticated') {
+            _localStorage.clearUserData();
+          }
+        }
       }
     } catch (e) {
       debugPrint('MainScreen: Error loading from server: $e');
-      // Сервер недоступен — оставляем текущие данные
+    } finally {
       if (mounted) {
         setState(() => _isLoadingChats = false);
-        if (_chats.isEmpty && !loadedFromLocal) {
-          try {
-            final prefsChats = await _localStorage.loadChats();
-            if (prefsChats.isNotEmpty) {
-              setState(() {
-                _chats = prefsChats;
-              });
-              _sortChats();
-              debugPrint('MainScreen: Fallback — loaded ${prefsChats.length} chats from SharedPreferences');
-            }
-          } catch (_) {}
-        }
       }
     }
 
@@ -780,59 +688,21 @@ class _MainScreenState extends State<MainScreen>
   Future<void> _ensureSavedChatExists() async {
     try {
       final userId = await AuthService.getUserId();
+      final db = AppDatabase();
       if (userId != null) {
-        final db = AppDatabase();
         await db.ensureSavedChatExists(userId);
-      }
-
-      // Check if saved chat already exists in local list
-      final hasSavedChat = _chats.any((c) => c.chatType == 'saved');
-      debugPrint('hasSavedChat: $hasSavedChat, chats count: ${_chats.length}');
-
-      if (!hasSavedChat) {
-        // If not in _chats but might be in DB (just created or already there), reload from DB
-        try {
-          final dbChats = await AppDatabase().getChats();
-          if (dbChats.isNotEmpty && mounted) {
-            setState(() {
-              _chats = dbChats.map(_dbChatToChat).toList();
-            });
-            _sortChats();
-          }
-        } catch (_) {}
       }
 
       // Secondary sync: Request saved chat from server
       debugPrint('Requesting saved chat from server for sync...');
       final result = await ChatService.getOrCreateSavedChat();
-      debugPrint('Saved chat result: $result');
 
       if (result['success'] == true && result['chat'] != null) {
         final savedChat = result['chat'] as Chat;
-        debugPrint(
-            'Got saved chat: ${savedChat.id}, name: ${savedChat.name}');
-
         if (userId != null) {
-          await AppDatabase().migrateSavedChatId('saved_$userId', savedChat.id);
+          await db.migrateSavedChatId('saved_$userId', savedChat.id);
         }
-
-        // Add to list or replace temporary placeholder if not already present with same data
-        if (mounted) {
-          setState(() {
-            _chats.removeWhere((c) => c.chatType == 'saved' && c.id != savedChat.id);
-            final existingIndex = _chats.indexWhere((c) => c.id == savedChat.id);
-            if (existingIndex == -1) {
-              _chats.insert(0, savedChat);
-            } else {
-              _chats[existingIndex] = savedChat;
-            }
-            _sortChats();
-            _localStorage.saveChats(_chats);
-          });
-          debugPrint('Added or synchronized saved chat in list');
-        }
-      } else {
-        debugPrint('Failed to get saved chat: ${result['message']}');
+        await db.saveChat(_chatToCompanion(savedChat));
       }
     } catch (e) {
       debugPrint('Error ensuring saved chat exists: $e');
@@ -898,6 +768,7 @@ class _MainScreenState extends State<MainScreen>
     _pageController.dispose();
     _wsSubscription?.cancel();
     _connectionCheckTimer?.cancel();
+    _chatsStreamSubscription?.cancel();
     // Don't disconnect WebSocket on dispose - it's a singleton and should stay connected
     // for the entire app lifecycle. Only unsubscribe OUR callbacks (not UnreadCountProvider's!).
     // Using unsubscribe() instead of unsubscribeAll() to avoid wiping other subscribers.
@@ -925,6 +796,7 @@ class _MainScreenState extends State<MainScreen>
       _chats = [];
       _isLoadingChats = true;
     });
+    _initChatsStream();
     // Disconnect old WebSocket, reconnect with new account token, reload chats
     _wsService.disconnect();
     _initWebSocket();
@@ -2400,6 +2272,17 @@ class _MainScreenState extends State<MainScreen>
       }
     }
 
+    final db = AppDatabase();
+
+    // Оптимистичное обновление SQLite — стрим мгновенно обновит UI
+    if (toPin.isNotEmpty) {
+      await db.batchSetPinned(toPin.map((c) => c.id).toList(), true);
+    }
+    if (toUnpin.isNotEmpty) {
+      await db.batchSetPinned(toUnpin.map((c) => c.id).toList(), false);
+    }
+    _exitSelectMode();
+
     int successCount = 0;
     for (final chat in toPin) {
       final result = await ChatService.pinChat(chatId: chat.id);
@@ -2411,23 +2294,6 @@ class _MainScreenState extends State<MainScreen>
     }
 
     if (mounted) {
-      final updatedList = <Chat>[];
-      setState(() {
-        for (final chat in [...toPin, ...toUnpin]) {
-          final index = _chats.indexWhere((c) => c.id == chat.id);
-          if (index != -1) {
-            final updated = chat.copyWith(isPinned: !chat.isPinned);
-            _chats[index] = updated;
-            updatedList.add(updated);
-          }
-        }
-        _sortChats();
-      });
-      _localStorage.saveChats(_chats);
-      try {
-        AppDatabase().saveChats(updatedList.map(_chatToCompanion).toList());
-      } catch (_) {}
-      _exitSelectMode();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Обновлено $successCount чатов')),
       );
@@ -2436,35 +2302,29 @@ class _MainScreenState extends State<MainScreen>
 
   /// Batch mark selected chats as read
   Future<void> _batchMarkAsRead(List<Chat> chats) async {
+    final db = AppDatabase();
+    final ids = chats.map((c) => c.id).toList();
+
+    // Оптимистичное обновление SQLite и провайдера — стрим мгновенно обновит UI
+    await db.batchMarkAsRead(ids);
+    for (final id in ids) {
+      try {
+        context.read<UnreadCountProvider>().setCount(id, 0);
+      } catch (_) {}
+    }
+    _exitSelectMode();
+
     int successCount = 0;
     for (final chat in chats) {
       if (chat.unreadCount > 0) {
         final result = await ChatService.markMessagesAsRead(chatId: chat.id);
         if (result['success'] == true) {
           successCount++;
-          if (mounted) {
-            setState(() {
-              final index = _chats.indexWhere((c) => c.id == chat.id);
-              if (index != -1) {
-                _chats[index] = chat.copyWith(unreadCount: 0);
-              }
-            });
-          }
         }
       }
     }
+
     if (mounted) {
-      final db = AppDatabase();
-      for (final chat in chats) {
-        if (chat.unreadCount > 0) {
-          try {
-            db.updateUnreadCount(chat.id, 0);
-            context.read<UnreadCountProvider>().setCount(chat.id, 0);
-          } catch (_) {}
-        }
-      }
-      _localStorage.saveChats(_chats);
-      _exitSelectMode();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
             content: Text('Отмечено как прочитанное: $successCount чатов')),
@@ -2495,32 +2355,25 @@ class _MainScreenState extends State<MainScreen>
     );
 
     if (confirmed == true && mounted) {
-      // Call API to delete/leave each chat
+      final db = AppDatabase();
+      final ids = chats.map((c) => c.id).toList();
+
+      // Оптимистичное удаление из SQLite — стрим мгновенно обновит UI
+      await db.batchDeleteChats(ids);
+      _exitSelectMode();
+
       int deleted = 0;
       int failed = 0;
-      final db = AppDatabase();
       for (final chat in chats) {
         final result = await ChatService.deleteChat(chat.id);
         if (result['success'] == true) {
           deleted++;
-          try {
-            await db.deleteChat(chat.id);
-            await db.deleteMessagesForChat(chat.id);
-          } catch (_) {}
         } else {
           failed++;
         }
       }
 
       if (!mounted) return;
-      setState(() {
-        for (final chat in chats) {
-          _chats.removeWhere((c) => c.id == chat.id);
-        }
-      });
-      _localStorage.saveChats(_chats);
-      _exitSelectMode();
-      // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(
           failed > 0

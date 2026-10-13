@@ -262,10 +262,60 @@ class AppDatabase extends _$AppDatabase {
 
   // === ЧАТЫ ===
 
+  /// Реактивный стрим чатов с сортировкой:
+  /// 1) Избранное (saved) в самом верху
+  /// 2) Закрепленные (isPinned == true)
+  /// 3) По дате последнего сообщения / обновления (updatedAt DESC)
+  Stream<List<DbChat>> watchChats({int filter = 0}) {
+    final query = select(chats);
+    if (filter == 1) {
+      // Личные чаты (private и saved)
+      query.where((t) => t.chatType.equals('private') | t.chatType.equals('saved'));
+    } else if (filter == 2) {
+      // Группы (и saved)
+      query.where((t) => t.chatType.equals('group') | t.chatType.equals('saved'));
+    } else if (filter == 3) {
+      // Каналы (и saved)
+      query.where((t) => t.chatType.equals('channel') | t.chatType.equals('saved'));
+    }
+    query.orderBy([
+      (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
+      (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+      (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+    ]);
+    return query.watch();
+  }
+
+  /// Поиск по локальным чатам через SQLite
+  Future<List<DbChat>> searchLocalChats(String query) async {
+    await ensureInitialized();
+    final pattern = '%$query%';
+    return (select(chats)
+          ..where((t) => t.name.like(pattern) | t.lastMessage.like(pattern))
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+          ]))
+        .get();
+  }
+
+  /// Реактивный подсчёт общего числа непрочитанных сообщений
+  Stream<int> watchTotalUnread() {
+    final sumCol = chats.unreadCount.sum();
+    final query = selectOnly(chats)..addColumns([sumCol]);
+    return query.watchSingleOrNull().map((row) => row?.read(sumCol) ?? 0);
+  }
+
   /// Получить все чаты, отсортированные по updatedAt (убывание)
   Future<List<DbChat>> getChats() async {
     await ensureInitialized();
-    return (select(chats)..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+    return (select(chats)
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+          ]))
         .get();
   }
 
@@ -296,16 +346,101 @@ class AppDatabase extends _$AppDatabase {
     await (delete(chats)..where((t) => t.chatId.equals(chatId))).go();
   }
 
-  /// Обновить unread count для чата
+  /// Обновить unread count для чата с гарантированным оповещением реактивных стримов Drift
   Future<void> updateUnreadCount(String chatId, int count) async {
     await ensureInitialized();
     await (update(chats)..where((t) => t.chatId.equals(chatId)))
-        .write(const ChatsCompanion(unreadCount: Value.absent()));
-    // Используем raw update для установки конкретного значения
-    await customStatement(
-      'UPDATE chats SET unread_count = ? WHERE chat_id = ?',
-      [count, chatId],
+        .write(ChatsCompanion(unreadCount: Value(count)));
+  }
+
+  /// Пакетное закрепление / открепление чатов
+  Future<void> batchSetPinned(List<String> chatIds, bool isPinned) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds)))
+        .write(ChatsCompanion(isPinned: Value(isPinned)));
+  }
+
+  /// Пакетная отметка чатов как прочитанные
+  Future<void> batchMarkAsRead(List<String> chatIds) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds)))
+        .write(const ChatsCompanion(unreadCount: Value(0)));
+  }
+
+  /// Пакетное удаление чатов и их сообщений
+  Future<void> batchDeleteChats(List<String> chatIds) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await batch((b) {
+      b.deleteWhere(chats, (t) => t.chatId.isIn(chatIds));
+      b.deleteWhere(messages, (t) => t.chatId.isIn(chatIds));
+    });
+  }
+
+  /// Обновить последнее сообщение чата и updatedAt
+  Future<void> updateChatLastMessage({
+    required String chatId,
+    required String content,
+    required String createdAt,
+    String messageType = 'text',
+    bool isRound = false,
+    String? fileUrl,
+    String? groupedId,
+    bool incrementUnread = false,
+  }) async {
+    await ensureInitialized();
+    final existing = await getChat(chatId);
+    if (existing == null) return;
+    final newUnread =
+        incrementUnread ? existing.unreadCount + 1 : existing.unreadCount;
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        lastMessage: Value(content),
+        lastMessageTime: Value(createdAt),
+        lastMessageType: Value(messageType),
+        lastMessageIsRound: Value(isRound),
+        lastMessageFileUrl: Value(fileUrl),
+        lastMessageGroupedId: Value(groupedId),
+        updatedAt: Value(createdAt),
+        unreadCount: Value(newUnread),
+      ),
     );
+  }
+
+  /// Пересчитать последнее сообщение чата на основе последней записи в таблице сообщений
+  Future<void> refreshChatLastMessageFromDb(String chatId) async {
+    await ensureInitialized();
+    final lastMsg = await getLastMessageForChat(chatId);
+    final existing = await getChat(chatId);
+    if (existing == null) return;
+
+    if (lastMsg == null) {
+      await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+        const ChatsCompanion(
+          lastMessage: Value(null),
+          lastMessageTime: Value(null),
+          lastMessageType: Value(null),
+          lastMessageIsRound: Value(false),
+          lastMessageFileUrl: Value(null),
+          lastMessageGroupedId: Value(null),
+        ),
+      );
+    } else {
+      final isRound = lastMsg.isRound || lastMsg.messageType == 'round';
+      await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+        ChatsCompanion(
+          lastMessage: Value(lastMsg.content),
+          lastMessageTime: Value(lastMsg.createdAt),
+          lastMessageType: Value(lastMsg.messageType),
+          lastMessageIsRound: Value(isRound),
+          lastMessageFileUrl: Value(lastMsg.fileUrl),
+          lastMessageGroupedId: Value(lastMsg.groupedId),
+          updatedAt: Value(lastMsg.createdAt),
+        ),
+      );
+    }
   }
 
   /// Частичное обновление чата (только переданные поля)

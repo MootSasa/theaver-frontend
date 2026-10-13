@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import 'database/app_database.dart';
+import 'notification_service.dart';
+import 'sync_service.dart';
 import 'websocket_service.dart';
 
 /// Subscription handle for a specific chat.
@@ -144,8 +146,14 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.messageRead:
-        _dispatchForChat(event.data['chat_id']?.toString(),
-            (s) => s.onMessageRead?.call(event));
+        final readChatId = event.data['chat_id']?.toString();
+        final readUnreadCount = event.data['unread_count'] as int? ?? 0;
+        if (readChatId != null) {
+          try {
+            await AppDatabase().updateUnreadCount(readChatId, readUnreadCount);
+          } catch (_) {}
+        }
+        _dispatchForChat(readChatId, (s) => s.onMessageRead?.call(event));
         break;
 
       case WebSocketEventType.typing:
@@ -154,8 +162,23 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.unreadCountUpdated:
-        _dispatchForChat(event.data['chat_id']?.toString(),
+        final unreadChatId = event.data['chat_id']?.toString();
+        final unreadCount = event.data['unread_count'] as int? ?? 0;
+        if (unreadChatId != null) {
+          try {
+            await AppDatabase().updateUnreadCount(unreadChatId, unreadCount);
+          } catch (_) {}
+        }
+        _dispatchForChat(unreadChatId,
             (s) => s.onUnreadCountUpdated?.call(event));
+        break;
+
+      case WebSocketEventType.newChat:
+        await _handleNewChat(event);
+        break;
+
+      case WebSocketEventType.chatUpdate:
+        await _handleChatUpdate(event);
         break;
 
       case WebSocketEventType.userStatus:
@@ -163,6 +186,7 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.userAvatarUpdated:
+        await _handleUserAvatarUpdated(event);
         _dispatchGlobal((s) => s.onUserAvatarUpdated?.call(event));
         break;
 
@@ -181,6 +205,9 @@ class ChatRealtimeManager {
         s.onReconnect?.call();
       }
     }
+    try {
+      SyncService().syncFromServer();
+    } catch (_) {}
   }
 
   void _dispatchForChat(
@@ -210,6 +237,48 @@ class ChatRealtimeManager {
 
     try {
       await _persistMessageToDrift(chatId, messageData);
+
+      final activeChatId = NotificationService().currentActiveChatId;
+      final isCurrentActive = activeChatId == chatId;
+      final content = messageData['content']?.toString() ?? '';
+      final createdAt = messageData['created_at']?.toString() ??
+          DateTime.now().toIso8601String();
+      final messageType = messageData['message_type']?.toString() ?? 'text';
+      final isRound = messageData['is_round'] == true || messageType == 'round';
+      final fileUrl = messageData['file_url']?.toString();
+      final groupedId = messageData['grouped_id']?.toString();
+
+      final existing = await AppDatabase().getChat(chatId);
+      if (existing == null) {
+        await AppDatabase().saveChat(ChatsCompanion(
+          chatId: drift.Value(chatId),
+          chatType: drift.Value(event.data['chat_type']?.toString() ?? 'private'),
+          name: drift.Value(messageData['sender_name']?.toString() ?? ''),
+          avatarUrl: drift.Value(messageData['sender_avatar_url']?.toString()),
+          lastMessage: drift.Value(content),
+          lastMessageTime: drift.Value(createdAt),
+          lastMessageType: drift.Value(messageType),
+          lastMessageIsRound: drift.Value(isRound),
+          lastMessageFileUrl: drift.Value(fileUrl),
+          lastMessageGroupedId: drift.Value(groupedId),
+          otherUserId: drift.Value(messageData['sender_id']?.toString()),
+          updatedAt: drift.Value(createdAt),
+          unreadCount: drift.Value(isCurrentActive ? 0 : 1),
+          isOnline: const drift.Value(false),
+          isPinned: const drift.Value(false),
+        ));
+      } else {
+        await AppDatabase().updateChatLastMessage(
+          chatId: chatId,
+          content: content,
+          createdAt: createdAt,
+          messageType: messageType,
+          isRound: isRound,
+          fileUrl: fileUrl,
+          groupedId: groupedId,
+          incrementUnread: !isCurrentActive,
+        );
+      }
     } catch (e) {
       debugPrint('ChatRealtimeManager: Error saving message to Drift: $e');
     }
@@ -233,6 +302,9 @@ class ChatRealtimeManager {
       try {
         await AppDatabase()
             .updateMessageContent(messageId, content, entitiesStr);
+        if (chatId != null) {
+          await AppDatabase().refreshChatLastMessageFromDb(chatId);
+        }
       } catch (e) {
         debugPrint('ChatRealtimeManager: Error updating message in Drift: $e');
       }
@@ -249,6 +321,9 @@ class ChatRealtimeManager {
     if (messageId != null) {
       try {
         await AppDatabase().deleteMessage(messageId);
+        if (chatId != null) {
+          await AppDatabase().refreshChatLastMessageFromDb(chatId);
+        }
       } catch (e) {
         debugPrint(
             'ChatRealtimeManager: Error deleting message from Drift: $e');
@@ -256,6 +331,82 @@ class ChatRealtimeManager {
     }
 
     _dispatchForChat(chatId, (s) => s.onMessageDeleted?.call(event));
+  }
+
+  Future<void> _handleNewChat(WebSocketEvent event) async {
+    final chatData = event.data['chat'] as Map<String, dynamic>? ?? event.data;
+    final chatId = chatData['chat_id']?.toString() ?? chatData['id']?.toString();
+    if (chatId == null) return;
+    try {
+      await AppDatabase().saveChat(ChatsCompanion(
+        chatId: drift.Value(chatId),
+        chatType: drift.Value(chatData['chat_type']?.toString() ?? 'private'),
+        name: drift.Value(chatData['name']?.toString() ?? ''),
+        avatarUrl: drift.Value(chatData['avatar_url']?.toString()),
+        lastMessage: drift.Value(chatData['last_message']?.toString()),
+        lastMessageTime: drift.Value(chatData['last_message_time']?.toString()),
+        lastMessageType: drift.Value(chatData['last_message_type']?.toString()),
+        lastMessageIsRound: drift.Value(chatData['last_message_is_round'] == true),
+        lastMessageFileUrl: drift.Value(chatData['last_message_file_url']?.toString()),
+        lastMessageGroupedId: drift.Value(chatData['last_message_grouped_id']?.toString()),
+        otherUserId: drift.Value(chatData['other_user_id']?.toString()),
+        updatedAt: drift.Value(chatData['updated_at']?.toString() ?? DateTime.now().toIso8601String()),
+        unreadCount: drift.Value(chatData['unread_count'] as int? ?? 0),
+        isOnline: drift.Value(chatData['is_online'] == true),
+        lastSeen: drift.Value(chatData['last_seen']?.toString()),
+        isPinned: drift.Value(chatData['is_pinned'] == true),
+      ));
+    } catch (e) {
+      debugPrint('ChatRealtimeManager: Error saving new chat to Drift: $e');
+    }
+  }
+
+  Future<void> _handleChatUpdate(WebSocketEvent event) async {
+    final chatId = event.data['chat_id']?.toString() ?? event.data['id']?.toString();
+    if (chatId == null) return;
+    try {
+      final existing = await AppDatabase().getChat(chatId);
+      if (existing == null) return;
+
+      final companion = ChatsCompanion(
+        chatId: drift.Value(chatId),
+        name: event.data.containsKey('name')
+            ? drift.Value(event.data['name'].toString())
+            : drift.Value(existing.name),
+        avatarUrl: event.data.containsKey('avatar_url')
+            ? drift.Value(event.data['avatar_url']?.toString())
+            : drift.Value(existing.avatarUrl),
+        unreadCount: event.data.containsKey('unread_count')
+            ? drift.Value(event.data['unread_count'] as int? ?? existing.unreadCount)
+            : drift.Value(existing.unreadCount),
+        isPinned: event.data.containsKey('is_pinned')
+            ? drift.Value(event.data['is_pinned'] as bool? ?? existing.isPinned)
+            : drift.Value(existing.isPinned),
+        updatedAt: event.data.containsKey('updated_at')
+            ? drift.Value(event.data['updated_at'].toString())
+            : drift.Value(existing.updatedAt),
+      );
+      await AppDatabase().saveChat(companion);
+    } catch (e) {
+      debugPrint('ChatRealtimeManager: Error updating chat in Drift: $e');
+    }
+  }
+
+  Future<void> _handleUserAvatarUpdated(WebSocketEvent event) async {
+    final userId = event.data['user_id']?.toString();
+    final avatarUrl = event.data['avatar_url']?.toString();
+    if (userId == null) return;
+    try {
+      await AppDatabase().updateUserAvatarInChats(userId, avatarUrl);
+      final allChats = await AppDatabase().getChats();
+      for (final chat in allChats) {
+        if (chat.chatType == 'private' && chat.otherUserId == userId) {
+          await AppDatabase().updateChatAvatar(chat.chatId, avatarUrl);
+        }
+      }
+    } catch (e) {
+      debugPrint('ChatRealtimeManager: Error updating user avatar in Drift: $e');
+    }
   }
 
   Future<void> _handleReactionUpdated(WebSocketEvent event) async {

@@ -175,6 +175,28 @@ class SyncService {
           payload['message_type'] == 'round'),
       groupedId: Value(groupedId),
     ));
+
+    // Also update chat's last message if message is newer
+    final chat = await _db.getChat(chatId);
+    if (chat != null) {
+      final msgCreatedAt = payload['created_at']?.toString() ?? '';
+      if (chat.lastMessageTime == null ||
+          msgCreatedAt.compareTo(chat.lastMessageTime!) >= 0) {
+        await _db.updateChatLastMessage(
+          chatId: chatId,
+          content: payload['content']?.toString() ?? '',
+          createdAt: msgCreatedAt.isNotEmpty
+              ? msgCreatedAt
+              : DateTime.now().toIso8601String(),
+          messageType: payload['message_type']?.toString() ?? 'text',
+          isRound: payload['is_round'] == true ||
+              payload['message_type'] == 'round',
+          fileUrl: payload['file_url']?.toString(),
+          groupedId: groupedId,
+          incrementUnread: false,
+        );
+      }
+    }
   }
 
   Future<void> _applyEditMessage(Map<String, dynamic> payload) async {
@@ -192,12 +214,20 @@ class SyncService {
 
     await _db.updateMessageContent(
         serverId, payload['content']?.toString() ?? '', entitiesStr);
+    final chatId = payload['chat_id']?.toString();
+    if (chatId != null) {
+      await _db.refreshChatLastMessageFromDb(chatId);
+    }
   }
 
   Future<void> _applyDeleteMessage(Map<String, dynamic> payload) async {
     final serverId = payload['message_id']?.toString();
     if (serverId == null) return;
     await _db.deleteMessage(serverId);
+    final chatId = payload['chat_id']?.toString();
+    if (chatId != null) {
+      await _db.refreshChatLastMessageFromDb(chatId);
+    }
   }
 
   Future<void> _applyReadStatus(Map<String, dynamic> payload) async {
