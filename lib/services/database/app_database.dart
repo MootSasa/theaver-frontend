@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
+import '../account_manager.dart';
 import 'connection/connection.dart' as impl;
 
 part 'app_database.g.dart';
@@ -121,15 +122,66 @@ class BankingCards extends Table {
 /// Заменяет IsarDatabaseService для Offline-First архитектуры.
 @DriftDatabase(tables: [Chats, Messages, SyncStates, BankingCards])
 class AppDatabase extends _$AppDatabase {
-  static final AppDatabase _instance = AppDatabase._internal();
-  factory AppDatabase() => _instance;
-  AppDatabase._internal() : super(_openConnection());
+  static final Map<String, AppDatabase> _instances = {};
+  static String? _activeUserId;
+
+  /// Set the currently active user ID for global AppDatabase() resolution
+  static void setActiveUser(String? userId) {
+    _activeUserId = userId;
+  }
+
+  /// Resolve current active user ID (from explicit setting or AccountManager)
+  static String get activeUserId {
+    return _activeUserId ?? AccountManager().currentAccount?.userId ?? 'default';
+  }
+
+  /// Factory constructor returning the database instance for [userId] (or active user)
+  factory AppDatabase([String? userId]) {
+    final uid = (userId != null && userId.isNotEmpty)
+        ? userId
+        : activeUserId;
+    return _instances.putIfAbsent(uid, () => AppDatabase._internal(uid));
+  }
+
+  /// The user ID this database instance belongs to
+  final String userId;
+
+  AppDatabase._internal(this.userId) : super(_openConnection(userId));
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
-  static QueryExecutor _openConnection() {
-    return impl.openConnection();
+  static QueryExecutor _openConnection(String userId) {
+    final dbName = (userId.isNotEmpty && userId != 'default')
+        ? 'miptgram_$userId'
+        : 'miptgram';
+    return impl.openConnection(dbName);
+  }
+
+  /// Removes and closes a specific user database and deletes its file
+  static Future<void> removeUserDatabase(String userId) async {
+    if (_instances.containsKey(userId)) {
+      final db = _instances.remove(userId)!;
+      try {
+        await db.close();
+      } catch (_) {}
+    }
+    final dbName = (userId.isNotEmpty && userId != 'default')
+        ? 'miptgram_$userId'
+        : 'miptgram';
+    try {
+      await impl.deleteDatabaseFile(dbName);
+    } catch (_) {}
+  }
+
+  /// Close all open database instances
+  static Future<void> closeAll() async {
+    for (final db in _instances.values) {
+      try {
+        await db.close();
+      } catch (_) {}
+    }
+    _instances.clear();
   }
 
   @override

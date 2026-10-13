@@ -6,6 +6,7 @@ import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/websocket_service.dart';
+import '../../services/database/app_database.dart';
 import '../auth/login_screen.dart';
 import '../main/main_screen.dart';
 import '../../utils/swipe_back_route.dart';
@@ -51,6 +52,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
     try {
       await _accountManager.setCurrentAccount(account.userId);
+      AppDatabase.setActiveUser(account.userId);
 
       // Verify the token is still valid (or device is offline)
       final status = await _verifyToken(account.token);
@@ -183,6 +185,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
         await AuthService.logout();
       } else {
         await _accountManager.removeAccount(account.userId);
+        try {
+          await AppDatabase.removeUserDatabase(account.userId);
+        } catch (_) {}
         _loadAccounts();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

@@ -84,11 +84,23 @@ class _MainScreenState extends State<MainScreen>
   List<Chat> _chats = [];
   bool _isLoadingChats = true;
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
+  String? _currentUserId;
 
   void _initChatsStream() {
     _chatsStreamSubscription?.cancel();
-    _chatsStreamSubscription = AppDatabase().watchChats().listen((dbChats) {
+    _currentUserId ??= _accountManager.currentAccount?.userId;
+    final db = AppDatabase(_currentUserId);
+    _chatsStreamSubscription = db.watchChats().listen((dbChats) async {
       if (!mounted) return;
+      if (dbChats.isEmpty && _chats.isEmpty) {
+        try {
+          final cached = await _localStorage.loadChats();
+          if (cached.isNotEmpty && mounted && _chats.isEmpty) {
+            await db.saveChats(cached.map(_chatToCompanion).toList());
+            return;
+          }
+        } catch (_) {}
+      }
       setState(() {
         _chats = dbChats.map(_dbChatToChat).toList();
         if (_isLoadingChats && _chats.isNotEmpty) {
@@ -188,11 +200,14 @@ class _MainScreenState extends State<MainScreen>
 
   /// Последовательная инициализация: Drift → стрим чатов → чаты с сервера → WebSocket
   Future<void> _initApp() async {
-    // 1. Инициализация Drift (обязательно до _loadChats!)
-    await _initOfflineFirst();
+    _currentUserId = _accountManager.currentAccount?.userId;
+    AppDatabase.setActiveUser(_currentUserId);
 
-    // 2. Реактивная подписка на стрим чатов из SQLite
+    // 1. Немедленно подписываемся на локальный стрим SQLite (UI мгновенно получает кэш)
     _initChatsStream();
+
+    // 2. Инициализация Drift и фоновая синхронизация
+    await _initOfflineFirst();
 
     // 3. Загрузка чатов (фоновый запрос к серверу)
     _loadChats();
@@ -660,7 +675,8 @@ class _MainScreenState extends State<MainScreen>
       setState(() => _isLoadingChats = true);
     }
 
-    final db = AppDatabase();
+    _currentUserId ??= _accountManager.currentAccount?.userId;
+    final db = AppDatabase(_currentUserId);
     await db.ensureInitialized();
 
     // Фоновая загрузка с сервера (бесшовное обновление локальной БД)
@@ -707,7 +723,7 @@ class _MainScreenState extends State<MainScreen>
   Future<void> _ensureSavedChatExists() async {
     try {
       final userId = await AuthService.getUserId();
-      final db = AppDatabase();
+      final db = AppDatabase(userId);
       if (userId != null) {
         await db.ensureSavedChatExists(userId);
       }
@@ -814,7 +830,16 @@ class _MainScreenState extends State<MainScreen>
 
   void _onAccountChanged() {
     if (!mounted) return;
-    debugPrint('[MainScreen] Active account changed! Refreshing state and WS...');
+    final newUserId = _accountManager.currentAccount?.userId;
+    if (newUserId == _currentUserId) {
+      // Profile, token, or settings updated for current account in background.
+      // Do NOT clear chats or reconnect WebSocket!
+      return;
+    }
+    debugPrint('[MainScreen] Active account changed: $_currentUserId -> $newUserId. Refreshing state and WS...');
+    _currentUserId = newUserId;
+    AppDatabase.setActiveUser(newUserId);
+
     setState(() {
       _chats = [];
       _isLoadingChats = true;
@@ -1793,7 +1818,7 @@ class _MainScreenState extends State<MainScreen>
   Widget _buildChatList({double topPadding = 8}) {
     final l10n = context.l10n;
 
-    if (_isLoadingChats) {
+    if (_isLoadingChats && _chats.isEmpty) {
       // Use topPadding so the indicator is visible below the glass AppBar
       return Padding(
         padding: EdgeInsets.only(top: topPadding),
@@ -1810,6 +1835,12 @@ class _MainScreenState extends State<MainScreen>
     List<Chat> filteredChats = _chats.where((chat) => activeFolder.matchesChat(chat)).toList();
 
     if (filteredChats.isEmpty) {
+      if (_isLoadingChats) {
+        return Padding(
+          padding: EdgeInsets.only(top: topPadding),
+          child: const Center(child: CircularProgressIndicator()),
+        );
+      }
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

@@ -14,7 +14,7 @@ class SyncService {
   factory SyncService() => _instance;
   SyncService._internal();
 
-  final AppDatabase _db = AppDatabase();
+  AppDatabase get _db => AppDatabase();
   // ignore: unused_field — будет использоваться для real-time sync через WebSocket
   final WebSocketService _ws = WebSocketService();
   final _uuid = const Uuid();

@@ -218,7 +218,11 @@ class AuthService {
 
       // 3. Clear local SQLite database and media cache
       try {
-        await AppDatabase().clearAllData();
+        if (currentUserId != null) {
+          await AppDatabase.removeUserDatabase(currentUserId);
+        } else {
+          await AppDatabase().clearAllData();
+        }
       } catch (e) {
         debugPrint('Logout: error clearing AppDatabase: $e');
       }
