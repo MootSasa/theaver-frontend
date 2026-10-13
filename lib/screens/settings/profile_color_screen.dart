@@ -1,8 +1,6 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ios_color_picker/show_ios_color_picker.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
 import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
@@ -482,7 +480,6 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
     final statusBarHeight = MediaQuery.of(context).padding.top;
     final displayName = _getUserDisplayName();
     final avatarUrl = _getUserAvatarUrl();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     // Верхний цвет фона предпросмотра профиля
     BoxDecoration topBackgroundDecoration;
@@ -500,19 +497,6 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
       );
     }
 
-    final glassSettings = LiquidGlassSettings(
-      refractiveIndex: 1.25,
-      thickness: 10,
-      blur: 6,
-      saturation: 1.4,
-      lightIntensity: isDark ? 0.6 : 0.9,
-      ambientStrength: isDark ? 0.15 : 0.35,
-      lightAngle: math.pi / 2,
-      glassColor: isDark
-          ? const Color.fromARGB(20, 20, 20, 35)
-          : const Color.fromARGB(25, 240, 240, 250),
-    );
-
     final avatarProvider = avatarImageProvider(avatarUrl);
 
     return Consumer<LiquidGlassProvider>(
@@ -520,7 +504,7 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
         final glassEnabled = glassProvider.enabled;
         final isLite = glassProvider.isLite;
 
-        Widget segmentedControl = ProfileSegmentedControl(
+        final segmentedControl = ProfileSegmentedControl(
           enabled: glassEnabled,
           isLite: isLite,
           customPreset: _tempPreset,
@@ -534,16 +518,6 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
           wallLabel: l10n.translate('profile_color_tab_profile'),
           giftsLabel: l10n.translate('profile_color_tab_name'),
         );
-
-        if (glassEnabled) {
-          segmentedControl = LiquidGlassLayer(
-            settings: glassSettings,
-            child: LiquidGlassBlendGroup(
-              blend: 10,
-              child: segmentedControl,
-            ),
-          );
-        }
 
         // Верхняя панель с кнопкой "Назад" и сегментом
         final topBarRow = Row(

@@ -503,46 +503,46 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
     final glassProvider = context.watch<LiquidGlassProvider?>();
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider?.getEffectiveLightAngle(reduceMotion: reduceMotion) ?? 0.785;
 
     // 1. Floating Top App Bar (matching real main_screen)
     final Widget centerPill;
     final Widget rightButton;
 
     if (glassEnabled) {
-      final topGlassShape = LiquidGlassShape.continuousRoundedRectangle(
-        cornerRadius: 22.0,
-        clipQuality: LiquidGlassClipQuality.exact,
-        borderWidth: 0.7,
-        lightIntensity: isDark ? 0.7 : 0.95,
-        lightDirection: lightAngle,
-        borderType: const OpticalBorder(
-          borderSaturation: 1.1,
-          ambientIntensity: 0.85,
-          borderSolidity: 0.95,
-        ),
-      );
-
-      final topGlassStyle = LiquidGlassStyle(
-        shape: topGlassShape,
-        appearance: LiquidGlassAppearance(
-          color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-          blur: glassProvider?.blurEffect ??
-              const LiquidGlassBlur(sigmaX: 8.0, sigmaY: 8.0),
-          shadow: LiquidGlassShadow(
-            blur: 16,
-            opacity: isDark ? 0.40 : 0.18,
-            offset: const Offset(0, 4),
-            color: Colors.black,
-          ),
-        ),
-        refraction: const LiquidGlassRefraction(
-          distortion: 0.06,
-          distortionWidth: 26,
-        ),
-        liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
-      );
+      final topGlassStyle = (glassProvider != null)
+          ? glassProvider.createStyle(
+              context: context,
+              cornerRadius: 22.0,
+              refractionIndex: 1.1,
+              refractionWidth: 24,
+            )
+          : LiquidGlassStyle(
+              shape: const LiquidGlassShape.continuousRoundedRectangle(
+                cornerRadius: 22.0,
+                clipQuality: LiquidGlassClipQuality.exact,
+              ),
+              color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
+              blur: 8.0,
+              shadow: isDark
+                  ? null
+                  : const LiquidGlassShadow(
+                      blur: 8.0,
+                      opacity: 0.14,
+                    ),
+              specular: LiquidGlassLight.specular(
+                thickness: 5.0,
+                sharpness: 0.5,
+                spread: 0.9,
+                intensity: isDark ? 1.0 : 0.75,
+                oppositeIntensity: 1.0,
+                color: isDark ? null : const Color(0xCC2C2C2E),
+              ),
+              refractionIndex: 1.1,
+              refractionWidth: 24,
+              dispersion: 1.32,
+              saturation: 1.2,
+              liteGlass: isLite,
+            );
 
       centerPill = SizedBox(
         width: 140.0,
@@ -638,38 +638,40 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
     // 2. Floating Bottom Navigation Bar (matching real main_screen)
     final Widget bottomBar;
     if (glassEnabled) {
-      final bottomGlassShape = LiquidGlassShape.continuousRoundedRectangle(
-        cornerRadius: 30.0,
-        clipQuality: LiquidGlassClipQuality.exact,
-        borderWidth: 0.7,
-        lightIntensity: isDark ? 0.7 : 0.95,
-        lightDirection: lightAngle,
-        borderType: const OpticalBorder(
-          borderSaturation: 1.1,
-          ambientIntensity: 0.85,
-          borderSolidity: 0.95,
-        ),
-      );
-
-      final bottomGlassStyle = LiquidGlassStyle(
-        shape: bottomGlassShape,
-        appearance: LiquidGlassAppearance(
-          color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-          blur: glassProvider?.blurEffect ??
-              const LiquidGlassBlur(sigmaX: 8.0, sigmaY: 8.0),
-          shadow: LiquidGlassShadow(
-            blur: 16,
-            opacity: isDark ? 0.40 : 0.18,
-            offset: const Offset(0, 8),
-            color: Colors.black,
-          ),
-        ),
-        refraction: const LiquidGlassRefraction(
-          distortion: 0.06,
-          distortionWidth: 26,
-        ),
-        liteGlass: isLite ? LiquidGlassLitePickup.backdrop : null,
-      );
+      final bottomGlassStyle = (glassProvider != null)
+          ? glassProvider.createStyle(
+              context: context,
+              cornerRadius: 30.0,
+              refractionIndex: 1.1,
+              refractionWidth: 24,
+            )
+          : LiquidGlassStyle(
+              shape: const LiquidGlassShape.continuousRoundedRectangle(
+                cornerRadius: 30.0,
+                clipQuality: LiquidGlassClipQuality.exact,
+              ),
+              color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
+              blur: 8.0,
+              shadow: isDark
+                  ? null
+                  : const LiquidGlassShadow(
+                      blur: 8.0,
+                      opacity: 0.14,
+                    ),
+              specular: LiquidGlassLight.specular(
+                thickness: 5.0,
+                sharpness: 0.5,
+                spread: 0.9,
+                intensity: isDark ? 1.0 : 0.75,
+                oppositeIntensity: 1.0,
+                color: isDark ? null : const Color(0xCC2C2C2E),
+              ),
+              refractionIndex: 1.1,
+              refractionWidth: 24,
+              dispersion: 1.32,
+              saturation: 1.2,
+              liteGlass: isLite,
+            );
 
       bottomBar = Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16.0),

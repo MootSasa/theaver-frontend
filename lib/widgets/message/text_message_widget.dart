@@ -553,32 +553,73 @@ class TextMessageWidget extends StatelessWidget {
     return result;
   }
 
+  static final RegExp _markdownIndicator = RegExp(r'[*_~`\[\]#>$|\\:]');
+  static final Map<int, String> _formattedDataCache = {};
+  static final md.ExtensionSet _kExtensionSet = md.ExtensionSet(
+    [
+      const CollapsibleBlockquoteBlockSyntax(),
+      ...md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+    ],
+    [
+      UnderlineInlineSyntax(),
+      MathInlineSyntax(),
+      CheckboxInlineSyntax(),
+      EmojiInlineSyntax(),
+      SpoilerInlineSyntax(),
+      ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+    ],
+  );
+
   @override
   Widget build(BuildContext context) {
+    final effectiveStyle = (style ?? Theme.of(context).textTheme.bodyMedium)?.copyWith(
+      fontSize: style?.fontSize ?? _kMessageFontSize,
+      height: 1.4,
+    );
+
+    final bool hasEntities = entities != null && entities!.isNotEmpty;
+    final bool hasLinks = text.contains('http://') || text.contains('https://') || text.contains('www.');
+
+    // Fast-path: Plain text without markdown, entities, or URLs renders instantly without AST parser
+    if (!hasEntities && !hasLinks && !_markdownIndicator.hasMatch(text)) {
+      return Text(
+        text,
+        style: effectiveStyle,
+      );
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final String markdownData;
-    if (entities != null && entities!.isNotEmpty) {
-      final effectiveEntities = <MessageEntity>[...entities!];
-      // Auto-detect any raw URLs in clean text not covered by existing entities
-      for (final match in EntityParser.urlRegex.allMatches(text)) {
-        final url = match.group(0)!;
-        final start = match.start;
-        final len = url.length;
-        final covered = effectiveEntities.any((e) =>
-            e.offset <= start && (e.offset + e.length) >= (start + len));
-        if (!covered) {
-          effectiveEntities.add(MessageEntity(
-            type: 'url',
-            offset: start,
-            length: len,
-            url: url,
-          ));
+    final int cacheKey = Object.hash(text, entities?.length ?? 0);
+    String? formattedData = _formattedDataCache[cacheKey];
+    if (formattedData == null) {
+      final String markdownData;
+      if (hasEntities) {
+        final effectiveEntities = <MessageEntity>[...entities!];
+        for (final match in EntityParser.urlRegex.allMatches(text)) {
+          final url = match.group(0)!;
+          final start = match.start;
+          final len = url.length;
+          final covered = effectiveEntities.any((e) =>
+              e.offset <= start && (e.offset + e.length) >= (start + len));
+          if (!covered) {
+            effectiveEntities.add(MessageEntity(
+              type: 'url',
+              offset: start,
+              length: len,
+              url: url,
+            ));
+          }
         }
+        markdownData = EntityParser.toMarkdown(text, effectiveEntities);
+      } else {
+        markdownData = text;
       }
-      markdownData = EntityParser.toMarkdown(text, effectiveEntities);
-    } else {
-      markdownData = text;
+      formattedData = preserveWhitespace(markdownData);
+      if (_formattedDataCache.length > 500) {
+        _formattedDataCache.clear();
+      }
+      _formattedDataCache[cacheKey] = formattedData;
     }
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
@@ -588,32 +629,14 @@ class TextMessageWidget extends StatelessWidget {
         : (themeExt?.palette.chatBubbleIncomingLink ??
             (isDark ? const Color(0xFF7BE5DA) : Theme.of(context).colorScheme.primary));
 
-    final formattedData = preserveWhitespace(markdownData);
-
     return MarkdownBody(
       data: formattedData,
       selectable: false,
       shrinkWrap: true,
       softLineBreak: true, // Позволяет делать перенос строки одним нажатием Enter
-      extensionSet: md.ExtensionSet(
-        [
-          const CollapsibleBlockquoteBlockSyntax(),
-          ...md.ExtensionSet.gitHubFlavored.blockSyntaxes,
-        ],
-        [
-          UnderlineInlineSyntax(),
-          MathInlineSyntax(),
-          CheckboxInlineSyntax(),
-          EmojiInlineSyntax(),
-          SpoilerInlineSyntax(),
-          ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-        ],
-      ),
+      extensionSet: _kExtensionSet,
       styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-        p: (style ?? Theme.of(context).textTheme.bodyMedium)?.copyWith(
-          fontSize: style?.fontSize ?? _kMessageFontSize,
-          height: 1.4,
-        ),
+        p: effectiveStyle,
         pPadding: EdgeInsets.zero,
         blockSpacing: 0,
         listBulletPadding: const EdgeInsets.only(right: 4),

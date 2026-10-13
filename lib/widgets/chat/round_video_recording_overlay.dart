@@ -117,6 +117,9 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   @override
   void dispose() {
     widget.recorderService.removeListener(_onRecorderUpdate);
+    if (!_isSending && (widget.recorderService.isRecording || widget.recorderService.isInitialized)) {
+      widget.recorderService.cancelRecording();
+    }
     _fadeController.dispose();
     _pulseController.dispose();
     _trashController.dispose();

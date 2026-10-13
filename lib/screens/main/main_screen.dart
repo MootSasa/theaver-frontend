@@ -1,4 +1,5 @@
 import '../../utils/image_utils.dart';
+import '../../utils/emoji_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -20,6 +21,7 @@ import '../../screens/chat/system_notifications_screen.dart';
 import '../../services/search_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/draft_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
@@ -77,11 +79,13 @@ class _MainScreenState extends State<MainScreen>
 
   // Top glass bar & morph context menu
   bool _isTopMenuOpen = false;
-  bool _isTopMenuWide = false;
+  final LayerLink _topMenuLayerLink = LayerLink();
+  final OverlayPortalController _topMenuOverlayController = OverlayPortalController();
 
   // Central folder morph menu
   bool _isFolderMenuOpen = false;
-  bool _isFolderMenuWide = false;
+  final LayerLink _folderMenuLayerLink = LayerLink();
+  final OverlayPortalController _folderMenuOverlayController = OverlayPortalController();
 
   // Animation controllers for Material mode top bar morphing
   late final AnimationController _classicTopMenuController;
@@ -89,20 +93,6 @@ class _MainScreenState extends State<MainScreen>
   late final CurvedAnimation _classicTopMenuAnimation;
   late final CurvedAnimation _classicFolderMenuAnimation;
   int _topMenuTabIndex = 1;
-
-  Timer? _morphSafetyTimer;
-
-  void _startMorphSafetyTimer() {
-    _morphSafetyTimer?.cancel();
-    _morphSafetyTimer = Timer(const Duration(milliseconds: 350), () {
-      if (mounted) {
-        setState(() {
-          _isTopMenuWide = _isTopMenuOpen;
-          _isFolderMenuWide = _isFolderMenuOpen;
-        });
-      }
-    });
-  }
 
   // Search results
   List<SearchResultUser> _users = [];
@@ -146,7 +136,10 @@ class _MainScreenState extends State<MainScreen>
       reverseCurve: Curves.easeInOutCubic,
     );
     WidgetsBinding.instance.addObserver(this);
+    _folderMenuOverlayController.show();
+    _topMenuOverlayController.show();
     _searchController.addListener(_onSearchChanged);
+    DraftService().draftsNotifier.addListener(_onDraftsChanged);
 
     // Инициализация: сначала Drift, потом загрузка чатов и WebSocket
     _initApp();
@@ -306,6 +299,14 @@ class _MainScreenState extends State<MainScreen>
 
     if (chatData != null) {
       final newChat = Chat.fromJson(chatData);
+      // Ignore empty private chats without messages or drafts that are not pinned
+      if (newChat.chatType == 'private' &&
+          (newChat.lastMessage == null || newChat.lastMessage!.isEmpty) &&
+          (newChat.draft == null || newChat.draft!.text.isEmpty) &&
+          !newChat.isPinned) {
+        return;
+      }
+
       if (mounted) {
         setState(() {
           // Check if chat already exists
@@ -316,10 +317,8 @@ class _MainScreenState extends State<MainScreen>
           } else {
             // Update existing chat
             _chats[existingIndex] = newChat;
-            // Move to top
-            _chats.removeAt(existingIndex);
-            _chats.insert(0, newChat);
           }
+          _sortChats();
         });
         // Save to local storage
         _localStorage.saveChats(_chats);
@@ -342,9 +341,8 @@ class _MainScreenState extends State<MainScreen>
       // here — that would cause double-counting.
 
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
-      setState(() {
-        // Find the chat and update it
-        if (chatIndex != -1) {
+      if (chatIndex != -1) {
+        setState(() {
           final chat = _chats[chatIndex];
 
           // Get unread count from provider (authoritative, already incremented)
@@ -359,36 +357,52 @@ class _MainScreenState extends State<MainScreen>
             newUnreadCount = isFromMe ? chat.unreadCount : chat.unreadCount + 1;
           }
 
-          final msgType = messageData?['message_type'] as String?;
-          final isRound = messageData?['is_round'] == true || msgType == 'round';
+          final msgType = messageData?['message_type'] as String? ?? 'text';
+          final isRound =
+              messageData?['is_round'] == true || msgType == 'round';
           final fileUrl = messageData?['file_url'] as String?;
-          final updatedChat = chat.copyWith(
-            lastMessage: messageData?['content'] as String? ?? chat.lastMessage,
+          final groupedId = messageData?['grouped_id'] as String?;
+          final content = messageData?['content'] as String? ?? '';
+
+          final updatedChat = Chat(
+            id: chat.id,
+            chatType: chat.chatType,
+            name: chat.name,
+            avatarUrl: chat.avatarUrl,
+            lastMessage: content,
             lastMessageTime:
                 messageData?['created_at'] as String? ?? chat.lastMessageTime,
-            lastMessageType: msgType ?? chat.lastMessageType,
-            lastMessageIsRound: isRound || chat.lastMessageIsRound,
-            lastMessageFileUrl: fileUrl ?? chat.lastMessageFileUrl,
+            lastMessageType: msgType,
+            lastMessageIsRound: isRound,
+            lastMessageFileUrl: fileUrl,
+            lastMessageGroupedId: groupedId,
             updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
             unreadCount: newUnreadCount,
+            isOnline: chat.isOnline,
+            lastSeen: chat.lastSeen,
+            isPinned: chat.isPinned,
+            otherUserId: chat.otherUserId,
+            draft: chat.draft,
           );
+
           // Update the chat in place
           _chats[chatIndex] = updatedChat;
           // Re-sort: pinned/saved chats stay in their fixed positions,
           // unpinned chats sort by updated_at
           _sortChats();
-        }
-      });
-      // Save to local storage
-      _localStorage.saveChats(_chats);
+        });
+        // Save to local storage
+        _localStorage.saveChats(_chats);
 
-      // Сохранить в Drift
-      final db = AppDatabase();
-      try {
-        if (chatIndex != -1) {
+        // Сохранить в Drift
+        final db = AppDatabase();
+        try {
           db.saveChat(_chatToCompanion(_chats[chatIndex]));
-        }
-      } catch (_) {}
+        } catch (_) {}
+      } else {
+        // Chat was not in the list yet, reload chats seamlessly
+        _loadChats(silent: true);
+      }
     }
   }
 
@@ -535,27 +549,58 @@ class _MainScreenState extends State<MainScreen>
     try {
       final db = AppDatabase();
       final lastMsg = await db.getLastMessageForChat(chatId);
+      final draft = DraftService().getDraft(chatId);
       if (!mounted) return;
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
       if (chatIndex != -1) {
+        final chat = _chats[chatIndex];
+
+        // A chat has messages if either the local DB returned a message, or the chat model itself already had a last message
+        final hasMessages = lastMsg != null || (chat.lastMessage != null && chat.lastMessage!.isNotEmpty);
+        final hasDraft = draft != null && draft.text.trim().isNotEmpty;
+
+        // Only purge empty private chats if there are genuinely NO messages anywhere, NO draft, and it's not pinned
+        if (chat.chatType == 'private' &&
+            !hasMessages &&
+            !hasDraft &&
+            !chat.isPinned) {
+          setState(() {
+            _chats.removeAt(chatIndex);
+          });
+          await db.deleteChat(chatId);
+          _localStorage.saveChats(_chats);
+          return;
+        }
+
+        final isRound = lastMsg != null
+            ? (lastMsg.isRound || lastMsg.messageType == 'round')
+            : chat.lastMessageIsRound;
         setState(() {
-          final chat = _chats[chatIndex];
-          _chats[chatIndex] = chat.copyWith(
-            lastMessage: (lastMsg != null && lastMsg.content.isNotEmpty)
-                ? lastMsg.content
-                : chat.lastMessage,
-            lastMessageTime: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
-                ? lastMsg.createdAt
-                : chat.lastMessageTime,
+          _chats[chatIndex] = Chat(
+            id: chat.id,
+            chatType: chat.chatType,
+            name: chat.name,
+            avatarUrl: chat.avatarUrl,
+            lastMessage: lastMsg?.content ?? chat.lastMessage,
+            lastMessageTime: lastMsg?.createdAt ?? chat.lastMessageTime,
             lastMessageType: lastMsg?.messageType ?? chat.lastMessageType,
-            lastMessageIsRound: lastMsg?.isRound ?? chat.lastMessageIsRound,
+            lastMessageIsRound: isRound,
             lastMessageFileUrl: lastMsg?.fileUrl ?? chat.lastMessageFileUrl,
+            lastMessageGroupedId: lastMsg?.groupedId ?? chat.lastMessageGroupedId,
             updatedAt: (lastMsg != null && lastMsg.createdAt.isNotEmpty)
                 ? lastMsg.createdAt
                 : chat.updatedAt,
+            unreadCount: chat.unreadCount,
+            isOnline: chat.isOnline,
+            lastSeen: chat.lastSeen,
+            isPinned: chat.isPinned,
+            otherUserId: chat.otherUserId,
+            draft: draft,
           );
+          _sortChats();
         });
         _localStorage.saveChats(_chats);
+        await db.saveChat(_chatToCompanion(_chats[chatIndex]));
       }
     } catch (e) {
       debugPrint('Error refreshing last message for chat $chatId: $e');
@@ -677,6 +722,7 @@ class _MainScreenState extends State<MainScreen>
           _isLoadingChats = false;
           if (result['success'] == true) {
             _chats = result['chats'] as List<Chat>;
+            DraftService().populateFromChats(_chats);
             _sortChats();
 
             // Сохранить в Drift для offline-доступа
@@ -795,6 +841,11 @@ class _MainScreenState extends State<MainScreen>
       avatarUrl: model.avatarUrl,
       lastMessage: model.lastMessage,
       lastMessageTime: model.lastMessageTime,
+      lastMessageType: model.lastMessageType,
+      lastMessageIsRound: model.lastMessageIsRound,
+      lastMessageFileUrl: model.lastMessageFileUrl,
+      lastMessageGroupedId: model.lastMessageGroupedId,
+      otherUserId: model.otherUserId,
       updatedAt: model.updatedAt,
       unreadCount: model.unreadCount,
       isOnline: model.isOnline,
@@ -812,6 +863,11 @@ class _MainScreenState extends State<MainScreen>
       avatarUrl: Value(chat.avatarUrl),
       lastMessage: Value(chat.lastMessage),
       lastMessageTime: Value(chat.lastMessageTime),
+      lastMessageType: Value(chat.lastMessageType),
+      lastMessageIsRound: Value(chat.lastMessageIsRound),
+      lastMessageFileUrl: Value(chat.lastMessageFileUrl),
+      lastMessageGroupedId: Value(chat.lastMessageGroupedId),
+      otherUserId: Value(chat.otherUserId),
       updatedAt: Value(chat.updatedAt),
       unreadCount: Value(chat.unreadCount),
       isOnline: Value(chat.isOnline),
@@ -826,9 +882,9 @@ class _MainScreenState extends State<MainScreen>
     _classicFolderMenuAnimation.dispose();
     _classicTopMenuController.dispose();
     _classicFolderMenuController.dispose();
-    _morphSafetyTimer?.cancel();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
+    DraftService().draftsNotifier.removeListener(_onDraftsChanged);
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
@@ -852,6 +908,10 @@ class _MainScreenState extends State<MainScreen>
       context.read<UnreadCountProvider>().removeListener(_onUnreadCountProviderChanged);
     } catch (_) {}
     super.dispose();
+  }
+
+  void _onDraftsChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onSearchChanged() {
@@ -1013,21 +1073,18 @@ class _MainScreenState extends State<MainScreen>
     }
     _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
-    _startMorphSafetyTimer();
     _classicTopMenuController.forward();
+    _topMenuOverlayController.show();
     setState(() {
-      _isTopMenuWide = true;
       _isTopMenuOpen = true;
     });
   }
 
   void _closeTopMenu() {
     if (!_isTopMenuOpen) return;
-    _startMorphSafetyTimer();
     _classicTopMenuController.reverse();
     setState(() {
       _isTopMenuOpen = false;
-      _isTopMenuWide = false;
     });
   }
 
@@ -1046,21 +1103,18 @@ class _MainScreenState extends State<MainScreen>
       _closeTopMenu();
     }
     HapticUtils.tap();
-    _startMorphSafetyTimer();
     _classicFolderMenuController.forward();
+    _folderMenuOverlayController.show();
     setState(() {
-      _isFolderMenuWide = true;
       _isFolderMenuOpen = true;
     });
   }
 
   void _closeFolderMenu() {
     if (!_isFolderMenuOpen) return;
-    _startMorphSafetyTimer();
     _classicFolderMenuController.reverse();
     setState(() {
       _isFolderMenuOpen = false;
-      _isFolderMenuWide = false;
     });
   }
 
@@ -1355,64 +1409,27 @@ class _MainScreenState extends State<MainScreen>
     BuildContext context,
     LiquidGlassProvider glassProvider,
   ) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle =
-        glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
     const double ctrlSize = 44.0;
     const double menuWidth = 200.0;
-    final double menuHeight = _getMenuHeight(_currentIndex);
     const double folderMenuWidth = 220.0;
-    const double folderMenuHeight = 4 * 44.0 + 12.0; // 188.0
     const double barRadius = ctrlSize / 2; // 22.0 — stadium capsule ratio
 
-    final pillStyle = LiquidGlassStyle(
-      shape: _glassShape(barRadius, lightAngle),
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.40 : 0.18,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
+    final pillStyle = glassProvider.createStyle(
+      context: context,
+      cornerRadius: barRadius,
+      refractionIndex: 1.1,
+      refractionWidth: 24.0,
     );
 
-    final morphStyle = LiquidGlassStyle(
-      shape: _glassShape(barRadius, lightAngle),
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.40 : 0.18,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-    );
+    final morphStyle = pillStyle;
+    const morphMotion = LiquidGlassMorphMotion.fluid;
 
     final double closedPillWidth =
         math.max(130.0, _calculateTitleWidth(context) + 48.0);
 
-    final double maxActiveMenuHeight = math.max(
-      _isTopMenuWide ? menuHeight : 0,
-      _isFolderMenuWide ? folderMenuHeight : 0,
-    );
-
     return SizedBox(
       width: double.infinity,
-      height: maxActiveMenuHeight > 0 ? maxActiveMenuHeight + 8 : ctrlSize + 4,
+      height: ctrlSize + 4,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -1421,51 +1438,68 @@ class _MainScreenState extends State<MainScreen>
             top: 2,
             left: 0,
             right: 0,
-            height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
             child: Align(
               alignment: Alignment.topCenter,
-              child: SizedBox(
-                width: _isFolderMenuWide ? folderMenuWidth : closedPillWidth,
-                height: _isFolderMenuWide ? folderMenuHeight : ctrlSize,
-                child: LiquidGlassMorph(
-                  alignment: Alignment.topCenter,
-                  motion: LiquidGlassMorphMotion.plain,
-                  smoothness: 28,
-                  style: pillStyle,
-                  onEnd: () {
-                    _morphSafetyTimer?.cancel();
-                    if (mounted) {
-                      setState(() {
-                        if (_isFolderMenuWide != _isFolderMenuOpen) {
-                          _isFolderMenuWide = _isFolderMenuOpen;
-                        }
-                      });
-                    }
-                  },
-                  child: _isFolderMenuOpen
-                      ? _FolderMorphMenu(
-                          key: const ValueKey<String>('folder_menu'),
-                          width: folderMenuWidth,
-                          activeFilter: _activeFilter,
-                          unreadCounts: [
-                            _getUnreadCountForFilter(0),
-                            _getUnreadCountForFilter(1),
-                            _getUnreadCountForFilter(2),
-                            _getUnreadCountForFilter(3),
-                          ],
-                          onSelectFolder: (index) {
-                            HapticUtils.selection();
-                            setState(() => _activeFilter = index);
-                            _closeFolderMenu();
-                          },
-                        )
-                      : _TitlePillContent(
-                          key: const ValueKey<String>('title_pill'),
-                          title: _currentTitleText,
-                          titleKey: _currentTitleKey,
-                          isConnected: _isTitleConnected,
-                          onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+              child: OverlayPortal(
+                controller: _folderMenuOverlayController,
+                overlayChildBuilder: (context) {
+                  return Stack(
+                    children: [
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          ignoring: !_isFolderMenuOpen,
+                          child: GestureDetector(
+                            onTap: _closeFolderMenu,
+                            behavior: HitTestBehavior.opaque,
+                          ),
                         ),
+                      ),
+                      CompositedTransformFollower(
+                        link: _folderMenuLayerLink,
+                        showWhenUnlinked: false,
+                        targetAnchor: Alignment.topCenter,
+                        followerAnchor: Alignment.topCenter,
+                        child: LiquidGlassMorph(
+                          key: const ValueKey<String>('main_folder_menu_morph'),
+                          alignment: Alignment.topCenter,
+                          motion: morphMotion,
+                          smoothness: 28,
+                          style: pillStyle,
+                          child: _isFolderMenuOpen
+                              ? _FolderMorphMenu(
+                                  key: const ValueKey<String>('folder_menu'),
+                                  width: folderMenuWidth,
+                                  activeFilter: _activeFilter,
+                                  unreadCounts: [
+                                    _getUnreadCountForFilter(0),
+                                    _getUnreadCountForFilter(1),
+                                    _getUnreadCountForFilter(2),
+                                    _getUnreadCountForFilter(3),
+                                  ],
+                                  onSelectFolder: (index) {
+                                    HapticUtils.selection();
+                                    setState(() => _activeFilter = index);
+                                    _closeFolderMenu();
+                                  },
+                                )
+                              : _TitlePillContent(
+                                  key: const ValueKey<String>('title_pill'),
+                                  title: _currentTitleText,
+                                  titleKey: _currentTitleKey,
+                                  isConnected: _isTitleConnected,
+                                  onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+                                ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+                child: CompositedTransformTarget(
+                  link: _folderMenuLayerLink,
+                  child: SizedBox(
+                    width: closedPillWidth,
+                    height: ctrlSize,
+                  ),
                 ),
               ),
             ),
@@ -1475,35 +1509,55 @@ class _MainScreenState extends State<MainScreen>
           Positioned(
             top: 2,
             right: 16,
-            width: _isTopMenuWide ? menuWidth : ctrlSize,
-            height: _isTopMenuWide ? menuHeight : ctrlSize,
-            child: LiquidGlassMorph(
-              alignment: Alignment.topRight,
-              motion: LiquidGlassMorphMotion.plain,
-              smoothness: 28,
-              style: morphStyle,
-              onEnd: () {
-                _morphSafetyTimer?.cancel();
-                if (mounted) {
-                  setState(() {
-                    if (_isTopMenuWide != _isTopMenuOpen) {
-                      _isTopMenuWide = _isTopMenuOpen;
-                    }
-                  });
-                }
-              },
-              child: _isTopMenuOpen
-                  ? _TopMorphMenu(
-                      key: const ValueKey<String>('menu'),
-                      width: menuWidth,
-                      items: _getMenuItems(_currentIndex),
-                      onItemTap: _handleMenuAction,
-                    )
-                  : _ThreeDotsGlyph(
-                      key: const ValueKey<String>('glyph'),
-                      size: ctrlSize,
-                      onTap: _toggleTopMenu,
+            child: OverlayPortal(
+              controller: _topMenuOverlayController,
+              overlayChildBuilder: (context) {
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        ignoring: !_isTopMenuOpen,
+                        child: GestureDetector(
+                          onTap: _closeTopMenu,
+                          behavior: HitTestBehavior.opaque,
+                        ),
+                      ),
                     ),
+                    CompositedTransformFollower(
+                      link: _topMenuLayerLink,
+                      showWhenUnlinked: false,
+                      targetAnchor: Alignment.topRight,
+                      followerAnchor: Alignment.topRight,
+                      child: LiquidGlassMorph(
+                        key: const ValueKey<String>('main_top_menu_morph'),
+                        alignment: Alignment.topRight,
+                        motion: morphMotion,
+                        smoothness: 28,
+                        style: morphStyle,
+                        child: _isTopMenuOpen
+                            ? _TopMorphMenu(
+                                key: const ValueKey<String>('menu'),
+                                width: menuWidth,
+                                items: _getMenuItems(_currentIndex),
+                                onItemTap: _handleMenuAction,
+                              )
+                            : _ThreeDotsGlyph(
+                                key: const ValueKey<String>('glyph'),
+                                size: ctrlSize,
+                                onTap: _toggleTopMenu,
+                              ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+              child: CompositedTransformTarget(
+                link: _topMenuLayerLink,
+                child: const SizedBox(
+                  width: ctrlSize,
+                  height: ctrlSize,
+                ),
+              ),
             ),
           ),
         ],
@@ -1613,6 +1667,184 @@ class _MainScreenState extends State<MainScreen>
           math.max(currentTopHeight, currentFolderHeight) + 8,
         );
 
+        final folderPillWidget = Positioned(
+          top: 2,
+          left: 0,
+          right: 0,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Container(
+              width: currentFolderWidth,
+              height: currentFolderHeight,
+              decoration: BoxDecoration(
+                color: barBackgroundColor,
+                borderRadius: BorderRadius.circular(22.0),
+                border: Border.all(color: borderColor, width: 0.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(
+                      alpha: (baseShadowAlpha *
+                              (0.6 + 0.4 * folderProgress))
+                          .clamp(0.0, 1.0),
+                    ),
+                    blurRadius: 10 + 6 * folderProgress,
+                    offset: Offset(0, 3 + 3 * folderProgress),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  // Folder menu items
+                  if (folderProgress > 0.01)
+                    Positioned(
+                      top: 0,
+                      left: (currentFolderWidth - folderMenuWidth) / 2,
+                      width: folderMenuWidth,
+                      height: folderMenuHeight,
+                      child: Opacity(
+                        opacity: ((folderProgress - 0.15) / 0.85)
+                            .clamp(0.0, 1.0),
+                        child: Transform.translate(
+                          offset:
+                              Offset(0, -10.0 * (1.0 - folderProgress)),
+                          child: IgnorePointer(
+                            ignoring: folderProgress < 0.9,
+                            child: _FolderMorphMenu(
+                              key: const ValueKey<String>('folder_menu'),
+                              width: folderMenuWidth,
+                              activeFilter: _activeFilter,
+                              unreadCounts: [
+                                _getUnreadCountForFilter(0),
+                                _getUnreadCountForFilter(1),
+                                _getUnreadCountForFilter(2),
+                                _getUnreadCountForFilter(3),
+                              ],
+                              onSelectFolder: (index) {
+                                HapticUtils.selection();
+                                setState(() => _activeFilter = index);
+                                _closeFolderMenu();
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // Title pill content ("Theaver")
+                  if (folderProgress < 0.99)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: ctrlSize,
+                      child: Opacity(
+                        opacity: (1.0 - (folderProgress / 0.35))
+                            .clamp(0.0, 1.0),
+                        child: Transform.scale(
+                          scale: 1.0 - 0.15 * folderProgress,
+                          child: IgnorePointer(
+                            ignoring: folderProgress > 0.1,
+                            child: _TitlePillContent(
+                              key: const ValueKey<String>('title_pill'),
+                              title: _currentTitleText,
+                              titleKey: _currentTitleKey,
+                              isConnected: _isTitleConnected,
+                              onTap: _currentIndex == 1
+                                  ? _toggleFolderMenu
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+
+        final threeDotsWidget = Positioned(
+          top: 2,
+          right: 16,
+          child: Container(
+            width: currentTopWidth,
+            height: currentTopHeight,
+            decoration: BoxDecoration(
+              color: barBackgroundColor,
+              borderRadius: BorderRadius.circular(22.0),
+              border: Border.all(color: borderColor, width: 0.5),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                    alpha:
+                        (baseShadowAlpha * (0.6 + 0.4 * topProgress))
+                            .clamp(0.0, 1.0),
+                  ),
+                  blurRadius: 10 + 6 * topProgress,
+                  offset: Offset(0, 3 + 3 * topProgress),
+                ),
+              ],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                // Menu items
+                if (topProgress > 0.01)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    width: menuWidth,
+                    height: menuHeight,
+                    child: Opacity(
+                      opacity: ((topProgress - 0.15) / 0.85)
+                          .clamp(0.0, 1.0),
+                      child: Transform.translate(
+                        offset:
+                            Offset(0, -10.0 * (1.0 - topProgress)),
+                        child: IgnorePointer(
+                          ignoring: topProgress < 0.9,
+                          child: _TopMorphMenu(
+                            key: const ValueKey<String>('menu'),
+                            width: menuWidth,
+                            items: _getMenuItems(menuTabIndex),
+                            onItemTap: _handleMenuAction,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Three dots glyph
+                if (topProgress < 0.99)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    width: ctrlSize,
+                    height: ctrlSize,
+                    child: Opacity(
+                      opacity: (1.0 - (topProgress / 0.35))
+                          .clamp(0.0, 1.0),
+                      child: Transform.scale(
+                        scale: 1.0 - 0.2 * topProgress,
+                        child: IgnorePointer(
+                          ignoring: topProgress > 0.1,
+                          child: _ThreeDotsGlyph(
+                            key: const ValueKey<String>('glyph'),
+                            size: ctrlSize,
+                            onTap: _toggleTopMenu,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+
         return SafeArea(
           bottom: false,
           child: Padding(
@@ -1622,187 +1854,9 @@ class _MainScreenState extends State<MainScreen>
               height: currentBarHeight,
               child: Stack(
                 clipBehavior: Clip.none,
-                children: [
-                  // Centered title pill / morph folder dropdown menu
-                  Positioned(
-                    top: 2,
-                    left: 0,
-                    right: 0,
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Container(
-                        width: currentFolderWidth,
-                        height: currentFolderHeight,
-                        decoration: BoxDecoration(
-                          color: barBackgroundColor,
-                          borderRadius: BorderRadius.circular(22.0),
-                          border: Border.all(color: borderColor, width: 0.5),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(
-                                alpha: (baseShadowAlpha *
-                                        (0.6 + 0.4 * folderProgress))
-                                    .clamp(0.0, 1.0),
-                              ),
-                              blurRadius: 10 + 6 * folderProgress,
-                              offset: Offset(0, 3 + 3 * folderProgress),
-                            ),
-                          ],
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: Stack(
-                          clipBehavior: Clip.hardEdge,
-                          children: [
-                            // Folder menu items
-                            if (folderProgress > 0.01)
-                              Positioned(
-                                top: 0,
-                                left: (currentFolderWidth - folderMenuWidth) / 2,
-                                width: folderMenuWidth,
-                                height: folderMenuHeight,
-                                child: Opacity(
-                                  opacity: ((folderProgress - 0.15) / 0.85)
-                                      .clamp(0.0, 1.0),
-                                  child: Transform.translate(
-                                    offset:
-                                        Offset(0, -10.0 * (1.0 - folderProgress)),
-                                    child: IgnorePointer(
-                                      ignoring: folderProgress < 0.9,
-                                      child: _FolderMorphMenu(
-                                        key: const ValueKey<String>('folder_menu'),
-                                        width: folderMenuWidth,
-                                        activeFilter: _activeFilter,
-                                        unreadCounts: [
-                                          _getUnreadCountForFilter(0),
-                                          _getUnreadCountForFilter(1),
-                                          _getUnreadCountForFilter(2),
-                                          _getUnreadCountForFilter(3),
-                                        ],
-                                        onSelectFolder: (index) {
-                                          HapticUtils.selection();
-                                          setState(() => _activeFilter = index);
-                                          _closeFolderMenu();
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                            // Title pill content ("Theaver")
-                            if (folderProgress < 0.99)
-                              Positioned(
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                height: ctrlSize,
-                                child: Opacity(
-                                  opacity: (1.0 - (folderProgress / 0.35))
-                                      .clamp(0.0, 1.0),
-                                  child: Transform.scale(
-                                    scale: 1.0 - 0.15 * folderProgress,
-                                    child: IgnorePointer(
-                                      ignoring: folderProgress > 0.1,
-                                      child: _TitlePillContent(
-                                        key: const ValueKey<String>('title_pill'),
-                                        title: _currentTitleText,
-                                        titleKey: _currentTitleKey,
-                                        isConnected: _isTitleConnected,
-                                        onTap: _currentIndex == 1
-                                            ? _toggleFolderMenu
-                                            : null,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Persistent three dots button and morph context menu
-                  Positioned(
-                    top: 2,
-                    right: 16,
-                    child: Container(
-                      width: currentTopWidth,
-                      height: currentTopHeight,
-                      decoration: BoxDecoration(
-                        color: barBackgroundColor,
-                        borderRadius: BorderRadius.circular(22.0),
-                        border: Border.all(color: borderColor, width: 0.5),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(
-                              alpha:
-                                  (baseShadowAlpha * (0.6 + 0.4 * topProgress))
-                                      .clamp(0.0, 1.0),
-                            ),
-                            blurRadius: 10 + 6 * topProgress,
-                            offset: Offset(0, 3 + 3 * topProgress),
-                          ),
-                        ],
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Stack(
-                        clipBehavior: Clip.hardEdge,
-                        children: [
-                          // Menu items
-                          if (topProgress > 0.01)
-                            Positioned(
-                              top: 0,
-                              right: 0,
-                              width: menuWidth,
-                              height: menuHeight,
-                              child: Opacity(
-                                opacity: ((topProgress - 0.15) / 0.85)
-                                    .clamp(0.0, 1.0),
-                                child: Transform.translate(
-                                  offset:
-                                      Offset(0, -10.0 * (1.0 - topProgress)),
-                                  child: IgnorePointer(
-                                    ignoring: topProgress < 0.9,
-                                    child: _TopMorphMenu(
-                                      key: const ValueKey<String>('menu'),
-                                      width: menuWidth,
-                                      items: _getMenuItems(menuTabIndex),
-                                      onItemTap: _handleMenuAction,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                          // Three dots glyph
-                          if (topProgress < 0.99)
-                            Positioned(
-                              top: 0,
-                              right: 0,
-                              width: ctrlSize,
-                              height: ctrlSize,
-                              child: Opacity(
-                                opacity: (1.0 - (topProgress / 0.35))
-                                    .clamp(0.0, 1.0),
-                                child: Transform.scale(
-                                  scale: 1.0 - 0.2 * topProgress,
-                                  child: IgnorePointer(
-                                    ignoring: topProgress > 0.1,
-                                    child: _ThreeDotsGlyph(
-                                      key: const ValueKey<String>('glyph'),
-                                      size: ctrlSize,
-                                      onTap: _toggleTopMenu,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                children: folderProgress > 0
+                    ? [threeDotsWidget, folderPillWidget]
+                    : [folderPillWidget, threeDotsWidget],
               ),
             ),
           ),
@@ -2080,6 +2134,44 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Widget? _buildChatSubtitle(Chat chat, bool hasUnread) {
+    final draft = DraftService().getDraft(chat.id) ?? chat.draft;
+    if (draft != null && draft.isNotEmpty) {
+      final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft_prefix') ?? 'Черновик';
+      final draftText = draft.text.trim().isNotEmpty ? draft.text : '...';
+      return RichText(
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: '$draftPrefix: ',
+              style: const TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            ...EmojiUtils.buildEmojiTextSpan(
+              draftText,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+                fontSize: 14,
+              ),
+            ).children ??
+                [
+                  TextSpan(
+                    text: draftText,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+          ],
+        ),
+      );
+    }
+
     if (chat.isLastMessageRoundVideo) {
       final primary = Theme.of(context).colorScheme.primary;
       return Row(
@@ -2673,9 +2765,6 @@ class _MainScreenState extends State<MainScreen>
             final isDark = Theme.of(context).brightness == Brightness.dark;
             final statusBarHeight = MediaQuery.of(context).padding.top;
             final topBarHeight = statusBarHeight + 52.0;
-            final reduceMotion = MediaQuery.disableAnimationsOf(context);
-            final lightAngle =
-                glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
 
             if (glassProvider.enabled) {
               final double screen = MediaQuery.sizeOf(context).width;
@@ -2705,43 +2794,14 @@ class _MainScreenState extends State<MainScreen>
                 barWidth = maxGroupWidth - actionSize - spacing;
               }
 
-              final shape = _glassShape(barHeight / 2, lightAngle);
-
-              final barStyle = LiquidGlassStyle(
-                shape: shape,
-                appearance: LiquidGlassAppearance(
-                  color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-                  blur: glassProvider.blurEffect,
-                  shadow: LiquidGlassShadow(
-                    blur: 16,
-                    opacity: isDark ? 0.40 : 0.18,
-                    offset: const Offset(0, 8),
-                    color: Colors.black,
-                  ),
-                ),
-                refraction: const LiquidGlassRefraction(
-                  distortion: 0.06,
-                  distortionWidth: 26,
-                ),
+              final barStyle = glassProvider.createStyle(
+                context: context,
+                cornerRadius: barHeight / 2,
+                refractionIndex: 1.1,
+                refractionWidth: 24.0,
               );
 
-              final actionStyle = LiquidGlassStyle(
-                shape: _glassShape(barHeight / 2, lightAngle),
-                appearance: LiquidGlassAppearance(
-                  color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-                  blur: glassProvider.blurEffect,
-                  shadow: LiquidGlassShadow(
-                    blur: 16,
-                    opacity: isDark ? 0.40 : 0.18,
-                    offset: const Offset(0, 8),
-                    color: Colors.black,
-                  ),
-                ),
-                refraction: const LiquidGlassRefraction(
-                  distortion: 0.06,
-                  distortionWidth: 26,
-                ),
-              );
+              final actionStyle = barStyle;
 
               final double effectiveBottomMargin = keyboardHeight > 0
                   ? (bottomMargin + keyboardHeight - safeBottom)
@@ -2780,7 +2840,8 @@ class _MainScreenState extends State<MainScreen>
                     ],
                   ),
                 ),
-                actionMargin: actionMargin,
+                bottomNavigationBarActionMargin: actionMargin,
+                floatingActionButtonMargin: actionMargin,
                 bottomNavigationBar: LiquidGlassTabBar(
                   items: [
                     _buildTabBarItem(
@@ -2838,12 +2899,10 @@ class _MainScreenState extends State<MainScreen>
                     animated: true,
                     growHeight: 7,
                     rest: LiquidGlassStyle(
-                      shape: _glassShape(28, lightAngle),
-                      appearance: LiquidGlassAppearance(
-                        color: isDark
-                            ? const Color(0x38FFFFFF)
-                            : const Color(0x2EAEAEB2),
-                      ),
+                      shape: _glassShape(28),
+                      color: isDark
+                          ? const Color(0x38FFFFFF)
+                          : const Color(0x2EAEAEB2),
                     ),
                   ),
                 ),
@@ -2933,18 +2992,10 @@ class _MainScreenState extends State<MainScreen>
     ); // closes AnnotatedRegion
   }
 
-  LiquidGlassShape _glassShape(double cornerRadius, double lightAngle) =>
+  LiquidGlassShape _glassShape(double cornerRadius) =>
       LiquidGlassShape.continuousRoundedRectangle(
         cornerRadius: cornerRadius,
         clipQuality: LiquidGlassClipQuality.exact,
-        borderWidth: 0.7,
-        lightIntensity: 0.9,
-        lightDirection: lightAngle,
-        borderType: const OpticalBorder(
-          borderSaturation: 1.1,
-          ambientIntensity: 0.85,
-          borderSolidity: 0.95,
-        ),
       );
 
   LiquidGlassTabBarItem _buildTabBarItem({
@@ -3108,7 +3159,9 @@ class _MainScreenState extends State<MainScreen>
                   otherUserId: result.id,
                 ),
               ),
-            ).then((_) {});
+            ).then((_) {
+              if (mounted) _refreshChatLastMessage(chat.id);
+            });
           } else if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -3120,7 +3173,6 @@ class _MainScreenState extends State<MainScreen>
         break;
       case 'group':
         if (result is SearchResultGroup) {
-          
           Navigator.push(
             context,
             SwipeBackPageRoute(
@@ -3130,12 +3182,13 @@ class _MainScreenState extends State<MainScreen>
                 groupAvatar: null,
               ),
             ),
-          ).then((_) {});
+          ).then((_) {
+            if (mounted) _refreshChatLastMessage(result.id);
+          });
         }
         break;
       case 'channel':
         if (result is SearchResultChannel) {
-          
           Navigator.push(
             context,
             SwipeBackPageRoute(
@@ -3145,7 +3198,9 @@ class _MainScreenState extends State<MainScreen>
                 channelAvatar: null,
               ),
             ),
-          ).then((_) {});
+          ).then((_) {
+            if (mounted) _refreshChatLastMessage(result.id);
+          });
         }
         break;
       case 'message':

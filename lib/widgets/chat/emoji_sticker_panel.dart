@@ -256,21 +256,12 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
               offstage: displayHeight <= 0,
               child: glassProvider.enabled
                   ? LiquidGlassLens(
-                      style: LiquidGlassStyle(
-                        shape: const LiquidGlassShape.continuousRoundedRectangle(
-                          cornerRadius: 0,
-                        ),
-                        appearance: LiquidGlassAppearance(
-                          color: isDark
-                              ? const Color(0x33202025)
-                              : const Color(0x8FFFFFFF),
-                          blur: glassProvider.blurEffect,
-                        ),
-                        refraction: const LiquidGlassRefraction(
-                          distortion: 0.05,
-                          distortionWidth: 20,
-                        ),
-                        liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+                      style: glassProvider.createStyle(
+                        context: context,
+                        cornerRadius: 0,
+                        borderWidth: 0,
+                        refractionIndex: 1.02,
+                        refractionWidth: 24,
                       ),
                       child: const SizedBox.expand(),
                     )
@@ -414,27 +405,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       ],
     );
 
-    final searchShape = LiquidGlassShape.continuousRoundedRectangle(
+    final searchStyle = glassProvider.createStyle(
+      context: context,
       cornerRadius: 24,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.6,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
-    );
-
-    final searchStyle = LiquidGlassStyle(
-      shape: searchShape,
-      appearance: LiquidGlassAppearance(
-        color: isDark
-            ? const Color(0x33202025)
-            : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 20,
-      ),
-      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+      refractionWidth: 24,
     );
 
     return Container(
@@ -503,8 +477,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
   Widget _buildEmojiTopControls() {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final glassProvider = context.watch<LiquidGlassProvider>();
 
     return AnimatedBuilder(
@@ -539,25 +511,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         final selectorWidget = _buildEmojiSetSelector(isGrouped: true);
 
         if (glassProvider.enabled) {
-          final sharedStyle = LiquidGlassStyle(
-            shape: LiquidGlassShape.continuousRoundedRectangle(
-              cornerRadius: 24,
-              clipQuality: LiquidGlassClipQuality.exact,
-              borderWidth: 0.6,
-              lightIntensity: isDark ? 0.7 : 0.95,
-              lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
-            ),
-            appearance: LiquidGlassAppearance(
-              color: isDark
-                  ? const Color(0x33202025)
-                  : const Color(0x8FFFFFFF),
-              blur: glassProvider.blurEffect,
-            ),
-            refraction: const LiquidGlassRefraction(
-              distortion: 0.06,
-              distortionWidth: 20,
-            ),
-            liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+          final sharedStyle = glassProvider.createStyle(
+            context: context,
+            cornerRadius: 24,
+            refractionWidth: 24,
           );
 
           return SizedBox(
@@ -802,25 +759,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       ],
     );
 
-    final selectorShape = LiquidGlassShape.continuousRoundedRectangle(
+    final selectorStyle = glassProvider.createStyle(
+      context: context,
       cornerRadius: 24,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.6,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
-    );
-
-    final selectorStyle = LiquidGlassStyle(
-      shape: selectorShape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: glassProvider.blurEffect,
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 20,
-      ),
-      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+      refractionWidth: 24,
     );
 
     return Container(
@@ -1197,27 +1139,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     );
 
     if (glassProvider.enabled) {
-      final navShape = LiquidGlassShape.continuousRoundedRectangle(
+      final navStyle = glassProvider.createStyle(
+        context: context,
         cornerRadius: 32,
-        clipQuality: LiquidGlassClipQuality.exact,
-        borderWidth: 0.6,
-        lightIntensity: isDark ? 0.7 : 0.95,
-        lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
-      );
-
-      final navStyle = LiquidGlassStyle(
-        shape: navShape,
-        appearance: LiquidGlassAppearance(
-          color: isDark
-              ? const Color(0x33202025)
-              : const Color(0x8FFFFFFF),
-          blur: glassProvider.blurEffect,
-        ),
-        refraction: const LiquidGlassRefraction(
-          distortion: 0.06,
-          distortionWidth: 20,
-        ),
-        liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+        refractionWidth: 24,
       );
 
       return LiquidGlassLens(
@@ -1282,27 +1207,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     );
 
     if (glassProvider.enabled) {
-      final buttonShape = LiquidGlassShape.continuousRoundedRectangle(
+      final buttonStyle = glassProvider.createStyle(
+        context: context,
         cornerRadius: 20,
-        clipQuality: LiquidGlassClipQuality.exact,
-        borderWidth: 0.6,
-        lightIntensity: isDark ? 0.7 : 0.95,
-        lightDirection: glassProvider.getEffectiveLightAngle(reduceMotion: false),
-      );
-
-      final buttonStyle = LiquidGlassStyle(
-        shape: buttonShape,
-        appearance: LiquidGlassAppearance(
-          color: isDark
-              ? const Color(0x33202025)
-              : const Color(0x8FFFFFFF),
-          blur: glassProvider.blurEffect,
-        ),
-        refraction: const LiquidGlassRefraction(
-          distortion: 0.06,
-          distortionWidth: 20,
-        ),
-        liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+        refractionWidth: 24,
       );
 
       return LiquidGlassLens(

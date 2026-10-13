@@ -1,13 +1,11 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/regular/shield_check.dart';
 import 'package:iconoir_flutter/regular/laptop.dart';
 import 'package:iconoir_flutter/regular/check.dart';
 import 'package:iconoir_flutter/regular/lock.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
@@ -157,7 +155,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
     final l10n = context.l10n;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
+    final glassProvider = context.watch<LiquidGlassProvider>();
     final mediaQuery = MediaQuery.of(context);
 
     // Height offset for floating cloud app bar (same as in PrivateChatScreen)
@@ -180,7 +178,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
         onTitleTap: () => _showChatInfoDialog(context, l10n),
         onAvatarTap: () => _showChatInfoDialog(context, l10n),
       ),
-      bottomBar: _buildBottomBar(glassEnabled, isDark, theme, l10n),
+      bottomBar: _buildBottomBar(glassProvider, isDark, theme, l10n),
       floatingActionButton: ScrollDownFab(
         visible: _showScrollDownFab,
         unreadCount: 0,
@@ -437,7 +435,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
   }
 
   Widget _buildBottomBar(
-    bool glassEnabled,
+    LiquidGlassProvider glassProvider,
     bool isDark,
     ThemeData theme,
     AppLocalizations l10n,
@@ -469,33 +467,27 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
       ],
     );
 
-    if (glassEnabled) {
-      final glassSettings = LiquidGlassSettings(
-        refractiveIndex: 1.15,
-        thickness: 20,
-        blur: 8,
-        saturation: 1.5,
-        lightIntensity: isDark ? 0.7 : 1.0,
-        ambientStrength: isDark ? 0.2 : 0.5,
-        lightAngle: math.pi / 2,
-        glassColor: isDark
+    if (glassProvider.enabled) {
+      final glassStyle = glassProvider.createStyle(
+        color: isDark
             ? const Color.fromARGB(40, 30, 30, 40)
             : const Color.fromARGB(50, 255, 255, 255),
+        blur: 8.0,
+        refractionIndex: 1.15,
+        refractionWidth: 24.0,
+        shape: const LiquidGlassShape.continuousRoundedRectangle(
+          cornerRadius: kInputFillBorderRadius,
+        ),
       );
 
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
-        child: LiquidGlassLayer(
-          settings: glassSettings,
-          child: FakeGlass(
-            settings: glassSettings,
-            shape: const LiquidRoundedSuperellipse(
-                borderRadius: kInputFillBorderRadius),
-            child: Container(
-              height: kInputHeight,
-              alignment: Alignment.center,
-              child: content,
-            ),
+        child: LiquidGlassLens(
+          style: glassStyle,
+          child: Container(
+            height: kInputHeight,
+            alignment: Alignment.center,
+            child: content,
           ),
         ),
       );

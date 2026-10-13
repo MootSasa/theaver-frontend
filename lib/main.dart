@@ -12,6 +12,8 @@ import 'screens/auth/splash_screen.dart';
 import 'services/settings_service.dart';
 import 'services/account_manager.dart';
 import 'services/cache_service.dart';
+import 'services/draft_service.dart';
+import 'services/chat_realtime_manager.dart';
 import 'services/liquid_glass_provider.dart';
 import 'services/unread_count_provider.dart';
 import 'services/deep_link_service.dart';
@@ -27,6 +29,8 @@ import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'screens/call/voice_call_screen.dart';
 import 'screens/call/video_call_screen.dart';
+import 'screens/chat/user_profile_screen.dart';
+import 'utils/swipe_back_route.dart';
 import 'widgets/chat/floating_video_note_overlay.dart';
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
@@ -121,6 +125,8 @@ void main() async {
   await SettingsService().init();
   await AccountManager().init();
   await CacheService().init();
+  await DraftService().init();
+  ChatRealtimeManager().init();
 
   // Initialize deep link service
   await DeepLinkService().init();
@@ -210,6 +216,20 @@ class TheaverApp extends StatelessWidget {
                   builder: (_) => VideoCallScreen(
                     callId: chatId,
                     isCaller: true,
+                  ),
+                  settings: settings,
+                );
+              }
+              if (settings.name == '/profile') {
+                final args = settings.arguments as Map<String, dynamic>? ?? {};
+                final userId = args['userId']?.toString() ?? '';
+                final name = args['name']?.toString();
+                final avatarUrl = args['avatarUrl']?.toString();
+                return SwipeBackPageRoute(
+                  builder: (_) => UserProfileScreen(
+                    userId: userId,
+                    initialName: name,
+                    initialAvatarUrl: avatarUrl,
                   ),
                   settings: settings,
                 );

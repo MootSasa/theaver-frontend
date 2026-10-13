@@ -29,6 +29,7 @@ enum WebSocketEventType {
   messageReactionUpdated,
   userAvatarUpdated,
   userAppearanceUpdated,
+  draftUpdated,
 }
 
 /// WebSocket event data
@@ -88,6 +89,8 @@ class WebSocketEvent {
         return WebSocketEventType.userAvatarUpdated;
       case 'user_appearance_updated':
         return WebSocketEventType.userAppearanceUpdated;
+      case 'draft_updated':
+        return WebSocketEventType.draftUpdated;
       default:
         return WebSocketEventType.connected;
     }
@@ -171,6 +174,9 @@ class WebSocketService {
   final StreamController<WebSocketEvent> _eventController = 
       StreamController<WebSocketEvent>.broadcast();
   Stream<WebSocketEvent> get eventStream => _eventController.stream;
+
+  @visibleForTesting
+  void emitForTesting(WebSocketEvent event) => _eventController.add(event);
 
   final Map<WebSocketEventType, List<WebSocketEventCallback>> _callbacks = {};
 

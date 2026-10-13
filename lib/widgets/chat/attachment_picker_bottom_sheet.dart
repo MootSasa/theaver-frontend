@@ -1251,41 +1251,14 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
       );
     }
 
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final lightAngle = glassProvider.getEffectiveLightAngle(reduceMotion: reduceMotion);
-
-    final shape = LiquidGlassShape.continuousRoundedRectangle(
+    final style = glassProvider.createStyle(
+      context: context,
       cornerRadius: 36,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: isDark ? 0.7 : 0.95,
-      lightDirection: lightAngle,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
-      ),
-    );
-
-    final style = LiquidGlassStyle(
-      shape: shape,
-      appearance: LiquidGlassAppearance(
-        color: isDark
-            ? const Color(0x3D24242C)
-            : const Color(0x9EFFFFFF),
-        blur: glassProvider.blurEffect,
-        shadow: LiquidGlassShadow(
-          blur: 16,
-          opacity: isDark ? 0.35 : 0.12,
-          offset: const Offset(0, 4),
-          color: Colors.black,
-        ),
-      ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.06,
-        distortionWidth: 26,
-      ),
-      liteGlass: glassProvider.isLite ? LiquidGlassLitePickup.backdrop : null,
+      color: isDark
+          ? const Color(0x3D24242C)
+          : const Color(0x9EFFFFFF),
+      refractionIndex: 1.1,
+      refractionWidth: 24,
     );
 
     return Padding(

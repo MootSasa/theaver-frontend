@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -29,7 +30,24 @@ class VisibleMessageDetector extends StatefulWidget {
 
 class _VisibleMessageDetectorState extends State<VisibleMessageDetector> {
   bool _hasBeenSeen = false;
-  DateTime? _firstVisibleAt;
+  Timer? _visibleTimer;
+
+  @override
+  void didUpdateWidget(covariant VisibleMessageDetector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.messageId != widget.messageId) {
+      _visibleTimer?.cancel();
+      _visibleTimer = null;
+      _hasBeenSeen = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _visibleTimer?.cancel();
+    _visibleTimer = null;
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -46,24 +64,32 @@ class _VisibleMessageDetectorState extends State<VisibleMessageDetector> {
   }
 
   void _onVisibilityChanged(VisibilityInfo info) {
-    if (_hasBeenSeen) return;
+    if (_hasBeenSeen || !mounted) return;
 
     final visibleFraction = info.visibleFraction;
 
     if (visibleFraction >= widget.visibilityThreshold) {
-      // Message is sufficiently visible
-      final now = DateTime.now();
-      _firstVisibleAt ??= now;
-
-      final elapsed = now.difference(_firstVisibleAt!);
-      if (elapsed >= widget.visibleDuration) {
-        // Message has been visible long enough — mark as seen
+      if (widget.visibleDuration == Duration.zero) {
         _hasBeenSeen = true;
+        _visibleTimer?.cancel();
+        _visibleTimer = null;
         widget.onMessageSeen();
+        return;
       }
+
+      // Start timer if not already active
+      _visibleTimer ??= Timer(widget.visibleDuration, () {
+        if (!mounted || _hasBeenSeen) return;
+        setState(() {
+          _hasBeenSeen = true;
+        });
+        _visibleTimer = null;
+        widget.onMessageSeen();
+      });
     } else {
-      // Message is no longer sufficiently visible — reset timer
-      _firstVisibleAt = null;
+      // Message is no longer sufficiently visible — cancel timer
+      _visibleTimer?.cancel();
+      _visibleTimer = null;
     }
   }
 }

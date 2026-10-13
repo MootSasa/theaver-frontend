@@ -346,6 +346,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       setState(() {
         _isDownloading = false;
         _isCached = false;
+        _hasError = true;
       });
     }
   }
@@ -392,6 +393,18 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       }
     } catch (e) {
       debugPrint('[VideoMessageWidget] Controller init failed: $e');
+      try {
+        await MediaCacheManager.instance.evict(widget.videoUrl);
+      } catch (_) {}
+      try {
+        if (await file.exists()) {
+          final cacheDir = await MediaCacheManager.instance.getMediaCacheDirectory();
+          if (file.path.startsWith(cacheDir.path)) {
+            await file.delete();
+          }
+        }
+      } catch (_) {}
+
       if (mounted && session == _initSession) {
         setState(() => _hasError = true);
       }
@@ -558,7 +571,28 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     super.dispose();
   }
 
+  Future<void> _retryDownloadOrInit() async {
+    setState(() {
+      _hasError = false;
+    });
+    try {
+      await MediaCacheManager.instance.evict(widget.videoUrl);
+    } catch (_) {}
+    final uri = Uri.tryParse(widget.videoUrl);
+    final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+    if (isNetwork) {
+      _startDownload();
+    } else {
+      _initializeVideoPlayer();
+    }
+  }
+
   void _handleTap() {
+    if (_hasError) {
+      _retryDownloadOrInit();
+      return;
+    }
+
     if (!_isCached && !_isDownloading) {
       _startDownload();
     }
@@ -797,17 +831,10 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                               ? Container(
                                   color: Colors.black87,
                                   child: Center(
-                                    child: widget.onRetry != null
-                                        ? IconButton(
-                                            icon: const Icon(Icons.refresh, color: Colors.white70, size: 36),
-                                            onPressed: () {
-                                              setState(() {
-                                                _hasError = false;
-                                              });
-                                              _initializeVideoPlayer();
-                                            },
-                                          )
-                                        : const Icon(Icons.error_outline, color: Colors.white70, size: 36),
+                                    child: IconButton(
+                                      icon: const Icon(Icons.refresh, color: Colors.white70, size: 36),
+                                      onPressed: _retryDownloadOrInit,
+                                    ),
                                   ),
                                 )
                               : !isInitialized

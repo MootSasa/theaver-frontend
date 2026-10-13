@@ -7,9 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
 import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
 import 'package:inspire_blur/inspire_blur.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/account_manager.dart';
@@ -30,22 +31,39 @@ import '../../widgets/profile/qr_code_dialog.dart';
 import '../../widgets/notifications/in_app_notification_banner.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../config/app_config.dart';
+import '../../utils/date_time_utils.dart';
 import 'edit_profile_screen.dart';
 import 'profile_color_screen.dart';
 
-/// Экран профиля пользователя с двумя режимами дизайна.
+/// Универсальный экран профиля пользователя (как для себя в настройках, так и для собеседников).
 ///
 /// - **Liquid Glass включён** — премиальный дизайн со стеклянными элементами
 /// - **Liquid Glass выключен/недоступен** — премиальный дизайн с полупрозрачными карточками
-///
-/// Фото сохраняется автоматически при выборе/удалении.
-/// Оба режима поддерживают светлую и тёмную тему приложения.
+/// - Поддерживает нативную Hero-анимацию аватарки, имени и статуса между чатом и профилем.
 class ProfileScreen extends StatefulWidget {
   final Function()? onUpdate;
+  final String? userId;
+  final String? initialName;
+  final String? initialAvatarUrl;
+  final bool? initialIsOnline;
+  final DateTime? initialLastSeen;
+  final String? chatId;
+  final String? heroTag;
+  final VoidCallback? onVoiceCall;
+  final VoidCallback? onVideoCall;
 
   const ProfileScreen({
     Key? key,
     this.onUpdate,
+    this.userId,
+    this.initialName,
+    this.initialAvatarUrl,
+    this.initialIsOnline,
+    this.initialLastSeen,
+    this.chatId,
+    this.heroTag,
+    this.onVoiceCall,
+    this.onVideoCall,
   }) : super(key: key);
 
   @override
@@ -68,6 +86,19 @@ class ProfileScreenState extends State<ProfileScreen>
   bool _isLoading = true;
   bool _isProcessing = false;
   final AccountManager _accountManager = AccountManager();
+
+  bool get _isSelf {
+    if (widget.userId == null || widget.userId!.isEmpty) return true;
+    final currentUserId = _accountManager.currentAccount?.userId;
+    return currentUserId != null && currentUserId == widget.userId;
+  }
+
+  String get _heroKey => widget.heroTag ?? widget.userId ?? 'self';
+
+  String? _bio;
+  bool _isOnline = false;
+  DateTime? _lastSeen;
+  bool _isMuted = false;
 
   /// Выбранная вкладка сегментированного переключателя (0 = Стена, 1 = Подарки)
   int _selectedSegment = 0;
@@ -194,8 +225,13 @@ class ProfileScreenState extends State<ProfileScreen>
       });
     });
 
-    AvatarSyncService().addListener(_onAvatarSyncChanged);
-    _loadUserProfile();
+    if (_isSelf) {
+      AvatarSyncService().addListener(_onAvatarSyncChanged);
+      _loadUserProfile();
+    } else {
+      _initOtherUserData();
+      _loadOtherUserProfile();
+    }
   }
 
   void _onScroll() {
@@ -314,9 +350,149 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  void _initOtherUserData() {
+    _isLoading = false;
+    if (widget.initialName != null && widget.initialName!.isNotEmpty) {
+      final parts = widget.initialName!.trim().split(' ');
+      _nameController.text = parts.first;
+      if (parts.length > 1) {
+        _surnameController.text = parts.sublist(1).join(' ');
+      }
+    }
+    if (widget.initialAvatarUrl != null && widget.initialAvatarUrl!.isNotEmpty) {
+      _avatarUrl = widget.initialAvatarUrl;
+      _avatarUrls = [widget.initialAvatarUrl!];
+    }
+    _isOnline = widget.initialIsOnline ?? false;
+    _lastSeen = widget.initialLastSeen;
+    _updateTopLuminance();
+  }
+
+  Future<void> _loadOtherUserProfile() async {
+    if (widget.userId == null || widget.userId!.isEmpty) return;
+    try {
+      final res = await AuthService.getUserProfile(widget.userId!);
+      if (res['success'] == true && res['user'] != null && mounted) {
+        final u = res['user'] as Map<String, dynamic>;
+        setState(() {
+          final displayName = u['display_name']?.toString() ?? u['name']?.toString();
+          if (displayName != null && displayName.isNotEmpty) {
+            final parts = displayName.trim().split(' ');
+            _nameController.text = parts.first;
+            _surnameController.text = parts.length > 1 ? parts.sublist(1).join(' ') : (u['surname']?.toString() ?? '');
+          }
+          if (u['username'] != null) {
+            _usernameController.text = u['username'].toString();
+          }
+          if (u['phone'] != null) {
+            _phoneController.text = u['phone'].toString();
+          }
+          if (u['bio'] != null) {
+            _bio = u['bio'].toString();
+          }
+          if (u['avatar_url'] != null && u['avatar_url'].toString().isNotEmpty) {
+            final serverUrl = u['avatar_url'].toString();
+            _avatarUrl = serverUrl;
+            if (!_avatarUrls.contains(serverUrl)) {
+              _avatarUrls = [serverUrl, ..._avatarUrls];
+            }
+          }
+          if (u['avatars'] != null) {
+            final list = u['avatars'] as List<dynamic>;
+            final urls = list.map((a) => a['avatar_url'].toString()).toList();
+            if (urls.isNotEmpty) {
+              _avatarUrls = urls;
+            }
+          }
+        });
+        _updateTopLuminance();
+      }
+    } catch (e) {
+      debugPrint('[ProfileScreen] Error loading peer user profile: $e');
+    }
+  }
+
+  String _getStatusText(AppLocalizations l10n) {
+    if (_isSelf) {
+      return l10n.translate('profile_online');
+    }
+    if (_isOnline) {
+      return l10n.translate('chat_online');
+    } else if (_lastSeen != null) {
+      return DateTimeUtils.formatLastSeen(_lastSeen, context);
+    } else {
+      return l10n.translate('chat_offline');
+    }
+  }
+
+  Color _getStatusColor(BuildContext context, Color fallbackColor) {
+    if (_isSelf) {
+      return context.watch<ProfileThemeProvider>().hasCustomColor
+          ? context.watch<ProfileThemeProvider>().statusColor
+          : fallbackColor;
+    }
+    if (_isOnline) {
+      return const Color(0xFF34C759);
+    }
+    return Theme.of(context).brightness == Brightness.dark
+        ? Colors.white.withValues(alpha: 0.6)
+        : const Color(0xFF8E8E93);
+  }
+
+  List<ProfileActionButtonItem>? _getOtherUserActionButtons(BuildContext context) {
+    final l10n = context.l10n;
+    return [
+      ProfileActionButtonItem(
+        icon: Icons.chat_bubble_outline_rounded,
+        label: l10n.translate('chat_title'),
+        onTap: () {
+          if (widget.chatId != null) {
+            Navigator.maybePop(context);
+          } else {
+            Navigator.pushNamed(context, '/chat', arguments: {
+              'userId': widget.userId,
+              'name': _getDisplayName(),
+              'avatarUrl': _avatarUrl,
+            });
+          }
+        },
+      ),
+      ProfileActionButtonItem(
+        icon: Icons.phone_outlined,
+        label: l10n.translate('call'),
+        onTap: widget.onVoiceCall ??
+            () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(l10n.translate('call_not_supported'))),
+              );
+            },
+      ),
+      ProfileActionButtonItem(
+        icon: Icons.videocam_outlined,
+        label: l10n.translate('video'),
+        onTap: widget.onVideoCall ??
+            () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(l10n.translate('call_not_supported'))),
+              );
+            },
+      ),
+      ProfileActionButtonItem(
+        icon: _isMuted ? Icons.notifications_off_outlined : Icons.notifications_none_outlined,
+        label: l10n.translate(_isMuted ? 'chat_unmute' : 'chat_mute'),
+        onTap: () {
+          setState(() => _isMuted = !_isMuted);
+          HapticUtils.selection();
+        },
+      ),
+    ];
+  }
+
   @override
   void dispose() {
-    AvatarSyncService().removeListener(_onAvatarSyncChanged);
+    if (_isSelf) {
+      AvatarSyncService().removeListener(_onAvatarSyncChanged);
+    }
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _nameController.dispose();
@@ -890,9 +1066,29 @@ class ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _textHeroFlightShuttleBuilder(
+    BuildContext flightContext,
+    Animation<double> animation,
+    HeroFlightDirection flightDirection,
+    BuildContext fromHeroContext,
+    BuildContext toHeroContext,
+  ) {
+    final targetWidget = flightDirection == HeroFlightDirection.push
+        ? toHeroContext.widget
+        : fromHeroContext.widget;
+    return Material(
+      type: MaterialType.transparency,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.center,
+        child: targetWidget,
+      ),
+    );
+  }
+
   void _openFullAvatarViewer() async {
     if (_avatarUrls.isEmpty) {
-      _pickImage();
+      if (_isSelf) _pickImage();
       return;
     }
 
@@ -905,18 +1101,20 @@ class ProfileScreenState extends State<ProfileScreen>
       avatarUrls: _avatarUrls,
       initialIndex: currentIndex,
       displayName: _getDisplayName(),
-      onChoosePhoto: _pickImage,
-      onDelete: (index) {
-        _deleteAvatar();
+      onChoosePhoto: _isSelf ? _pickImage : null,
+      onDelete: _isSelf
+          ? (index) {
+              _deleteAvatar();
+            }
+          : null,
+      onPageChanged: (index) {
+        setState(() {
+          _currentAvatarIndex = index;
+        });
+        if (_avatarPageController.hasClients) {
+          _avatarPageController.jumpToPage(index);
+        }
       },
-    onPageChanged: (index) {
-      setState(() {
-        _currentAvatarIndex = index;
-      });
-      if (_avatarPageController.hasClients) {
-        _avatarPageController.jumpToPage(index);
-      }
-    },
     );
 
     // При закрытии полноэкранного просмотра: если мы в свёрнутом режиме (круглая аватарка)
@@ -1001,18 +1199,6 @@ class ProfileScreenState extends State<ProfileScreen>
       _expandFactor,
     );
 
-    final glassSettings = LiquidGlassSettings(
-      refractiveIndex: 1.25,
-      thickness: 10,
-      blur: 6,
-      saturation: 1.4,
-      lightIntensity: isDark ? 0.6 : 0.9,
-      ambientStrength: isDark ? 0.15 : 0.35,
-      lightAngle: math.pi / 2,
-      glassColor: isDark
-          ? const Color.fromARGB(20, 20, 20, 35)
-          : const Color.fromARGB(25, 240, 240, 250),
-    );
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayStyle,
@@ -1098,6 +1284,7 @@ class ProfileScreenState extends State<ProfileScreen>
                             tintColor: avatarBgColor,
                             backgroundColor: avatarBgColor,
                             displayName: _getDisplayName(),
+                            chatAvatarHeroTag: 'profile_avatar_$_heroKey',
                             onTap: _openFullAvatarViewer,
                           );
                         },
@@ -1198,18 +1385,37 @@ class ProfileScreenState extends State<ProfileScreen>
                               : (1.0 - (scrollOffset / 75.0)).clamp(0.0, 1.0),
                           child: Column(
                             children: [
-                              Text(
-                                _getDisplayName(),
-                                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                              Hero(
+                                tag: 'profile_name_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getDisplayName(),
+                                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 4),
-                              Text(
-                                l10n.translate('profile_online'),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: context.watch<ProfileThemeProvider>().hasCustomColor
-                                      ? context.watch<ProfileThemeProvider>().statusColor
-                                      : const Color(0xFF0088CC).withValues(alpha: 0.8),
+                              Hero(
+                                tag: 'profile_status_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getStatusText(l10n),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: _getStatusColor(
+                                        context,
+                                        const Color(0xFF0088CC).withValues(alpha: 0.8),
+                                      ),
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                               ),
                             ],
@@ -1224,68 +1430,63 @@ class ProfileScreenState extends State<ProfileScreen>
                       offset: Offset(0, contentTranslation),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: LiquidGlassLayer(
-                          settings: glassSettings,
-                          child: LiquidGlassBlendGroup(
-                            blend: 10,
-                            child: SingleChildScrollView(
-                              padding: const EdgeInsets.only(bottom: 32),
-                              child: Column(
-                                children: [
-                                  LiquidGlassProfileButtons(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    onChoosePhoto: _pickImage,
-                                    onQrCode: _showQrCode,
-                                    onEdit: _openEditProfile,
-                                    onDeletePhoto: _deleteAvatar,
-                                    hasAvatar: _avatarUrl != null || _avatarFile != null,
-                                    collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
-                                    choosePhotoLabel: l10n.translate('profile_choose_photo'),
-                                    qrCodeLabel: l10n.translate('profile_qr_code'),
-                                    editLabel: l10n.translate('profile_edit_btn'),
-                                    deletePhotoLabel: l10n.translate('profile_delete_photo'),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  LiquidGlassMusicStatus(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    trackTitle: null,
-                                    trackAuthor: null,
-                                    musicLabel: l10n.translate('profile_music'),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  LiquidGlassInfoPanel(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
-                                    bio: null,
-                                    username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
-                                    birthday: null,
-                                    age: null,
-                                    phoneLabel: l10n.translate('profile_phone'),
-                                    bioLabel: l10n.translate('profile_bio'),
-                                    usernameLabel: l10n.translate('profile_username'),
-                                    birthdayLabel: l10n.translate('profile_birthday'),
-                                    ageLabel: l10n.translate('profile_age'),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  ProfileSegmentedControl(
-                                    enabled: true,
-                                    isLite: isLite,
-                                    selectedIndex: _selectedSegment,
-                                    onTabChanged: (index) {
-                                      setState(() {
-                                        _selectedSegment = index;
-                                      });
-                                    },
-                                    wallLabel: l10n.translate('profile_tab_wall'),
-                                    giftsLabel: l10n.translate('profile_tab_gifts'),
-                                  ),
-                                  SizedBox(height: math.max(250.0, MediaQuery.of(context).size.height * 0.6)),
-                                ],
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.only(bottom: 32),
+                          child: Column(
+                            children: [
+                              LiquidGlassProfileButtons(
+                                enabled: true,
+                                isLite: isLite,
+                                customButtons: _isSelf ? null : _getOtherUserActionButtons(context),
+                                onChoosePhoto: _isSelf ? _pickImage : null,
+                                onQrCode: _isSelf ? _showQrCode : null,
+                                onEdit: _isSelf ? _openEditProfile : null,
+                                onDeletePhoto: _isSelf ? _deleteAvatar : null,
+                                hasAvatar: _avatarUrl != null || _avatarFile != null,
+                                collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
+                                choosePhotoLabel: l10n.translate('profile_choose_photo'),
+                                qrCodeLabel: l10n.translate('profile_qr_code'),
+                                editLabel: l10n.translate('profile_edit_btn'),
+                                deletePhotoLabel: l10n.translate('profile_delete_photo'),
                               ),
-                            ),
+                              const SizedBox(height: 12),
+                              LiquidGlassMusicStatus(
+                                enabled: true,
+                                isLite: isLite,
+                                trackTitle: null,
+                                trackAuthor: null,
+                                musicLabel: l10n.translate('profile_music'),
+                              ),
+                              const SizedBox(height: 12),
+                              LiquidGlassInfoPanel(
+                                enabled: true,
+                                isLite: isLite,
+                                phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
+                                bio: _bio,
+                                username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
+                                birthday: null,
+                                age: null,
+                                phoneLabel: l10n.translate('profile_phone'),
+                                bioLabel: l10n.translate('profile_bio'),
+                                usernameLabel: l10n.translate('profile_username'),
+                                birthdayLabel: l10n.translate('profile_birthday'),
+                                ageLabel: l10n.translate('profile_age'),
+                              ),
+                              const SizedBox(height: 12),
+                              ProfileSegmentedControl(
+                                enabled: true,
+                                isLite: isLite,
+                                selectedIndex: _selectedSegment,
+                                onTabChanged: (index) {
+                                  setState(() {
+                                    _selectedSegment = index;
+                                  });
+                                },
+                                wallLabel: l10n.translate('profile_tab_wall'),
+                                giftsLabel: l10n.translate('profile_tab_gifts'),
+                              ),
+                              SizedBox(height: math.max(250.0, MediaQuery.of(context).size.height * 0.6)),
+                            ],
                           ),
                         ),
                       ),
@@ -1486,6 +1687,7 @@ class ProfileScreenState extends State<ProfileScreen>
                       tintColor: backgroundColor,
                       backgroundColor: backgroundColor,
                       displayName: _getDisplayName(),
+                      chatAvatarHeroTag: 'profile_avatar_$_heroKey',
                       onTap: _openFullAvatarViewer,
                     ),
                   ),
@@ -1571,18 +1773,34 @@ class ProfileScreenState extends State<ProfileScreen>
                               : (1.0 - (scrollOffset / 75.0)).clamp(0.0, 1.0),
                           child: Column(
                             children: [
-                              Text(
-                                _getDisplayName(),
-                                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                              Hero(
+                                tag: 'profile_name_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getDisplayName(),
+                                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 4),
-                              Text(
-                                l10n.translate('profile_online'),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: context.watch<ProfileThemeProvider>().hasCustomColor
-                                      ? context.watch<ProfileThemeProvider>().statusColor
-                                      : brandColor,
+                              Hero(
+                                tag: 'profile_status_$_heroKey',
+                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Text(
+                                    _getStatusText(l10n),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: _getStatusColor(context, brandColor),
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                               ),
                             ],
@@ -1621,7 +1839,7 @@ class ProfileScreenState extends State<ProfileScreen>
                               LiquidGlassInfoPanel(
                                 enabled: false,
                                 phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
-                                bio: null,
+                                bio: _bio,
                                 username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
                                 birthday: null,
                                 age: null,
@@ -1702,10 +1920,11 @@ class ProfileScreenState extends State<ProfileScreen>
   }) {
     return LiquidGlassProfileButtons(
       enabled: false,
-      onChoosePhoto: _pickImage,
-      onQrCode: _showQrCode,
-      onEdit: _openEditProfile,
-      onDeletePhoto: _deleteAvatar,
+      customButtons: _isSelf ? null : _getOtherUserActionButtons(context),
+      onChoosePhoto: _isSelf ? _pickImage : null,
+      onQrCode: _isSelf ? _showQrCode : null,
+      onEdit: _isSelf ? _openEditProfile : null,
+      onDeletePhoto: _isSelf ? _deleteAvatar : null,
       hasAvatar: _avatarUrl != null || _avatarFile != null,
       collapseProgress: collapseProgress,
       choosePhotoLabel: l10n.translate('profile_choose_photo'),
@@ -1768,17 +1987,27 @@ class ProfileScreenState extends State<ProfileScreen>
             )
           else
             const Spacer(),
-          _MorphingHeaderMenuButton(
-            iconColor: effectiveIconColor,
-            isDark: isDark,
-            glassEnabled: glassEnabled,
-            isLite: isLite,
-            onEditProfile: _openEditProfile,
-            onChoosePhoto: _pickImage,
-            onChooseMusic: () => _showTodoFeatureBanner(l10n.translate('profile_menu_choose_music')),
-            onChangeColor: _openColorSettings,
-            onCopyLink: _copyProfileLink,
-          ),
+          if (_isSelf)
+            _MorphingHeaderMenuButton(
+              iconColor: effectiveIconColor,
+              isDark: isDark,
+              glassEnabled: glassEnabled,
+              isLite: isLite,
+              onEditProfile: _openEditProfile,
+              onChoosePhoto: _pickImage,
+              onChooseMusic: () => _showTodoFeatureBanner(l10n.translate('profile_menu_choose_music')),
+              onChangeColor: _openColorSettings,
+              onCopyLink: _copyProfileLink,
+            )
+          else
+            _RoundHeaderButton(
+              icon: Icons.share_outlined,
+              iconColor: effectiveIconColor,
+              isDark: isDark,
+              glassEnabled: glassEnabled,
+              isLite: isLite,
+              onTap: _copyProfileLink,
+            ),
         ],
       ),
     );
@@ -1823,54 +2052,43 @@ class _RoundHeaderButton extends StatelessWidget {
     Widget buttonContent;
 
     if (glassEnabled) {
-      // Liquid Glass / FakeGlass более прозрачный вариант
-      final glassChild = GlassGlow(
-        child: Container(
-          width: size,
-          height: size,
-          alignment: Alignment.center,
-          decoration: isDark
-              ? null
-              : BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    width: 0.5,
-                  ),
-                ),
-          child: Icon(icon, size: 22, color: iconColor),
+      final glassProvider = context.watch<LiquidGlassProvider>();
+      final glassStyle = glassProvider.createStyle(
+        context: context,
+        refractionIndex: 1.25,
+        refractionWidth: 24.0,
+        blur: 6.0,
+        color: isDark
+            ? const Color.fromARGB(12, 20, 20, 35)
+            : const Color.fromARGB(15, 240, 240, 250),
+        isLiteOverride: isLite,
+        shape: const LiquidGlassShape.roundedRectangle(
+          cornerRadius: size / 2,
         ),
       );
 
-      final glassSettings = LiquidGlassSettings(
-        refractiveIndex: 1.25,
-        thickness: 10,
-        blur: 6,
-        glassColor: isDark
-            ? const Color.fromARGB(12, 20, 20, 35)
-            : const Color.fromARGB(15, 240, 240, 250),
+      final buttonChild = Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        decoration: isDark
+            ? null
+            : BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  width: 0.5,
+                ),
+              ),
+        child: Icon(icon, size: 22, color: iconColor),
       );
 
-      buttonContent = isLite
-          ? FakeGlass(
-              shape: const LiquidOval(),
-              settings: glassSettings,
-              child: glassChild,
-            )
-          : LiquidGlass.withOwnLayer(
-              shape: const LiquidOval(),
-              settings: glassSettings,
-              child: glassChild,
-            );
-
-      // В стеклянном режиме включаем LiquidStretch
-      return LiquidStretch(
-        stretch: 0.3,
-        interactionScale: 1.06,
-        child: GestureDetector(
-          onTap: onTap,
-          behavior: HitTestBehavior.opaque,
-          child: buttonContent,
+      return GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: LiquidGlassLens(
+          style: glassStyle,
+          child: buttonChild,
         ),
       );
     } else {
@@ -1910,6 +2128,148 @@ class _RoundHeaderButton extends StatelessWidget {
   }
 }
 
+class _MorphMenuItemData {
+  final String id;
+  final String label;
+  final Widget Function(Color color, double size) iconBuilder;
+
+  const _MorphMenuItemData({
+    required this.id,
+    required this.label,
+    required this.iconBuilder,
+  });
+}
+
+class _ThreeDotsGlyph extends StatelessWidget {
+  final double size;
+  final Color? color;
+  final VoidCallback onTap;
+
+  const _ThreeDotsGlyph({
+    super.key,
+    required this.size,
+    this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final iconColor = color ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Center(
+          child: iconoir.MoreVert(
+            width: 22.0,
+            height: 22.0,
+            color: iconColor,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TopMorphMenu extends StatelessWidget {
+  final double width;
+  final List<_MorphMenuItemData> items;
+  final ValueChanged<String> onItemTap;
+
+  const _TopMorphMenu({
+    super.key,
+    required this.width,
+    required this.items,
+    required this.onItemTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final double totalHeight = items.length * 44.0 + 12.0;
+    return SizedBox(
+      width: width,
+      height: totalHeight,
+      child: OverflowBox(
+        minWidth: width,
+        maxWidth: width,
+        minHeight: 0,
+        maxHeight: totalHeight,
+        alignment: Alignment.topCenter,
+        child: Material(
+          color: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6.0),
+            child: SingleChildScrollView(
+              physics: const NeverScrollableScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < items.length; i++)
+                    _MorphMenuRow(
+                      key: ValueKey(items[i].id),
+                      item: items[i],
+                      onTap: () => onItemTap(items[i].id),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MorphMenuRow extends StatelessWidget {
+  final _MorphMenuItemData item;
+  final VoidCallback onTap;
+
+  const _MorphMenuRow({
+    super.key,
+    required this.item,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final itemColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        height: 44.0,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14.0),
+          child: Row(
+            children: [
+              item.iconBuilder(itemColor, 20.0),
+              const SizedBox(width: 10.0),
+              Expanded(
+                child: Text(
+                  item.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15.0,
+                    fontWeight: FontWeight.w500,
+                    color: itemColor,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MorphingHeaderMenuButton extends StatefulWidget {
   final Color iconColor;
   final bool isDark;
@@ -1938,110 +2298,39 @@ class _MorphingHeaderMenuButton extends StatefulWidget {
   State<_MorphingHeaderMenuButton> createState() => _MorphingHeaderMenuButtonState();
 }
 
-class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
-    with SingleTickerProviderStateMixin {
+class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton> {
   final LayerLink _layerLink = LayerLink();
   final OverlayPortalController _overlayPortalController = OverlayPortalController();
-  late AnimationController _animController;
-  late Animation<double> _expandAnimation;
-  late Animation<double> _fadeAnimation;
   bool _isOpen = false;
-  double _targetWidth = 245.0;
-  final double _targetHeight = 202.0;
+  static const double _ctrlSize = 42.0;
+  static const double _menuWidth = 200.0;
 
   @override
   void initState() {
     super.initState();
-    _animController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    );
-    _expandAnimation = CurvedAnimation(
-      parent: _animController,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
-    );
-    _fadeAnimation = CurvedAnimation(
-      parent: _animController,
-      curve: const Interval(0.2, 1.0, curve: Curves.easeOut),
-      reverseCurve: const Interval(0.0, 0.4, curve: Curves.easeIn),
-    );
+    _overlayPortalController.show();
   }
 
-  @override
-  void dispose() {
-    _animController.dispose();
-    super.dispose();
-  }
-
-  double _calculateMenuWidth(AppLocalizations l10n) {
-    final texts = [
-      l10n.translate('profile_menu_edit_info'),
-      l10n.translate('profile_menu_choose_photo'),
-      l10n.translate('profile_menu_choose_music'),
-      l10n.translate('profile_menu_change_color'),
-      l10n.translate('profile_menu_copy_link'),
-    ];
-
-    double maxWidth = 0.0;
-    const baseWidth = 4.0 + 4.0 + 10.0 + 10.0 + 20.0 + 12.0;
-
-    for (int i = 0; i < texts.length; i++) {
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: texts[i],
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-
-      double itemWidth = baseWidth + textPainter.width;
-
-      if (i == 2 || i == 3) {
-        final todoPainter = TextPainter(
-          text: const TextSpan(
-            text: 'TODO',
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        
-        itemWidth += 6.0 + 6.0 + 6.0 + todoPainter.width;
-      }
-
-      if (itemWidth > maxWidth) {
-        maxWidth = itemWidth;
-      }
+  void _toggleMenu() {
+    if (_isOpen) {
+      _closeMenu();
+    } else {
+      _openMenu();
     }
-
-    maxWidth += 12.0;
-    return maxWidth.clamp(180.0, MediaQuery.of(context).size.width - 32.0);
   }
 
   void _openMenu() {
     if (_isOpen) return;
-    HapticUtils.selection();
-    
-    final l10n = context.l10n;
-    _targetWidth = _calculateMenuWidth(l10n);
-
+    HapticUtils.tap();
     setState(() {
       _isOpen = true;
     });
-    _overlayPortalController.show();
-    _animController.forward(from: 0.0);
   }
 
   void _closeMenu() {
     if (!_isOpen) return;
-    HapticUtils.selection();
     setState(() {
       _isOpen = false;
-    });
-    _animController.reverse().then((_) {
-      if (mounted) {
-        _overlayPortalController.hide();
-      }
     });
   }
 
@@ -2053,300 +2342,157 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
     setState(() {
       _isOpen = false;
     });
-    _animController.reverse().then((_) {
-      if (mounted) {
-        _overlayPortalController.hide();
-      }
-      callback();
-    });
+    callback();
   }
 
-  Widget _buildMenuItem({
-    required IconData icon,
-    required String title,
-    bool isTodo = false,
-    required VoidCallback onTap,
-  }) {
-    final textColor = widget.isDark ? Colors.white.withValues(alpha: 0.95) : const Color(0xFF1C1C1E);
-    final iconColor = widget.isDark ? Colors.white.withValues(alpha: 0.85) : const Color(0xFF0088CC);
+  void _handleMenuAction(String id) {
+    switch (id) {
+      case 'edit_info':
+        _closeMenuWithCallback(widget.onEditProfile);
+        break;
+      case 'choose_photo':
+        _closeMenuWithCallback(widget.onChoosePhoto);
+        break;
+      case 'choose_music':
+        _closeMenuWithCallback(widget.onChooseMusic);
+        break;
+      case 'change_color':
+        _closeMenuWithCallback(widget.onChangeColor);
+        break;
+      case 'copy_link':
+        _closeMenuWithCallback(widget.onCopyLink);
+        break;
+    }
+  }
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      splashColor: widget.isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
-      highlightColor: widget.isDark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.02),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        child: Row(
-          children: [
-            Icon(icon, size: 20, color: iconColor),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (isTodo)
-              Container(
-                margin: const EdgeInsets.only(left: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: widget.isDark
-                      ? const Color(0xFF0088CC).withValues(alpha: 0.25)
-                      : const Color(0xFF0088CC).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'TODO',
-                  style: TextStyle(
-                    color: widget.isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC),
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-          ],
-        ),
+  List<_MorphMenuItemData> _getMenuItems(BuildContext context) {
+    final l10n = context.l10n;
+    return [
+      _MorphMenuItemData(
+        id: 'edit_info',
+        label: l10n.translate('profile_menu_edit_info'),
+        iconBuilder: (color, size) => iconoir.EditPencil(color: color, width: size, height: size),
       ),
-    );
+      _MorphMenuItemData(
+        id: 'choose_photo',
+        label: l10n.translate('profile_menu_choose_photo'),
+        iconBuilder: (color, size) => iconoir.Camera(color: color, width: size, height: size),
+      ),
+      _MorphMenuItemData(
+        id: 'choose_music',
+        label: l10n.translate('profile_menu_choose_music'),
+        iconBuilder: (color, size) => iconoir.MusicDoubleNote(color: color, width: size, height: size),
+      ),
+      _MorphMenuItemData(
+        id: 'change_color',
+        label: l10n.translate('profile_menu_change_color'),
+        iconBuilder: (color, size) => iconoir.Palette(color: color, width: size, height: size),
+      ),
+      _MorphMenuItemData(
+        id: 'copy_link',
+        label: l10n.translate('profile_menu_copy_link'),
+        iconBuilder: (color, size) => iconoir.Link(color: color, width: size, height: size),
+      ),
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
-    final l10n = context.l10n;
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final morphStyle = glassProvider.createStyle(
+      context: context,
+      cornerRadius: _ctrlSize / 2,
+      refractionIndex: 1.1,
+      refractionWidth: 24.0,
+      isLiteOverride: widget.isLite,
+    );
 
-    Widget buildMenuContent(double progress, double width, double height) {
-      if (progress < 0.25) {
-        return const SizedBox();
-      } else {
-        return SizedBox(
-          width: width,
-          height: height,
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildMenuItem(
-                      icon: Icons.edit_outlined,
-                      title: l10n.translate('profile_menu_edit_info'),
-                      onTap: () => _closeMenuWithCallback(widget.onEditProfile),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.photo_camera_outlined,
-                      title: l10n.translate('profile_menu_choose_photo'),
-                      onTap: () => _closeMenuWithCallback(widget.onChoosePhoto),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.music_note_outlined,
-                      title: l10n.translate('profile_menu_choose_music'),
-                      isTodo: true,
-                      onTap: () => _closeMenuWithCallback(widget.onChooseMusic),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.palette_outlined,
-                      title: l10n.translate('profile_menu_change_color'),
-                      onTap: () => _closeMenuWithCallback(widget.onChangeColor),
-                    ),
-                    _buildMenuItem(
-                      icon: Icons.link_rounded,
-                      title: l10n.translate('profile_menu_copy_link'),
-                      onTap: () => _closeMenuWithCallback(widget.onCopyLink),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-    }
+    final menuItems = _getMenuItems(context);
 
     return OverlayPortal(
       controller: _overlayPortalController,
       overlayChildBuilder: (context) {
         return Stack(
           children: [
-            GestureDetector(
-              onTap: _closeMenu,
-              behavior: HitTestBehavior.opaque,
-              child: const SizedBox.expand(),
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: !_isOpen,
+                child: GestureDetector(
+                  onTap: _closeMenu,
+                  behavior: HitTestBehavior.opaque,
+                ),
+              ),
             ),
             CompositedTransformFollower(
               link: _layerLink,
               showWhenUnlinked: false,
               targetAnchor: Alignment.topRight,
               followerAnchor: Alignment.topRight,
-              child: AnimatedBuilder(
-                animation: _animController,
-                builder: (context, child) {
-                  final progress = _expandAnimation.value;
-                  final width = ui.lerpDouble(42.0, _targetWidth, progress)!;
-                  final height = ui.lerpDouble(42.0, _targetHeight, progress)!;
-                  final borderRadius = ui.lerpDouble(21.0, 18.0, progress)!;
-
-                  return SizedBox(
-                    width: width,
-                    height: height,
-                    child: Material(
-                      color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(borderRadius),
-                      clipBehavior: Clip.antiAlias,
-                      child: buildMenuContent(progress, width, height),
+              child: widget.glassEnabled
+                  ? LiquidGlassMorph(
+                      key: const ValueKey<String>('profile_header_menu_morph'),
+                      alignment: Alignment.topRight,
+                      motion: LiquidGlassMorphMotion.fluid,
+                      smoothness: 28,
+                      style: morphStyle,
+                      child: _isOpen
+                          ? _TopMorphMenu(
+                              key: const ValueKey<String>('profile_menu'),
+                              width: _menuWidth,
+                              items: menuItems,
+                              onItemTap: _handleMenuAction,
+                            )
+                          : _ThreeDotsGlyph(
+                              key: const ValueKey<String>('profile_glyph'),
+                              size: _ctrlSize,
+                              color: widget.iconColor,
+                              onTap: _toggleMenu,
+                            ),
+                    )
+                  : AnimatedContainer(
+                      key: const ValueKey<String>('profile_header_menu_matte'),
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOutCubic,
+                      alignment: Alignment.topRight,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: widget.isDark
+                              ? const Color(0xFA2C2C2E)
+                              : const Color(0xFAFFFFFF),
+                          borderRadius: BorderRadius.circular(_ctrlSize / 2),
+                          border: Border.all(
+                            color: widget.isDark
+                                ? Colors.white.withValues(alpha: 0.1)
+                                : Colors.black.withValues(alpha: 0.08),
+                            width: 0.5,
+                          ),
+                        ),
+                        child: _isOpen
+                            ? _TopMorphMenu(
+                                key: const ValueKey<String>('profile_menu'),
+                                width: _menuWidth,
+                                items: menuItems,
+                                onItemTap: _handleMenuAction,
+                              )
+                            : _ThreeDotsGlyph(
+                                key: const ValueKey<String>('profile_glyph'),
+                                size: _ctrlSize,
+                                color: widget.iconColor,
+                                onTap: _toggleMenu,
+                              ),
+                      ),
                     ),
-                  );
-                },
-              ),
             ),
           ],
         );
       },
       child: CompositedTransformTarget(
         link: _layerLink,
-        child: SizedBox(
-          width: 42,
-          height: 42,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              AnimatedBuilder(
-                animation: _animController,
-                builder: (context, child) {
-                  final progress = _expandAnimation.value;
-                  final width = ui.lerpDouble(42.0, _targetWidth, progress)!;
-                  final height = ui.lerpDouble(42.0, _targetHeight, progress)!;
-                  final borderRadius = ui.lerpDouble(21.0, 18.0, progress)!;
-
-                  final restIcon = progress < 0.25
-                      ? Center(
-                          child: Opacity(
-                            opacity: (1.0 - progress / 0.25).clamp(0.0, 1.0),
-                            child: Icon(
-                              Icons.more_horiz,
-                              size: 22,
-                              color: widget.iconColor,
-                            ),
-                          ),
-                        )
-                      : const SizedBox();
-
-                  Widget containerWidget;
-
-                  if (widget.glassEnabled) {
-                    final glassThickness = ui.lerpDouble(10.0, 12.0, progress)!;
-                    final glassBlur = ui.lerpDouble(6.0, 10.0, progress)!;
-                    final glassAlpha = widget.isDark
-                        ? ui.lerpDouble(12.0, 22.0, progress)!.round()
-                        : ui.lerpDouble(15.0, 35.0, progress)!.round();
-
-                    final glassChild = GlassGlow(
-                      child: Container(
-                        width: width,
-                        height: height,
-                        decoration: widget.isDark
-                            ? BoxDecoration(
-                                borderRadius: BorderRadius.circular(borderRadius),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: ui.lerpDouble(0.0, 0.12, progress)!),
-                                  width: 0.5,
-                                ),
-                              )
-                            : BoxDecoration(
-                                borderRadius: BorderRadius.circular(borderRadius),
-                                border: Border.all(
-                                  color: Colors.black.withValues(alpha: ui.lerpDouble(0.04, 0.08, progress)!),
-                                  width: 0.5,
-                                ),
-                              ),
-                        child: restIcon,
-                      ),
-                    );
-
-                    final glassSettings = LiquidGlassSettings(
-                      refractiveIndex: 1.25,
-                      thickness: glassThickness,
-                      blur: glassBlur,
-                      glassColor: widget.isDark
-                          ? Color.fromARGB(glassAlpha, 20, 20, 35)
-                          : Color.fromARGB(glassAlpha, 240, 240, 250),
-                    );
-
-                    final glassWidget = widget.isLite
-                        ? FakeGlass(
-                            shape: LiquidRoundedSuperellipse(borderRadius: borderRadius),
-                            settings: glassSettings,
-                            child: glassChild,
-                          )
-                        : LiquidGlass.withOwnLayer(
-                            shape: LiquidRoundedSuperellipse(borderRadius: borderRadius),
-                            settings: glassSettings,
-                            child: glassChild,
-                          );
-
-                    containerWidget = LiquidStretch(
-                      stretch: 0.15,
-                      interactionScale: 1.02,
-                      child: glassWidget,
-                    );
-                  } else {
-                    final darkAlpha = ui.lerpDouble(180.0, 245.0, progress)!.round();
-                    final lightAlpha = ui.lerpDouble(220.0, 248.0, progress)!.round();
-                    containerWidget = Container(
-                      width: width,
-                      height: height,
-                      decoration: BoxDecoration(
-                        color: widget.isDark
-                            ? Color.fromARGB(darkAlpha, 44, 44, 46)
-                            : Color.fromARGB(lightAlpha, 255, 255, 255),
-                        borderRadius: BorderRadius.circular(borderRadius),
-                        border: Border.all(
-                          color: widget.isDark
-                              ? Colors.white.withValues(alpha: 0.12)
-                              : Colors.black.withValues(alpha: 0.08),
-                          width: 0.5,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.18),
-                            blurRadius: 16,
-                            spreadRadius: 1,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: restIcon,
-                    );
-                  }
-
-                  return Positioned(
-                    top: 0,
-                    right: 0,
-                    width: width,
-                    height: height,
-                    child: GestureDetector(
-                      onTap: _isOpen ? null : _openMenu,
-                      behavior: HitTestBehavior.opaque,
-                      child: containerWidget,
-                    ),
-                  );
-                },
-
-            ),
-          ],
+        child: const SizedBox(
+          width: _ctrlSize,
+          height: _ctrlSize,
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 }

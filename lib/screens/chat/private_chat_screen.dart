@@ -13,12 +13,15 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../services/chat_service.dart';
+import '../../services/draft_service.dart';
+import '../../services/chat_actions_helper.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/file_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/sync_service.dart';
+import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
@@ -35,13 +38,14 @@ import '../../widgets/chat/unread_separator.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'user_profile_screen.dart';
+import '../../utils/swipe_back_route.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../widgets/message/message_bubble.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/media_album.dart';
 import '../../widgets/message/media_album_widget.dart';
-import '../../utils/swipe_back_route.dart';
 import '../../utils/entity_parser.dart';
 import 'group_chat_screen.dart';
 import 'channel_screen.dart';
@@ -85,13 +89,16 @@ class PrivateChatScreen extends StatefulWidget {
   State<PrivateChatScreen> createState() => _PrivateChatScreenState();
 }
 
-class _PrivateChatScreenState extends State<PrivateChatScreen> {
+class _PrivateChatScreenState extends State<PrivateChatScreen>
+    with WidgetsBindingObserver {
   final List<Message> _messages = [];
   final MarkdownTextEditingController _textController = MarkdownTextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _inputFocusNode = FocusNode();
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isSyncing = false;
+  Timer? _syncDebounceTimer;
   String? _currentUserId;
   String _chatName = '';
   String? _chatAvatar;
@@ -99,23 +106,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   String _chatType = 'private'; // 'private', 'saved'
   bool _isOtherUserOnline = false;
   DateTime? _otherUserLastSeen;
-  bool _isSearchMode = false;
   bool _showEmojiPanel = false;
   bool _isKeyboardRising = false;
   bool _isKeyboardFalling = false;
   double _keyboardHeight = 280.0; // Better default height for most devices
   double _lastBottomInset = 0;
   Timer? _transitionTimer;
-  int _searchCurrentIndex = 0;
-  int _searchTotalCount = 0;
-  String _searchQuery = '';
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
-  bool _showScrollDownFab = false;
+  final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
   double _accumulatedScrollUp = 0;
-  List<int> _searchResultIndices = []; // indices of messages matching search
   final List<String> _jumpHistory = [];
 
   // Unread messages tracking
@@ -132,9 +134,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   Timer? _markReadTimer; // Debounce timer for batch mark-as-read
   bool _isMarkingRead = false; // Prevent concurrent mark-as-read calls
 
-  // WebSocket
+  // WebSocket & Realtime
   final WebSocketService _wsService = WebSocketService();
-  StreamSubscription<WebSocketEvent>? _wsSubscription;
+  ChatSubscription? _chatSubscription;
   bool _isTyping = false;
   Timer? _typingTimer;
   // ignore: unused_field
@@ -145,11 +147,34 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   final List<File> _attachedFiles = [];
   final List<String> _attachedFileNames = [];
-  double _uploadProgress = 0.0;
+  final ValueNotifier<double> _uploadProgressNotifier = ValueNotifier<double>(0.0);
+  double get _uploadProgress => _uploadProgressNotifier.value;
   bool _isUploading = false;
 
-  List<FeedItem> get _feedItems =>
-      groupMessagesIntoFeedItems(_messages, isReversed: true);
+  List<FeedItem> _feedItems = [];
+  int _firstUnreadFeedIndex = -1;
+  final GlobalKey _unreadSeparatorKey = GlobalKey();
+  double _newestMessageHeight = 150.0;
+
+  void _updateFeedItems() {
+    _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
+    if (_showUnreadDivider && _firstUnreadMessageId != null) {
+      _firstUnreadFeedIndex = _feedItems.indexWhere((item) =>
+          item.id == _firstUnreadMessageId ||
+          (item is FeedAlbumItem &&
+              item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+    } else {
+      _firstUnreadFeedIndex = -1;
+    }
+    _pruneMessageKeys();
+  }
+
+  void _pruneMessageKeys() {
+    if (_messageKeys.length > 300) {
+      final activeIds = _messages.take(150).map((m) => m.id).toSet();
+      _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
+    }
+  }
 
   bool _isVideoFile(String filePath) {
     final clean = filePath.split('?').first.toLowerCase();
@@ -218,10 +243,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     if (widget.otherUserId != null) {
       _otherUserId = widget.otherUserId;
     }
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
     _initWebSocket();
     _scrollController.addListener(_onScroll);
     _inputFocusNode.addListener(_onFocusChanged);
+
+    // Restore draft if exists
+    final draft = DraftService().getDraft(widget.chatId);
+    if (draft != null && draft.isNotEmpty) {
+      _textController.text = draft.text;
+      if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
+        _isQuote = draft.isQuote;
+        _quoteText = draft.quoteText;
+      }
+    }
 
     // Connect continuous media playback (voice + video notes) with coordinator
     MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
@@ -238,6 +274,159 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     });
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _onAppResumed();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _onAppPaused();
+    }
+  }
+
+  void _onAppResumed() {
+    try {
+      context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
+    } catch (_) {}
+    if (!_wsService.isConnected) {
+      _wsService.connect();
+    }
+    _triggerSilentSync();
+  }
+
+  void _onAppPaused() {
+    _markReadTimer?.cancel();
+    _flushMarkRead();
+    _stopMyTyping();
+    if (_isVideoRecording) {
+      _onVideoRecordingCancelled();
+    }
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+      setState(() => _isVoiceRecording = false);
+    }
+  }
+
+  void _triggerSilentSync() {
+    _syncDebounceTimer?.cancel();
+    _syncDebounceTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) {
+        _syncLatestMessages();
+      }
+    });
+  }
+
+  /// Silently synchronizes latest messages from server without flashing a loading spinner
+  /// or interrupting the user's scroll position.
+  Future<void> _syncLatestMessages() async {
+    if (_isSyncing || !mounted) return;
+    _isSyncing = true;
+
+    try {
+      final result = await ChatService.getMessages(chatId: widget.chatId, limit: 50);
+      if (result['success'] == true && mounted) {
+        final serverMessages = result['messages'] as List<Message>;
+        final db = AppDatabase();
+
+        setState(() {
+          final pendingMessages = _messages
+              .where((m) => m.sendStatus != 1 && m.localId != null)
+              .toList();
+
+          final Map<String, Message> merged = {};
+          for (final m in _messages) {
+            merged[m.id] = m;
+            if (m.localId != null && m.localId!.isNotEmpty) {
+              merged[m.localId!] = m;
+            }
+          }
+          for (final m in serverMessages) {
+            merged[m.id] = m;
+            if (m.localId != null && m.localId!.isNotEmpty) {
+              merged[m.localId!] = m;
+            }
+          }
+          for (final pending in pendingMessages) {
+            final key = pending.localId ?? pending.id;
+            if (!merged.containsKey(key)) {
+              merged[key] = pending;
+            }
+          }
+
+          _messages.clear();
+          final Map<String, Message> dedupedById = {};
+          for (final m in merged.values) {
+            dedupedById[m.id] = m;
+          }
+          _messages.addAll(dedupedById.values);
+
+          for (final m in _messages) {
+            if (m.reactions.isNotEmpty) {
+              _messageReactions[m.id] = Map.from(m.reactions);
+            }
+            if (m.myReactions.isNotEmpty) {
+              _myReactions[m.id] = Set.from(m.myReactions);
+            }
+          }
+
+          _messages.sort((a, b) {
+            try {
+              final ta = DateTime.parse(a.createdAt);
+              final tb = DateTime.parse(b.createdAt);
+              final cmp = tb.compareTo(ta);
+              if (cmp != 0) return cmp;
+              return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+            } catch (_) {
+              return 0;
+            }
+          });
+
+          _updateFeedItems();
+        });
+
+        try {
+          db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
+        } catch (e) {
+          debugPrint('Drift saveMessages error in sync: $e');
+        }
+
+        // Update unread count
+        try {
+          final unreadInfo = await ChatService.getUnreadInfo(chatId: widget.chatId);
+          if (unreadInfo['success'] == true && mounted) {
+            final serverUnreadCount = unreadInfo['unread_count'] as int? ?? 0;
+            setState(() {
+              _unreadCount = serverUnreadCount;
+            });
+            try {
+              context.read<UnreadCountProvider>().setCount(widget.chatId, serverUnreadCount);
+            } catch (_) {}
+          }
+        } catch (_) {}
+
+        // Refresh partner online status
+        try {
+          final chatResult = await ChatService.getChat(widget.chatId);
+          if (chatResult['success'] == true && mounted) {
+            final chat = chatResult['chat'] as ChatDetails;
+            for (var participant in chat.participants) {
+              if (participant.id != _currentUserId) {
+                setState(() {
+                  _isOtherUserOnline = participant.isOnline;
+                  _otherUserLastSeen = participant.lastSeen;
+                });
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('PrivateChatScreen: _syncLatestMessages error: $e');
+    } finally {
+      _isSyncing = false;
+    }
+  }
+
   void _onFocusChanged() {
     if (_inputFocusNode.hasFocus && _showEmojiPanel) {
       setState(() {
@@ -247,9 +436,31 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   }
 
   void _initWebSocket() {
-    // Subscribe to WebSocket events for this chat
-    // Note: We only use eventStream.listen, not subscribe() to avoid duplicate handling
-    _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
+    _chatSubscription = ChatRealtimeManager().bindChat(
+      chatId: widget.chatId,
+      onNewMessage: _onNewMessage,
+      onMessageEdited: _onMessageEdited,
+      onMessageDeleted: _onMessageDeleted,
+      onReactionUpdated: _onMessageReactionUpdated,
+      onMessageRead: _onMessageRead,
+      onTyping: _onTypingIndicator,
+      onUserStatus: _onUserStatusUpdate,
+      onUnreadCountUpdated: _onUnreadCountUpdated,
+      onUserAppearanceUpdated: _onUserAppearanceUpdated,
+      onUserAvatarUpdated: (event) {
+        final userId = event.data['user_id']?.toString();
+        final avatarUrl = event.data['avatar_url']?.toString();
+        if ((userId == widget.otherUserId || userId == _otherUserId) &&
+            mounted) {
+          PaintingBinding.instance.imageCache.clear();
+          PaintingBinding.instance.imageCache.clearLiveImages();
+          setState(() {
+            _chatAvatar = avatarUrl;
+          });
+        }
+      },
+      onReconnect: _triggerSilentSync,
+    );
   }
 
   Future<void> _saveKeyboardHeight(double height) async {
@@ -258,60 +469,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       await prefs.setDouble('keyboard_height', height);
     } catch (e) {
       debugPrint('Error saving keyboard height: $e');
-    }
-  }
-
-  void _handleWebSocketEvent(WebSocketEvent event) {
-    // Handle events specific to this chat
-    if (event.type == WebSocketEventType.newMessage) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onNewMessage(event);
-      }
-    } else if (event.type == WebSocketEventType.messageRead) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageRead(event);
-      }
-    } else if (event.type == WebSocketEventType.typing) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onTypingIndicator(event);
-      }
-    } else if (event.type == WebSocketEventType.userStatus) {
-      _onUserStatusUpdate(event);
-    } else if (event.type == WebSocketEventType.unreadCountUpdated) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onUnreadCountUpdated(event);
-      }
-    } else if (event.type == WebSocketEventType.messageEdited) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageEdited(event);
-      }
-    } else if (event.type == WebSocketEventType.messageDeleted) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageDeleted(event);
-      }
-    } else if (event.type == WebSocketEventType.messageReactionUpdated) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.chatId) {
-        _onMessageReactionUpdated(event);
-      }
-    } else if (event.type == WebSocketEventType.userAvatarUpdated) {
-      final userId = event.data['user_id']?.toString();
-      final avatarUrl = event.data['avatar_url']?.toString();
-      if ((userId == widget.otherUserId || userId == _otherUserId) && mounted) {
-        PaintingBinding.instance.imageCache.clear();
-        PaintingBinding.instance.imageCache.clearLiveImages();
-        setState(() {
-          _chatAvatar = avatarUrl;
-        });
-      }
-    } else if (event.type == WebSocketEventType.userAppearanceUpdated) {
-      _onUserAppearanceUpdated(event);
     }
   }
 
@@ -358,6 +515,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           senderReplyStripStyle: replyStripStyle ?? _replyToMessage!.senderReplyStripStyle,
         );
       }
+      _updateFeedItems();
     });
   }
 
@@ -407,6 +565,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             reactions: reactionsMap,
             myReactions: _myReactions[messageId] ?? _messages[idx].myReactions,
           );
+          _updateFeedItems();
         }
       });
 
@@ -429,6 +588,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     if (mounted) {
       setState(() {
         _messages.removeWhere((m) => m.id == messageId);
+        _updateFeedItems();
       });
     }
 
@@ -463,6 +623,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             entities: newEntities ?? _messages[index].entities,
             isEdited: true,
           );
+          _updateFeedItems();
         }
       });
     }
@@ -488,6 +649,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _hasScrolledToUnread = false;
           _showUnreadDivider = false;
         }
+        _updateFeedItems();
       });
     }
   }
@@ -515,6 +677,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             replyInfo: message.replyInfo ?? _messages[existingIndex].replyInfo,
             groupedId: message.groupedId ?? _messages[existingIndex].groupedId,
           );
+          _updateFeedItems();
         });
       }
       return;
@@ -535,6 +698,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _typingUserId = null;
         }
         _messages.insert(0, message);
+        _updateFeedItems();
       });
 
       // If message is from other user, queue it for mark-as-read
@@ -684,6 +848,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   bool _amITyping = false;
 
   void _onInputTextChanged(String text) {
+    if (!_isEditing) {
+      DraftService().saveDraft(
+        widget.chatId,
+        text: text,
+        replyToMessageId: _replyToMessage?.id,
+        quoteText: _quoteText,
+        isQuote: _isQuote,
+      );
+    }
+
     final bool hasText = text.trim().isNotEmpty;
     if (hasText) {
       if (!_amITyping) {
@@ -724,6 +898,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             _messages[i] = _messages[i].copyWith(isRead: true);
           }
         }
+        _updateFeedItems();
       });
 
       // Обновить статус isRead в Drift для персистенции
@@ -832,6 +1007,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _textController.text,
+      replyToMessageId: message.id,
+      isQuote: false,
+    );
     // Focus the input field
     _textController.selection = TextSelection.collapsed(
       offset: _textController.text.length,
@@ -847,6 +1028,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       _quoteOffset = offset;
       _quoteLength = length;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _textController.text,
+      replyToMessageId: message.id,
+      quoteText: selectedText,
+      isQuote: true,
+    );
     // Focus the input field
     _textController.selection = TextSelection.collapsed(
       offset: _textController.text.length,
@@ -862,6 +1050,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.chatId,
+      text: _textController.text,
+    );
   }
 
   /// Cancel current message editing
@@ -892,11 +1084,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     }
 
     // If message is not built yet, we need to find it in the list
-    int index = _messages.indexWhere((m) => m.id == messageId);
+    int index = _feedItems.indexWhere((item) =>
+        item.id == messageId ||
+        (item is FeedAlbumItem &&
+            item.album.items.any((ai) => ai.id == messageId)));
     
     // If message not in list, try to load more
     if (index == -1) {
-      if (_hasMoreMessages && retryCount < 5) {
+      if (_hasMoreMessages && retryCount < 12) {
         await _loadMoreMessages();
         // Recurse to try finding it again
         return _scrollToMessage(messageId, retryCount: retryCount + 1);
@@ -908,7 +1103,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     // In a reversed ListView, higher index means OLDER message = HIGHER scroll offset.
     // We'll jump close to the target then let it refine.
     const estimatedItemHeight = 110.0;
-    final targetOffset = index * estimatedItemHeight;
+    final maxScroll = _scrollController.position.hasContentDimensions
+        ? _scrollController.position.maxScrollExtent
+        : 0.0;
+    final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
 
     // Use jump if far, animate if close
     if ((_scrollController.offset - targetOffset).abs() > 2000) {
@@ -925,7 +1123,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     await Future.delayed(const Duration(milliseconds: 100));
     
     // Retry to refine position if message is now built
-    if (retryCount < 10) {
+    if (retryCount < 15) {
       return _scrollToMessage(messageId, retryCount: retryCount + 1);
     }
   }
@@ -952,9 +1150,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     if (originalChatId == null || originalChatId == widget.chatId) {
       if (fromMessageId != null && (_jumpHistory.isEmpty || _jumpHistory.last != fromMessageId)) {
         _jumpHistory.add(fromMessageId);
-        setState(() {
-          _showScrollDownFab = true;
-        });
+        _showScrollDownFabNotifier.value = true;
       }
       await _scrollToMessage(messageId);
       return;
@@ -1040,18 +1236,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       _jumpHistory.clear();
     }
 
-    // Dynamic threshold: height of the newest message
-    double threshold = 150.0; // Default
-    if (_messages.isNotEmpty) {
+    // Dynamic threshold: cached height of newest message
+    if (offset < 50 && _messages.isNotEmpty) {
       final firstMsgId = _messages.first.id;
       final key = _messageKeys[firstMsgId];
       final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null && renderBox.hasSize) {
-        threshold = renderBox.size.height; // Message height + small buffer
+      if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
+        _newestMessageHeight = renderBox.size.height;
+      }
+      if (_unreadCount > 0) {
+        _onMessageVisible(firstMsgId);
       }
     }
+    final double threshold = _newestMessageHeight;
     
-    bool shouldShow = _showScrollDownFab;
+    final bool currentFabVisible = _showScrollDownFabNotifier.value;
+    bool shouldShow = currentFabVisible;
     if (offset <= threshold) {
       shouldShow = false;
     } else if (_jumpHistory.isNotEmpty) {
@@ -1063,15 +1263,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       shouldShow = false;
     }
     
-    if (shouldShow != _showScrollDownFab) {
-      setState(() {
-        _showScrollDownFab = shouldShow;
-        if (shouldShow) {
-          _accumulatedScrollDown = 0;
-        } else {
-          _accumulatedScrollUp = 0;
-        }
-      });
+    if (shouldShow != currentFabVisible) {
+      _showScrollDownFabNotifier.value = shouldShow;
+      if (shouldShow) {
+        _accumulatedScrollDown = 0;
+      } else {
+        _accumulatedScrollUp = 0;
+      }
     }
   }
 
@@ -1118,6 +1316,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           _showUnreadDivider = true;
           _dividerUnreadCount = _unreadCount;
         }
+        _updateFeedItems();
       });
     }
 
@@ -1146,9 +1345,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       _scrollToFirstUnread();
     }
 
-    // Mark ALL unread messages as read after scrolling
-    // (use markMessagesAsRead which marks all, not just up to first unread)
-    if (_unreadCount > 0) {
+    // If user opened chat without an unread divider anchor, mark messages as read
+    if (_firstUnreadMessageId == null && _unreadCount > 0) {
       _markAllMessagesAsRead();
     }
   }
@@ -1199,6 +1397,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             _myReactions[m.id] = Set.from(m.myReactions);
           }
         }
+        _updateFeedItems();
       });
     }
 
@@ -1272,6 +1471,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               return 0;
             }
           });
+          _updateFeedItems();
 
           // Сохранить в Drift для оффлайн-доступа
           try {
@@ -1311,13 +1511,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
       if (localMessages.isNotEmpty) {
         setState(() {
-          // Дедупликация: добавлять только сообщения, которых ещё нет
-          for (final m
-              in localMessages.map((m) => Message.fromDbMessage(m))) {
-            if (!_messages.any((existing) =>
-                existing.id == m.id ||
-                (m.localId != null && existing.localId == m.localId))) {
+          final existingIds = <String>{
+            for (final m in _messages) m.id,
+            for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+          };
+          for (final m in localMessages.map((m) => Message.fromDbMessage(m))) {
+            if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
               _messages.add(m);
+              existingIds.add(m.id);
+              if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
               if (m.reactions.isNotEmpty) {
                 _messageReactions[m.id] = Map.from(m.reactions);
               }
@@ -1337,6 +1539,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             if (cmp != 0) return cmp;
             return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
           });
+          _updateFeedItems();
           _isLoadingMore = false;
         });
         return;
@@ -1374,10 +1577,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       }
 
       setState(() {
-        // Дедупликация: добавлять только сообщения, которых ещё нет
+        final existingIds = <String>{
+          for (final m in _messages) m.id,
+          for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+        };
         for (final m in newMessages) {
-          if (!_messages.any((existing) => existing.id == m.id)) {
+          if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
             _messages.add(m);
+            existingIds.add(m.id);
+            if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
             if (m.reactions.isNotEmpty) {
               _messageReactions[m.id] = Map.from(m.reactions);
             }
@@ -1397,6 +1605,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           if (cmp != 0) return cmp;
           return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
         });
+        _updateFeedItems();
         _isLoadingMore = false;
       });
     } else if (mounted) {
@@ -1456,35 +1665,97 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     );
   }
 
-  /// Scroll to the first unread message
-  void _scrollToFirstUnread() {
+  /// Scroll to the first unread message with multi-batch prefetch and GlobalKey alignment
+  Future<void> _scrollToFirstUnread() async {
     if (_firstUnreadMessageId == null || _hasScrolledToUnread) return;
+    _hasScrolledToUnread = true;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !_scrollController.hasClients) return;
 
-      final index = _messages.indexWhere((m) => m.id == _firstUnreadMessageId);
-      if (index == -1) {
-        _scrollToBottom();
+      // 1. If unread separator is already in view, align directly
+      if (_unreadSeparatorKey.currentContext != null) {
+        await Scrollable.ensureVisible(
+          _unreadSeparatorKey.currentContext!,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+          alignment: 0.15,
+        );
         return;
       }
 
-      // In reversed list, we need to calculate the offset
-      // Each message is approximately 60-100 pixels, we'll estimate
-      // Scroll to show the unread message with some context above
-      const estimatedItemHeight = 80.0;
+      // 2. Find target index in _feedItems
+      int targetFeedIndex = _firstUnreadFeedIndex;
+      if (targetFeedIndex == -1 && _firstUnreadMessageId != null) {
+        targetFeedIndex = _feedItems.indexWhere((item) =>
+            item.id == _firstUnreadMessageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      }
+
+      // If message is beyond current loaded page, prefetch older messages (up to 4 batches)
+      int retries = 0;
+      while (targetFeedIndex == -1 && _hasMoreMessages && retries < 4 && mounted) {
+        await _loadMoreMessages();
+        retries++;
+        targetFeedIndex = _feedItems.indexWhere((item) =>
+            item.id == _firstUnreadMessageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      }
+
+      if (!mounted || !_scrollController.hasClients) return;
+
+      if (targetFeedIndex == -1) {
+        // Unread messages are very far back; jump to oldest loaded message to bring user close
+        if (_scrollController.position.hasContentDimensions) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+        return;
+      }
+
+      // 3. Approximate jump to divider position (_firstUnreadFeedIndex + 1)
+      final dividerItemIndex = targetFeedIndex + 1;
+      const estimatedItemHeight = 90.0;
+      final maxScroll = _scrollController.position.hasContentDimensions
+          ? _scrollController.position.maxScrollExtent
+          : 0.0;
       final targetOffset =
-          (index - 2).clamp(0, _messages.length - 1) * estimatedItemHeight;
+          (dividerItemIndex * estimatedItemHeight).clamp(0.0, maxScroll);
 
-      _scrollController.animateTo(
-        targetOffset,
-        duration: const Duration(milliseconds: 500),
-        curve: Curves.easeOut,
-      );
+      if ((_scrollController.offset - targetOffset).abs() > 1500) {
+        _scrollController.jumpTo(targetOffset);
+      } else {
+        await _scrollController.animateTo(
+          targetOffset,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
 
-      setState(() {
-        _hasScrolledToUnread = true;
-      });
+      // Allow a brief frame for ListView.builder to instantiate the elements around targetOffset
+      await Future.delayed(const Duration(milliseconds: 60));
+      if (!mounted) return;
+
+      // 4. Precision alignment: ensureVisible on unread separator or first unread bubble
+      if (_unreadSeparatorKey.currentContext != null) {
+        await Scrollable.ensureVisible(
+          _unreadSeparatorKey.currentContext!,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          alignment: 0.15,
+        );
+      } else {
+        final key = _messageKeys[_firstUnreadMessageId];
+        if (key?.currentContext != null) {
+          await Scrollable.ensureVisible(
+            key!.currentContext!,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+            alignment: 0.15,
+          );
+        }
+      }
     });
   }
 
@@ -1523,6 +1794,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   entities: effectiveEntities,
                   isEdited: true,
                 );
+                _updateFeedItems();
               }
             });
           }
@@ -1558,6 +1830,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     final replyQuoteLength = _quoteLength;
 
     _stopMyTyping();
+    DraftService().deleteDraft(widget.chatId);
     _textController.clear();
     setState(() {
       _isSending = true;
@@ -1600,9 +1873,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
             final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
               if (mounted) {
-                setState(() {
-                  _uploadProgress = (overallProcessedCount + i + p) / totalFilesCount;
-                });
+                _uploadProgressNotifier.value = (overallProcessedCount + i + p) / totalFilesCount;
               }
             });
 
@@ -1686,6 +1957,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   _messages.insert(0, msg);
                 }
               }
+              _updateFeedItems();
               final db = AppDatabase();
               await db.saveMessages(
                   newMsgs.map((m) => _messageToCompanion(m)).toList());
@@ -1713,6 +1985,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             if (res['success'] == true && res['message'] is Message) {
               final sent = res['message'] as Message;
               _messages.insert(0, sent);
+              _updateFeedItems();
               await AppDatabase().saveMessage(_messageToCompanion(sent));
             }
           }
@@ -1721,7 +1994,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _isUploading = false;
-            _uploadProgress = 0.0;
+            _uploadProgressNotifier.value = 0.0;
             _isSending = false;
           });
           _scrollToBottom();
@@ -1739,9 +2012,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           final isImg = _isImageFile(file.path);
           final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
             if (mounted) {
-              setState(() {
-                _uploadProgress = (i + p) / filesToSend.length;
-              });
+              _uploadProgressNotifier.value = (i + p) / filesToSend.length;
             }
           });
 
@@ -1762,6 +2033,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               setState(() {
                 if (!_messages.any((m) => m.id == sent.id)) {
                   _messages.insert(0, sent);
+                  _updateFeedItems();
                 }
               });
             }
@@ -1771,7 +2043,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _isUploading = false;
-            _uploadProgress = 0.0;
+            _uploadProgressNotifier.value = 0.0;
             _isSending = false;
           });
           _scrollToBottom();
@@ -1791,7 +2063,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         final isVideo = _isVideoFile(file.path);
 
         final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
-          setState(() { _uploadProgress = p; });
+          _uploadProgressNotifier.value = p;
         });
 
         singleMediaPayload = {
@@ -1806,7 +2078,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
         setState(() {
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
 
         messageType = isVideo ? 'video' : _getMessageTypeFromMimeType(uploadResult.mimeType);
@@ -1872,6 +2144,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
             _isSending = false;
           });
           _scrollToBottom();
@@ -1921,6 +2194,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                         sendStatus: 1, // sent
                       );
                     }
+                    _updateFeedItems();
                   }
                 });
               }
@@ -1937,6 +2211,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 if (idx != -1) {
                   _messages[idx] =
                       _messages[idx].copyWith(sendStatus: 2); // failed
+                  _updateFeedItems();
                 }
               });
               ScaffoldMessenger.of(context).showSnackBar(
@@ -1954,6 +2229,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               if (idx != -1) {
                 _messages[idx] =
                     _messages[idx].copyWith(sendStatus: 2); // failed
+                _updateFeedItems();
               }
             });
             ScaffoldMessenger.of(context).showSnackBar(
@@ -1979,6 +2255,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               // Дедупликация: не добавлять если WS уже принёс это сообщение
               if (!_messages.any((m) => m.id == sentMsg.id)) {
                 _messages.insert(0, sentMsg);
+                _updateFeedItems();
               }
               _isSending = false;
             });
@@ -1987,7 +2264,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
             setState(() => _isSending = false);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                  content: Text(result['message'] ?? 'Failed to send message')),
+                content: Text(result['message'] ?? 'Failed to send message')),
             );
           }
         }
@@ -2004,7 +2281,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         setState(() {
           _isSending = false;
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
       }
     }
@@ -2020,6 +2297,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       final idx = _messages.indexWhere((m) => m.localId == message.localId);
       if (idx != -1) {
         _messages[idx] = _messages[idx].copyWith(sendStatus: 0);
+        _updateFeedItems();
       }
     });
 
@@ -2035,6 +2313,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
               _messages.indexWhere((m) => m.localId == message.localId);
           if (idx != -1) {
             _messages[idx] = Message.fromDbMessage(updated);
+            _updateFeedItems();
           }
         });
       }
@@ -2104,6 +2383,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           },
           appBar: Builder(
             builder: (context) {
+              final heroTag = _otherUserId ?? displayName;
               return FloatingGlassAppBar(
                 name: displayName,
                 avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
@@ -2112,9 +2392,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
                 isChannel: false,
                 isMuted: _isMuted,
+                heroTag: heroTag,
                 onBack: () => Navigator.pop(context),
                 onTitleTap: _viewUserProfile,
                 onViewProfile: _viewUserProfile,
+                profileScreenBuilder: (routeContext) => UserProfileScreen(
+                  userId: _otherUserId ?? '',
+                  initialName: displayName,
+                  initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+                  isOnline: _isOtherUserOnline,
+                  lastSeen: _otherUserLastSeen,
+                  chatId: widget.chatId,
+                  heroTag: heroTag,
+                  onVoiceCall: _startVoiceCall,
+                  onVideoCall: _startVideoCall,
+                ),
                 onVoiceCall: _startVoiceCall,
                 onVideoCall: _startVideoCall,
                 onSearch: _searchMessages,
@@ -2153,7 +2445,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     }
 
     // The panel height should exactly match our best knowledge of the keyboard height
-    final double targetPanelHeight = _keyboardHeight;
+    final double targetPanelHeight = _keyboardHeight.clamp(0.0, maxPossibleHeight);
 
     // Keyboard-to-Emoji or Emoji-to-Keyboard stabilization:
     if (_isKeyboardFalling && bottomInset == 0) {
@@ -2261,78 +2553,89 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   ],
                 ),
               )
-            : Column(
-                children: [
-                  if (_isLoadingMore)
-                    const Padding(
-                      padding: EdgeInsets.all(8.0),
-                      child: Center(
-                          child: CircularProgressIndicator(strokeWidth: 2)),
+            : Builder(
+                builder: (context) {
+                  final int dividerOffset =
+                      (_showUnreadDivider && _firstUnreadFeedIndex != -1) ? 1 : 0;
+                  final int baseCount = _feedItems.length + dividerOffset;
+                  final int totalItemCount = baseCount + (_isLoadingMore ? 1 : 0);
+
+                  return ListView.builder(
+                    controller: _scrollController,
+                    reverse: true,
+                    cacheExtent: 600.0,
+                    // В glass-режиме добавляем верхний отступ,
+                    // чтобы сообщения не прятались за glass AppBar
+                    padding: EdgeInsets.only(
+                      top: topPadding,
+                      bottom: _inputHeight + bottomOffset,
                     ),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: _scrollController,
-                      reverse: true,
-                      cacheExtent: 600.0,
-                      // В glass-режиме добавляем верхний отступ,
-                      // чтобы сообщения не прятались за glass AppBar
-                      padding: EdgeInsets.only(
-                        top: topPadding,
-                        bottom: _inputHeight + bottomOffset,
-                      ),
-                      itemCount: _feedItems.length +
-                          (_showUnreadDivider && _firstUnreadMessageId != null
-                              ? 1
-                              : 0),
-                      itemBuilder: (context, index) {
-                        // Insert unread divider between unread and read messages.
-                        if (_showUnreadDivider &&
-                            _firstUnreadMessageId != null) {
-                          final unreadIndex = _feedItems.indexWhere((item) =>
-                              item.id == _firstUnreadMessageId ||
-                              (item is FeedAlbumItem &&
-                                  item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
-                          if (unreadIndex != -1) {
-                            final dividerPosition = unreadIndex + 1;
+                    itemCount: totalItemCount,
+                    itemBuilder: (context, index) {
+                      // Older messages loading spinner at the top of the reversed list
+                      if (_isLoadingMore && index == baseCount) {
+                        return const Padding(
+                          padding: EdgeInsets.all(12.0),
+                          child: Center(
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        );
+                      }
 
-                            if (index == dividerPosition) {
-                              return _buildUnreadDivider();
-                            }
-                            if (index < dividerPosition) {
-                              return _buildFeedItem(index);
-                            }
-                            final adjustedIndex = index - 1;
-                            if (adjustedIndex >= 0 &&
-                                adjustedIndex < _feedItems.length) {
-                              return _buildFeedItem(adjustedIndex);
-                            }
-                          }
+                      // Insert unread divider between unread and read messages.
+                      if (_showUnreadDivider && _firstUnreadFeedIndex != -1) {
+                        final dividerPosition = _firstUnreadFeedIndex + 1;
+
+                        if (index == dividerPosition) {
+                          return UnreadSeparator(
+                            key: _unreadSeparatorKey,
+                            count: _dividerUnreadCount,
+                            onTap: () {},
+                          );
                         }
-
-                        if (index < 0 || index >= _feedItems.length) {
-                          return const SizedBox.shrink();
+                        if (index < dividerPosition) {
+                          return _buildFeedItem(index);
                         }
+                        final adjustedIndex = index - 1;
+                        if (adjustedIndex >= 0 &&
+                            adjustedIndex < _feedItems.length) {
+                          return _buildFeedItem(adjustedIndex);
+                        }
+                        return const SizedBox.shrink();
+                      }
 
-                        return _buildFeedItem(index);
-                      },
-                    ),
-                  ),
-                ],
+                      if (index < 0 || index >= _feedItems.length) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return _buildFeedItem(index);
+                    },
+                  );
+                },
               );
 
     final messageInput = _buildMessageInput();
 
     final bool isKeyboardVisible = bottomInset > 0;
 
-    // Use PopScope to handle back button for closing emoji panel
+    // Use PopScope to handle back button for closing emoji panel or cancelling active recordings
     return PopScope(
-      canPop: !_showEmojiPanel && !isKeyboardVisible,
+      canPop: !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
           if (_showEmojiPanel) {
             setState(() => _showEmojiPanel = false);
           } else if (isKeyboardVisible) {
             FocusScope.of(context).unfocus();
+          } else if (_isVideoRecording) {
+            _onVideoRecordingCancelled();
+          } else if (_isVoiceRecording) {
+            _voiceRecorderService.cancelRecording();
+            setState(() => _isVoiceRecording = false);
           }
         }
       },
@@ -2374,21 +2677,24 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 Positioned(
                   right: 14,
                   bottom: _inputHeight + 10 + bottomOffset,
-                  child: ScrollDownFab(
-                    visible: _showScrollDownFab,
-                    unreadCount: _unreadCount,
-                    onPressed: () {
-                      if (_jumpHistory.isNotEmpty) {
-                        final lastId = _jumpHistory.removeLast();
-                        _scrollToMessage(lastId);
-                      } else {
-                        _scrollController.animateTo(
-                          0,
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeOut,
-                        );
-                      }
-                    },
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _showScrollDownFabNotifier,
+                    builder: (context, showFab, _) => ScrollDownFab(
+                      visible: showFab,
+                      unreadCount: _unreadCount,
+                      onPressed: () {
+                        if (_jumpHistory.isNotEmpty) {
+                          final lastId = _jumpHistory.removeLast();
+                          _scrollToMessage(lastId);
+                        } else {
+                          _scrollController.animateTo(
+                            0,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      },
+                    ),
                   ),
                 ),
                 // Поле ввода внизу (внутри Stack над сообщениями)
@@ -2473,38 +2779,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     );
   }
 
-  Widget _buildUnreadDivider() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              height: 1,
-              color: Colors.grey[300],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              'Непрочитанные сообщения ($_dividerUnreadCount)',
-              style: TextStyle(
-                color: Colors.grey[600],
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Container(
-              height: 1,
-              color: Colors.grey[300],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   Widget _buildFeedItem(int index) {
     if (index < 0 || index >= _feedItems.length) {
@@ -2524,6 +2799,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
     final bool isMe = message.senderId == _currentUserId;
 
+    // Ensure all album item IDs map to this key so reply jumps locate the album
+    for (final ai in album.items) {
+      _messageKeys[ai.id] = key;
+    }
+
+    final bool isAlbumTargeted = _highlightMessageId == message.id ||
+        album.items.any((ai) => ai.id == _highlightMessageId);
+
     Widget albumWidget = MediaAlbumWidget(
       key: key,
       album: album,
@@ -2532,6 +2815,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       chatType: _chatType,
       formatTime: _formatTime,
       onFileTap: (url, name, type) => _openFile(url, name, type),
+      isHighlighted: isAlbumTargeted,
+      highlightItemId: _highlightMessageId,
     );
 
     albumWidget = Align(
@@ -2574,12 +2859,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
     final prevItem =
         index < _feedItems.length - 1 ? _feedItems[index + 1] : null;
-    final currentDt = DateTime.tryParse(message.createdAt) ?? DateTime.now();
-    final prevDt = prevItem != null
-        ? (DateTime.tryParse(prevItem.createdAt) ?? DateTime.now())
-        : null;
-    final currentDate = _dateOnly(currentDt);
-    final prevDate = prevDt != null ? _dateOnly(prevDt) : null;
+    final (currentDt, currentDate) = _resolveDates(message.createdAt);
+    final prevDate = prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
@@ -2658,24 +2939,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     // Add date separator if needed
     final prevItem =
         index < _feedItems.length - 1 ? _feedItems[index + 1] : null;
-    final currentDt = DateTime.tryParse(message.createdAt) ?? DateTime.now();
-    final prevDt = prevItem != null
-        ? (DateTime.tryParse(prevItem.createdAt) ?? DateTime.now())
-        : null;
-    final currentDate = _dateOnly(currentDt);
-    final prevDate = prevDt != null ? _dateOnly(prevDt) : null;
+    final (currentDt, currentDate) = _resolveDates(message.createdAt);
+    final prevDate = prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
       items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
-    }
-
-    // Add unread separator
-    if (_showUnreadDivider && message.id == _firstUnreadMessageId) {
-      items.add(UnreadSeparator(
-        count: _dividerUnreadCount,
-        onTap: () {},
-      ));
     }
 
     items.add(messageWidget);
@@ -2706,6 +2975,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       onRemoveAttachment: _removeAttachedFile,
       isUploading: _isUploading,
       uploadProgress: _uploadProgress,
+      uploadProgressNotifier: _uploadProgressNotifier,
       onChanged: _onInputTextChanged,
       onSend: _sendMessage,
       onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
@@ -2978,6 +3248,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
@@ -2988,7 +3259,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       final uploadResult = await _fileService.uploadFile(
         file,
         onProgress: (progress) {
-          if (mounted) setState(() => _uploadProgress = progress);
+          if (mounted) _uploadProgressNotifier.value = progress;
         },
       );
 
@@ -3035,6 +3306,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     fileUrl: uploadResult.url,
                   );
                 }
+                _updateFeedItems();
               }
             });
           }
@@ -3048,6 +3320,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   _messages.indexWhere((m) => m.localId == pendingLocalId);
               if (idx != -1) {
                 _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+                _updateFeedItems();
               }
             });
           }
@@ -3063,6 +3336,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 _messages.indexWhere((m) => m.localId == pendingLocalId);
             if (idx != -1) {
               _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              _updateFeedItems();
             }
           });
         }
@@ -3071,7 +3345,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (mounted) {
         setState(() {
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
       }
     }
@@ -3148,6 +3422,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         if (mounted) {
           setState(() {
             _messages.insert(0, message);
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
@@ -3158,7 +3433,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       final uploadResult = await _fileService.uploadFileChunked(
         file,
         onProgress: (progress) {
-          if (mounted) setState(() => _uploadProgress = progress);
+          if (mounted) _uploadProgressNotifier.value = progress;
         },
       );
 
@@ -3204,6 +3479,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                     fileUrl: uploadResult.url,
                   );
                 }
+                _updateFeedItems();
               }
             });
           }
@@ -3217,6 +3493,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                   _messages.indexWhere((m) => m.localId == pendingLocalId);
               if (idx != -1) {
                 _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+                _updateFeedItems();
               }
             });
           }
@@ -3232,6 +3509,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
                 _messages.indexWhere((m) => m.localId == pendingLocalId);
             if (idx != -1) {
               _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              _updateFeedItems();
             }
           });
         }
@@ -3249,7 +3527,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (mounted) {
         setState(() {
           _isUploading = false;
-          _uploadProgress = 0.0;
+          _uploadProgressNotifier.value = 0.0;
         });
       }
     }
@@ -3259,10 +3537,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   /// Navigate to user profile screen
   void _viewUserProfile() {
     if (_otherUserId != null) {
-      Navigator.pushNamed(
+      final displayName = _chatName.isNotEmpty ? _chatName : widget.otherUserName;
+      final heroTag = _otherUserId ?? displayName;
+      Navigator.push(
         context,
-        '/profile',
-        arguments: {'userId': _otherUserId},
+        SwipeBackPageRoute(
+          builder: (_) => UserProfileScreen(
+            userId: _otherUserId!,
+            initialName: displayName,
+            initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+            isOnline: _isOtherUserOnline,
+            lastSeen: _otherUserLastSeen,
+            chatId: widget.chatId,
+            heroTag: heroTag,
+            onVoiceCall: _startVoiceCall,
+            onVideoCall: _startVideoCall,
+          ),
+        ),
       );
     }
   }
@@ -3281,47 +3572,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
   /// Show confirmation dialog for clearing chat history
   void _showClearHistoryDialog() {
-    showDialog(
+    ChatActionsHelper.showClearHistoryDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Clear History'),
-        content: Text('Delete all messages in this chat with $_chatName?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _clearChatHistory();
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
+      chatId: widget.chatId,
+      onHistoryCleared: () {
+        if (mounted) {
+          setState(() {
+            _messages.clear();
+            _updateFeedItems();
+          });
+        }
+      },
     );
-  }
-
-  /// Clear all messages in this chat
-  Future<void> _clearChatHistory() async {
-    final result = await ChatService.clearChatHistory(chatId: widget.chatId);
-    if (mounted) {
-      if (result['success'] == true) {
-        setState(() {
-          _messages.clear();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Chat history cleared')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(result['message'] ?? 'Failed to clear history')),
-        );
-      }
-    }
   }
 
   /// Show confirmation dialog for blocking user
@@ -3775,17 +4037,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _syncDebounceTimer?.cancel();
+
     // Stop typing indicator if active
     _stopMyTyping();
 
-    // Flush any pending mark-as-read before leaving
+    // Flush any pending mark-as-read and draft before leaving
     _markReadTimer?.cancel();
     _flushMarkRead();
+    if (!_isEditing) {
+      DraftService().flushDraft(widget.chatId);
+    }
 
     _textController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
-    _wsSubscription?.cancel();
+    _showScrollDownFabNotifier.dispose();
+    _uploadProgressNotifier.dispose();
+    _chatSubscription?.cancel();
     _typingTimer?.cancel();
     _highlightTimer?.cancel();
 
@@ -3794,6 +4064,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       context.read<UnreadCountProvider>().setOpenChat(null);
     } catch (_) {}
 
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+    }
+    if (_isVideoRecording) {
+      _videoRecorderService.cancelRecording();
+    }
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 
@@ -3877,8 +4153,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
     });
   }
 
-  /// Toggle reaction on a message — optimistic update + API call
+  /// Toggle reaction on a message — optimistic update + API call with rollback
   void _toggleReaction(String messageId, String emoji) {
+    // Snapshot previous reactions for rollback
+    final previousMyReactions = Set<String>.from(_myReactions[messageId] ?? {});
+    final previousReactions = Map<String, int>.from(_messageReactions[messageId] ?? {});
+
     // Optimistic update
     setState(() {
       final mySet = _myReactions.putIfAbsent(messageId, () => <String>{});
@@ -3905,6 +4185,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
           reactions: Map.from(reactions),
           myReactions: Set.from(mySet),
         );
+        _updateFeedItems();
       }
     });
 
@@ -3918,11 +4199,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       debugPrint('PrivateChatScreen: error saving reactions to DB: $e');
     }
 
-    // API call
-    _sendReactionToggle(messageId, emoji);
+    // API call with rollback
+    _sendReactionToggle(messageId, emoji, previousMyReactions, previousReactions);
   }
 
-  Future<void> _sendReactionToggle(String messageId, String emoji) async {
+  Future<void> _sendReactionToggle(
+    String messageId,
+    String emoji,
+    Set<String> previousMyReactions,
+    Map<String, int> previousReactions,
+  ) async {
     try {
       final res = await ChatService.toggleReaction(
         chatId: widget.chatId,
@@ -3932,14 +4218,67 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
       if (res['success'] != true) {
         debugPrint(
             'PrivateChatScreen: toggleReaction returned success=false for msg=$messageId: ${res['message']}');
+        _rollbackReaction(messageId, previousMyReactions, previousReactions);
       }
     } catch (e) {
       debugPrint('PrivateChatScreen: toggleReaction exception: $e');
+      _rollbackReaction(messageId, previousMyReactions, previousReactions);
     }
+  }
+
+  void _rollbackReaction(
+    String messageId,
+    Set<String> previousMyReactions,
+    Map<String, int> previousReactions,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      if (previousMyReactions.isEmpty) {
+        _myReactions.remove(messageId);
+      } else {
+        _myReactions[messageId] = Set.from(previousMyReactions);
+      }
+
+      if (previousReactions.isEmpty) {
+        _messageReactions.remove(messageId);
+      } else {
+        _messageReactions[messageId] = Map.from(previousReactions);
+      }
+
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
+          reactions: Map.from(_messageReactions[messageId] ?? {}),
+          myReactions: Set.from(_myReactions[messageId] ?? {}),
+        );
+        _updateFeedItems();
+      }
+    });
+
+    try {
+      AppDatabase().updateMessageReactions(
+        messageId,
+        _messageReactions[messageId] ?? {},
+        _myReactions[messageId] ?? {},
+      );
+    } catch (_) {}
   }
 
   /// Extract date-only from DateTime
   DateTime _dateOnly(DateTime dt) => DateTimeUtils.startOfDay(dt);
+
+  static final Map<String, (DateTime, DateTime)> _dateCache = {};
+
+  (DateTime, DateTime) _resolveDates(String createdAt) {
+    var cached = _dateCache[createdAt];
+    if (cached != null) return cached;
+    final dt = DateTime.tryParse(createdAt) ?? DateTime.now();
+    final startOfDay = _dateOnly(dt);
+    cached = (dt, startOfDay);
+    if (_dateCache.length > 500) _dateCache.clear();
+    _dateCache[createdAt] = cached;
+    return cached;
+  }
 
   /// Format date label for date separator
   String _formatDateLabel(DateTime dt) =>
@@ -3995,53 +4334,43 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
   }
 
   void _confirmDeleteMessage(Message message) {
-    showDialog(
+    final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
+    ChatActionsHelper.confirmAndDeleteMessage(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(ctx.l10n.translate('chat_delete_message_title')),
-        content: Text(ctx.l10n.translate('chat_delete_message_confirm')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(ctx.l10n.translate('cancel')),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _deleteMessage(message);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text(ctx.l10n.translate('chat_action_delete')),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _deleteMessage(Message message) async {
-    // Optimistically remove from UI
-    setState(() {
-      _messages.removeWhere((m) => m.id == message.id);
-    });
-
-    // Remove from local database
-    try {
-      await AppDatabase().deleteMessage(message.id);
-    } catch (e) {
-      debugPrint('PrivateChatScreen: error deleting from DB: $e');
-    }
-
-    // Call server API
-    final result = await ChatService.deleteMessage(
       chatId: widget.chatId,
-      messageId: message.id,
+      message: message,
+      onOptimisticDelete: () {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.id == message.id);
+            _updateFeedItems();
+          });
+        }
+      },
+      onRollback: () {
+        if (mounted) {
+          setState(() {
+            if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
+              _messages.insert(deletedIndex, message);
+            } else {
+              _messages.add(message);
+              _messages.sort((a, b) {
+                try {
+                  final ta = DateTime.parse(a.createdAt);
+                  final tb = DateTime.parse(b.createdAt);
+                  final cmp = tb.compareTo(ta);
+                  if (cmp != 0) return cmp;
+                  return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+                } catch (_) {
+                  return 0;
+                }
+              });
+            }
+            _updateFeedItems();
+          });
+        }
+      },
     );
-
-    if (result['success'] != true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['message'] ?? 'Failed to delete message')),
-      );
-    }
   }
 
   /// Helper to check if string is exactly one emoji

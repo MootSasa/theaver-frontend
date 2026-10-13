@@ -170,10 +170,18 @@ class _RawViewportGradientBox extends SingleChildRenderObjectWidget {
 class RenderViewportGradientBox extends RenderProxyBox {
   List<Color>? _gradientColors;
   List<double>? _gradientStops;
+  List<double>? _effectiveStops;
   Color? _solidColor;
   BorderRadius _borderRadius;
   GlobalKey? _viewportScopeKey;
   Size? _fallbackScreenSize;
+
+  final Paint _gradientPaint = Paint()..isAntiAlias = true;
+  final Paint _solidPaint = Paint()..isAntiAlias = true;
+
+  RenderBox? _cachedViewportBox;
+  RenderSliverPadding? _cachedSliverPadding;
+  bool _ancestorsResolved = false;
 
   RenderViewportGradientBox({
     RenderBox? child,
@@ -189,12 +197,61 @@ class RenderViewportGradientBox extends RenderProxyBox {
         _borderRadius = borderRadius,
         _viewportScopeKey = viewportScopeKey,
         _fallbackScreenSize = fallbackScreenSize,
-        super(child);
+        super(child) {
+    _updateEffectiveStops();
+  }
+
+  void _updateEffectiveStops() {
+    if (_gradientColors == null || _gradientColors!.length < 2) {
+      _effectiveStops = null;
+      return;
+    }
+    final int colorCount = _gradientColors!.length;
+    if (_gradientStops != null && _gradientStops!.length == colorCount) {
+      _effectiveStops = _gradientStops;
+    } else {
+      _effectiveStops = List<double>.generate(colorCount, (i) => i / (colorCount - 1));
+    }
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _ancestorsResolved = false;
+  }
+
+  @override
+  void detach() {
+    _cachedViewportBox = null;
+    _cachedSliverPadding = null;
+    _ancestorsResolved = false;
+    super.detach();
+  }
+
+  void _resolveAncestors() {
+    if (_ancestorsResolved) return;
+    _ancestorsResolved = true;
+    final ancestorViewport = RenderAbstractViewport.maybeOf(this);
+    _cachedViewportBox = ancestorViewport is RenderBox
+        ? (ancestorViewport as RenderBox)
+        : null;
+    if (_cachedViewportBox != null) {
+      RenderObject? cur = parent;
+      while (cur != null && cur != _cachedViewportBox) {
+        if (cur is RenderSliverPadding) {
+          _cachedSliverPadding = cur;
+          break;
+        }
+        cur = cur.parent;
+      }
+    }
+  }
 
   List<Color>? get gradientColors => _gradientColors;
   set gradientColors(List<Color>? val) {
     if (_gradientColors == val) return;
     _gradientColors = val;
+    _updateEffectiveStops();
     markNeedsPaint();
   }
 
@@ -202,6 +259,7 @@ class RenderViewportGradientBox extends RenderProxyBox {
   set gradientStops(List<double>? val) {
     if (_gradientStops == val) return;
     _gradientStops = val;
+    _updateEffectiveStops();
     markNeedsPaint();
   }
 
@@ -261,28 +319,21 @@ class RenderViewportGradientBox extends RenderProxyBox {
           centerXInCanvas = offset.dx - originInScope.dx + scopeBox.size.width * 0.5;
         } else {
           // 2. Check if inside a scrolling viewport (ListView in chat screens)
-          final ancestorViewport = RenderAbstractViewport.maybeOf(this);
-          final RenderBox? viewportBox = ancestorViewport is RenderBox
-              ? (ancestorViewport as RenderBox)
+          _resolveAncestors();
+          final RenderBox? viewportBox = (_cachedViewportBox != null && _cachedViewportBox!.attached)
+              ? _cachedViewportBox
               : null;
 
-          if (viewportBox != null && viewportBox.attached && viewportBox.hasSize && viewportBox.size.height > 10.0) {
+          if (viewportBox != null && viewportBox.hasSize && viewportBox.size.height > 10.0) {
             final posInViewport = localToGlobal(Offset.zero, ancestor: viewportBox);
 
-            // Find sliver padding (topPadding / bottomPadding of chat list)
+            // Cached sliver padding (topPadding / bottomPadding of chat list)
             double topPadding = 0.0;
             double bottomPadding = 0.0;
-            RenderObject? cur = parent;
-            while (cur != null && cur != viewportBox) {
-              if (cur is RenderSliverPadding) {
-                final insets = cur.resolvedPadding;
-                if (insets != null) {
-                  topPadding = insets.top;
-                  bottomPadding = insets.bottom;
-                }
-                break;
-              }
-              cur = cur.parent;
+            final insets = _cachedSliverPadding?.resolvedPadding;
+            if (insets != null) {
+              topPadding = insets.top;
+              bottomPadding = insets.bottom;
             }
 
             final effectiveHeight = viewportBox.size.height - topPadding - bottomPadding;
@@ -324,42 +375,29 @@ class RenderViewportGradientBox extends RenderProxyBox {
           centerXInCanvas = offset.dx + size.width * 0.5;
         }
 
-        final int colorCount = _gradientColors!.length;
-        final List<double> effectiveStops =
-            (_gradientStops != null && _gradientStops!.length == colorCount)
-                ? _gradientStops!
-                : List<double>.generate(colorCount, (i) => i / (colorCount - 1));
+        final List<double> stops = _effectiveStops ?? const [0.0, 1.0];
 
         final shader = ui.Gradient.linear(
           Offset(centerXInCanvas, topInCanvas),
           Offset(centerXInCanvas, bottomInCanvas),
           _gradientColors!,
-          effectiveStops,
+          stops,
         );
 
-        final paint = Paint()
-          ..shader = shader
-          ..isAntiAlias = true;
-
-        canvas.drawRRect(rrect, paint);
+        _gradientPaint.shader = shader;
+        canvas.drawRRect(rrect, _gradientPaint);
       } else if (_solidColor != null && _solidColor != Colors.transparent) {
-        final paint = Paint()
-          ..color = _solidColor!
-          ..isAntiAlias = true;
-
-        canvas.drawRRect(rrect, paint);
+        _solidPaint.color = _solidColor!;
+        canvas.drawRRect(rrect, _solidPaint);
       }
     } catch (e) {
       debugPrint('ViewportGradientBox.paint error: $e');
       if (_solidColor != null && _solidColor != Colors.transparent) {
-        final fallbackPaint = Paint()
-          ..color = _solidColor!
-          ..isAntiAlias = true;
-        canvas.drawRRect(rrect, fallbackPaint);
+        _solidPaint.color = _solidColor!;
+        canvas.drawRRect(rrect, _solidPaint);
       }
     } finally {
       // Paint child content (text, timestamp, sender, icons) over the bubble background.
-      // ALWAYS GUARANTEED TO RUN SO CONTENT NEVER DISAPPEARS!
       super.paint(context, offset);
     }
   }

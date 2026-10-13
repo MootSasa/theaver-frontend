@@ -6,6 +6,7 @@ import 'auth_service.dart';
 import 'database/app_database.dart';
 import 'notification_service.dart';
 import '../utils/date_time_utils.dart';
+import '../models/chat_draft.dart';
 
 /// Chat represents a chat conversation.
 class Chat {
@@ -25,6 +26,7 @@ class Chat {
   final bool isPinned; // Whether chat is pinned
   final String? otherUserId;
   final String? lastMessageGroupedId;
+  final ChatDraft? draft;
 
   Chat({
     required this.id,
@@ -43,6 +45,7 @@ class Chat {
     this.isPinned = false,
     this.otherUserId,
     this.lastMessageGroupedId,
+    this.draft,
   });
 
   /// True if the last message in this chat is a round video note («кружочек»)
@@ -78,6 +81,9 @@ class Chat {
       isPinned: json['is_pinned'] ?? false,
       otherUserId: json['other_user_id']?.toString() ?? json['otherUserId']?.toString(),
       lastMessageGroupedId: json['last_message_grouped_id']?.toString(),
+      draft: json['draft'] != null && json['draft'] is Map<String, dynamic>
+          ? ChatDraft.fromJson(json['draft'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -98,6 +104,7 @@ class Chat {
     bool? isPinned,
     String? otherUserId,
     String? lastMessageGroupedId,
+    ChatDraft? draft,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -116,6 +123,7 @@ class Chat {
       isPinned: isPinned ?? this.isPinned,
       otherUserId: otherUserId ?? this.otherUserId,
       lastMessageGroupedId: lastMessageGroupedId ?? this.lastMessageGroupedId,
+      draft: draft ?? this.draft,
     );
   }
 }
@@ -1488,6 +1496,91 @@ class ChatService {
     } catch (e) {
       debugPrint('Delete message error: $e');
       return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Save chat draft to server
+  static Future<Map<String, dynamic>> saveDraft({
+    required String chatId,
+    required String text,
+    String? replyToMessageId,
+    String? quoteText,
+    bool isQuote = false,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/draft'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'text': text,
+          'reply_to_message_id': replyToMessageId,
+          'quote_text': quoteText,
+          'is_quote': isQuote,
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+      return data is Map<String, dynamic>
+          ? data
+          : {'success': response.statusCode == 200};
+    } catch (e) {
+      debugPrint('Save draft error: $e');
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  /// Get chat draft from server
+  static Future<ChatDraft?> getDraft({required String chatId}) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) return null;
+
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/draft'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true &&
+            data['draft'] != null &&
+            data['draft'] is Map<String, dynamic>) {
+          return ChatDraft.fromJson(data['draft'] as Map<String, dynamic>);
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Get draft error: $e');
+      return null;
+    }
+  }
+
+  /// Delete chat draft on server
+  static Future<void> deleteDraft({required String chatId}) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) return;
+
+      await http.delete(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/draft'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+    } catch (e) {
+      debugPrint('Delete draft error: $e');
     }
   }
 

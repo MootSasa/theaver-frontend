@@ -47,8 +47,8 @@ class LiquidGlassProvider extends ChangeNotifier {
   /// Степень размытия заднего плана (blur sigma)
   double get blur => _blur;
 
-  /// Эффект размытия заднего плана для передачи в LiquidGlassLens
-  LiquidGlassBlur get blurEffect => LiquidGlassBlur(sigmaX: _blur, sigmaY: _blur);
+  /// Степень размытия заднего плана (blur sigma) для передачи в LiquidGlassLens
+  double get blurEffect => _blur;
 
   /// Вычисляет итоговый угол освещения для передачи в шейдеры/виджеты.
   /// Стабилен и не вызывает ненужных перерисовок.
@@ -57,6 +57,116 @@ class LiquidGlassProvider extends ChangeNotifier {
       return 62.0;
     }
     return _lightAngle;
+  }
+
+  /// Создает унифицированный [LiquidGlassStyle] для приложения Miptgram,
+  /// адаптированный под текущую тему, угол освещения и режим (full/lite).
+  LiquidGlassStyle createStyle({
+    BuildContext? context,
+    double cornerRadius = 0,
+    LiquidGlassCornerStyle cornerStyle = LiquidGlassCornerStyle.continuousRoundedRectangle,
+    LiquidGlassClipQuality clipQuality = LiquidGlassClipQuality.exact,
+    LiquidGlassShape? shape,
+    Color? color,
+    double? blur,
+    LiquidGlassShadow? shadow,
+    double refractionIndex = 1.1,
+    double refractionWidth = 24.0,
+    double dispersion = 1.32,
+    double saturation = 1.2,
+    double borderWidth = 1.25,
+    Color? borderColor,
+    bool includeGlow = false,
+    bool? isLiteOverride,
+    bool? isDarkOverride,
+    LiquidGlassAdaptivity? adaptivity,
+  }) {
+    final isDark = isDarkOverride ??
+        (context != null
+            ? Theme.of(context).brightness == Brightness.dark
+            : true);
+    final reduceMotion =
+        context != null ? MediaQuery.disableAnimationsOf(context) : false;
+    final angle = getEffectiveLightAngle(reduceMotion: reduceMotion);
+    final lite = isLiteOverride ?? isLite;
+
+    final defaultColor = isDark
+        ? const Color(0x33202025)
+        : const Color(0x66FFFFFF);
+
+    final effectiveShape = shape ??
+        LiquidGlassShape(
+          cornerRadius: cornerRadius,
+          cornerStyle: cornerStyle,
+          clipQuality: clipQuality,
+        );
+
+    // Адаптивная окантовка (specular):
+    // - На тёмной теме: borderColor ?? null (при null шейдер автоматически берёт
+    //   цвет фона под гранью и высветляет его через rimLift, создавая естественный блик)
+    // - На светлой теме: borderColor ?? const Color(0xCC2C2C2E) (тёмно-графитовая окантовка,
+    //   устраняющая белый ореол и формирующая тёмный оптический контур)
+    final effectiveBorderColor =
+        borderColor ?? (isDark ? null : const Color(0xCC2C2C2E));
+
+    final specular = borderWidth > 0
+        ? LiquidGlassLight.specular(
+            thickness: borderWidth * 4.0,
+            sharpness: 0.5,
+            angle: angle,
+            spread: 0.9,
+            intensity: isDark ? 1.0 : 0.75,
+            oppositeIntensity: 1.0,
+            color: effectiveBorderColor,
+          )
+        : const LiquidGlassLight.specular(thickness: 0);
+
+    final glow = (borderWidth > 0 && includeGlow)
+        ? LiquidGlassLight.glow(
+            thickness: borderWidth * 8.0,
+            angle: angle + 90,
+            spread: 0.5,
+            intensity: isDark ? 0.3 : 0.2,
+            color: effectiveBorderColor,
+          )
+        : null;
+
+    final effectiveShadow = shadow ??
+        (!isDark
+            ? const LiquidGlassShadow(
+                blur: 8.0,
+                opacity: 0.14,
+              )
+            : null);
+
+    final effectiveAdaptivity = adaptivity ??
+        (color == null
+            ? const LiquidGlassAdaptivity(
+                glassColorOnDark: Color(0x33202025),
+                contentColorOnDark: Colors.white,
+                glassColorOnLight: Color(0x66FFFFFF),
+                contentColorOnLight: Color(0xFF1C1C1E),
+                duration: Duration(milliseconds: 300),
+                darkBelow: 0.6,
+                lightAbove: 0.6,
+                brightnessFallback: LiquidGlassBrightnessFallback.appTheme,
+              )
+            : null);
+
+    return LiquidGlassStyle(
+      shape: effectiveShape,
+      color: color ?? defaultColor,
+      blur: blur ?? _blur,
+      shadow: effectiveShadow,
+      specular: specular,
+      glow: glow,
+      refractionIndex: refractionIndex,
+      refractionWidth: refractionWidth,
+      dispersion: dispersion,
+      saturation: saturation,
+      adaptivity: effectiveAdaptivity,
+      liteGlass: lite,
+    );
   }
 
   /// Инициализация из SettingsService

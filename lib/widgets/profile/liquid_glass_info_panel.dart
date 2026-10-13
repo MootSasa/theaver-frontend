@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:provider/provider.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import '../../services/liquid_glass_provider.dart';
 
 /// Большая стеклянная информационная панель с данными пользователя.
 ///
@@ -106,45 +108,52 @@ class LiquidGlassInfoPanel extends StatelessWidget {
     if (rows.isEmpty) return const SizedBox.shrink();
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    const shape = LiquidRoundedSuperellipse(borderRadius: 28);
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassStyle = glassProvider.createStyle(
+      context: context,
+      isLiteOverride: isLite,
+    );
 
-    final glassChild = GlassGlow(
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-        decoration: isDark
-            ? null
-            : BoxDecoration(
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  width: 0.5,
+    final panelContent = Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+      decoration: isDark
+          ? null
+          : BoxDecoration(
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: Colors.black.withValues(alpha: 0.12),
+                width: 0.5,
+              ),
+            ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (int i = 0; i < rows.length; i++) ...[
+            _GlassInfoRow(row: rows[i], isDark: isDark),
+            if (i < rows.length - 1)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Divider(
+                  height: 1,
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.black.withValues(alpha: 0.06),
                 ),
               ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (int i = 0; i < rows.length; i++) ...[
-              _GlassInfoRow(row: rows[i], isDark: isDark),
-              if (i < rows.length - 1)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Divider(
-                    height: 1,
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.08)
-                        : Colors.black.withValues(alpha: 0.06),
-                  ),
-                ),
-            ],
           ],
-        ),
+        ],
       ),
     );
 
-    return isLite
-        ? FakeGlass.inLayer(shape: shape, child: glassChild)
-        : LiquidGlass.grouped(shape: shape, child: glassChild);
+    return LiquidGlassLens(
+      style: glassStyle.copyWith(
+        shape: const LiquidGlassShape.continuousRoundedRectangle(
+          cornerRadius: 28,
+        ),
+      ),
+      child: panelContent,
+    );
   }
 
   /// Классическая панель (Card)

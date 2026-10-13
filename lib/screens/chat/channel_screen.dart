@@ -10,6 +10,7 @@ import '../../services/websocket_service.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
+import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_theme_provider.dart';
 import 'package:drift/drift.dart' show Value;
@@ -39,6 +40,9 @@ import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/message/video_message_widget.dart';
 import '../../widgets/message/voice_message_widget.dart';
+import '../../services/draft_service.dart';
+import '../../services/chat_actions_helper.dart';
+import '../../services/message_context_menu_service.dart';
 
 
 
@@ -60,12 +64,15 @@ class ChannelScreen extends StatefulWidget {
   State<ChannelScreen> createState() => _ChannelScreenState();
 }
 
-class _ChannelScreenState extends State<ChannelScreen> {
+class _ChannelScreenState extends State<ChannelScreen>
+    with WidgetsBindingObserver {
   final List<Message> _messages = [];
   final MarkdownTextEditingController _messageController = MarkdownTextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   bool _isLoading = true;
+  bool _isSyncing = false;
+  Timer? _syncDebounceTimer;
   bool _hasMoreMessages = true;
   bool _isLoadingMore = false;
   bool _isSending = false;
@@ -74,6 +81,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
   String? _channelAvatar;
   int _subscriberCount = 0;
   bool _isAdmin = false;
+  bool _isMuted = false;
   bool _showScrollDownFab = false;
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
@@ -92,16 +100,28 @@ class _ChannelScreenState extends State<ChannelScreen> {
   int _quoteOffset = 0;
   int _quoteLength = 0;
 
-  // WebSocket
+  // WebSocket & Realtime
   final WebSocketService _wsService = WebSocketService();
-  StreamSubscription<WebSocketEvent>? _wsSubscription;
+  ChatSubscription? _chatSubscription;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _highlightMessageId = widget.highlightMessageId;
     _loadData();
     _initWebSocket();
+
+    // Restore draft if exists
+    final draft = DraftService().getDraft(widget.channelId);
+    if (draft != null && draft.isNotEmpty) {
+      _messageController.text = draft.text;
+      if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
+        _isQuote = draft.isQuote;
+        _quoteText = draft.quoteText;
+      }
+    }
+    _messageController.addListener(_onInputTextChanged);
 
     // Connect continuous media playback with coordinator
     MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.channelId;
@@ -184,29 +204,102 @@ class _ChannelScreenState extends State<ChannelScreen> {
   }
 
   void _initWebSocket() {
-    // Subscribe to WebSocket events for this channel
-    // Note: We only use eventStream.listen, not subscribe() to avoid duplicate handling
-    _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
+    _chatSubscription = ChatRealtimeManager().bindChat(
+      chatId: widget.channelId,
+      onNewMessage: _onNewMessage,
+      onMessageEdited: _onMessageEdited,
+      onMessageDeleted: _onMessageDeleted,
+      onReconnect: _triggerSilentSync,
+    );
   }
 
-  void _handleWebSocketEvent(WebSocketEvent event) {
-    if (event.type == WebSocketEventType.newMessage) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.channelId) {
-        _onNewMessage(event);
-      }
-    } else if (event.type == WebSocketEventType.messageEdited) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.channelId) {
-        _onMessageEdited(event);
-      }
-    } else if (event.type == WebSocketEventType.messageDeleted) {
-      final chatId = event.data['chat_id']?.toString();
-      if (chatId == widget.channelId) {
-        _onMessageDeleted(event);
-      }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _onAppResumed();
     }
   }
+
+  void _onAppResumed() {
+    try {
+      context.read<UnreadCountProvider>().setOpenChat(widget.channelId);
+    } catch (_) {}
+    if (!_wsService.isConnected) {
+      _wsService.connect();
+    }
+    _triggerSilentSync();
+  }
+
+  void _triggerSilentSync() {
+    _syncDebounceTimer?.cancel();
+    _syncDebounceTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) {
+        _syncLatestMessages();
+      }
+    });
+  }
+
+  /// Silently synchronizes latest channel messages without flashing a loading indicator.
+  Future<void> _syncLatestMessages() async {
+    if (_isSyncing || !mounted) return;
+    _isSyncing = true;
+
+    try {
+      final result = await ChatService.getMessages(chatId: widget.channelId, limit: 50);
+      if (result['success'] == true && mounted) {
+        final serverMessages = result['messages'] as List<Message>;
+        final db = AppDatabase();
+
+        setState(() {
+          final Map<String, Message> merged = {};
+          for (final m in _messages) {
+            merged[m.id] = m;
+          }
+          for (final m in serverMessages) {
+            merged[m.id] = m;
+          }
+
+          _messages.clear();
+          _messages.addAll(merged.values);
+          _messages.sort((a, b) {
+            try {
+              final ta = DateTime.parse(a.createdAt);
+              final tb = DateTime.parse(b.createdAt);
+              final cmp = tb.compareTo(ta);
+              if (cmp != 0) return cmp;
+              return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+            } catch (_) {
+              return 0;
+            }
+          });
+        });
+
+        try {
+          db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
+        } catch (e) {
+          debugPrint('Drift saveMessages in channel sync error: $e');
+        }
+
+        // Refresh channel info / subscriber count
+        try {
+          final chatResult = await ChatService.getChat(widget.channelId);
+          if (chatResult['success'] == true && mounted) {
+            final chat = chatResult['chat'] as ChatDetails;
+            setState(() {
+              _channelName = chat.name;
+              _channelAvatar = chat.avatarUrl;
+              _subscriberCount = chat.participants.length;
+            });
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('ChannelScreen: _syncLatestMessages error: $e');
+    } finally {
+      _isSyncing = false;
+    }
+  }
+
 
   void _onMessageDeleted(WebSocketEvent event) {
     final messageId = event.data['message_id']?.toString();
@@ -621,7 +714,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
 
     final index = _messages.indexWhere((m) => m.id == messageId);
     if (index == -1) {
-      if (_hasMoreMessages && retryCount < 5) {
+      if (_hasMoreMessages && retryCount < 12) {
         await _loadMoreMessages();
         return _scrollToMessage(messageId, retryCount: retryCount + 1);
       }
@@ -629,7 +722,10 @@ class _ChannelScreenState extends State<ChannelScreen> {
     }
 
     const estimatedItemHeight = 120.0;
-    final targetOffset = index * estimatedItemHeight;
+    final maxScroll = _scrollController.position.hasContentDimensions
+        ? _scrollController.position.maxScrollExtent
+        : 0.0;
+    final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
 
     if ((_scrollController.offset - targetOffset).abs() > 2000) {
       _scrollController.jumpTo(targetOffset);
@@ -643,7 +739,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
 
     await Future.delayed(const Duration(milliseconds: 100));
     
-    if (retryCount < 10) {
+    if (retryCount < 15) {
       return _scrollToMessage(messageId, retryCount: retryCount + 1);
     }
   }
@@ -729,6 +825,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
     final replyQuoteLength = _quoteLength;
 
     _messageController.clear();
+    DraftService().deleteDraft(widget.channelId);
     setState(() {
       _isSending = true;
       _replyToMessage = null;
@@ -946,6 +1043,16 @@ class _ChannelScreenState extends State<ChannelScreen> {
     });
   }
 
+  void _onInputTextChanged() {
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+      replyToMessageId: _replyToMessage?.id,
+      quoteText: _quoteText,
+      isQuote: _isQuote,
+    );
+  }
+
   void _startReply(Message message) {
     setState(() {
       _replyToMessage = message;
@@ -954,6 +1061,32 @@ class _ChannelScreenState extends State<ChannelScreen> {
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+      replyToMessageId: message.id,
+      isQuote: false,
+    );
+  }
+
+  void _startQuote(Message message, String selectedText, int offset, int length) {
+    setState(() {
+      _replyToMessage = message;
+      _isQuote = true;
+      _quoteText = selectedText;
+      _quoteOffset = offset;
+      _quoteLength = length;
+    });
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+      replyToMessageId: message.id,
+      quoteText: selectedText,
+      isQuote: true,
+    );
+    _messageController.selection = TextSelection.collapsed(
+      offset: _messageController.text.length,
+    );
   }
 
   void _cancelReply() {
@@ -964,6 +1097,10 @@ class _ChannelScreenState extends State<ChannelScreen> {
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    DraftService().saveDraft(
+      widget.channelId,
+      text: _messageController.text,
+    );
   }
 
   String _formatTime(String timestamp) {
@@ -972,9 +1109,14 @@ class _ChannelScreenState extends State<ChannelScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _syncDebounceTimer?.cancel();
+
+    DraftService().flushDraft(widget.channelId);
+    _messageController.removeListener(_onInputTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
-    _wsSubscription?.cancel();
+    _chatSubscription?.cancel();
 
     if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.channelId) {
       MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
@@ -1091,7 +1233,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
         isOnline: false, // Channel doesn't have online status
         statusText: subscriberText,
         isChannel: true, // Calls hidden in channel
-        isMuted: false, // TODO: Get muted state
+        isMuted: _isMuted,
         onBack: () => Navigator.pop(context),
         onTitleTap: () {
           // TODO: Open channel info
@@ -1100,13 +1242,31 @@ class _ChannelScreenState extends State<ChannelScreen> {
           // TODO: View channel info
         },
         onSearch: () {
-          // TODO: Search
+          ChatActionsHelper.openSearch(
+            context: context,
+            chatId: widget.channelId,
+            chatName: displayName,
+          );
         },
         onToggleMute: () {
-          // TODO: Toggle notifications
+          ChatActionsHelper.toggleMute(
+            chatId: widget.channelId,
+            currentMuted: _isMuted,
+            onMuteChanged: (newMuted) => setState(() => _isMuted = newMuted),
+          );
         },
         onClearHistory: () {
-          // TODO: Clear history
+          ChatActionsHelper.showClearHistoryDialog(
+            context: context,
+            chatId: widget.channelId,
+            onHistoryCleared: () {
+              if (mounted) {
+                setState(() {
+                  _messages.clear();
+                });
+              }
+            },
+          );
         },
         onReport: () {
           // TODO: Report
@@ -1521,10 +1681,86 @@ class _ChannelScreenState extends State<ChannelScreen> {
     );
 
     // Wrap with SwipeToReplyWrapper for swipe-to-reply gesture
-    return SwipeToReplyWrapper(
+    messageWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
       enabled: _isAdmin, // Users can only reply if they can post (simple rule for now)
       child: messageWidget,
+    );
+
+    messageWidget = GestureDetector(
+      onTap: () {
+        _showContextMenu(message, message.senderId == _currentUserId || _isAdmin, key);
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: double.infinity,
+        color: Colors.transparent,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: messageWidget,
+      ),
+    );
+
+    return messageWidget;
+  }
+
+  void _confirmDeleteMessage(Message message) {
+    final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
+    ChatActionsHelper.confirmAndDeleteMessage(
+      context: context,
+      chatId: widget.channelId,
+      message: message,
+      onOptimisticDelete: () {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.id == message.id);
+          });
+        }
+      },
+      onRollback: () {
+        if (mounted) {
+          setState(() {
+            if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
+              _messages.insert(deletedIndex, message);
+            } else {
+              _messages.add(message);
+              _messages.sort((a, b) {
+                try {
+                  final ta = DateTime.parse(a.createdAt);
+                  final tb = DateTime.parse(b.createdAt);
+                  final cmp = tb.compareTo(ta);
+                  if (cmp != 0) return cmp;
+                  return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+                } catch (_) {
+                  return 0;
+                }
+              });
+            }
+          });
+        }
+      },
+    );
+  }
+
+  void _showContextMenu(Message message, bool isMe, GlobalKey key) {
+    if (message.messageType == 'text' && _isSingleEmoji(message.content)) {
+      if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
+        return;
+      }
+    }
+
+    final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
+    final bool isVoiceNote = message.messageType == 'voice';
+
+    MessageContextMenuService().show(
+      context: context,
+      message: message,
+      messageKey: key,
+      isMe: isMe,
+      onReply: () => _startReply(message),
+      onQuote: (!isVideoNote && !isVoiceNote) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
+      onPin: () {},
+      onDelete: (msg) => _confirmDeleteMessage(msg),
+      onReaction: (msgId, emoji) {},
     );
   }
 

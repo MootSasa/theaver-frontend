@@ -127,31 +127,43 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
     final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
 
-    final shape = LiquidGlassShape.continuousRoundedRectangle(
-      cornerRadius: 18,
-      clipQuality: LiquidGlassClipQuality.exact,
-      borderWidth: 0.7,
-      lightIntensity: 0.9,
-      lightDirection: widget.lightAngle ?? 62.0,
-      borderType: const OpticalBorder(
-        borderSaturation: 1.1,
-        ambientIntensity: 0.85,
-        borderSolidity: 0.95,
-      ),
-    );
-
     final style = LiquidGlassStyle(
-      shape: shape,
-      appearance: LiquidGlassAppearance(
-        color: isDark ? const Color(0x33202025) : const Color(0x8FFFFFFF),
-        blur: const LiquidGlassBlur(sigmaX: 5, sigmaY: 5),
-        shadow: const LiquidGlassShadow(blur: 8, opacity: 0.12),
+      shape: const LiquidGlassShape.continuousRoundedRectangle(
+        cornerRadius: 18,
+        clipQuality: LiquidGlassClipQuality.exact,
       ),
-      refraction: const LiquidGlassRefraction(
-        distortion: 0.05,
-        distortionWidth: 20,
+      color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
+      blur: 5.0,
+      shadow: isDark
+          ? null
+          : const LiquidGlassShadow(
+              blur: 6.0,
+              opacity: 0.12,
+            ),
+      specular: LiquidGlassLight.specular(
+        thickness: 5.0,
+        sharpness: 0.5,
+        angle: widget.lightAngle ?? 62.0,
+        spread: 0.9,
+        intensity: isDark ? 1.0 : 0.75,
+        oppositeIntensity: 1.0,
+        color: isDark ? null : const Color(0xCC2C2C2E),
       ),
-      liteGlass: widget.isLite ? LiquidGlassLitePickup.surface : null,
+      refractionIndex: 1.1,
+      refractionWidth: 24,
+      dispersion: 1.32,
+      saturation: 1.2,
+      adaptivity: const LiquidGlassAdaptivity(
+        glassColorOnDark: Color(0x33202025),
+        contentColorOnDark: Colors.white,
+        glassColorOnLight: Color(0x66FFFFFF),
+        contentColorOnLight: Color(0xFF1C1C1E),
+        duration: Duration(milliseconds: 300),
+        darkBelow: 0.6,
+        lightAbove: 0.6,
+        brightnessFallback: LiquidGlassBrightnessFallback.appTheme,
+      ),
+      liteGlass: widget.isLite,
     );
 
     return Padding(

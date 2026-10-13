@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart' hide LiquidGlassAppBar;
 
 import '../../services/settings_service.dart';
 import '../../services/auth_service.dart';
@@ -1438,47 +1438,42 @@ class _StorageScreenState extends State<StorageScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     if (glassEnabled) {
-      const shape = LiquidRoundedSuperellipse(borderRadius: 20);
-      final glassContent = GlassGlow(
-        child: Container(
-          width: double.infinity,
-          margin: margin,
-          padding: padding,
-          decoration: BoxDecoration(
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.04)
-                : Colors.black.withValues(alpha: 0.02),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.12)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.5,
-            ),
-          ),
-          child: child,
+      final glassStyle = context.read<LiquidGlassProvider>().createStyle(
+        refractionIndex: 1.1,
+        refractionWidth: 24.0,
+        blur: 14.0,
+        color: isDark
+            ? const Color.fromARGB(80, 20, 20, 30)
+            : const Color.fromARGB(80, 240, 240, 245),
+        isLiteOverride: isLite,
+        shape: const LiquidGlassShape.continuousRoundedRectangle(
+          cornerRadius: 20,
         ),
       );
 
-      final glassSettings = LiquidGlassSettings(
-        refractiveIndex: 1.1,
-        thickness: 10,
-        blur: 14,
-        saturation: 1.2,
-        lightIntensity: isDark ? 0.4 : 0.7,
-        ambientStrength: isDark ? 0.15 : 0.3,
-        glassColor: isDark
-            ? const Color.fromARGB(80, 20, 20, 30)
-            : const Color.fromARGB(80, 240, 240, 245),
+      final cardContent = Container(
+        width: double.infinity,
+        margin: margin,
+        padding: padding,
+        decoration: BoxDecoration(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.04)
+              : Colors.black.withValues(alpha: 0.02),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.12)
+                : Colors.black.withValues(alpha: 0.08),
+            width: 0.5,
+          ),
+        ),
+        child: child,
       );
 
-      return isLite
-          ? FakeGlass(shape: shape, child: glassContent)
-          : LiquidGlass.withOwnLayer(
-              shape: shape,
-              settings: glassSettings,
-              child: glassContent,
-            );
+      return LiquidGlassLens(
+        style: glassStyle,
+        child: cardContent,
+      );
     }
 
     // Standard Material 3 Card
