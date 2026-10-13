@@ -53,6 +53,7 @@ import '../../services/chat_folder_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../services/video_note_playback_service.dart';
+import '../../widgets/chat/swipeable_chat_tile.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({Key? key}) : super(key: key);
@@ -1840,24 +1841,19 @@ class _MainScreenState extends State<MainScreen>
       );
     }
 
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOutCubic,
+    return ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
       padding: EdgeInsets.only(
         top: topPadding,
         bottom: 100,
       ),
-      child: ListView.builder(
-        physics: const AlwaysScrollableScrollPhysics(
-          parent: BouncingScrollPhysics(),
-        ),
-        padding: EdgeInsets.zero,
-        itemCount: filteredChats.length,
-        itemBuilder: (context, index) {
-          final chat = filteredChats[index];
-          return _buildChatListItem(chat);
-        },
-      ),
+      itemCount: filteredChats.length,
+      itemBuilder: (context, index) {
+        final chat = filteredChats[index];
+        return _buildChatListItem(chat);
+      },
     );
   }
 
@@ -2049,12 +2045,11 @@ class _MainScreenState extends State<MainScreen>
       return chatTile;
     }
 
-    return Dismissible(
+    return SwipeableChatTile(
       key: ValueKey('chat_swipe_${chat.id}'),
-      direction: DismissDirection.endToStart,
-      confirmDismiss: (direction) async {
-        final action = ChatSwipeService().action;
-        HapticUtils.selection();
+      chat: chat,
+      enabled: !_isSelectMode,
+      onAction: (action) async {
         switch (action) {
           case ChatSwipeAction.read:
             await _toggleReadChat(chat);
@@ -2082,10 +2077,7 @@ class _MainScreenState extends State<MainScreen>
             }
             break;
         }
-        return false;
       },
-      background: const SizedBox.shrink(),
-      secondaryBackground: _buildChatSwipeBackground(),
       child: chatTile,
     );
   }
@@ -2736,8 +2728,20 @@ class _MainScreenState extends State<MainScreen>
                                     VideoNotePlaybackService().hasActiveVideo)
                                 ? 56.0
                                 : 0.0;
-                            return _buildChatList(
-                              topPadding: topBarHeight + 8.0 + playerOffset,
+                            final targetTopPadding =
+                                topBarHeight + 8.0 + playerOffset;
+                            return TweenAnimationBuilder<double>(
+                              tween: Tween<double>(
+                                begin: targetTopPadding,
+                                end: targetTopPadding,
+                              ),
+                              duration: const Duration(milliseconds: 250),
+                              curve: Curves.easeOutCubic,
+                              builder: (context, animatedTopPadding, _) {
+                                return _buildChatList(
+                                  topPadding: animatedTopPadding,
+                                );
+                              },
                             );
                           },
                         ),
