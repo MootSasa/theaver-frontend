@@ -1,5 +1,5 @@
 import 'package:uuid/uuid.dart';
-import '../services/database/app_database.dart';
+import '../services/chat_service.dart';
 
 /// Represents a configurable chat folder tab (e.g. "All", "Personal", "Groups", "Channels", or custom).
 class ChatFolder {
