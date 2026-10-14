@@ -578,14 +578,23 @@ class AppDatabase extends _$AppDatabase {
     await ensureInitialized();
     await _cleanupDuplicateSavedChats(userId);
     final existing = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
+    final account = AccountManager().getAccount(userId) ?? AccountManager().currentAccount;
     if (existing.isEmpty) {
       await saveChat(ChatsCompanion(
         chatId: Value('saved_$userId'),
         chatType: const Value('saved'),
         name: const Value('Избранное'),
+        avatarUrl: Value(account?.avatarUrl),
         updatedAt: Value(DateTime.now().toIso8601String()),
       ));
       debugPrint('AppDatabase: Created local "Saved Messages" chat for $userId');
+    } else if (account?.avatarUrl != null && account!.avatarUrl!.isNotEmpty) {
+      final first = existing.first;
+      if (first.avatarUrl == null || first.avatarUrl!.isEmpty) {
+        await (update(chats)..where((t) => t.chatId.equals(first.chatId))).write(
+          ChatsCompanion(avatarUrl: Value(account.avatarUrl)),
+        );
+      }
     }
   }
 

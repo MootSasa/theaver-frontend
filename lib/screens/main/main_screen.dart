@@ -743,15 +743,16 @@ class _MainScreenState extends State<MainScreen>
     unawaited(() async {
       try {
         final db = AppDatabase(_currentUserId);
-        final topChats = chats.take(10).toList();
+        final topChats = chats.take(20).toList();
         for (final chat in topChats) {
           if (!mounted) break;
           try {
-            final res = await ChatService.getMessages(chatId: chat.id, limit: 30);
+            final res = await ChatService.getMessages(chatId: chat.id, limit: 50);
             if (res['success'] == true && res['messages'] is List<Message>) {
               final msgs = res['messages'] as List<Message>;
               if (msgs.isNotEmpty) {
                 await db.saveMessages(msgs.map((m) => m.toCompanion()).toList());
+                await db.refreshChatLastMessageFromDb(chat.id);
               }
             }
           } catch (_) {}
@@ -781,6 +782,7 @@ class _MainScreenState extends State<MainScreen>
           await db.migrateSavedChatId('saved_$userId', savedChat.id);
         }
         await db.saveChat(_chatToCompanion(savedChat));
+        await db.refreshChatLastMessageFromDb(savedChat.id);
       }
     } catch (e) {
       debugPrint('Error ensuring saved chat exists: $e');
@@ -799,11 +801,15 @@ class _MainScreenState extends State<MainScreen>
         name = 'Чат';
       }
     }
+    String? avatarUrl = model.avatarUrl;
+    if (model.chatType == 'saved' && (avatarUrl == null || avatarUrl.isEmpty)) {
+      avatarUrl = _accountManager.currentAccount?.avatarUrl;
+    }
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
       name: name,
-      avatarUrl: model.avatarUrl,
+      avatarUrl: avatarUrl,
       lastMessage: model.lastMessage,
       lastMessageTime: model.lastMessageTime,
       lastMessageType: model.lastMessageType,
@@ -821,11 +827,15 @@ class _MainScreenState extends State<MainScreen>
 
   /// Конвертация Chat (UI) → ChatsCompanion (Drift)
   ChatsCompanion _chatToCompanion(Chat chat) {
+    String? avatarUrl = chat.avatarUrl;
+    if (chat.chatType == 'saved' && (avatarUrl == null || avatarUrl.isEmpty)) {
+      avatarUrl = _accountManager.currentAccount?.avatarUrl;
+    }
     return ChatsCompanion(
       chatId: Value(chat.id),
       chatType: Value(chat.chatType),
       name: Value(chat.name),
-      avatarUrl: Value(chat.avatarUrl),
+      avatarUrl: Value(avatarUrl),
       lastMessage: Value(chat.lastMessage),
       lastMessageTime: Value(chat.lastMessageTime),
       lastMessageType: Value(chat.lastMessageType),
@@ -1976,9 +1986,13 @@ class _MainScreenState extends State<MainScreen>
 
     const double avatarRadius = 22.0;
 
+    final String? effectiveAvatarUrl = chat.chatType == 'saved' && (chat.avatarUrl == null || chat.avatarUrl!.isEmpty)
+        ? (_accountManager.currentAccount?.avatarUrl ?? _accountManager.currentAccount?.localAvatarPath)
+        : chat.avatarUrl;
+
     final avatarWidget = isPrivateChat
         ? AvatarWithStatus(
-            avatarUrl: chat.avatarUrl,
+            avatarUrl: effectiveAvatarUrl,
             name: chat.name,
             radius: avatarRadius,
             isOnline: _isSelectMode ? false : chat.isOnline,
@@ -1990,10 +2004,10 @@ class _MainScreenState extends State<MainScreen>
               radius: avatarRadius,
               backgroundColor: Theme.of(context).colorScheme.primary,
               backgroundImage:
-                  chat.avatarUrl != null && chat.avatarUrl!.isNotEmpty
-                      ? avatarImageProvider(chat.avatarUrl)
+                  effectiveAvatarUrl != null && effectiveAvatarUrl.isNotEmpty
+                      ? avatarImageProvider(effectiveAvatarUrl)
                       : null,
-              child: chat.avatarUrl == null || chat.avatarUrl!.isEmpty
+              child: effectiveAvatarUrl == null || effectiveAvatarUrl.isEmpty
                   ? iconWidget
                   : null,
             ),
@@ -2611,6 +2625,7 @@ class _MainScreenState extends State<MainScreen>
         ).then((_) => onReturn());
         break;
       case 'saved':
+        final effectiveSavedAvatar = chat.avatarUrl ?? _accountManager.currentAccount?.avatarUrl ?? _accountManager.currentAccount?.localAvatarPath;
         // Open saved chat as a special chat with yourself
         Navigator.push(
           context,
@@ -2620,7 +2635,7 @@ class _MainScreenState extends State<MainScreen>
               otherUserName: context.l10n.translate('chat_saved_messages').isNotEmpty
                   ? context.l10n.translate('chat_saved_messages')
                   : 'Избранное',
-              otherUserAvatar: null,
+              otherUserAvatar: effectiveSavedAvatar,
             ),
           ),
         ).then((_) => onReturn());

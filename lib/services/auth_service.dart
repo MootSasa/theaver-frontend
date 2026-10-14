@@ -606,16 +606,19 @@ class AuthService {
         if (data['success'] == true) {
           // Update account profile
           final accountManager = AccountManager();
-          await accountManager.updateAccountProfile(
-            accountManager.currentAccount!.userId,
-            username: data['user']?['username'],
-            displayName: data['user']?['display_name'],
-            avatarUrl: data['user']?['avatar_url'],
-            name: data['user']?['name'],
-            surname: data['user']?['surname'],
-            email: data['user']?['email'],
-            phone: data['user']?['phone'],
-          );
+          final currentAcc = accountManager.currentAccount;
+          if (currentAcc != null) {
+            await accountManager.updateAccountProfile(
+              currentAcc.userId,
+              username: data['user']?['username'],
+              displayName: data['user']?['display_name'],
+              avatarUrl: data['user']?['avatar_url'],
+              name: data['user']?['name'],
+              surname: data['user']?['surname'],
+              email: data['user']?['email'],
+              phone: data['user']?['phone'],
+            );
+          }
           return {
             'success': true,
             'user': data['user'],

@@ -246,98 +246,110 @@ class ProfileScreenState extends State<ProfileScreen>
     if (account != null) {
       final localHistory = await AvatarSyncService().getLocalAvatarUrls(account.userId);
       if (!mounted) return;
-      setState(() {
-        final currentAccAvatar = account.avatarUrl;
-        if (currentAccAvatar != null && currentAccAvatar.isNotEmpty) {
-          _avatarUrl = currentAccAvatar;
-        }
-        final combined = <String>[];
-        for (final local in localHistory) {
-          if (!combined.contains(local)) combined.add(local);
-        }
-        for (final old in _avatarUrls) {
-          if (!combined.contains(old)) combined.add(old);
-        }
-        _avatarUrls = combined;
-      });
-      widget.onUpdate?.call();
-    }
-  }
-
-  Future<void> _loadUserProfile() async {
-    final account = _accountManager.currentAccount;
-
-    if (account != null) {
-      _nameController.text = account.name ?? '';
-      _surnameController.text = account.surname ?? '';
-      _usernameController.text = account.username ?? '';
-      _emailController.text = account.email ?? '';
-      _phoneController.text = account.phone ?? '';
-
-      final localHistory = await AvatarSyncService().getLocalAvatarUrls(account.userId);
-      if (localHistory.isNotEmpty) {
-        _avatarUrl = localHistory.first;
-        _avatarUrls = List.from(localHistory);
-      } else if (account.avatarUrl != null && account.avatarUrl!.isNotEmpty) {
-        _avatarUrl = account.avatarUrl;
-        _avatarUrls = [_avatarUrl!];
-      }
-
-      // Теневой вызов очереди фоновой синхронизации
-      AvatarSyncService().syncPendingAvatar(account.userId);
-    }
-
-    try {
-      final result = await AuthService.getCurrentUser();
-      debugPrint('[_loadUserProfile] result success=${result['success']}, user=${result['user']}');
-      if (result['success'] == true && result['user'] != null && mounted) {
-        final user = result['user'] as Map<String, dynamic>;
-        debugPrint('[_loadUserProfile] avatar_url=${user['avatar_url']}, avatars=${user['avatars']}');
-        
-        final localHistory = account != null ? await AvatarSyncService().getLocalAvatarUrls(account.userId) : <String>[];
-
         setState(() {
-          _nameController.text = user['name'] ?? _nameController.text;
-          _surnameController.text = user['surname'] ?? _surnameController.text;
-          _usernameController.text = user['username'] ?? _usernameController.text;
-          _emailController.text = user['email'] ?? _emailController.text;
-          _phoneController.text = user['phone'] ?? _phoneController.text;
-          
-          if (localHistory.isNotEmpty) {
-            _avatarUrl = localHistory.first;
-          } else {
-            _avatarUrl = user['avatar_url'] ?? _avatarUrl;
+          final currentAccAvatar = account.avatarUrl;
+          if (currentAccAvatar != null && currentAccAvatar.isNotEmpty) {
+            _avatarUrl = currentAccAvatar;
           }
-
-          // Parse avatars list (newest first)
-          if (user['avatars'] != null) {
-            final avatarsList = user['avatars'] as List<dynamic>;
-            final serverUrls = avatarsList.map((a) => a['avatar_url'].toString()).toList();
-            _avatarIds = avatarsList.map((a) => (a['id'] is int ? a['id'] as int : (a['id'] as num).toInt())).toList();
-            
-            final combined = <String>[];
-            for (final l in localHistory) {
-              if (!combined.contains(l)) combined.add(l);
-            }
-            for (final s in serverUrls) {
-              if (!combined.contains(s)) combined.add(s);
-            }
-            _avatarUrls = combined;
-            debugPrint('[_loadUserProfile] merged avatarUrls=$_avatarUrls, avatarIds=$_avatarIds');
-          } else if (_avatarUrl != null && _avatarUrl!.isNotEmpty) {
-            final combined = <String>[];
-            for (final l in localHistory) {
-              if (!combined.contains(l)) combined.add(l);
-            }
-            if (!combined.contains(_avatarUrl!)) combined.add(_avatarUrl!);
-            _avatarUrls = combined;
-            _avatarIds = [];
-            debugPrint('[_loadUserProfile] fallback: avatarUrls=$_avatarUrls');
-          } else {
-            debugPrint('[_loadUserProfile] no avatars found');
+          final combined = <String>[];
+          for (final local in localHistory) {
+            if (local.isNotEmpty && !combined.contains(local)) combined.add(local);
+          }
+          for (final old in _avatarUrls) {
+            if (old.isNotEmpty && !combined.contains(old)) combined.add(old);
+          }
+          if (_avatarUrl != null && _avatarUrl!.isNotEmpty && !combined.contains(_avatarUrl!)) {
+            combined.add(_avatarUrl!);
+          }
+          _avatarUrls = combined;
+          if (_avatarUrls.isNotEmpty && (_avatarUrl == null || _avatarUrl!.isEmpty)) {
+            _avatarUrl = _avatarUrls.first;
           }
         });
+        widget.onUpdate?.call();
       }
+    }
+
+    Future<void> _loadUserProfile() async {
+      final account = _accountManager.currentAccount;
+
+      if (account != null) {
+        _nameController.text = account.name ?? '';
+        _surnameController.text = account.surname ?? '';
+        _usernameController.text = account.username ?? '';
+        _emailController.text = account.email ?? '';
+        _phoneController.text = account.phone ?? '';
+
+        final localHistory = await AvatarSyncService().getLocalAvatarUrls(account.userId);
+        if (localHistory.isNotEmpty) {
+          _avatarUrl = localHistory.first;
+          _avatarUrls = List.from(localHistory);
+        } else if (account.avatarUrl != null && account.avatarUrl!.isNotEmpty) {
+          _avatarUrl = account.avatarUrl;
+          _avatarUrls = [_avatarUrl!];
+        }
+
+        // Теневой вызов очереди фоновой синхронизации
+        AvatarSyncService().syncPendingAvatar(account.userId);
+      }
+
+      try {
+        final result = await AuthService.getCurrentUser();
+        debugPrint('[_loadUserProfile] result success=${result['success']}, user=${result['user']}');
+        if (result['success'] == true && result['user'] != null && mounted) {
+          final user = result['user'] as Map<String, dynamic>;
+          debugPrint('[_loadUserProfile] avatar_url=${user['avatar_url']}, avatars=${user['avatars']}');
+          
+          final localHistory = account != null ? await AvatarSyncService().getLocalAvatarUrls(account.userId) : <String>[];
+
+          setState(() {
+            _nameController.text = user['name'] ?? _nameController.text;
+            _surnameController.text = user['surname'] ?? _surnameController.text;
+            _usernameController.text = user['username'] ?? _usernameController.text;
+            _emailController.text = user['email'] ?? _emailController.text;
+            _phoneController.text = user['phone'] ?? _phoneController.text;
+            
+            if (localHistory.isNotEmpty) {
+              _avatarUrl = localHistory.first;
+            } else {
+              _avatarUrl = user['avatar_url'] ?? _avatarUrl;
+            }
+
+            // Parse avatars list (newest first)
+            if (user['avatars'] != null) {
+              final avatarsList = user['avatars'] as List<dynamic>;
+              final serverUrls = avatarsList.map((a) => a['avatar_url'].toString()).where((s) => s.isNotEmpty).toList();
+              _avatarIds = avatarsList.map((a) => (a['id'] is int ? a['id'] as int : (a['id'] as num).toInt())).toList();
+              
+              final combined = <String>[];
+              for (final l in localHistory) {
+                if (l.isNotEmpty && !combined.contains(l)) combined.add(l);
+              }
+              for (final s in serverUrls) {
+                if (s.isNotEmpty && !combined.contains(s)) combined.add(s);
+              }
+              if (_avatarUrl != null && _avatarUrl!.isNotEmpty && !combined.contains(_avatarUrl!)) {
+                combined.add(_avatarUrl!);
+              }
+              _avatarUrls = combined;
+              if (_avatarUrls.isNotEmpty && (_avatarUrl == null || _avatarUrl!.isEmpty)) {
+                _avatarUrl = _avatarUrls.first;
+              }
+              debugPrint('[_loadUserProfile] merged avatarUrls=$_avatarUrls, avatarIds=$_avatarIds');
+            } else if (_avatarUrl != null && _avatarUrl!.isNotEmpty) {
+              final combined = <String>[];
+              for (final l in localHistory) {
+                if (l.isNotEmpty && !combined.contains(l)) combined.add(l);
+              }
+              if (!combined.contains(_avatarUrl!)) combined.add(_avatarUrl!);
+              _avatarUrls = combined;
+              _avatarIds = [];
+              debugPrint('[_loadUserProfile] fallback: avatarUrls=$_avatarUrls');
+            } else {
+              debugPrint('[_loadUserProfile] no avatars found');
+            }
+          });
+        }
     } catch (e) {
       debugPrint('Error loading profile from server: $e');
     }

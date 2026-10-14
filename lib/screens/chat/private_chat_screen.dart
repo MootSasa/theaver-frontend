@@ -1388,6 +1388,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _messages.clear();
         _messages.addAll(
             fixedMessages.map((m) => Message.fromDbMessage(m)).toList());
+        _messages.sort((a, b) {
+          try {
+            final ta = DateTime.parse(a.createdAt);
+            final tb = DateTime.parse(b.createdAt);
+            final cmp = tb.compareTo(ta); // descending
+            if (cmp != 0) return cmp;
+            return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+          } catch (_) {
+            return 0;
+          }
+        });
         _hasMoreMessages = localMessages.length >= 50;
         for (final m in _messages) {
           if (m.reactions.isNotEmpty) {
@@ -1399,6 +1410,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         }
         _updateFeedItems();
       });
+
+      if (_firstUnreadMessageId == null || _unreadCount == 0) {
+        _scrollToBottom();
+      }
     }
 
     // 2. Затем загрузить с сервера (обновление)
@@ -1477,6 +1492,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           try {
             db.saveMessages(
                 serverMessages.map((m) => _messageToCompanion(m)).toList());
+            if (serverMessages.isNotEmpty) {
+              final latest = serverMessages.first;
+              db.updateChatLastMessage(
+                chatId: widget.chatId,
+                lastMessage: latest.content,
+                lastMessageTime: latest.createdAt,
+                lastMessageType: latest.messageType,
+                lastMessageIsRound: latest.isRound,
+                lastMessageFileUrl: latest.fileUrl,
+                lastMessageGroupedId: latest.groupedId,
+              );
+            }
           } catch (e) {
             debugPrint('Drift saveMessages error: $e');
           }

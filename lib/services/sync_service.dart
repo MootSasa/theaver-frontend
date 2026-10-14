@@ -188,8 +188,17 @@ class SyncService {
     final content = payload['content']?.toString() ?? '';
 
     if (chat != null) {
-      if (chat.lastMessageTime == null ||
-          safeCreatedAt.compareTo(chat.lastMessageTime!) >= 0) {
+      bool isNewer = true;
+      if (chat.lastMessageTime != null) {
+        final newTime = DateTime.tryParse(safeCreatedAt);
+        final oldTime = DateTime.tryParse(chat.lastMessageTime!);
+        if (newTime != null && oldTime != null) {
+          isNewer = newTime.isAfter(oldTime) || newTime.isAtSameMomentAs(oldTime);
+        } else {
+          isNewer = safeCreatedAt.compareTo(chat.lastMessageTime!) >= 0;
+        }
+      }
+      if (isNewer) {
         await _db.updateChatLastMessage(
           chatId: chatId,
           content: content,
