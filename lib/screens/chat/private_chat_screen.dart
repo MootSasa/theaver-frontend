@@ -1496,12 +1496,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               final latest = serverMessages.first;
               db.updateChatLastMessage(
                 chatId: widget.chatId,
-                lastMessage: latest.content,
-                lastMessageTime: latest.createdAt,
-                lastMessageType: latest.messageType,
-                lastMessageIsRound: latest.isRound,
-                lastMessageFileUrl: latest.fileUrl,
-                lastMessageGroupedId: latest.groupedId,
+                content: latest.content,
+                createdAt: latest.createdAt,
+                messageType: latest.messageType,
+                isRound: latest.isRound,
+                fileUrl: latest.fileUrl,
+                groupedId: latest.groupedId,
               );
             }
           } catch (e) {

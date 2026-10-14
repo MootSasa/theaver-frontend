@@ -578,7 +578,10 @@ class AppDatabase extends _$AppDatabase {
     await ensureInitialized();
     await _cleanupDuplicateSavedChats(userId);
     final existing = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
-    final account = AccountManager().getAccount(userId) ?? AccountManager().currentAccount;
+    final mgr = AccountManager();
+    final account = (mgr.currentAccount?.userId == userId ? mgr.currentAccount : null) ??
+        mgr.accounts.where((acc) => acc.userId == userId).firstOrNull ??
+        mgr.currentAccount;
     if (existing.isEmpty) {
       await saveChat(ChatsCompanion(
         chatId: Value('saved_$userId'),
