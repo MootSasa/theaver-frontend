@@ -31,19 +31,27 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
   late final AnimationController _controller;
   Animation<double>? _animation;
   double _dragOffset = 0.0;
+  double _rawDragOffset = 0.0;
   bool _thresholdCrossed = false;
 
-  static const double _threshold = 64.0;
-  static const double _maxDrag = 110.0;
+  /// Minimum threshold in logical pixels required to trigger the swipe action.
+  /// If released below this threshold, the tile simply snaps back without executing the action.
+  static const double _threshold = 84.0;
+
+  /// Free 1:1 finger tracking distance before soft rubber-band resistance starts.
+  static const double _freeDragDistance = 180.0;
+
+  /// Maximum allowed displacement of the tile so it does not slide offscreen.
+  static const double _maxDrag = 240.0;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 220),
+      duration: const Duration(milliseconds: 240),
     )..addListener(() {
-        if (_animation != null) {
+        if (mounted && _animation != null) {
           setState(() {
             _dragOffset = _animation!.value;
           });
@@ -58,6 +66,16 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
   }
 
   void _animateBack({double from = 0.0}) {
+    _rawDragOffset = 0.0;
+    _thresholdCrossed = false;
+    if (from == 0.0) {
+      if (_dragOffset != 0.0 && mounted) {
+        setState(() {
+          _dragOffset = 0.0;
+        });
+      }
+      return;
+    }
     _animation = Tween<double>(begin: from, end: 0.0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
     );
@@ -67,29 +85,38 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
   void _onHorizontalDragStart(DragStartDetails details) {
     if (!widget.enabled) return;
     _controller.stop();
-    _thresholdCrossed = false;
+    _rawDragOffset = _dragOffset;
+    _thresholdCrossed = _dragOffset.abs() >= _threshold;
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
     if (!widget.enabled) return;
     final delta = details.primaryDelta ?? 0.0;
-    final current = _dragOffset + delta;
-    final sign = current >= 0 ? 1.0 : -1.0;
-    final abs = current.abs();
+    _rawDragOffset += delta;
+    final sign = _rawDragOffset >= 0 ? 1.0 : -1.0;
+    final abs = _rawDragOffset.abs();
 
-    // 1:1 displacement up to threshold, followed by soft rubber-band resistance
-    final damped = abs <= 64.0 ? abs : (64.0 + (abs - 64.0) * 0.35);
-    final clamped = damped > _maxDrag ? _maxDrag : damped;
+    // 1:1 displacement with finger up to _freeDragDistance,
+    // followed by soft rubber-band resistance up to _maxDrag
+    final double effectiveOffset;
+    if (abs <= _freeDragDistance) {
+      effectiveOffset = abs;
+    } else {
+      effectiveOffset = _freeDragDistance + (abs - _freeDragDistance) * 0.35;
+    }
+    final clamped = effectiveOffset.clamp(0.0, _maxDrag);
 
     setState(() {
       _dragOffset = sign * clamped;
     });
 
-    if (_dragOffset.abs() >= _threshold && !_thresholdCrossed) {
+    final isCrossed = _dragOffset.abs() >= _threshold;
+    if (isCrossed && !_thresholdCrossed) {
       _thresholdCrossed = true;
       HapticUtils.selection();
-    } else if (_dragOffset.abs() < _threshold && _thresholdCrossed) {
+    } else if (!isCrossed && _thresholdCrossed) {
       _thresholdCrossed = false;
+      HapticUtils.selection();
     }
   }
 
@@ -100,7 +127,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
     _animateBack(from: fromOffset);
 
     if (shouldTrigger) {
-      HapticUtils.selection();
+      HapticUtils.impact();
       final action = ChatSwipeService().action;
       widget.onAction(action);
     }
@@ -147,37 +174,43 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
             child: Container(
               color: action.color,
               alignment: isRight ? Alignment.centerLeft : Alignment.centerRight,
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 22),
               child: AnimatedScale(
-                scale: isCrossed ? 1.15 : (0.7 + 0.3 * progress),
-                duration: const Duration(milliseconds: 100),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: isRight
-                      ? [
-                          _buildActionIcon(action, Colors.white, 22),
-                          const SizedBox(width: 8),
-                          Text(
-                            action.label,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                scale: isCrossed ? 1.12 : (0.75 + 0.25 * progress),
+                duration: const Duration(milliseconds: 120),
+                curve: Curves.easeOutBack,
+                child: Opacity(
+                  opacity: (0.35 + 0.65 * progress).clamp(0.0, 1.0),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: isRight
+                        ? [
+                            _buildActionIcon(action, Colors.white, 24),
+                            const SizedBox(width: 10),
+                            Text(
+                              action.label,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13.5,
+                                letterSpacing: 0.2,
+                              ),
                             ),
-                          ),
-                        ]
-                      : [
-                          Text(
-                            action.label,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                          ]
+                        : [
+                            Text(
+                              action.label,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13.5,
+                                letterSpacing: 0.2,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          _buildActionIcon(action, Colors.white, 22),
-                        ],
+                            const SizedBox(width: 10),
+                            _buildActionIcon(action, Colors.white, 24),
+                          ],
+                  ),
                 ),
               ),
             ),
@@ -189,7 +222,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
           onHorizontalDragUpdate: _onHorizontalDragUpdate,
           onHorizontalDragEnd: _onHorizontalDragEnd,
           onHorizontalDragCancel: _onHorizontalDragCancel,
-          behavior: HitTestBehavior.translucent,
+          behavior: HitTestBehavior.opaque,
           child: Transform.translate(
             offset: Offset(_dragOffset, 0),
             child: Material(
