@@ -1974,22 +1974,29 @@ class _MainScreenState extends State<MainScreen>
     final isPrivateChat = chat.chatType == 'private';
     final isSelected = _selectedChatIds.contains(chat.id);
 
+    const double avatarRadius = 22.0;
+
     final avatarWidget = isPrivateChat
         ? AvatarWithStatus(
             avatarUrl: chat.avatarUrl,
             name: chat.name,
-            radius: 22,
+            radius: avatarRadius,
             isOnline: _isSelectMode ? false : chat.isOnline,
           )
-        : CircleAvatar(
-            backgroundColor: Theme.of(context).colorScheme.primary,
-            backgroundImage:
-                chat.avatarUrl != null && chat.avatarUrl!.isNotEmpty
-                    ? avatarImageProvider(chat.avatarUrl)
-                    : null,
-            child: chat.avatarUrl == null || chat.avatarUrl!.isEmpty
-                ? iconWidget
-                : null,
+        : SizedBox(
+            width: avatarRadius * 2,
+            height: avatarRadius * 2,
+            child: CircleAvatar(
+              radius: avatarRadius,
+              backgroundColor: Theme.of(context).colorScheme.primary,
+              backgroundImage:
+                  chat.avatarUrl != null && chat.avatarUrl!.isNotEmpty
+                      ? avatarImageProvider(chat.avatarUrl)
+                      : null,
+              child: chat.avatarUrl == null || chat.avatarUrl!.isEmpty
+                  ? iconWidget
+                  : null,
+            ),
           );
 
     final Widget leadingWidget = Stack(
@@ -2040,35 +2047,34 @@ class _MainScreenState extends State<MainScreen>
                   ),
                 ),
               const SizedBox(height: 4),
-              if (chat.unreadCount == -1)
+              if (hasUnread)
                 Container(
-                  width: 10,
-                  height: 10,
-                  margin: const EdgeInsets.only(top: 4, right: 4),
+                  height: 18,
+                  constraints: const BoxConstraints(minWidth: 18),
+                  padding: chat.unreadCount == -1
+                      ? EdgeInsets.zero
+                      : const EdgeInsets.symmetric(horizontal: 5),
                   decoration: BoxDecoration(
                     color: Theme.of(context).extension<TheavThemeExtension>()?.palette.unreadBadge ??
                         Theme.of(context).colorScheme.primary,
-                    shape: BoxShape.circle,
+                    borderRadius: BorderRadius.circular(9),
                   ),
-                )
-              else if (chat.unreadCount > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).extension<TheavThemeExtension>()?.palette.unreadBadge ??
-                        Theme.of(context).colorScheme.primary,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                  child: Text(
-                    chat.unreadCount > 99 ? '99+' : chat.unreadCount.toString(),
-                    style: TextStyle(
-                      color: Theme.of(context).extension<TheavThemeExtension>()?.palette.unreadBadgeText ??
-                          Theme.of(context).colorScheme.onPrimary,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
+                  child: Center(
+                    widthFactor: 1.0,
+                    heightFactor: 1.0,
+                    child: chat.unreadCount == -1
+                        ? const SizedBox(width: 18, height: 18)
+                        : Text(
+                            chat.unreadCount > 99 ? '99+' : chat.unreadCount.toString(),
+                            style: TextStyle(
+                              color: Theme.of(context).extension<TheavThemeExtension>()?.palette.unreadBadgeText ??
+                                  Theme.of(context).colorScheme.onPrimary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              height: 1.0,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
                   ),
                 )
               else
