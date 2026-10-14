@@ -29,15 +29,24 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Get unread count for a specific chat
   int getCount(String chatId) => _counts[chatId] ?? 0;
 
-  /// Get total unread count across all chats
-  int get totalUnread => _counts.values.fold(0, (sum, count) => sum + count);
+  /// Check whether a chat is manually marked as unread
+  bool isMarkedUnread(String chatId) => _counts[chatId] == -1;
+
+  /// Check whether a chat has unread messages or is marked as unread
+  bool hasUnread(String chatId) => (_counts[chatId] ?? 0) > 0 || _counts[chatId] == -1;
+
+  /// Get total unread count across all chats (marked unread chats count as +1)
+  int get totalUnread => _counts.values.fold(
+        0,
+        (sum, count) => sum + (count == -1 ? 1 : (count > 0 ? count : 0)),
+      );
 
   /// Get number of chats with unread messages for a specific filter
   int getUnreadChatCountForFilter(bool Function(String chatId, String chatType) matchesFilter) {
     int count = 0;
     _counts.forEach((chatId, unreadCount) {
       // We need chat type info here — the caller should pass it
-      if (unreadCount > 0) count++;
+      if (unreadCount > 0 || unreadCount == -1) count++;
     });
     return count;
   }
@@ -62,7 +71,7 @@ class UnreadCountProvider extends ChangeNotifier {
   void loadFromChats(List<Chat> chats) {
     _counts.clear();
     for (final chat in chats) {
-      if (chat.unreadCount > 0) {
+      if (chat.unreadCount > 0 || chat.unreadCount == -1) {
         _counts[chat.id] = chat.unreadCount;
       }
     }
@@ -83,13 +92,20 @@ class UnreadCountProvider extends ChangeNotifier {
   void increment(String chatId) {
     // Don't increment if user is currently in this chat
     if (_currentlyOpenChatId == chatId) return;
-    _counts[chatId] = (_counts[chatId] ?? 0) + 1;
+    final current = _counts[chatId] ?? 0;
+    _counts[chatId] = current == -1 ? 1 : current + 1;
     notifyListeners();
   }
 
   /// Optimistically decrement unread count for a chat (when messages marked as read)
   void decrement(String chatId, int count) {
     final current = _counts[chatId] ?? 0;
+    if (current == -1) {
+      _counts.remove(chatId);
+      NotificationService().cancelChatNotifications(chatId);
+      notifyListeners();
+      return;
+    }
     final newCount = (current - count).clamp(0, current);
     if (newCount == 0) {
       _counts.remove(chatId);

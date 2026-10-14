@@ -92,15 +92,6 @@ class _MainScreenState extends State<MainScreen>
     final db = AppDatabase(_currentUserId);
     _chatsStreamSubscription = db.watchChats().listen((dbChats) async {
       if (!mounted) return;
-      if (dbChats.isEmpty && _chats.isEmpty) {
-        try {
-          final cached = await _localStorage.loadChats();
-          if (cached.isNotEmpty && mounted && _chats.isEmpty) {
-            await db.saveChats(cached.map(_chatToCompanion).toList());
-            return;
-          }
-        } catch (_) {}
-      }
       final mappedChats = <Chat>[];
       bool hasSaved = false;
       for (final dbChat in dbChats) {
@@ -224,8 +215,8 @@ class _MainScreenState extends State<MainScreen>
     // 1. Немедленно подписываемся на локальный стрим SQLite (UI мгновенно получает кэш)
     _initChatsStream();
 
-    // 2. Инициализация Drift и фоновая синхронизация
-    await _initOfflineFirst();
+    // 2. Инициализация Drift и фоновая синхронизация (не блокирует первичную загрузку чатов)
+    unawaited(_initOfflineFirst());
 
     // 3. Загрузка чатов (фоновый запрос к серверу)
     _loadChats();
@@ -465,10 +456,16 @@ class _MainScreenState extends State<MainScreen>
         _localStorage.saveChats(_chats);
 
         // Сохранить в Drift
+        final db = AppDatabase(_currentUserId);
         if (updatedChat != null) {
-          final db = AppDatabase();
           try {
             db.saveChat(_chatToCompanion(updatedChat!));
+          } catch (_) {}
+        }
+        if (messageData != null) {
+          try {
+            final msg = Message.fromJson(messageData);
+            db.saveMessage(msg.toCompanion());
           } catch (_) {}
         }
       } else {
@@ -718,6 +715,9 @@ class _MainScreenState extends State<MainScreen>
           try {
             context.read<UnreadCountProvider>().loadFromChats(serverChats);
           } catch (_) {}
+
+          // Фоновый предзагруз сообщений для топ-10 активных чатов в Drift
+          _prefetchRecentMessages(serverChats);
         } else {
           debugPrint('Failed to load chats: ${result['message']}');
           if (result['message'] == 'Not authenticated') {
@@ -735,6 +735,31 @@ class _MainScreenState extends State<MainScreen>
 
     // Всегда проверять существование Избранного локально (даже оффлайн)
     await _ensureSavedChatExists();
+  }
+
+  /// Фоновая предзагрузка последних сообщений для наиболее активных чатов,
+  /// чтобы при переходе в чат сообщения открывались мгновенно из Drift SQLite
+  void _prefetchRecentMessages(List<Chat> chats) {
+    unawaited(() async {
+      try {
+        final db = AppDatabase(_currentUserId);
+        final topChats = chats.take(10).toList();
+        for (final chat in topChats) {
+          if (!mounted) break;
+          try {
+            final res = await ChatService.getMessages(chatId: chat.id, limit: 30);
+            if (res['success'] == true && res['messages'] is List<Message>) {
+              final msgs = res['messages'] as List<Message>;
+              if (msgs.isNotEmpty) {
+                await db.saveMessages(msgs.map((m) => m.toCompanion()).toList());
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (e) {
+        debugPrint('MainScreen: _prefetchRecentMessages error: $e');
+      }
+    }());
   }
 
   /// Ensure "Saved Messages" / "Favorites" chat exists
@@ -938,7 +963,10 @@ class _MainScreenState extends State<MainScreen>
     try {
       return context.read<UnreadCountProvider>().totalUnread;
     } catch (_) {
-      return _chats.fold(0, (sum, chat) => sum + chat.unreadCount);
+      return _chats.fold(
+          0,
+          (sum, chat) =>
+              sum + (chat.unreadCount == -1 ? 1 : (chat.unreadCount > 0 ? chat.unreadCount : 0)));
     }
   }
 
@@ -1838,7 +1866,11 @@ class _MainScreenState extends State<MainScreen>
     final folders = _folderService.folders;
     if (filterIndex >= 0 && filterIndex < folders.length) {
       final folder = folders[filterIndex];
-      return _chats.where((chat) => folder.matchesChat(chat) && chat.unreadCount > 0).length;
+      return _chats
+          .where((chat) =>
+              folder.matchesChat(chat) &&
+              (chat.unreadCount > 0 || chat.unreadCount == -1))
+          .length;
     }
     return 0;
   }
@@ -1938,7 +1970,7 @@ class _MainScreenState extends State<MainScreen>
         iconWidget = const iconoir.ChatBubble(color: Colors.white, width: 22, height: 22);
     }
 
-    final hasUnread = chat.unreadCount > 0;
+    final hasUnread = chat.unreadCount > 0 || chat.unreadCount == -1;
     final isPrivateChat = chat.chatType == 'private';
     final isSelected = _selectedChatIds.contains(chat.id);
 
@@ -2008,7 +2040,18 @@ class _MainScreenState extends State<MainScreen>
                   ),
                 ),
               const SizedBox(height: 4),
-              if (hasUnread)
+              if (chat.unreadCount == -1)
+                Container(
+                  width: 10,
+                  height: 10,
+                  margin: const EdgeInsets.only(top: 4, right: 4),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).extension<TheavThemeExtension>()?.palette.unreadBadge ??
+                        Theme.of(context).colorScheme.primary,
+                    shape: BoxShape.circle,
+                  ),
+                )
+              else if (chat.unreadCount > 0)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
@@ -2142,17 +2185,17 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _toggleReadChat(Chat chat) async {
-    final db = AppDatabase();
-    if (chat.unreadCount > 0) {
+    final db = AppDatabase(_currentUserId);
+    if (chat.unreadCount > 0 || chat.unreadCount == -1) {
       await db.batchMarkAsRead([chat.id]);
       try {
         context.read<UnreadCountProvider>().setCount(chat.id, 0);
       } catch (_) {}
       await ChatService.markMessagesAsRead(chatId: chat.id);
     } else {
-      await db.updateUnreadCount(chat.id, 1);
+      await db.updateUnreadCount(chat.id, -1);
       try {
-        context.read<UnreadCountProvider>().setCount(chat.id, 1);
+        context.read<UnreadCountProvider>().setCount(chat.id, -1);
       } catch (_) {}
     }
   }
@@ -2166,49 +2209,6 @@ class _MainScreenState extends State<MainScreen>
     } else {
       await ChatService.unpinChat(chatId: chat.id);
     }
-  }
-
-  Widget _buildChatSwipeBackground() {
-    final action = ChatSwipeService().action;
-    Widget icon;
-    switch (action) {
-      case ChatSwipeAction.pin:
-        icon = const iconoir.Pin(color: Colors.white, width: 22, height: 22);
-        break;
-      case ChatSwipeAction.read:
-        icon = const iconoir.ChatBubble(color: Colors.white, width: 22, height: 22);
-        break;
-      case ChatSwipeAction.archive:
-        icon = const iconoir.Archive(color: Colors.white, width: 22, height: 22);
-        break;
-      case ChatSwipeAction.mute:
-        icon = const iconoir.BellOff(color: Colors.white, width: 22, height: 22);
-        break;
-      case ChatSwipeAction.delete:
-        icon = const iconoir.Trash(color: Colors.white, width: 22, height: 22);
-        break;
-    }
-
-    return Container(
-      color: action.color,
-      alignment: Alignment.centerRight,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            action.label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 14,
-            ),
-          ),
-          const SizedBox(width: 8),
-          icon,
-        ],
-      ),
-    );
   }
 
   Widget? _buildChatSubtitle(Chat chat, bool hasUnread) {
@@ -2376,7 +2376,7 @@ class _MainScreenState extends State<MainScreen>
     final count = selectedChats.length;
     final allPinned =
         selectedChats.every((c) => c.isPinned || c.chatType == 'saved');
-    final anyUnread = selectedChats.any((c) => c.unreadCount > 0);
+    final anyUnread = selectedChats.any((c) => c.unreadCount > 0 || c.unreadCount == -1);
     final hasSavedChat = selectedChats.any((c) => c.chatType == 'saved');
     final deletableChats =
         selectedChats.where((c) => c.chatType != 'saved').toList();
@@ -2501,6 +2501,8 @@ class _MainScreenState extends State<MainScreen>
         if (result['success'] == true) {
           successCount++;
         }
+      } else if (chat.unreadCount == -1) {
+        successCount++;
       }
     }
 
@@ -2565,6 +2567,13 @@ class _MainScreenState extends State<MainScreen>
   }
 
   void _openChat(Chat chat) {
+    if (chat.unreadCount == -1) {
+      final db = AppDatabase(_currentUserId);
+      db.updateUnreadCount(chat.id, 0);
+      try {
+        context.read<UnreadCountProvider>().setCount(chat.id, 0);
+      } catch (_) {}
+    }
     try {
       context.read<UnreadCountProvider>().setOpenChat(chat.id);
     } catch (_) {}

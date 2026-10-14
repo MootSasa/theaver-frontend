@@ -178,24 +178,46 @@ class SyncService {
 
     // Also update chat's last message if message is newer
     final chat = await _db.getChat(chatId);
+    final msgCreatedAt = payload['created_at']?.toString() ?? '';
+    final safeCreatedAt = msgCreatedAt.isNotEmpty
+        ? msgCreatedAt
+        : DateTime.now().toIso8601String();
+    final isRound = payload['is_round'] == true ||
+        payload['message_type'] == 'round';
+    final messageType = payload['message_type']?.toString() ?? 'text';
+    final content = payload['content']?.toString() ?? '';
+
     if (chat != null) {
-      final msgCreatedAt = payload['created_at']?.toString() ?? '';
       if (chat.lastMessageTime == null ||
-          msgCreatedAt.compareTo(chat.lastMessageTime!) >= 0) {
+          safeCreatedAt.compareTo(chat.lastMessageTime!) >= 0) {
         await _db.updateChatLastMessage(
           chatId: chatId,
-          content: payload['content']?.toString() ?? '',
-          createdAt: msgCreatedAt.isNotEmpty
-              ? msgCreatedAt
-              : DateTime.now().toIso8601String(),
-          messageType: payload['message_type']?.toString() ?? 'text',
-          isRound: payload['is_round'] == true ||
-              payload['message_type'] == 'round',
+          content: content,
+          createdAt: safeCreatedAt,
+          messageType: messageType,
+          isRound: isRound,
           fileUrl: payload['file_url']?.toString(),
           groupedId: groupedId,
           incrementUnread: false,
         );
       }
+    } else {
+      // Upsert chat stub so it immediately appears in the chat list
+      await _db.saveChat(ChatsCompanion(
+        chatId: Value(chatId),
+        chatType: Value(payload['chat_type']?.toString() ?? 'private'),
+        name: Value(payload['sender_name']?.toString() ?? 'Чат'),
+        avatarUrl: Value(payload['sender_avatar_url']?.toString()),
+        lastMessage: Value(content),
+        lastMessageTime: Value(safeCreatedAt),
+        lastMessageType: Value(messageType),
+        lastMessageIsRound: Value(isRound),
+        lastMessageFileUrl: Value(payload['file_url']?.toString()),
+        lastMessageGroupedId: Value(groupedId),
+        otherUserId: Value(payload['sender_id']?.toString()),
+        updatedAt: Value(safeCreatedAt),
+        unreadCount: const Value(1),
+      ));
     }
   }
 

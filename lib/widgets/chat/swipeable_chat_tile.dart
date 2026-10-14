@@ -141,9 +141,13 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
   Widget _buildActionIcon(ChatSwipeAction action, Color color, double size) {
     switch (action) {
       case ChatSwipeAction.pin:
-        return iconoir.Pin(color: color, width: size, height: size);
+        return widget.chat.isPinned
+            ? iconoir.PinSlash(color: color, width: size, height: size)
+            : iconoir.Pin(color: color, width: size, height: size);
       case ChatSwipeAction.read:
-        return iconoir.ChatBubble(color: color, width: size, height: size);
+        return widget.chat.hasUnread
+            ? iconoir.Check(color: color, width: size, height: size)
+            : iconoir.ChatBubble(color: color, width: size, height: size);
       case ChatSwipeAction.archive:
         return iconoir.Archive(color: color, width: size, height: size);
       case ChatSwipeAction.mute:
@@ -164,6 +168,12 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
     final isRight = _dragOffset > 0;
     final progress = (_dragOffset.abs() / _threshold).clamp(0.0, 1.0);
     final isCrossed = _dragOffset.abs() >= _threshold;
+
+    final String actionLabel = action == ChatSwipeAction.read
+        ? (widget.chat.hasUnread ? 'Прочитать' : 'Не прочитано')
+        : (action == ChatSwipeAction.pin
+            ? (widget.chat.isPinned ? 'Открепить' : 'Закрепить')
+            : action.label);
 
     return Stack(
       clipBehavior: Clip.hardEdge,
@@ -188,7 +198,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
                             _buildActionIcon(action, Colors.white, 24),
                             const SizedBox(width: 10),
                             Text(
-                              action.label,
+                              actionLabel,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
@@ -199,7 +209,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
                           ]
                         : [
                             Text(
-                              action.label,
+                              actionLabel,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,

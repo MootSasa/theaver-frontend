@@ -16,6 +16,7 @@ import 'services/chat_swipe_service.dart';
 import 'services/cache_service.dart';
 import 'services/draft_service.dart';
 import 'services/chat_realtime_manager.dart';
+import 'services/database/app_database.dart';
 import 'services/liquid_glass_provider.dart';
 import 'services/unread_count_provider.dart';
 import 'services/deep_link_service.dart';
@@ -126,6 +127,7 @@ void main() async {
   // Initialize services
   await SettingsService().init();
   await AccountManager().init();
+  AppDatabase.setActiveUser(AccountManager().currentAccount?.userId);
   await ChatFolderService().init();
   await ChatSwipeService().init();
   await CacheService().init();
