@@ -647,11 +647,12 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   /// Конвертация Message → MessagesCompanion для Drift
   MessagesCompanion _messageToCompanion(Message msg) {
-    final isSent = msg.sendStatus == 1 && msg.id != msg.localId;
+    final hasServerId = msg.sendStatus == 1 && msg.id.isNotEmpty;
+    final effectiveChatId = msg.chatId.isNotEmpty ? msg.chatId : widget.channelId;
     return MessagesCompanion(
-      serverId: isSent ? Value(msg.id) : const Value.absent(),
+      serverId: hasServerId ? Value(msg.id) : const Value.absent(),
       localId: Value(msg.localId ?? msg.id),
-      chatId: Value(msg.chatId),
+      chatId: Value(effectiveChatId),
       senderId: Value(msg.senderId),
       content: Value(msg.content),
       messageType: Value(msg.messageType),

@@ -718,12 +718,13 @@ class Message {
   }
 
   /// Convert Message to Drift MessagesCompanion
-  MessagesCompanion toCompanion() {
-    final isSent = sendStatus == 1 && id != localId;
+  MessagesCompanion toCompanion({String? fallbackChatId}) {
+    final effectiveChatId = chatId.isNotEmpty ? chatId : (fallbackChatId ?? '');
+    final hasServerId = sendStatus == 1 && id.isNotEmpty;
     return MessagesCompanion(
-      serverId: isSent ? drift.Value(id) : const drift.Value.absent(),
+      serverId: hasServerId ? drift.Value(id) : const drift.Value.absent(),
       localId: drift.Value(localId ?? id),
-      chatId: drift.Value(chatId),
+      chatId: drift.Value(effectiveChatId),
       senderId: drift.Value(senderId),
       content: drift.Value(content),
       messageType: drift.Value(messageType),
@@ -1123,7 +1124,13 @@ class ChatService {
         List<Message> messages = [];
         if (data['messages'] != null && data['messages'] is List) {
           for (var msg in data['messages']) {
-            messages.add(Message.fromJson(msg));
+            if (msg is Map) {
+              final map = Map<String, dynamic>.from(msg);
+              if (map['chat_id'] == null || map['chat_id'].toString().isEmpty) {
+                map['chat_id'] = chatId;
+              }
+              messages.add(Message.fromJson(map));
+            }
           }
         }
         return {

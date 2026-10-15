@@ -609,15 +609,15 @@ class _MainScreenState extends State<MainScreen>
         } catch (_) {}
       }
       if (mounted) {
-        await _refreshChatLastMessage(chatId);
+        await _refreshChatLastMessage(chatId, allowClear: true);
       }
     }
   }
 
-  Future<void> _refreshChatLastMessage(String chatId) async {
+  Future<void> _refreshChatLastMessage(String chatId, {bool allowClear = false}) async {
     try {
       final db = AppDatabase();
-      await db.refreshChatLastMessageFromDb(chatId);
+      await db.refreshChatLastMessageFromDb(chatId, allowClear: allowClear);
     } catch (e) {
       debugPrint('Error refreshing last message for chat $chatId: $e');
     }
@@ -751,7 +751,7 @@ class _MainScreenState extends State<MainScreen>
             if (res['success'] == true && res['messages'] is List<Message>) {
               final msgs = res['messages'] as List<Message>;
               if (msgs.isNotEmpty) {
-                await db.saveMessages(msgs.map((m) => m.toCompanion()).toList());
+                await db.saveMessages(msgs.map((m) => m.toCompanion(fallbackChatId: chat.id)).toList());
                 await db.refreshChatLastMessageFromDb(chat.id);
               }
             }
@@ -782,7 +782,6 @@ class _MainScreenState extends State<MainScreen>
           await db.migrateSavedChatId('saved_$userId', savedChat.id);
         }
         await db.saveChat(_chatToCompanion(savedChat));
-        await db.refreshChatLastMessageFromDb(savedChat.id);
       }
     } catch (e) {
       debugPrint('Error ensuring saved chat exists: $e');

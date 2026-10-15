@@ -323,6 +323,11 @@ class AppDatabase extends _$AppDatabase {
       try {
         await _cleanupDuplicateSavedChats();
       } catch (_) {}
+
+      // 3. Очистка поврежденных сообщений без chat_id
+      try {
+        await customStatement("DELETE FROM messages WHERE chat_id = '' OR chat_id IS NULL");
+      } catch (_) {}
     } catch (e) {
       debugPrint('AppDatabase initialize error: $e');
     }
@@ -493,25 +498,15 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  /// Пересчитать последнее сообщение чата на основе последней записи в таблице сообщений
-  Future<void> refreshChatLastMessageFromDb(String chatId) async {
+  /// Пересчитать последнее сообщение чата на основе последней записи в таблице сообщений.
+  /// При отсутствии локальных сообщений НЕ затирает existing.lastMessage, если не передан allowClear: true.
+  Future<void> refreshChatLastMessageFromDb(String chatId, {bool allowClear = false}) async {
     await ensureInitialized();
     final lastMsg = await getLastMessageForChat(chatId);
     final existing = await getChat(chatId);
     if (existing == null) return;
 
-    if (lastMsg == null) {
-      await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
-        const ChatsCompanion(
-          lastMessage: Value(null),
-          lastMessageTime: Value(null),
-          lastMessageType: Value(null),
-          lastMessageIsRound: Value(false),
-          lastMessageFileUrl: Value(null),
-          lastMessageGroupedId: Value(null),
-        ),
-      );
-    } else {
+    if (lastMsg != null) {
       final isRound = lastMsg.isRound || lastMsg.messageType == 'round';
       await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
         ChatsCompanion(
@@ -522,6 +517,17 @@ class AppDatabase extends _$AppDatabase {
           lastMessageFileUrl: Value(lastMsg.fileUrl),
           lastMessageGroupedId: Value(lastMsg.groupedId),
           updatedAt: Value(lastMsg.createdAt),
+        ),
+      );
+    } else if (allowClear) {
+      await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+        const ChatsCompanion(
+          lastMessage: Value(null),
+          lastMessageTime: Value(null),
+          lastMessageType: Value(null),
+          lastMessageIsRound: Value(false),
+          lastMessageFileUrl: Value(null),
+          lastMessageGroupedId: Value(null),
         ),
       );
     }
