@@ -107,9 +107,6 @@ class ProfileScreenState extends State<ProfileScreen>
   /// Фактор расширения аватарки: 0.0 = маленькая круглая, 1.0 = большая квадратная
   double _expandFactor = 0.0;
 
-  /// Флаг текущего режима движения (true = сворачивание, false = расширение)
-  bool _isCollapsingMode = false;
-
   /// Яркость верхней части фото аватарки (0.0 = тёмное фото, 1.0 = светлое фото)
   double _topLuminance = 0.5;
 
@@ -121,7 +118,8 @@ class ProfileScreenState extends State<ProfileScreen>
     } else if (_avatarUrl != null && _avatarUrl!.isNotEmpty) {
       provider = avatarImageProvider(_avatarUrl);
     } else if (_avatarUrls.isNotEmpty) {
-      provider = avatarImageProvider(_avatarUrls.first);
+      final index = _currentAvatarIndex.clamp(0, _avatarUrls.length - 1);
+      provider = avatarImageProvider(_avatarUrls[index]);
     }
 
     if (provider == null) {
@@ -184,8 +182,6 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  /// Зафиксировано ли раскрытое состояние аватарки
-  bool _isExpanded = false;
 
   /// Контроллер анимации расширения аватарки
   late AnimationController _expandController;
@@ -889,148 +885,70 @@ class ProfileScreenState extends State<ProfileScreen>
     if (_expandController.isAnimating) return;
 
     final dy = details.delta.dy;
+    final screenHeight = MediaQuery.of(context).size.height;
 
-    // 1. Если аватарка в процессе расширения / сворачивания (или полностью развёрнута)
-    if (_expandFactor > 0.0) {
-      if (_isExpanded && !_isCollapsingMode) {
-        _isCollapsingMode = true;
-      } else if (!_isExpanded && _isCollapsingMode) {
-        _isCollapsingMode = false;
-      }
-
-      final screenHeight = MediaQuery.of(context).size.height;
-      final progress = _expandFactor.clamp(0.0, 1.0);
-
-      final resistance = 1.0 + 2.5 * math.sin(progress * math.pi);
-      final delta = (dy / (screenHeight * 0.30)) / resistance;
-
-      final oldFactor = _expandFactor;
-      final newFactor = (_expandFactor + delta).clamp(0.0, 1.0);
-
-      const expandThreshold = 0.32;
-      const collapseThreshold = 0.68;
-
-      if (!_isExpanded && oldFactor < expandThreshold && newFactor >= expandThreshold) {
-        _isExpanded = true;
-        _isCollapsingMode = false;
-        _animateToExpand(1.0, velocity: (details.primaryDelta ?? 1.0) * 100.0);
-        return;
-      }
-
-      if (_isExpanded && oldFactor >= collapseThreshold && newFactor < collapseThreshold) {
-        _isExpanded = false;
-        _isCollapsingMode = true;
-        if (_avatarPageController.hasClients && (_avatarPageController.page?.round() ?? 0) != 0) {
-          _avatarPageController.animateToPage(
-            0,
-            duration: const Duration(milliseconds: 350),
-            curve: Curves.easeInOutCubic,
-          );
-        }
-        _animateToExpand(0.0, velocity: (details.primaryDelta ?? -1.0) * 100.0);
-        return;
-      }
-
-      setState(() {
-        _expandFactor = newFactor;
-        _expandController.value = _expandFactor;
-      });
-      return;
+    // Прямое 1:1 следование за пальцем с мягким демпфированием у краев
+    double resistance = 1.0;
+    if (_expandFactor > 0.95 && dy > 0) {
+      resistance = 3.5;
+    } else if (_expandFactor < 0.05 && dy < 0) {
+      resistance = 3.5;
     }
 
-    // 2. Если аватарка полностью в круглом состоянии (_expandFactor == 0.0)
-    final currentScroll = _scrollController.hasClients ? _scrollController.offset : 0.0;
+    final delta = (dy / (screenHeight * 0.35)) / resistance;
+    final newFactor = (_expandFactor + delta).clamp(0.0, 1.0);
 
-    // Свайп вниз в самом верху экрана по любой области -> разворачиваем аватарку!
-    if (dy > 0 && currentScroll <= 0.0) {
-      final screenHeight = MediaQuery.of(context).size.height;
-      final delta = dy / (screenHeight * 0.30);
-      final newFactor = (_expandFactor + delta).clamp(0.0, 1.0);
-      setState(() {
-        _expandFactor = newFactor;
-        _expandController.value = _expandFactor;
-      });
-    } else if (_scrollController.hasClients) {
-      // Иначе — скроллим весь экран целиком!
-      final maxExtent = _scrollController.position.maxScrollExtent;
-      final targetOffset = (currentScroll - dy).clamp(0.0, math.max<double>(0.0, maxExtent));
-      _scrollController.jumpTo(targetOffset);
-    }
+    setState(() {
+      _expandFactor = newFactor;
+      _expandController.value = newFactor;
+    });
   }
 
   void _handleVerticalDragEnd(DragEndDetails details) {
     if (_expandController.isAnimating) return;
 
-    if (_expandFactor > 0.0 && _expandFactor < 1.0) {
-      final velocity = details.primaryVelocity ?? 0.0;
-      final isSwipeDown = velocity > 180;
-      final isSwipeUp = velocity < -180;
-
-      const expandThreshold = 0.32;
-      const collapseThreshold = 0.68;
-
-      if (_isExpanded) {
-        if (isSwipeUp || _expandFactor < collapseThreshold) {
-          _isExpanded = false;
-          _animateToExpand(0.0, velocity: velocity);
-        } else {
-          _animateToExpand(1.0, velocity: velocity);
-        }
-      } else {
-        if (isSwipeDown || _expandFactor >= expandThreshold) {
-          _isExpanded = true;
-          _animateToExpand(1.0, velocity: velocity);
-        } else {
-          _animateToExpand(0.0, velocity: velocity);
-        }
-      }
-      return;
-    }
-
-    // Доводчик для зафиксированного положения шапки при прокрутке вверх
-    if (_expandFactor == 0.0 && _scrollController.hasClients) {
-      final currentScroll = _scrollController.offset;
-      final velocity = details.primaryVelocity ?? 0.0;
-      const snapOffset = 233.0; // Точная позиция фиксации панели инфо под шапкой
-
-      if (currentScroll > 0.0 && currentScroll < snapOffset + 35.0) {
-        final bool shouldSnapToHeader;
-        if (velocity < -120) {
-          // Свайп ВВЕРХ -> доводчик доводит до зафиксированного положения
-          shouldSnapToHeader = true;
-        } else if (velocity > 150) {
-          // Свайп ВНИЗ -> доводчик доводит до самого верха (0.0)
-          shouldSnapToHeader = false;
-        } else {
-          // Отпустили палец без высокой скорости -> выбираем ближайшее положение
-          shouldSnapToHeader = currentScroll >= snapOffset * 0.42;
-        }
-
-        final target = shouldSnapToHeader ? snapOffset : 0.0;
-        _scrollController.animateTo(
-          target,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
-        return;
-      }
-
-      if (velocity.abs() > 120) {
-        final maxExtent = _scrollController.position.maxScrollExtent;
-        final targetOffset = (currentScroll - velocity * 0.35).clamp(
-          snapOffset,
-          math.max<double>(snapOffset, maxExtent),
-        );
-        _scrollController.animateTo(
-          targetOffset,
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.decelerate,
-        );
-      }
+    final velocity = details.primaryVelocity ?? 0.0;
+    // Свайп вниз с ускорением -> раскрываем
+    // Свайп вверх с ускорением -> сворачиваем
+    if (velocity > 200) {
+      _animateToExpand(1.0, velocity: velocity);
+    } else if (velocity < -200) {
+      _animateToExpand(0.0, velocity: velocity);
+    } else if (_expandFactor >= 0.45) {
+      _animateToExpand(1.0, velocity: velocity);
+    } else {
+      _animateToExpand(0.0, velocity: velocity);
     }
   }
 
-  /// Вычисляет смещение аватарки (translation) в зависимости от текущего фактора расширения и режима (расширение / сворачивание).
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (_expandController.isAnimating) return false;
+
+    if (notification is ScrollUpdateNotification) {
+      // Пользователь потянул вниз за пределы верха списка (overscroll)
+      if (notification.metrics.pixels < 0 && _expandFactor == 0.0) {
+        final overscroll = -notification.metrics.pixels;
+        final factor = (overscroll / 150.0).clamp(0.0, 1.0);
+        _expandController.value = factor;
+        setState(() {
+          _expandFactor = factor;
+        });
+      }
+    } else if (notification is ScrollEndNotification) {
+      if (_expandFactor > 0.0 && _expandFactor < 1.0) {
+        if (_expandFactor >= 0.40) {
+          _animateToExpand(1.0);
+        } else {
+          _animateToExpand(0.0);
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Вычисляет смещение аватарки (translation) в зависимости от текущего фактора расширения.
+  /// При progress = 0.0 аватарка центрирована под шапкой (top = topOffset).
+  /// При progress = 1.0 аватарка занимает полноэкранный квадрат (top = 0.0).
   double _calculateAvatarTopTranslation({
     required double screenWidth,
     required double topOffset,
@@ -1039,39 +957,17 @@ class ProfileScreenState extends State<ProfileScreen>
     final startCenterY = topOffset + 55.0;
     final endCenterY = screenWidth / 2;
 
-    final curvedFactor = Curves.easeInOutCubic.transform(progress);
-    final currentCenterY = startCenterY + (endCenterY - startCenterY) * curvedFactor;
+    final currentCenterY = startCenterY + (endCenterY - startCenterY) * progress;
     final currentSize = _calculateCurrentAvatarSize(screenWidth);
 
     final currentTop = currentCenterY - currentSize / 2;
     return currentTop - topOffset;
   }
 
-  /// Вычисляет текущий размер аватарки
+  /// Вычисляет текущий размер аватарки (непрерывно от 110dp до ширины экрана)
   double _calculateCurrentAvatarSize(double screenWidth) {
     final progress = _expandFactor.clamp(0.0, 1.0);
-    const expandThreshold = 0.32;
-    const collapseThreshold = 0.68;
-
-    if (_isCollapsingMode) {
-      if (progress >= collapseThreshold) {
-        return screenWidth;
-      } else {
-        final collapseProgress = (progress / collapseThreshold).clamp(0.0, 1.0);
-        final collapseFactor = Curves.easeInQuart.transform(collapseProgress);
-        return 110.0 + (screenWidth - 110.0) * collapseFactor;
-      }
-    } else {
-      if (progress < expandThreshold) {
-        final preProgress = (progress / expandThreshold).clamp(0.0, 1.0);
-        final preFactor = Curves.easeOutCubic.transform(preProgress);
-        return 110.0 + (145.0 - 110.0) * preFactor;
-      } else {
-        final expansionProgress = ((progress - expandThreshold) / (1.0 - expandThreshold)).clamp(0.0, 1.0);
-        final fastSizeFactor = Curves.easeOutQuart.transform(expansionProgress);
-        return 145.0 + (screenWidth - 145.0) * fastSizeFactor;
-      }
-    }
+    return 110.0 + (screenWidth - 110.0) * progress;
   }
 
   @override
@@ -1155,10 +1051,18 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   // ============================================================
-  // Liquid Glass дизайн
+  // Единая раскладка профиля (Liquid Glass / Modern)
   // ============================================================
 
   Widget _buildGlassProfile(BuildContext context, {bool isLite = false}) {
+    return _buildProfileLayout(context, isGlass: true, isLite: isLite);
+  }
+
+  Widget _buildModernProfile(BuildContext context) {
+    return _buildProfileLayout(context, isGlass: false, isLite: false);
+  }
+
+  Widget _buildProfileLayout(BuildContext context, {required bool isGlass, required bool isLite}) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
@@ -1192,10 +1096,9 @@ class ProfileScreenState extends State<ProfileScreen>
     final currentSize = _calculateCurrentAvatarSize(screenWidth);
     final avatarTopY = topOffset + effectiveAvatarTranslation;
     final usernameTopY = avatarTopY + currentSize + contentTranslation + 12.0;
-    
-    // Блюр начинается немного выше (над) именем пользователя и заканчивается на середине кнопок
-    final blurTopY = usernameTopY - 0.0; 
-    final blurBottomY = usernameTopY + 85.0; 
+
+    final blurTopY = usernameTopY - 0.0;
+    final blurBottomY = usernameTopY + 85.0;
     final blurHeight = math.max(0.0, blurBottomY - blurTopY);
     final blurProgress = ((_expandFactor - 0.15) / 0.85).clamp(0.0, 1.0);
     final blurFactor = Curves.easeOutCubic.transform(blurProgress);
@@ -1222,738 +1125,349 @@ class ProfileScreenState extends State<ProfileScreen>
       _expandFactor,
     );
 
-
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: overlayStyle,
-      child: Scaffold(
-        backgroundColor: backgroundColor,
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: Color(0xFF0088CC)))
-            : GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onVerticalDragUpdate: _handleVerticalDragUpdate,
-          onVerticalDragEnd: _handleVerticalDragEnd,
-          child: Stack(
-            children: [
-              // 1. Основной фон экрана (адаптивный, включая цвет профиля)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeInOutCubic,
-                color: backgroundColor,
-              ),
-
-              // 2. Кастомный фоновый градиент ТОЛЬКО вокруг аватарки
-              Builder(
-                builder: (context) {
-                  final profileTheme = context.watch<ProfileThemeProvider>();
-                  if (!profileTheme.hasCustomColor) return const SizedBox.shrink();
-                  final preset = profileTheme.currentPreset!;
-                  if (!preset.isGradient) return const SizedBox.shrink();
-                  
-                  final headerBgHeight = topOffset + avatarTopTranslation + currentSize + 50.0;
-
-                  return Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: math.max(0.0, headerBgHeight),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeInOutCubic,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: preset.gradientColors!,
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ),
+    return PopScope(
+      canPop: _expandFactor <= 0.05,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_expandFactor > 0.05) {
+          _animateToExpand(0.0);
+        }
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: overlayStyle,
+        child: Scaffold(
+          backgroundColor: backgroundColor,
+          body: _isLoading
+              ? const Center(child: CircularProgressIndicator(color: Color(0xFF0088CC)))
+              : GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onVerticalDragUpdate: _expandFactor > 0.0 ? _handleVerticalDragUpdate : null,
+                  onVerticalDragEnd: _expandFactor > 0.0 ? _handleVerticalDragEnd : null,
+                  child: Stack(
+                    children: [
+                      // 1. Основной адаптивный фон экрана
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 350),
+                        curve: Curves.easeInOutCubic,
+                        color: backgroundColor,
                       ),
-                    ),
-                  );
-                },
-              ),
 
-              // 2. Аватарка (с прозрачностью при прокрутке вверх)
-              Positioned(
-                top: topOffset,
-                left: 0,
-                right: 0,
-                child: Transform.translate(
-                  offset: Offset(0, effectiveAvatarTranslation),
-                  child: Center(
-                    child: Opacity(
-                      opacity: _expandFactor > 0.0
-                          ? 1.0
-                          : (1.0 - (scrollOffset / 90.0)).clamp(0.0, 1.0),
-                      child: Builder(
+                      // 2. Кастомный фоновый градиент вокруг аватарки
+                      Builder(
                         builder: (context) {
-                          final profileTheme = context.watch<ProfileThemeProvider>();
-                          Color avatarBgColor = backgroundColor;
-                          if (profileTheme.hasCustomColor) {
-                            final preset = profileTheme.currentPreset!;
-                            if (preset.isGradient && preset.gradientColors != null) {
-                              avatarBgColor = preset.gradientColors!.reduce(
-                                  (a, b) => b);
-                            } else {
-                              avatarBgColor = preset.backgroundColor;
-                            }
-                          }
-                          return ExpandableAvatar(
-                            pageController: _avatarPageController,
-                            initialPage: _currentAvatarIndex,
-                            avatarUrls: _avatarUrls,
-                            avatarFile: _avatarFile,
-                            expandFactor: _expandFactor,
-                            isCollapsing: _isCollapsingMode,
-                            tintColor: avatarBgColor,
-                            backgroundColor: avatarBgColor,
-                            displayName: _getDisplayName(),
-                            chatAvatarHeroTag: 'profile_avatar_$_heroKey',
-                            onTap: _openFullAvatarViewer,
+                          final pTheme = context.watch<ProfileThemeProvider>();
+                          if (!pTheme.hasCustomColor) return const SizedBox.shrink();
+                          final preset = pTheme.currentPreset!;
+                          if (!preset.isGradient) return const SizedBox.shrink();
+
+                          final headerBgHeight = topOffset + avatarTopTranslation + currentSize + 50.0;
+
+                          return Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            height: math.max(0.0, headerBgHeight),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 350),
+                              curve: Curves.easeInOutCubic,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: preset.gradientColors!,
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                ),
+                              ),
+                            ),
                           );
                         },
                       ),
-                    ),
-                  ),
-                ),
-              ),
 
-              // 2. Бэкдроп блюр НАД аватаркой, но ЗА текстом и кнопками действия
-              if (_expandFactor > 0.05 && blurFactor > 0.001)
-                Positioned(
-                  top: blurTopY,
-                  left: 0,
-                  right: 0,
-                  height: blurHeight + 5,
-                  child: IgnorePointer(
-                    child: Inspire.tint.bottomToTop(
-                      color: backgroundColor,
-                      opacity: 1.0 * blurFactor,
-                      extent: 0.85,
-                      curve: Curves.easeOutCubic,
-                      child: Inspire.backdropBlur(
-                        config: InspireBlurConfig.bottomToTop(
-                          sigma: 10.0 * blurFactor,
-                          extent: 0.85,
-                          fadeCurve: Curves.easeOutCubic,
-                        ),
-                        child: const SizedBox.expand(),
-                      ),
-                    ),
-                  ),
-                ),
-                
-              if (_expandFactor > 0.05 && blurFactor > 0.001)
-                Positioned(
-                  top: blurBottomY,
-                  left: 0,
-                  right: 0,
-                  bottom: -1000, // Уходим далеко вниз, чтобы гарантированно закрыть фон
-                  child: IgnorePointer(
-                    child: Container(
-                      color: backgroundColor, // Прямоугольник цвета фона
-                    ),
-                  ),
-                ),
-              SingleChildScrollView(
-                controller: _scrollController,
-                physics: const NeverScrollableScrollPhysics(),
-                child: Column(
-                  children: [
-                    SizedBox(
-                      height: topOffset + 110.0 + (_expandFactor > 0.0 ? (avatarTopTranslation + currentSize - 110.0) : 0.0),
-                      width: double.infinity,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onTap: _openFullAvatarViewer,
-                        onHorizontalDragUpdate: (details) {
-                          if (_avatarUrls.length > 1 && _expandFactor > 0.5 && _avatarPageController.hasClients) {
-                            final currentOffset = _avatarPageController.offset;
-                            final newOffset = (currentOffset - details.delta.dx).clamp(
-                              0.0,
-                              _avatarPageController.position.maxScrollExtent,
-                            );
-                            _avatarPageController.jumpTo(newOffset);
-                          }
-                        },
-                        onHorizontalDragEnd: (details) {
-                          if (_avatarUrls.length > 1 && _expandFactor > 0.5 && _avatarPageController.hasClients) {
-                            final double currentPage = _avatarPageController.page ?? 0.0;
-                            final velocity = details.primaryVelocity ?? 0.0;
-                            final int targetPage;
-                            if (velocity < -250) {
-                              targetPage = (currentPage.floor() + 1).clamp(0, _avatarUrls.length - 1);
-                            } else if (velocity > 250) {
-                              targetPage = (currentPage.ceil() - 1).clamp(0, _avatarUrls.length - 1);
-                            } else {
-                              targetPage = currentPage.round().clamp(0, _avatarUrls.length - 1);
-                            }
-                            _avatarPageController.animateToPage(
-                              targetPage,
-                              duration: const Duration(milliseconds: 250),
-                              curve: Curves.easeOutCubic,
-                            );
-                          }
-                        },
-                        child: const SizedBox.expand(),
-                      ),
-                    ),
-
-                    Transform.translate(
-                      offset: Offset(0, contentTranslation),
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Opacity(
-                          opacity: _expandFactor > 0.0
-                              ? 1.0
-                              : (1.0 - (scrollOffset / 75.0)).clamp(0.0, 1.0),
-                          child: Column(
-                            children: [
-                              Hero(
-                                tag: 'profile_name_$_heroKey',
-                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
-                                child: Material(
-                                  type: MaterialType.transparency,
-                                  child: Text(
-                                    _getDisplayName(),
-                                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Hero(
-                                tag: 'profile_status_$_heroKey',
-                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
-                                child: Material(
-                                  type: MaterialType.transparency,
-                                  child: Text(
-                                    _getStatusText(l10n),
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: _getStatusColor(
-                                        context,
-                                        const Color(0xFF0088CC).withValues(alpha: 0.8),
-                                      ),
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    Transform.translate(
-                      offset: Offset(0, contentTranslation),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: SingleChildScrollView(
-                          padding: const EdgeInsets.only(bottom: 32),
-                          child: Column(
-                            children: [
-                              LiquidGlassProfileButtons(
-                                enabled: true,
-                                isLite: isLite,
-                                customButtons: _isSelf ? null : _getOtherUserActionButtons(context),
-                                onChoosePhoto: _isSelf ? _pickImage : null,
-                                onQrCode: _isSelf ? _showQrCode : null,
-                                onEdit: _isSelf ? _openEditProfile : null,
-                                onDeletePhoto: _isSelf ? _deleteAvatar : null,
-                                hasAvatar: _avatarUrl != null || _avatarFile != null,
-                                collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
-                                choosePhotoLabel: l10n.translate('profile_choose_photo'),
-                                qrCodeLabel: l10n.translate('profile_qr_code'),
-                                editLabel: l10n.translate('profile_edit_btn'),
-                                deletePhotoLabel: l10n.translate('profile_delete_photo'),
-                              ),
-                              const SizedBox(height: 12),
-                              LiquidGlassMusicStatus(
-                                enabled: true,
-                                isLite: isLite,
-                                trackTitle: null,
-                                trackAuthor: null,
-                                musicLabel: l10n.translate('profile_music'),
-                              ),
-                              const SizedBox(height: 12),
-                              LiquidGlassInfoPanel(
-                                enabled: true,
-                                isLite: isLite,
-                                phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
-                                bio: _bio,
-                                username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
-                                birthday: _formatBirthday(_birthday, l10n),
-                                age: _calculateAge(_birthday)?.toString(),
-                                phoneLabel: l10n.translate('profile_phone'),
-                                bioLabel: l10n.translate('profile_bio'),
-                                usernameLabel: l10n.translate('profile_username'),
-                                birthdayLabel: l10n.translate('profile_birthday'),
-                                ageLabel: l10n.translate('profile_age'),
-                              ),
-                              const SizedBox(height: 12),
-                              ProfileSegmentedControl(
-                                enabled: true,
-                                isLite: isLite,
-                                selectedIndex: _selectedSegment,
-                                onTabChanged: (index) {
-                                  setState(() {
-                                    _selectedSegment = index;
-                                  });
+                      // 3. Аватарка с непрерывным морфингом
+                      Positioned(
+                        top: topOffset,
+                        left: 0,
+                        right: 0,
+                        child: Transform.translate(
+                          offset: Offset(0, effectiveAvatarTranslation),
+                          child: Center(
+                            child: Opacity(
+                              opacity: _expandFactor > 0.0
+                                  ? 1.0
+                                  : (1.0 - (scrollOffset / 90.0)).clamp(0.0, 1.0),
+                              child: Builder(
+                                builder: (context) {
+                                  final pTheme = context.watch<ProfileThemeProvider>();
+                                  Color avatarBgColor = backgroundColor;
+                                  if (pTheme.hasCustomColor) {
+                                    final preset = pTheme.currentPreset!;
+                                    if (preset.isGradient && preset.gradientColors != null) {
+                                      avatarBgColor = preset.gradientColors!.reduce(
+                                          (a, b) => b);
+                                    } else {
+                                      avatarBgColor = preset.backgroundColor;
+                                    }
+                                  }
+                                  return ExpandableAvatar(
+                                    pageController: _avatarPageController,
+                                    initialPage: _currentAvatarIndex,
+                                    avatarUrls: _avatarUrls,
+                                    avatarFile: _avatarFile,
+                                    expandFactor: _expandFactor,
+                                    tintColor: avatarBgColor,
+                                    backgroundColor: avatarBgColor,
+                                    displayName: _getDisplayName(),
+                                    chatAvatarHeroTag: 'profile_avatar_$_heroKey',
+                                    onTap: _openFullAvatarViewer,
+                                    onPageChanged: (index) {
+                                      setState(() {
+                                        _currentAvatarIndex = index;
+                                      });
+                                      _updateTopLuminance();
+                                    },
+                                  );
                                 },
-                                wallLabel: l10n.translate('profile_tab_wall'),
-                                giftsLabel: l10n.translate('profile_tab_gifts'),
                               ),
-                              SizedBox(height: math.max(250.0, MediaQuery.of(context).size.height * 0.6)),
-                            ],
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
 
-              // 5. Аватарка (с вертикальным отражением нижних 15%)
-              // Прогрессивный Backdrop Blur для всей верхней области от пакета inspire_blur
-              if (statusBarHeight > 0 && _expandFactor > 0.01)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: statusBarHeight + 0.0,
-                  child: InspireBackdropBlur(
-                    clipBehavior: Clip.none,
-                    config: InspireBlurConfig.topToBottom(
-                      sigma: 10.0 * _expandFactor,
-                      extent: 1.0,
-                      fadeCurve: Curves.easeOutCubic,
-                    ),
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-
-              Positioned(
-                top: statusBarHeight,
-                left: 0,
-                right: 0,
-                child: _buildProfileHeader(
-                  context,
-                  l10n,
-                  isDark,
-                  onSurfaceColor,
-                  iconColor: headerIconColor,
-                  glassEnabled: true,
-                  isLite: isLite,
-                  scrollOffset: scrollOffset,
-                ),
-              ),
-
-              // Индикатор загрузки
-              if (_isProcessing)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black.withValues(alpha: 0.3),
-                    child: const Center(
-                      child: CircularProgressIndicator(color: Color(0xFF0088CC)),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ============================================================
-  // Современный дизайн БЕЗ Liquid Glass
-  // ============================================================
-
-  Widget _buildModernProfile(BuildContext context) {
-    final l10n = context.l10n;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    Color backgroundColor = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F5);
-    final profileTheme = context.watch<ProfileThemeProvider>();
-    if (profileTheme.hasCustomColor) {
-      final preset = profileTheme.currentPreset!;
-      if (preset.isGradient && preset.gradientColors != null) {
-        backgroundColor = preset.gradientColors!.reduce(
-            (a, b) => b);
-      } else {
-        backgroundColor = preset.backgroundColor;
-      }
-    }
-    final onSurfaceColor = isDark ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E);
-    final brandColor = context.watch<ProfileThemeProvider>().primaryColor;
-
-    final screenWidth = MediaQuery.of(context).size.width;
-    final statusBarHeight = MediaQuery.of(context).padding.top;
-    const headerHeight = 48.0;
-    final topOffset = statusBarHeight + headerHeight - 15.0;
-
-    final avatarTopTranslation = _calculateAvatarTopTranslation(
-      screenWidth: screenWidth,
-      topOffset: topOffset,
-    );
-    final contentTranslation = avatarTopTranslation;
-
-    final scrollOffset = (_scrollController.hasClients ? _scrollController.offset : 0.0).clamp(0.0, double.infinity);
-    final effectiveAvatarTranslation = avatarTopTranslation - (1.0 - _expandFactor) * scrollOffset;
-
-    final currentSize = _calculateCurrentAvatarSize(screenWidth);
-    final avatarTopY = topOffset + effectiveAvatarTranslation;
-    final usernameTopY = avatarTopY + currentSize + contentTranslation + 12.0;
-    
-    // Блюр начинается немного выше (над) именем пользователя и заканчивается на середине кнопок
-    final blurTopY = usernameTopY - 0.0; 
-    final blurBottomY = usernameTopY + 85.0; 
-    final blurHeight = math.max(0.0, blurBottomY - blurTopY);
-    final blurProgress = ((_expandFactor - 0.15) / 0.85).clamp(0.0, 1.0);
-    final blurFactor = Curves.easeOutCubic.transform(blurProgress);
-
-    final isPhotoTopLight = _topLuminance > 0.55;
-
-    final targetIconBrightness = _expandFactor > 0.4
-        ? (isPhotoTopLight ? Brightness.dark : Brightness.light)
-        : (isDark ? Brightness.light : Brightness.dark);
-
-    final overlayStyle = SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: targetIconBrightness,
-      statusBarBrightness: targetIconBrightness == Brightness.dark ? Brightness.light : Brightness.dark,
-    );
-
-    final expandedHeaderColor = targetIconBrightness == Brightness.dark
-        ? Colors.black.withValues(alpha: 0.85)
-        : Colors.white;
-
-    final headerIconColor = Color.lerp(
-      onSurfaceColor.withValues(alpha: 0.7),
-      expandedHeaderColor,
-      _expandFactor,
-    );
-
-    final cardColor = isDark
-        ? const Color.fromARGB(180, 44, 44, 46)
-        : const Color.fromARGB(180, 255, 255, 255);
-
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: overlayStyle,
-      child: Scaffold(
-        backgroundColor: backgroundColor,
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: Color(0xFF0088CC)))
-            : GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onVerticalDragUpdate: _handleVerticalDragUpdate,
-          onVerticalDragEnd: _handleVerticalDragEnd,
-          child: Stack(
-            children: [
-              // 1. Основной фон экрана (адаптивный, включая цвет профиля)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeInOutCubic,
-                color: backgroundColor,
-              ),
-
-              // 2. Кастомный фоновый градиент ТОЛЬКО вокруг аватарки
-              Builder(
-                builder: (context) {
-                  final profileTheme = context.watch<ProfileThemeProvider>();
-                  if (!profileTheme.hasCustomColor) return const SizedBox.shrink();
-                  final preset = profileTheme.currentPreset!;
-                  if (!preset.isGradient) return const SizedBox.shrink();
-                  
-                  final headerBgHeight = topOffset + avatarTopTranslation + currentSize + 50.0;
-
-                  return Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: math.max(0.0, headerBgHeight),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeInOutCubic,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: preset.gradientColors!,
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-              // 2. Аватарка (с вертикальным отражением нижних 15%)
-              Positioned(
-                top: topOffset,
-                left: 0,
-                right: 0,
-                child: Transform.translate(
-                  offset: Offset(0, effectiveAvatarTranslation),
-                  child: Center(
-                    child: ExpandableAvatar(
-                      pageController: _avatarPageController,
-                      initialPage: _currentAvatarIndex,
-                      avatarUrls: _avatarUrls,
-                      avatarFile: _avatarFile,
-                      expandFactor: _expandFactor,
-                      isCollapsing: _isCollapsingMode,
-                      tintColor: backgroundColor,
-                      backgroundColor: backgroundColor,
-                      displayName: _getDisplayName(),
-                      chatAvatarHeroTag: 'profile_avatar_$_heroKey',
-                      onTap: _openFullAvatarViewer,
-                    ),
-                  ),
-                ),
-              ),
-
-              // 2. Бэкдроп блюр НАД аватаркой, но ЗА текстом и кнопками действия
-              if (_expandFactor > 0.05 && blurFactor > 0.001)
-                Positioned(
-                  top: blurTopY,
-                  left: 0,
-                  right: 0,
-                  height: blurHeight,
-                  child: IgnorePointer(
-                    child: Inspire.tint.bottomToTop(
-                      color: backgroundColor,
-                      opacity: 1.0 * blurFactor,
-                      extent: 0.85,
-                      curve: Curves.easeOutCubic,
-                      child: Inspire.backdropBlur(
-                        config: InspireBlurConfig.bottomToTop(
-                          sigma: 10.0 * blurFactor,
-                          extent: 0.85,
-                          fadeCurve: Curves.easeOutCubic,
-                        ),
-                        child: const SizedBox.expand(),
-                      ),
-                    ),
-                  ),
-                ),
-                
-              SingleChildScrollView(
-                controller: _scrollController,
-                physics: const NeverScrollableScrollPhysics(),
-                child: Column(
-                  children: [
-                    SizedBox(
-                      height: topOffset + 110.0 + (_expandFactor > 0.0 ? (avatarTopTranslation + currentSize - 110.0) : 0.0),
-                      width: double.infinity,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onTap: _openFullAvatarViewer,
-                        onHorizontalDragUpdate: (details) {
-                          if (_avatarUrls.length > 1 && _expandFactor > 0.5 && _avatarPageController.hasClients) {
-                            final currentOffset = _avatarPageController.offset;
-                            final newOffset = (currentOffset - details.delta.dx).clamp(
-                              0.0,
-                              _avatarPageController.position.maxScrollExtent,
-                            );
-                            _avatarPageController.jumpTo(newOffset);
-                          }
-                        },
-                        onHorizontalDragEnd: (details) {
-                          if (_avatarUrls.length > 1 && _expandFactor > 0.5 && _avatarPageController.hasClients) {
-                            final double currentPage = _avatarPageController.page ?? 0.0;
-                            final velocity = details.primaryVelocity ?? 0.0;
-                            final int targetPage;
-                            if (velocity < -250) {
-                              targetPage = (currentPage.floor() + 1).clamp(0, _avatarUrls.length - 1);
-                            } else if (velocity > 250) {
-                              targetPage = (currentPage.ceil() - 1).clamp(0, _avatarUrls.length - 1);
-                            } else {
-                              targetPage = currentPage.round().clamp(0, _avatarUrls.length - 1);
-                            }
-                            _avatarPageController.animateToPage(
-                              targetPage,
-                              duration: const Duration(milliseconds: 250),
+                      // 4. Бэкдроп блюр под развёрнутой аватаркой
+                      if (_expandFactor > 0.05 && blurFactor > 0.001)
+                        Positioned(
+                          top: blurTopY,
+                          left: 0,
+                          right: 0,
+                          height: blurHeight + 5,
+                          child: IgnorePointer(
+                            child: Inspire.tint.bottomToTop(
+                              color: backgroundColor,
+                              opacity: 1.0 * blurFactor,
+                              extent: 0.85,
                               curve: Curves.easeOutCubic,
-                            );
-                          }
-                        },
-                        child: const SizedBox.expand(),
-                      ),
-                    ),
-
-                    Transform.translate(
-                      offset: Offset(0, contentTranslation),
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Opacity(
-                          opacity: _expandFactor > 0.0
-                              ? 1.0
-                              : (1.0 - (scrollOffset / 75.0)).clamp(0.0, 1.0),
-                          child: Column(
-                            children: [
-                              Hero(
-                                tag: 'profile_name_$_heroKey',
-                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
-                                child: Material(
-                                  type: MaterialType.transparency,
-                                  child: Text(
-                                    _getDisplayName(),
-                                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                              child: Inspire.backdropBlur(
+                                config: InspireBlurConfig.bottomToTop(
+                                  sigma: 10.0 * blurFactor,
+                                  extent: 0.85,
+                                  fadeCurve: Curves.easeOutCubic,
                                 ),
+                                child: const SizedBox.expand(),
                               ),
-                              const SizedBox(height: 4),
-                              Hero(
-                                tag: 'profile_status_$_heroKey',
-                                flightShuttleBuilder: _textHeroFlightShuttleBuilder,
-                                child: Material(
-                                  type: MaterialType.transparency,
-                                  child: Text(
-                                    _getStatusText(l10n),
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: _getStatusColor(context, brandColor),
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         ),
-                      ),
-                    ),
 
-                    const SizedBox(height: 16),
+                      if (_expandFactor > 0.05 && blurFactor > 0.001)
+                        Positioned(
+                          top: blurBottomY,
+                          left: 0,
+                          right: 0,
+                          bottom: -1000,
+                          child: IgnorePointer(
+                            child: Container(
+                              color: backgroundColor,
+                            ),
+                          ),
+                        ),
 
-                    Transform.translate(
-                      offset: Offset(0, contentTranslation),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                      // 5. Нативный скролл содержимого профиля
+                      NotificationListener<ScrollNotification>(
+                        onNotification: _handleScrollNotification,
                         child: SingleChildScrollView(
-                          physics: const NeverScrollableScrollPhysics(),
+                          controller: _scrollController,
+                          physics: _expandFactor > 0.0
+                              ? const NeverScrollableScrollPhysics()
+                              : const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
                           child: Column(
                             children: [
-                              _buildModernButtons(
-                                context,
-                                l10n,
-                                isDark,
-                                cardColor,
-                                onSurfaceColor,
-                                brandColor,
-                                collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
+                              // Пространство под аватарку с перехватом жеста потягивания
+                              SizedBox(
+                                height: topOffset + 110.0 + (_expandFactor > 0.0 ? (avatarTopTranslation + currentSize - 110.0) : 0.0),
+                                width: double.infinity,
+                                child: _expandFactor == 0.0
+                                    ? GestureDetector(
+                                        behavior: HitTestBehavior.translucent,
+                                        onVerticalDragUpdate: _handleVerticalDragUpdate,
+                                        onVerticalDragEnd: _handleVerticalDragEnd,
+                                        onTap: _openFullAvatarViewer,
+                                        child: const SizedBox.expand(),
+                                      )
+                                    : const SizedBox.expand(),
                               ),
-                              const SizedBox(height: 12),
-                              LiquidGlassMusicStatus(
-                                enabled: false,
-                                trackTitle: null,
-                                trackAuthor: null,
-                                musicLabel: l10n.translate('profile_music'),
+
+                              // Имя и статус пользователя
+                              Transform.translate(
+                                offset: Offset(0, contentTranslation),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: Opacity(
+                                    opacity: _expandFactor > 0.0
+                                        ? 1.0
+                                        : (1.0 - (scrollOffset / 75.0)).clamp(0.0, 1.0),
+                                    child: Column(
+                                      children: [
+                                        Hero(
+                                          tag: 'profile_name_$_heroKey',
+                                          flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                          child: Material(
+                                            type: MaterialType.transparency,
+                                            child: Text(
+                                              _getDisplayName(),
+                                              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: onSurfaceColor),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Hero(
+                                          tag: 'profile_status_$_heroKey',
+                                          flightShuttleBuilder: _textHeroFlightShuttleBuilder,
+                                          child: Material(
+                                            type: MaterialType.transparency,
+                                            child: Text(
+                                              _getStatusText(l10n),
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: _getStatusColor(
+                                                  context,
+                                                  const Color(0xFF0088CC).withValues(alpha: 0.8),
+                                                ),
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ),
-                              const SizedBox(height: 12),
-                              LiquidGlassInfoPanel(
-                                enabled: false,
-                                phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
-                                bio: _bio,
-                                username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
-                                birthday: _formatBirthday(_birthday, l10n),
-                                age: _calculateAge(_birthday)?.toString(),
-                                phoneLabel: l10n.translate('profile_phone'),
-                                bioLabel: l10n.translate('profile_bio'),
-                                usernameLabel: l10n.translate('profile_username'),
-                                birthdayLabel: l10n.translate('profile_birthday'),
-                                ageLabel: l10n.translate('profile_age'),
+
+                              const SizedBox(height: 16),
+
+                              // Кнопки действий, музыка, инфо-панель и вкладки
+                              Transform.translate(
+                                offset: Offset(0, contentTranslation),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 32),
+                                    child: Column(
+                                      children: [
+                                        LiquidGlassProfileButtons(
+                                          enabled: isGlass,
+                                          isLite: isLite,
+                                          customButtons: _isSelf ? null : _getOtherUserActionButtons(context),
+                                          onChoosePhoto: _isSelf ? _pickImage : null,
+                                          onQrCode: _isSelf ? _showQrCode : null,
+                                          onEdit: _isSelf ? _openEditProfile : null,
+                                          onDeletePhoto: _isSelf ? _deleteAvatar : null,
+                                          hasAvatar: _avatarUrl != null || _avatarFile != null,
+                                          collapseProgress: (scrollOffset / 180.0).clamp(0.0, 1.0),
+                                          choosePhotoLabel: l10n.translate('profile_choose_photo'),
+                                          qrCodeLabel: l10n.translate('profile_qr_code'),
+                                          editLabel: l10n.translate('profile_edit_btn'),
+                                          deletePhotoLabel: l10n.translate('profile_delete_photo'),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        LiquidGlassMusicStatus(
+                                          enabled: isGlass,
+                                          isLite: isLite,
+                                          trackTitle: null,
+                                          trackAuthor: null,
+                                          musicLabel: l10n.translate('profile_music'),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        LiquidGlassInfoPanel(
+                                          enabled: isGlass,
+                                          isLite: isLite,
+                                          phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
+                                          bio: _bio,
+                                          username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
+                                          birthday: _formatBirthday(_birthday, l10n),
+                                          age: _calculateAge(_birthday)?.toString(),
+                                          phoneLabel: l10n.translate('profile_phone'),
+                                          bioLabel: l10n.translate('profile_bio'),
+                                          usernameLabel: l10n.translate('profile_username'),
+                                          birthdayLabel: l10n.translate('profile_birthday'),
+                                          ageLabel: l10n.translate('profile_age'),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        ProfileSegmentedControl(
+                                          enabled: isGlass,
+                                          isLite: isLite,
+                                          selectedIndex: _selectedSegment,
+                                          onTabChanged: (index) {
+                                            setState(() {
+                                              _selectedSegment = index;
+                                            });
+                                          },
+                                          wallLabel: l10n.translate('profile_tab_wall'),
+                                          giftsLabel: l10n.translate('profile_tab_gifts'),
+                                        ),
+                                        SizedBox(height: math.max(250.0, MediaQuery.of(context).size.height * 0.6)),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ),
-                              SizedBox(height: math.max(180.0, MediaQuery.of(context).size.height - 320.0)),
                             ],
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
 
-              // Прогрессивный Backdrop Blur для всей верхней области от пакета inspire_blur
-              if (statusBarHeight > 0 && _expandFactor > 0.01)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: statusBarHeight + 0.0,
-                  child: InspireBackdropBlur(
-                    clipBehavior: Clip.none,
-                    config: InspireBlurConfig.topToBottom(
-                      sigma: 10.0 * _expandFactor,
-                      extent: 1.0,
-                      fadeCurve: Curves.easeOutCubic,
-                    ),
-                    child: const SizedBox.expand(),
+                      // 6. Верхний бэкдроп-блюр для статус-бара
+                      if (statusBarHeight > 0 && _expandFactor > 0.01)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: statusBarHeight + 0.0,
+                          child: InspireBackdropBlur(
+                            clipBehavior: Clip.none,
+                            config: InspireBlurConfig.topToBottom(
+                              sigma: 10.0 * _expandFactor,
+                              extent: 1.0,
+                              fadeCurve: Curves.easeOutCubic,
+                            ),
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+
+                      // 7. Шапка профиля
+                      Positioned(
+                        top: statusBarHeight,
+                        left: 0,
+                        right: 0,
+                        child: _buildProfileHeader(
+                          context,
+                          l10n,
+                          isDark,
+                          onSurfaceColor,
+                          iconColor: headerIconColor,
+                          glassEnabled: isGlass,
+                          isLite: isLite,
+                          scrollOffset: scrollOffset,
+                        ),
+                      ),
+
+                      // 8. Индикатор загрузки
+                      if (_isProcessing)
+                        Positioned.fill(
+                          child: Container(
+                            color: Colors.black.withValues(alpha: 0.3),
+                            child: const Center(
+                              child: CircularProgressIndicator(color: Color(0xFF0088CC)),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-
-              Positioned(
-                top: statusBarHeight,
-                left: 0,
-                right: 0,
-                child: _buildProfileHeader(
-                  context,
-                  l10n,
-                  isDark,
-                  onSurfaceColor,
-                  iconColor: headerIconColor,
-                  glassEnabled: false,
-                  scrollOffset: scrollOffset,
-                ),
-              ),
-
-              if (_isProcessing)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black.withValues(alpha: 0.3),
-                    child: const Center(
-                      child: CircularProgressIndicator(color: Color(0xFF0088CC)),
-                    ),
-                  ),
-                ),
-            ],
-          ),
         ),
       ),
-    );
-  }
-
-  /// Кнопки в современном режиме (без стекла)
-  Widget _buildModernButtons(
-    BuildContext context,
-    AppLocalizations l10n,
-    bool isDark,
-    Color cardColor,
-    Color onSurfaceColor,
-    Color brandColor, {
-    double collapseProgress = 0.0,
-  }) {
-    return LiquidGlassProfileButtons(
-      enabled: false,
-      customButtons: _isSelf ? null : _getOtherUserActionButtons(context),
-      onChoosePhoto: _isSelf ? _pickImage : null,
-      onQrCode: _isSelf ? _showQrCode : null,
-      onEdit: _isSelf ? _openEditProfile : null,
-      onDeletePhoto: _isSelf ? _deleteAvatar : null,
-      hasAvatar: _avatarUrl != null || _avatarFile != null,
-      collapseProgress: collapseProgress,
-      choosePhotoLabel: l10n.translate('profile_choose_photo'),
-      qrCodeLabel: l10n.translate('profile_qr_code'),
-      editLabel: l10n.translate('profile_edit_btn'),
-      deletePhotoLabel: l10n.translate('profile_delete_photo'),
     );
   }
 
