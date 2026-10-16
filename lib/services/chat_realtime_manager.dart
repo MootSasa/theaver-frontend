@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import 'database/app_database.dart';
-import 'notification_service.dart';
 import 'sync_service.dart';
 import 'websocket_service.dart';
 
@@ -238,8 +237,6 @@ class ChatRealtimeManager {
     try {
       await _persistMessageToDrift(chatId, messageData);
 
-      final activeChatId = NotificationService().currentActiveChatId;
-      final isCurrentActive = activeChatId == chatId;
       final content = messageData['content']?.toString() ?? '';
       final createdAt = messageData['created_at']?.toString() ??
           DateTime.now().toIso8601String();
@@ -263,7 +260,7 @@ class ChatRealtimeManager {
           lastMessageGroupedId: drift.Value(groupedId),
           otherUserId: drift.Value(messageData['sender_id']?.toString()),
           updatedAt: drift.Value(createdAt),
-          unreadCount: drift.Value(isCurrentActive ? 0 : 1),
+          unreadCount: const drift.Value(0),
           isOnline: const drift.Value(false),
           isPinned: const drift.Value(false),
         ));
@@ -276,7 +273,7 @@ class ChatRealtimeManager {
           isRound: isRound,
           fileUrl: fileUrl,
           groupedId: groupedId,
-          incrementUnread: !isCurrentActive,
+          incrementUnread: false,
         );
       }
     } catch (e) {

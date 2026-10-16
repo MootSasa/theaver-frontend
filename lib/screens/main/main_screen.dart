@@ -392,7 +392,6 @@ class _MainScreenState extends State<MainScreen>
     debugPrint('New message received: ${event.data}');
     final chatId = event.data['chat_id']?.toString();
     final messageData = event.data['message'] as Map<String, dynamic>?;
-    final senderId = messageData?['sender_id']?.toString();
 
     if (chatId != null && mounted) {
       // NOTE: UnreadCountProvider already increments via its own _onNewMessage
@@ -405,17 +404,12 @@ class _MainScreenState extends State<MainScreen>
         setState(() {
           final chat = _chats[chatIndex];
 
-          // Get unread count from provider (authoritative, already incremented)
+          // Get unread count from provider (authoritative source)
           int newUnreadCount = chat.unreadCount;
           try {
             newUnreadCount =
                 context.read<UnreadCountProvider>().getCount(chatId);
-          } catch (_) {
-            // Fallback: increment manually if provider not available
-            final currentUserId = _wsService.currentUserId;
-            final isFromMe = senderId != null && senderId == currentUserId;
-            newUnreadCount = isFromMe ? chat.unreadCount : chat.unreadCount + 1;
-          }
+          } catch (_) {}
 
           final msgType = messageData?['message_type'] as String? ?? 'text';
           final isRound =
