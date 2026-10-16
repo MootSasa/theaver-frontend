@@ -135,6 +135,8 @@ class AccountManager extends ChangeNotifier {
     String? surname,
     String? email,
     String? phone,
+    String? bio,
+    DateTime? birthday,
     String? localAvatarPath,
   }) async {
     final index = _accounts.indexWhere((acc) => acc.userId == userId);
@@ -151,6 +153,8 @@ class AccountManager extends ChangeNotifier {
         surname: surname ?? oldAccount.surname,
         email: email ?? oldAccount.email,
         phone: phone ?? oldAccount.phone,
+        bio: bio ?? oldAccount.bio,
+        birthday: birthday ?? oldAccount.birthday,
         localAvatarPath: localAvatarPath ?? oldAccount.localAvatarPath,
       );
       if (_currentAccount?.userId == userId) {
@@ -192,6 +196,9 @@ class AccountManager extends ChangeNotifier {
       final username = pendingData['username'] as String? ?? '';
       final email = pendingData['email'] as String? ?? '';
       final phone = pendingData['phone'] as String? ?? '';
+      final bio = pendingData['bio'] as String?;
+      final birthdayStr = pendingData['birthday'] as String?;
+      final birthday = birthdayStr != null ? DateTime.tryParse(birthdayStr) : null;
 
       final result = await AuthService.updateProfile(
         name: name,
@@ -199,6 +206,8 @@ class AccountManager extends ChangeNotifier {
         username: username,
         email: email,
         phone: phone,
+        bio: bio,
+        birthday: birthday,
       );
 
       if (result['synced'] == true) {
@@ -442,6 +451,8 @@ class Account {
   final String? surname;
   final String? email;
   final String? phone;
+  final String? bio;
+  final DateTime? birthday;
   final String? localAvatarPath;
 
   Account({
@@ -455,6 +466,8 @@ class Account {
     this.surname,
     this.email,
     this.phone,
+    this.bio,
+    this.birthday,
     this.localAvatarPath,
   });
 
@@ -470,6 +483,8 @@ class Account {
       'surname': surname,
       'email': email,
       'phone': phone,
+      'bio': bio,
+      'birthday': birthday?.toIso8601String().split('T').first,
       'localAvatarPath': localAvatarPath,
     };
   }
@@ -488,6 +503,10 @@ class Account {
       surname: json['surname'] as String?,
       email: json['email'] as String?,
       phone: json['phone'] as String?,
+      bio: json['bio'] as String?,
+      birthday: json['birthday'] != null
+          ? DateTime.tryParse(json['birthday'] as String)
+          : null,
       localAvatarPath: json['localAvatarPath'] as String?,
     );
   }
@@ -503,6 +522,8 @@ class Account {
     String? surname,
     String? email,
     String? phone,
+    String? bio,
+    DateTime? birthday,
     String? localAvatarPath,
   }) {
     return Account(
@@ -516,6 +537,8 @@ class Account {
       surname: surname ?? this.surname,
       email: email ?? this.email,
       phone: phone ?? this.phone,
+      bio: bio ?? this.bio,
+      birthday: birthday ?? this.birthday,
       localAvatarPath: localAvatarPath ?? this.localAvatarPath,
     );
   }

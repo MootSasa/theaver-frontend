@@ -608,15 +608,20 @@ class AuthService {
           final accountManager = AccountManager();
           final currentAcc = accountManager.currentAccount;
           if (currentAcc != null) {
+            final userJson = data['user'] as Map<String, dynamic>?;
+            final birthdayStr = userJson?['birthday'] as String?;
+            final parsedBirthday = birthdayStr != null ? DateTime.tryParse(birthdayStr) : null;
             await accountManager.updateAccountProfile(
               currentAcc.userId,
-              username: data['user']?['username'],
-              displayName: data['user']?['display_name'],
-              avatarUrl: data['user']?['avatar_url'],
-              name: data['user']?['name'],
-              surname: data['user']?['surname'],
-              email: data['user']?['email'],
-              phone: data['user']?['phone'],
+              username: userJson?['username'],
+              displayName: userJson?['display_name'],
+              avatarUrl: userJson?['avatar_url'],
+              name: userJson?['name'],
+              surname: userJson?['surname'],
+              email: userJson?['email'],
+              phone: userJson?['phone'],
+              bio: userJson?['bio'],
+              birthday: parsedBirthday,
             );
           }
           return {
@@ -1022,10 +1027,13 @@ class AuthService {
     required String email,
     required String phone,
     String? avatarUrl,
+    String? bio,
+    DateTime? birthday,
     bool requiresServerValidation = false,
   }) async {
     final accountManager = AccountManager();
     final currentAcc = accountManager.currentAccount;
+    final birthdayIso = birthday?.toIso8601String().split('T').first;
 
     // Проверяем, изменились ли никнейм или телефон относительно текущего сохраненного профиля
     final isUsernameChanged = currentAcc != null &&
@@ -1061,6 +1069,8 @@ class AuthService {
             'email': email,
             'phone': phone,
             if (avatarUrl != null) 'avatar_url': avatarUrl,
+            if (bio != null) 'bio': bio,
+            if (birthdayIso != null) 'birthday': birthdayIso,
           }),
         ).timeout(const Duration(seconds: 5));
 
@@ -1078,6 +1088,8 @@ class AuthService {
                 surname: surname,
                 email: email,
                 phone: phone,
+                bio: bio,
+                birthday: birthday,
               );
             }
             await accountManager.clearPendingProfileSync();
@@ -1123,6 +1135,8 @@ class AuthService {
         surname: surname,
         email: email,
         phone: phone,
+        bio: bio,
+        birthday: birthday,
       );
     }
 
@@ -1135,6 +1149,8 @@ class AuthService {
           'username': username,
           'email': email,
           'phone': phone,
+          if (bio != null) 'bio': bio,
+          if (birthdayIso != null) 'birthday': birthdayIso,
         });
         return {
           'success': true,
@@ -1156,6 +1172,8 @@ class AuthService {
           'email': email,
           'phone': phone,
           if (avatarUrl != null) 'avatar_url': avatarUrl,
+          if (bio != null) 'bio': bio,
+          if (birthdayIso != null) 'birthday': birthdayIso,
         }),
       ).timeout(const Duration(seconds: 5));
 
@@ -1178,6 +1196,8 @@ class AuthService {
         'username': username,
         'email': email,
         'phone': phone,
+        if (bio != null) 'bio': bio,
+        if (birthdayIso != null) 'birthday': birthdayIso,
       });
 
       return {
@@ -1192,6 +1212,8 @@ class AuthService {
         'username': username,
         'email': email,
         'phone': phone,
+        if (bio != null) 'bio': bio,
+        if (birthdayIso != null) 'birthday': birthdayIso,
       });
 
       return {

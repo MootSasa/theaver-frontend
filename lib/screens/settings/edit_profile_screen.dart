@@ -10,6 +10,7 @@ class EditProfileScreen extends StatefulWidget {
   final String? initialUsername;
   final String? initialPhone;
   final String? initialBio;
+  final DateTime? initialBirthday;
   final String? initialEmail;
 
   const EditProfileScreen({
@@ -19,6 +20,7 @@ class EditProfileScreen extends StatefulWidget {
     this.initialUsername,
     this.initialPhone,
     this.initialBio,
+    this.initialBirthday,
     this.initialEmail,
   }) : super(key: key);
 
@@ -58,8 +60,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _bioController = TextEditingController(text: widget.initialBio ?? '');
     _bioController.addListener(_onBioChanged);
 
-    // День рождения по умолчанию HE задается никакой датой (null)
-    _selectedBirthday = null;
+    _selectedBirthday = widget.initialBirthday;
   }
 
   void _onBioChanged() {
@@ -106,6 +107,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       username: username,
       email: email,
       phone: phone,
+      bio: _bioController.text.trim(),
+      birthday: _selectedBirthday,
     );
 
     if (!mounted) return;

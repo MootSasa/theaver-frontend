@@ -96,6 +96,7 @@ class ProfileScreenState extends State<ProfileScreen>
   String get _heroKey => widget.heroTag ?? widget.userId ?? 'self';
 
   String? _bio;
+  DateTime? _birthday;
   bool _isOnline = false;
   DateTime? _lastSeen;
   bool _isMuted = false;
@@ -279,6 +280,8 @@ class ProfileScreenState extends State<ProfileScreen>
         _usernameController.text = account.username ?? '';
         _emailController.text = account.email ?? '';
         _phoneController.text = account.phone ?? '';
+        _bio = account.bio;
+        _birthday = account.birthday;
 
         final localHistory = await AvatarSyncService().getLocalAvatarUrls(account.userId);
         if (localHistory.isNotEmpty) {
@@ -308,6 +311,8 @@ class ProfileScreenState extends State<ProfileScreen>
             _usernameController.text = user['username'] ?? _usernameController.text;
             _emailController.text = user['email'] ?? _emailController.text;
             _phoneController.text = user['phone'] ?? _phoneController.text;
+            if (user['bio'] != null) _bio = user['bio'].toString();
+            if (user['birthday'] != null) _birthday = DateTime.tryParse(user['birthday'].toString());
             
             if (localHistory.isNotEmpty) {
               _avatarUrl = localHistory.first;
@@ -401,6 +406,9 @@ class ProfileScreenState extends State<ProfileScreen>
           }
           if (u['bio'] != null) {
             _bio = u['bio'].toString();
+          }
+          if (u['birthday'] != null) {
+            _birthday = DateTime.tryParse(u['birthday'].toString());
           }
           if (u['avatar_url'] != null && u['avatar_url'].toString().isNotEmpty) {
             final serverUrl = u['avatar_url'].toString();
@@ -806,7 +814,8 @@ class ProfileScreenState extends State<ProfileScreen>
           initialSurname: _surnameController.text,
           initialUsername: _usernameController.text,
           initialPhone: _phoneController.text,
-          initialBio: null,
+          initialBio: _bio,
+          initialBirthday: _birthday,
           initialEmail: _emailController.text,
         ),
       ),
@@ -818,6 +827,8 @@ class ProfileScreenState extends State<ProfileScreen>
         if (result['surname'] != null) _surnameController.text = result['surname'];
         if (result['username'] != null) _usernameController.text = result['username'];
         if (result['phone'] != null) _phoneController.text = result['phone'];
+        if (result.containsKey('bio')) _bio = result['bio'] as String?;
+        if (result.containsKey('birthday')) _birthday = result['birthday'] as DateTime?;
       });
       if (widget.onUpdate != null) {
         widget.onUpdate!();
@@ -1476,8 +1487,8 @@ class ProfileScreenState extends State<ProfileScreen>
                                 phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
                                 bio: _bio,
                                 username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
-                                birthday: null,
-                                age: null,
+                                birthday: _formatBirthday(_birthday, l10n),
+                                age: _calculateAge(_birthday)?.toString(),
                                 phoneLabel: l10n.translate('profile_phone'),
                                 bioLabel: l10n.translate('profile_bio'),
                                 usernameLabel: l10n.translate('profile_username'),
@@ -1853,8 +1864,8 @@ class ProfileScreenState extends State<ProfileScreen>
                                 phone: _phoneController.text.isNotEmpty ? _phoneController.text : null,
                                 bio: _bio,
                                 username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
-                                birthday: null,
-                                age: null,
+                                birthday: _formatBirthday(_birthday, l10n),
+                                age: _calculateAge(_birthday)?.toString(),
                                 phoneLabel: l10n.translate('profile_phone'),
                                 bioLabel: l10n.translate('profile_bio'),
                                 usernameLabel: l10n.translate('profile_username'),
@@ -2034,6 +2045,26 @@ class ProfileScreenState extends State<ProfileScreen>
           : '';
     }
     return '$name $surname'.trim();
+  }
+
+  int? _calculateAge(DateTime? birthday) {
+    if (birthday == null) return null;
+    final now = DateTime.now();
+    int age = now.year - birthday.year;
+    if (now.month < birthday.month ||
+        (now.month == birthday.month && now.day < birthday.day)) {
+      age--;
+    }
+    return age >= 0 ? age : null;
+  }
+
+  String? _formatBirthday(DateTime? date, AppLocalizations l10n) {
+    if (date == null) return null;
+    final months = [
+      'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+    ];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 }
 
