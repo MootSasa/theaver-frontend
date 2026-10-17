@@ -887,16 +887,33 @@ class ProfileScreenState extends State<ProfileScreen>
     final dy = details.delta.dy;
     final screenHeight = MediaQuery.of(context).size.height;
 
-    // Прямое 1:1 следование за пальцем с мягким демпфированием у краев
+    // Нелинейное сопротивление ("эффект заевшего механизма")
     double resistance = 1.0;
-    if (_expandFactor > 0.95 && dy > 0) {
-      resistance = 3.5;
-    } else if (_expandFactor < 0.05 && dy < 0) {
-      resistance = 3.5;
+    const threshold = 0.38;
+
+    if (_expandFactor < threshold) {
+      if (dy > 0) {
+        final u = _expandFactor / threshold; // 0.0 .. 1.0
+        // По мере приближения к порогу сопротивление нарастает от 1.0 до 4.5
+        resistance = 1.0 + 3.5 * (u * u);
+      } else {
+        resistance = 1.2;
+      }
+    } else {
+      if (_expandFactor > 0.95 && dy > 0) {
+        resistance = 3.5;
+      } else if (dy < 0) {
+        resistance = 1.0;
+      }
     }
 
     final delta = (dy / (screenHeight * 0.35)) / resistance;
     final newFactor = (_expandFactor + delta).clamp(0.0, 1.0);
+
+    // Тактильный отклик при преодолении порога заевшего механизма
+    if (_expandFactor < threshold && newFactor >= threshold && dy > 0) {
+      HapticUtils.selection();
+    }
 
     setState(() {
       _expandFactor = newFactor;
@@ -914,7 +931,7 @@ class ProfileScreenState extends State<ProfileScreen>
       _animateToExpand(1.0, velocity: velocity);
     } else if (velocity < -200) {
       _animateToExpand(0.0, velocity: velocity);
-    } else if (_expandFactor >= 0.45) {
+    } else if (_expandFactor >= 0.38) {
       _animateToExpand(1.0, velocity: velocity);
     } else {
       _animateToExpand(0.0, velocity: velocity);
@@ -928,18 +945,42 @@ class ProfileScreenState extends State<ProfileScreen>
       // Пользователь потянул вниз за пределы верха списка (overscroll)
       if (notification.metrics.pixels < 0 && _expandFactor == 0.0) {
         final overscroll = -notification.metrics.pixels;
-        final factor = (overscroll / 150.0).clamp(0.0, 1.0);
-        _expandController.value = factor;
+        // Замедление растяжения при оверскролле к порогу 0.38
+        double factor;
+        if (overscroll < 70.0) {
+          factor = (overscroll / 70.0) * 0.38;
+        } else {
+          factor = 0.38 + ((overscroll - 70.0) / 120.0) * 0.62;
+        }
+        final clamped = factor.clamp(0.0, 1.0);
+        _expandController.value = clamped;
         setState(() {
-          _expandFactor = factor;
+          _expandFactor = clamped;
         });
       }
     } else if (notification is ScrollEndNotification) {
       if (_expandFactor > 0.0 && _expandFactor < 1.0) {
-        if (_expandFactor >= 0.40) {
+        if (_expandFactor >= 0.38) {
           _animateToExpand(1.0);
         } else {
           _animateToExpand(0.0);
+        }
+      } else if (_expandFactor == 0.0 && _scrollController.hasClients) {
+        // Доводчики для шапки: не даем экрану останавливаться в промежуточном состоянии
+        // между 0.0 (аватарка видна) и 115.0 (аватарка скрыта, шапка зафиксирована)
+        final offset = _scrollController.offset;
+        const snapThreshold = 115.0;
+        if (offset > 0.5 && offset < snapThreshold - 0.5) {
+          final target = offset >= snapThreshold * 0.45 ? snapThreshold : 0.0;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _scrollController.hasClients) {
+              _scrollController.animateTo(
+                target,
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+              );
+            }
+          });
         }
       }
     }
@@ -957,17 +998,16 @@ class ProfileScreenState extends State<ProfileScreen>
     final startCenterY = topOffset + 55.0;
     final endCenterY = screenWidth / 2;
 
-    final currentCenterY = startCenterY + (endCenterY - startCenterY) * progress;
+    final currentCenterY = startCenterY + (endCenterY - startCenterY) * Curves.easeInOutCubic.transform(progress);
     final currentSize = _calculateCurrentAvatarSize(screenWidth);
 
     final currentTop = currentCenterY - currentSize / 2;
     return currentTop - topOffset;
   }
 
-  /// Вычисляет текущий размер аватарки (непрерывно от 110dp до ширины экрана)
+  /// Вычисляет текущий размер аватарки (нелинейно с заевшим механизмом через ExpandableAvatar)
   double _calculateCurrentAvatarSize(double screenWidth) {
-    final progress = _expandFactor.clamp(0.0, 1.0);
-    return 110.0 + (screenWidth - 110.0) * progress;
+    return ExpandableAvatar.calculateAvatarSize(screenWidth, _expandFactor);
   }
 
   @override
@@ -1006,18 +1046,27 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   void _openFullAvatarViewer() async {
-    if (_avatarUrls.isEmpty) {
+    final effectiveUrls = <String>[];
+    if (_avatarUrls.isNotEmpty) {
+      effectiveUrls.addAll(_avatarUrls);
+    } else if (_avatarUrl != null && _avatarUrl!.isNotEmpty) {
+      effectiveUrls.add(_avatarUrl!);
+    } else if (_avatarFile != null) {
+      effectiveUrls.add(_avatarFile!.path);
+    }
+
+    if (effectiveUrls.isEmpty) {
       if (_isSelf) _pickImage();
       return;
     }
 
     final currentIndex = _avatarPageController.hasClients
-        ? (_avatarPageController.page?.round() ?? 0).clamp(0, _avatarUrls.length - 1)
-        : 0;
+        ? (_avatarPageController.page?.round() ?? 0).clamp(0, effectiveUrls.length - 1)
+        : _currentAvatarIndex.clamp(0, effectiveUrls.length - 1);
 
     await AvatarGalleryViewer.open(
       context,
-      avatarUrls: _avatarUrls,
+      avatarUrls: effectiveUrls,
       initialIndex: currentIndex,
       displayName: _getDisplayName(),
       onChoosePhoto: _isSelf ? _pickImage : null,
@@ -1095,17 +1144,16 @@ class ProfileScreenState extends State<ProfileScreen>
 
     final currentSize = _calculateCurrentAvatarSize(screenWidth);
     final avatarTopY = topOffset + effectiveAvatarTranslation;
-    final usernameTopY = avatarTopY + currentSize + contentTranslation + 12.0;
 
-    final blurTopY = usernameTopY - 0.0;
-    final blurBottomY = usernameTopY + 85.0;
+    final blurTopY = avatarTopY + currentSize;
+    final blurBottomY = blurTopY + 85.0;
     final blurHeight = math.max(0.0, blurBottomY - blurTopY);
-    final blurProgress = ((_expandFactor - 0.15) / 0.85).clamp(0.0, 1.0);
+    final blurProgress = ((_expandFactor - 0.38) / 0.62).clamp(0.0, 1.0);
     final blurFactor = Curves.easeOutCubic.transform(blurProgress);
 
     final isPhotoTopLight = _topLuminance > 0.55;
 
-    final targetIconBrightness = _expandFactor > 0.4
+    final targetIconBrightness = _expandFactor > 0.38
         ? (isPhotoTopLight ? Brightness.dark : Brightness.light)
         : (isDark ? Brightness.light : Brightness.dark);
 
@@ -1218,6 +1266,8 @@ class ProfileScreenState extends State<ProfileScreen>
                                     displayName: _getDisplayName(),
                                     chatAvatarHeroTag: 'profile_avatar_$_heroKey',
                                     onTap: _openFullAvatarViewer,
+                                    onVerticalDragUpdate: _handleVerticalDragUpdate,
+                                    onVerticalDragEnd: _handleVerticalDragEnd,
                                     onPageChanged: (index) {
                                       setState(() {
                                         _currentAvatarIndex = index;
@@ -1280,19 +1330,12 @@ class ProfileScreenState extends State<ProfileScreen>
                               : const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
                           child: Column(
                             children: [
-                              // Пространство под аватарку с перехватом жеста потягивания
-                              SizedBox(
-                                height: topOffset + 110.0 + (_expandFactor > 0.0 ? (avatarTopTranslation + currentSize - 110.0) : 0.0),
-                                width: double.infinity,
-                                child: _expandFactor == 0.0
-                                    ? GestureDetector(
-                                        behavior: HitTestBehavior.translucent,
-                                        onVerticalDragUpdate: _handleVerticalDragUpdate,
-                                        onVerticalDragEnd: _handleVerticalDragEnd,
-                                        onTap: _openFullAvatarViewer,
-                                        child: const SizedBox.expand(),
-                                      )
-                                    : const SizedBox.expand(),
+                              // Пространство под аватарку с IgnorePointer чтобы не блокировать жесты и тапы по аватарке
+                              IgnorePointer(
+                                child: SizedBox(
+                                  height: topOffset + 110.0 + (_expandFactor > 0.0 ? (avatarTopTranslation + currentSize - 110.0) : 0.0),
+                                  width: double.infinity,
+                                ),
                               ),
 
                               // Имя и статус пользователя

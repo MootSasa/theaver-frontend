@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -57,6 +58,12 @@ class ExpandableAvatar extends StatefulWidget {
   /// Уведомление о смене активной аватарки
   final ValueChanged<int>? onPageChanged;
 
+  /// Опциональный обработчик вертикального перетаскивания (для плавного сворачивания/разворачивания)
+  final GestureDragUpdateCallback? onVerticalDragUpdate;
+
+  /// Опциональный обработчик завершения вертикального перетаскивания
+  final GestureDragEndCallback? onVerticalDragEnd;
+
   const ExpandableAvatar({
     Key? key,
     this.avatarUrls = const [],
@@ -72,7 +79,48 @@ class ExpandableAvatar extends StatefulWidget {
     this.pageController,
     this.initialPage,
     this.onPageChanged,
+    this.onVerticalDragUpdate,
+    this.onVerticalDragEnd,
   }) : super(key: key);
+
+  /// Вычисляет нелинейный размер аватарки с эффектом заевшего механизма.
+  /// До порога 0.38 размер медленно растягивается с замедлением скорости к порогу.
+  /// После порога 0.38 размер резко раскрывается в большой квадрат.
+  static double calculateAvatarSize(double screenWidth, double expandFactor) {
+    final p = expandFactor.clamp(0.0, 1.0);
+    const threshold = 0.38;
+    const smallSize = 110.0;
+    const thresholdSize = 138.0;
+
+    if (p < threshold) {
+      final u = p / threshold; // 0.0 .. 1.0
+      // Замедление по мере приближения к порогу (эффект заевшего механизма)
+      final progress = math.sin(u * math.pi / 2);
+      return smallSize + (thresholdSize - smallSize) * progress;
+    } else {
+      final v = (p - threshold) / (1.0 - threshold); // 0.0 .. 1.0
+      // Резкий переход в большой квадрат
+      final progress = Curves.easeOutQuart.transform(v);
+      return thresholdSize + (screenWidth - thresholdSize) * progress;
+    }
+  }
+
+  /// Вычисляет скругление углов аватарки.
+  /// До порога 0.38 аватарка строго круглая (size / 2).
+  /// После порога 0.38 скругление быстро исчезает, переходя в квадрат.
+  static double calculateBorderRadius(double size, double expandFactor) {
+    final p = expandFactor.clamp(0.0, 1.0);
+    const threshold = 0.38;
+
+    if (p < threshold) {
+      return size / 2;
+    } else {
+      final v = (p - threshold) / (1.0 - threshold);
+      // Быстрый переход из круга в квадрат на первой трети пути после порога
+      final cornerProgress = Curves.easeOutCubic.transform((v / 0.30).clamp(0.0, 1.0));
+      return (size / 2) * (1.0 - cornerProgress);
+    }
+  }
 
   @override
   State<ExpandableAvatar> createState() => _ExpandableAvatarState();
@@ -142,24 +190,19 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    // Маленький размер: 110dp диаметр (radius 55)
-    const smallSize = 110.0;
-    // Большой размер: 100% ширины экрана (квадрат 1:1)
     final screenWidth = MediaQuery.of(context).size.width;
     final largeSize = screenWidth;
-
     final progress = widget.expandFactor.clamp(0.0, 1.0);
 
-    // Плавный непрерывный морфинг размера от 110dp до ширины экрана
-    final size = lerpDouble(smallSize, largeSize, progress);
+    // Нелинейный расчет размера аватарки ("эффект заевшего механизма")
+    final size = ExpandableAvatar.calculateAvatarSize(largeSize, progress);
 
-    // Плавный переход формы от круга (size/2) к квадрату (0.0)
-    // easeIn обеспечивает сохранение круглой формы в начале движения
-    final radiusProgress = Curves.easeIn.transform(progress);
-    final borderRadius = lerpDouble(size / 2, 0.0, radiusProgress);
+    // Расчет скругления (до порога 0.38 строго круг)
+    final borderRadius = ExpandableAvatar.calculateBorderRadius(size, progress);
 
     // Размер иконки/буквы плейсхолдера
-    final iconSize = lerpDouble(50.0, 120.0, Curves.easeInOutCubic.transform(progress));
+    final iconProgress = progress < 0.38 ? 0.0 : Curves.easeOutQuart.transform(((progress - 0.38) / 0.62).clamp(0.0, 1.0));
+    final iconSize = lerpDouble(50.0, 120.0, iconProgress);
 
     // Цвет фона плейсхолдера
     final bgColor = widget.backgroundColor ?? (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE0E0E0));
@@ -206,87 +249,53 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
               : const SizedBox.expand()));
     }
 
-    Widget avatarWidget = Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(borderRadius),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(borderRadius),
-        child: Stack(
-          clipBehavior: Clip.hardEdge,
-          fit: StackFit.expand,
-          children: [
-            // 1. Основное изображение аватарки
-            Positioned.fill(
-              child: Container(
-                color: bgColor,
-                child: avatarContent,
+    Widget avatarWidget = GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: isFullyExpanded && widget.avatarUrls.length > 1 ? null : widget.onTap,
+      onVerticalDragUpdate: widget.onVerticalDragUpdate,
+      onVerticalDragEnd: widget.onVerticalDragEnd,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(borderRadius),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(borderRadius),
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            fit: StackFit.expand,
+            children: [
+              // 1. Основное изображение аватарки
+              Positioned.fill(
+                child: Container(
+                  color: bgColor,
+                  child: avatarContent,
+                ),
               ),
-            ),
 
-            // 2. Буквенный плейсхолдер если нет фото
-            if (widget.avatarFile == null && widget.avatarUrls.isEmpty)
-              Center(
-                child: Text(
-                  widget.displayName.isNotEmpty
-                      ? widget.displayName[0].toUpperCase()
-                      : '?',
-                  style: TextStyle(
-                    color: bgColor.computeLuminance() > 0.5 ? Colors.black54 : Colors.white70,
-                    fontSize: iconSize,
-                    fontWeight: FontWeight.w300,
+              // 2. Буквенный плейсхолдер если нет фото
+              if (widget.avatarFile == null && widget.avatarUrls.isEmpty)
+                Center(
+                  child: Text(
+                    widget.displayName.isNotEmpty
+                        ? widget.displayName[0].toUpperCase()
+                        : '?',
+                    style: TextStyle(
+                      color: bgColor.computeLuminance() > 0.5 ? Colors.black54 : Colors.white70,
+                      fontSize: iconSize,
+                      fontWeight: FontWeight.w300,
+                    ),
                   ),
                 ),
-              ),
 
-            // 3. Верхний градиентный скрайм для контраста индикаторов историй
-            _buildTopGradientScrim(progress),
+              // 3. Верхний градиентный скрайм для контраста индикаторов историй
+              _buildTopGradientScrim(progress),
 
-            // 4. Stories-style индикаторы нескольких фото
-            _buildStoryIndicators(context, progress),
-
-            // 5. Зоны нажатия (тапы по краям для листания, по центру — открытие галереи)
-            if (isFullyExpanded && widget.avatarUrls.length > 1)
-              Positioned.fill(
-                child: Row(
-                  children: [
-                    // Левая треть: предыдущее фото
-                    Expanded(
-                      flex: 3,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onTap: _prevPhoto,
-                      ),
-                    ),
-                    // Центральная область: открыть полноэкранный зум/галерею
-                    Expanded(
-                      flex: 4,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onTap: widget.onTap,
-                      ),
-                    ),
-                    // Правая треть: следующее фото
-                    Expanded(
-                      flex: 3,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.translucent,
-                        onTap: _nextPhoto,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: widget.onTap,
-                ),
-              ),
-          ],
+              // 4. Stories-style индикаторы нескольких фото
+              _buildStoryIndicators(context, progress),
+            ],
+          ),
         ),
       ),
     );
@@ -336,33 +345,28 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
       top: topOffset,
       left: 14.0,
       right: 14.0,
-      child: Opacity(
-        opacity: opacity,
-        child: Row(
-          children: List.generate(widget.avatarUrls.length, (index) {
-            final isCurrent = index == _currentPage;
-            return Expanded(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                margin: const EdgeInsets.symmetric(horizontal: 2.0),
-                height: 2.5,
-                decoration: BoxDecoration(
-                  color: isCurrent
-                      ? Colors.white
-                      : Colors.white.withValues(alpha: 0.38),
-                  borderRadius: BorderRadius.circular(2.0),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      blurRadius: 2.5,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
+      child: IgnorePointer(
+        child: Opacity(
+          opacity: opacity,
+          child: Row(
+            children: List.generate(widget.avatarUrls.length, (index) {
+              final isCurrent = index == _currentPage;
+              return Expanded(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  margin: const EdgeInsets.symmetric(horizontal: 2.0),
+                  height: 2.5,
+                  decoration: BoxDecoration(
+                    color: isCurrent
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.38),
+                    borderRadius: BorderRadius.circular(2.0),
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            }),
+          ),
         ),
       ),
     );
@@ -417,7 +421,25 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
       },
       itemBuilder: (context, index) {
         final url = widget.avatarUrls[index];
-        return _buildAvatarImage(url, width, height, bgColor, iconSize, isDark, imgAlignment, enableHero);
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (details) {
+            final dx = details.localPosition.dx;
+            final w = width;
+            if (widget.avatarUrls.length > 1) {
+              if (dx < w * 0.30) {
+                _prevPhoto();
+              } else if (dx > w * 0.70) {
+                _nextPhoto();
+              } else {
+                widget.onTap?.call();
+              }
+            } else {
+              widget.onTap?.call();
+            }
+          },
+          child: _buildAvatarImage(url, width, height, bgColor, iconSize, isDark, imgAlignment, enableHero),
+        );
       },
     );
   }
