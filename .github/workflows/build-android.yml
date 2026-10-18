@@ -84,17 +84,24 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | flutter doctor --android-licenses || true
 
-      - name: Setup Google and HMS Services Config
+      - name: Setup Google, HMS Services Config & Signing Keystore
         working-directory: ${{ steps.locate_project.outputs.path }}
         env:
           GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON }}
           AGCONNECT_SERVICES: ${{ secrets.AGCONNECT_SERVICES_JSON }}
+          DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$GOOGLE_SERVICES" ]; then
             echo "$GOOGLE_SERVICES" > android/app/google-services.json
           fi
           if [ -n "$AGCONNECT_SERVICES" ]; then
             echo "$AGCONNECT_SERVICES" > android/app/agconnect-services.json
+          fi
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > android/app/debug.keystore
+            echo "✅ Restored consistent Android signing keystore"
           fi
 
       - name: Install dependencies

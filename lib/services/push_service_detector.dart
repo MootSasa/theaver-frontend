@@ -93,6 +93,13 @@ class PushServiceDetector {
   Future<PushServiceType> detect() async {
     if (_isDetected) return _detected;
 
+    if (kIsWeb) {
+      _detected = PushServiceType.none;
+      _isDetected = true;
+      debugPrint('PushServiceDetector: web platform → $_detected');
+      return _detected;
+    }
+
     if (!Platform.isAndroid) {
       // iOS / macOS / Windows / Linux — FCM работает через APNS на iOS
       if (Platform.isIOS || Platform.isMacOS) {

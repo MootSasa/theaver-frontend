@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
@@ -45,29 +46,31 @@ void main() async {
   debugPrint('main() started');
 
   // Initialize cross-platform video player engine (Windows, Linux, macOS)
-  try {
-    fvp.registerWith(options: {
-      'platforms': ['windows', 'linux', 'macos'],
-    });
-  } catch (e) {
-    debugPrint('fvp initialization skipped: $e');
-  }
+  if (!kIsWeb) {
+    try {
+      fvp.registerWith(options: {
+        'platforms': ['windows', 'linux', 'macos'],
+      });
+    } catch (e) {
+      debugPrint('fvp initialization skipped: $e');
+    }
 
-  // Initialize cross-platform audio player engine (Linux, Windows uses native just_audio_windows)
-  try {
-    JustAudioMediaKit.ensureInitialized(
-      linux: true,
-      windows: false,
-      android: false,
-      iOS: false,
-      macOS: false,
-    );
-  } catch (e) {
-    debugPrint('JustAudioMediaKit initialization skipped: $e');
+    // Initialize cross-platform audio player engine (Linux, Windows uses native just_audio_windows)
+    try {
+      JustAudioMediaKit.ensureInitialized(
+        linux: true,
+        windows: false,
+        android: false,
+        iOS: false,
+        macOS: false,
+      );
+    } catch (e) {
+      debugPrint('JustAudioMediaKit initialization skipped: $e');
+    }
   }
 
   // Configure AudioSession for media playback (A2DP stereo, no SCO phone mode, active during iOS mute switch)
-  if (Platform.isIOS || Platform.isAndroid || Platform.isMacOS) {
+  if (!kIsWeb && (Platform.isIOS || Platform.isAndroid || Platform.isMacOS)) {
     try {
       final audioSession = await AudioSession.instance;
       await audioSession.configure(const AudioSessionConfiguration(
@@ -141,7 +144,7 @@ void main() async {
   await DeepLinkService().init();
 
   // Initialize desktop window and system tray
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     await DesktopTrayService().init();
   }
 

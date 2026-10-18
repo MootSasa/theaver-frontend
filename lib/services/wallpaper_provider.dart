@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -78,7 +77,7 @@ class WallpaperProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
 
     // Migrate legacy non-scoped key to current user if needed
-    if (prefs.containsKey(_legacyWallpaperPathKey)) {
+    if (!kIsWeb && prefs.containsKey(_legacyWallpaperPathKey)) {
       final legacyPath = prefs.getString(_legacyWallpaperPathKey);
       await prefs.remove(_legacyWallpaperPathKey);
       if (legacyPath != null && await File(legacyPath).exists()) {
@@ -86,10 +85,10 @@ class WallpaperProvider extends ChangeNotifier {
       }
     }
 
-    _wallpaperPath = prefs.getString(_wallpaperPathKey(userId));
+    _wallpaperPath = kIsWeb ? null : prefs.getString(_wallpaperPathKey(userId));
     _wallpaperUrl = prefs.getString(_wallpaperUrlKey(userId));
 
-    if (_wallpaperPath != null) {
+    if (!kIsWeb && _wallpaperPath != null) {
       if (!await File(_wallpaperPath!).exists()) {
         _wallpaperPath = null;
         await prefs.remove(_wallpaperPathKey(userId));
@@ -108,7 +107,7 @@ class WallpaperProvider extends ChangeNotifier {
       if (res['success'] == true && res['appearance'] != null) {
         final serverWpUrl = res['appearance']['wallpaper_url'] as String?;
         if (serverWpUrl != null && serverWpUrl.isNotEmpty) {
-          if (serverWpUrl != _wallpaperUrl || _wallpaperPath == null) {
+          if (serverWpUrl != _wallpaperUrl || (!kIsWeb && _wallpaperPath == null)) {
             await onRemoteWallpaperUpdated(serverWpUrl, targetUserId: userId);
           }
         } else if (_wallpaperUrl != null && _wallpaperUrl!.isNotEmpty) {
@@ -135,7 +134,7 @@ class WallpaperProvider extends ChangeNotifier {
     _wallpaperPath = path;
     notifyListeners();
 
-    if (syncToServer) {
+    if (syncToServer && !kIsWeb) {
       _uploadToServer(uid, path);
     }
   }
@@ -166,7 +165,7 @@ class WallpaperProvider extends ChangeNotifier {
       await prefs.remove(_wallpaperUrlKey(uid));
     }
 
-    if (_wallpaperPath != null) {
+    if (!kIsWeb && _wallpaperPath != null) {
       try {
         final file = File(_wallpaperPath!);
         if (await file.exists()) {
@@ -197,6 +196,16 @@ class WallpaperProvider extends ChangeNotifier {
       remoteUrl = remoteUrl.replaceAll('storage.miptgram.ru', 'storage.theaver.app');
     } else if (remoteUrl.contains('miptgram.ru')) {
       remoteUrl = remoteUrl.replaceAll('miptgram.ru', 'theaver.app');
+    }
+
+    if (kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_wallpaperUrlKey(uid), remoteUrl);
+      if (uid == _currentUserId) {
+        _wallpaperUrl = remoteUrl;
+        notifyListeners();
+      }
+      return;
     }
 
     try {

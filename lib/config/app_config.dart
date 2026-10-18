@@ -90,12 +90,19 @@ class AppConfig {
       // Automatically load dynamic package info from platform (pubspec.yaml)
       try {
         final info = await PackageInfo.fromPlatform();
-        if (info.version.isNotEmpty) {
+        if (appVersion != '1.0.0' && appVersion.isNotEmpty) {
+          _currentVersion = appVersion;
+        } else if (info.version.isNotEmpty) {
           _currentVersion = info.version;
         }
-        final b = int.tryParse(info.buildNumber);
-        if (b != null && b > 0) {
-          _currentBuildNumber = b;
+        if (appBuildNumber > 1) {
+          _currentBuildNumber = appBuildNumber;
+        } else {
+          final b = int.tryParse(info.buildNumber);
+          if (b != null && b > 0) {
+            // Normalize Flutter --split-per-abi versionCode (abiPrefix * 1000 + buildNumber)
+            _currentBuildNumber = (b >= 1000 && b < 10000) ? (b % 1000) : b;
+          }
         }
       } catch (_) {}
 
