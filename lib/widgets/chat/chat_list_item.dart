@@ -47,7 +47,7 @@ class ChatListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasUnread = unreadCount > 0;
+    final hasUnread = unreadCount > 0 || unreadCount == -1;
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
     final p = themeExt?.palette;
@@ -80,18 +80,30 @@ class ChatListItem extends StatelessWidget {
           ),
           if (hasUnread)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              height: 18,
+              constraints: const BoxConstraints(minWidth: 18),
+              padding: unreadCount == -1
+                  ? EdgeInsets.zero
+                  : const EdgeInsets.symmetric(horizontal: 5),
               decoration: BoxDecoration(
                 color: unreadBg,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(9),
               ),
-              child: Text(
-                unreadCount > 99 ? '99+' : unreadCount.toString(),
-                style: TextStyle(
-                  color: unreadText,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
+              child: Center(
+                widthFactor: 1.0,
+                heightFactor: 1.0,
+                child: unreadCount == -1
+                    ? const SizedBox(width: 18, height: 18)
+                    : Text(
+                        unreadCount > 99 ? '99+' : unreadCount.toString(),
+                        style: TextStyle(
+                          color: unreadText,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          height: 1.0,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
               ),
             ),
         ],

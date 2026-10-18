@@ -11,9 +11,12 @@ import 'theme/theme_provider.dart';
 import 'screens/auth/splash_screen.dart';
 import 'services/settings_service.dart';
 import 'services/account_manager.dart';
+import 'services/chat_folder_service.dart';
+import 'services/chat_swipe_service.dart';
 import 'services/cache_service.dart';
 import 'services/draft_service.dart';
 import 'services/chat_realtime_manager.dart';
+import 'services/database/app_database.dart';
 import 'services/liquid_glass_provider.dart';
 import 'services/unread_count_provider.dart';
 import 'services/deep_link_service.dart';
@@ -24,6 +27,7 @@ import 'services/banking_cards_provider.dart';
 import 'services/wallet_security_provider.dart';
 import 'services/wallpaper_provider.dart';
 import 'services/profile_theme_provider.dart';
+import 'services/profile_instant_cache.dart';
 import 'utils/emoji_utils.dart';
 import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -124,9 +128,14 @@ void main() async {
   // Initialize services
   await SettingsService().init();
   await AccountManager().init();
+  await ProfileInstantCache.instance.init();
+  AppDatabase.setActiveUser(AccountManager().currentAccount?.userId);
+  await ChatFolderService().init();
+  await ChatSwipeService().init();
   await CacheService().init();
   await DraftService().init();
   ChatRealtimeManager().init();
+  ProfileInstantCache.instance.warmupSelf();
 
   // Initialize deep link service
   await DeepLinkService().init();
@@ -148,12 +157,12 @@ class TheaverApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider(create: (_) => LocaleProvider()),
-        ChangeNotifierProvider(create: (_) => LiquidGlassProvider()..init()),
+        ChangeNotifierProvider(create: (_) => LiquidGlassProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => UnreadCountProvider()..initialize()),
         ChangeNotifierProvider(create: (_) => NotificationSettingsProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => PrivacySettingsProvider()..loadAll()),
         ChangeNotifierProvider(create: (_) => WallpaperProvider()..init()),
-        ChangeNotifierProvider(create: (_) => ProfileThemeProvider()..init()),
+        ChangeNotifierProvider(create: (_) => ProfileThemeProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => WalletSecurityProvider()),
         ChangeNotifierProxyProvider<WalletSecurityProvider, BankingCardsProvider>(
           create: (_) => BankingCardsProvider(),

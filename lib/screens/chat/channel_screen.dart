@@ -12,6 +12,7 @@ import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
+import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import 'package:drift/drift.dart' show Value;
 import '../../utils/image_utils.dart';
@@ -43,6 +44,7 @@ import '../../widgets/message/voice_message_widget.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/message_context_menu_service.dart';
+import '../settings/profile_screen.dart';
 
 
 
@@ -109,6 +111,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _highlightMessageId = widget.highlightMessageId;
+    ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
     _loadData();
     _initWebSocket();
 
@@ -647,11 +650,12 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   /// Конвертация Message → MessagesCompanion для Drift
   MessagesCompanion _messageToCompanion(Message msg) {
-    final isSent = msg.sendStatus == 1 && msg.id != msg.localId;
+    final hasServerId = msg.sendStatus == 1 && msg.id.isNotEmpty;
+    final effectiveChatId = msg.chatId.isNotEmpty ? msg.chatId : widget.channelId;
     return MessagesCompanion(
-      serverId: isSent ? Value(msg.id) : const Value.absent(),
+      serverId: hasServerId ? Value(msg.id) : const Value.absent(),
       localId: Value(msg.localId ?? msg.id),
-      chatId: Value(msg.chatId),
+      chatId: Value(effectiveChatId),
       senderId: Value(msg.senderId),
       content: Value(msg.content),
       messageType: Value(msg.messageType),
@@ -1236,10 +1240,34 @@ class _ChannelScreenState extends State<ChannelScreen>
         isMuted: _isMuted,
         onBack: () => Navigator.pop(context),
         onTitleTap: () {
-          // TODO: Open channel info
+          Navigator.push(
+            context,
+            SwipeBackPageRoute(
+              builder: (_) => ProfileScreen(
+                entityType: ProfileEntityType.channel,
+                chatId: widget.channelId,
+                initialName: displayName,
+                initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
+                heroTag: displayName,
+                onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
+              ),
+            ),
+          );
         },
         onViewProfile: () {
-          // TODO: View channel info
+          Navigator.push(
+            context,
+            SwipeBackPageRoute(
+              builder: (_) => ProfileScreen(
+                entityType: ProfileEntityType.channel,
+                chatId: widget.channelId,
+                initialName: displayName,
+                initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
+                heroTag: displayName,
+                onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
+              ),
+            ),
+          );
         },
         onSearch: () {
           ChatActionsHelper.openSearch(

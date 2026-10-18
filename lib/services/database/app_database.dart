@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
+import '../account_manager.dart';
 import 'connection/connection.dart' as impl;
 
 part 'app_database.g.dart';
@@ -121,15 +122,74 @@ class BankingCards extends Table {
 /// Заменяет IsarDatabaseService для Offline-First архитектуры.
 @DriftDatabase(tables: [Chats, Messages, SyncStates, BankingCards])
 class AppDatabase extends _$AppDatabase {
-  static final AppDatabase _instance = AppDatabase._internal();
-  factory AppDatabase() => _instance;
-  AppDatabase._internal() : super(_openConnection());
+  static final Map<String, AppDatabase> _instances = {};
+  static String? _activeUserId;
+
+  /// Set the currently active user ID for global AppDatabase() resolution
+  static void setActiveUser(String? userId) {
+    _activeUserId = userId;
+  }
+
+  /// Resolve current active user ID (from explicit setting or AccountManager)
+  static String get activeUserId {
+    return _activeUserId ?? AccountManager().currentAccount?.userId ?? 'default';
+  }
+
+  /// Factory constructor returning the database instance for [userId] (or active user)
+  factory AppDatabase([String? userId]) {
+    final uid = (userId != null && userId.isNotEmpty)
+        ? userId
+        : activeUserId;
+    return _instances.putIfAbsent(uid, () => AppDatabase._internal(uid));
+  }
+
+  /// The user ID this database instance belongs to
+  final String userId;
+
+  AppDatabase._internal(this.userId) : super(_openConnection(userId));
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
-  static QueryExecutor _openConnection() {
-    return impl.openConnection();
+  static QueryExecutor _openConnection(String userId) {
+    final dbName = (userId.isNotEmpty && userId != 'default')
+        ? 'miptgram_$userId'
+        : 'miptgram';
+    return impl.openConnection(dbName);
+  }
+
+  /// Removes and closes a specific user database and deletes its file
+  static Future<void> removeUserDatabase(String userId) async {
+    if (_instances.containsKey(userId)) {
+      final db = _instances.remove(userId)!;
+      try {
+        await db.close();
+      } catch (_) {}
+    }
+    final dbName = (userId.isNotEmpty && userId != 'default')
+        ? 'miptgram_$userId'
+        : 'miptgram';
+    try {
+      await impl.deleteDatabaseFile(dbName);
+    } catch (_) {}
+  }
+
+  /// Close all open database instances
+  static Future<void> closeAll() async {
+    for (final db in _instances.values) {
+      try {
+        await db.close();
+      } catch (_) {}
+    }
+    _instances.clear();
+  }
+
+  /// Closes all open database instances and deletes all database files on disk
+  static Future<void> deleteAllDatabases() async {
+    await closeAll();
+    try {
+      await impl.deleteAllDatabaseFiles();
+    } catch (_) {}
   }
 
   @override
@@ -248,6 +308,26 @@ class AppDatabase extends _$AppDatabase {
       await customSelect('SELECT 1').getSingle();
       _isInitialized = true;
       debugPrint('AppDatabase: Initialized');
+
+      // 1. Очистка пустых приватных чатов-«призраков» (без сообщений, без черновиков, не закреплены, пустое имя)
+      try {
+        await customStatement(
+          "DELETE FROM chats WHERE chat_type = 'private' AND (name = '' OR name = '?' OR name IS NULL) AND (last_message IS NULL OR last_message = '') AND (is_pinned IS NULL OR is_pinned = 0)",
+        );
+        await customStatement(
+          "UPDATE chats SET name = 'Пользователь' WHERE (name = '' OR name = '?' OR name IS NULL) AND chat_type = 'private'",
+        );
+      } catch (_) {}
+
+      // 2. Дедупликация чатов «Избранное»
+      try {
+        await _cleanupDuplicateSavedChats();
+      } catch (_) {}
+
+      // 3. Очистка поврежденных сообщений без chat_id
+      try {
+        await customStatement("DELETE FROM messages WHERE chat_id = '' OR chat_id IS NULL");
+      } catch (_) {}
     } catch (e) {
       debugPrint('AppDatabase initialize error: $e');
     }
@@ -262,10 +342,66 @@ class AppDatabase extends _$AppDatabase {
 
   // === ЧАТЫ ===
 
+  /// Реактивный стрим чатов с сортировкой:
+  /// 1) Избранное (saved) в самом верху
+  /// 2) Закрепленные (isPinned == true)
+  /// 3) По дате последнего сообщения / обновления (updatedAt DESC)
+  Stream<List<DbChat>> watchChats({int filter = 0}) {
+    final query = select(chats);
+    // Скрываем пустые приватные чаты-«призраки» (должно быть сообщение или закрепление)
+    query.where((t) =>
+        t.chatType.isNotValue('private') |
+        t.isPinned.equals(true) |
+        (t.lastMessage.isNotNull() & t.lastMessage.isNotValue('')));
+
+    if (filter == 1) {
+      // Личные чаты (private и saved)
+      query.where((t) => t.chatType.equals('private') | t.chatType.equals('saved'));
+    } else if (filter == 2) {
+      // Группы (и saved)
+      query.where((t) => t.chatType.equals('group') | t.chatType.equals('saved'));
+    } else if (filter == 3) {
+      // Каналы (и saved)
+      query.where((t) => t.chatType.equals('channel') | t.chatType.equals('saved'));
+    }
+    query.orderBy([
+      (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
+      (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+      (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+    ]);
+    return query.watch();
+  }
+
+  /// Поиск по локальным чатам через SQLite
+  Future<List<DbChat>> searchLocalChats(String query) async {
+    await ensureInitialized();
+    final pattern = '%$query%';
+    return (select(chats)
+          ..where((t) => t.name.like(pattern) | t.lastMessage.like(pattern))
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+          ]))
+        .get();
+  }
+
+  /// Реактивный подсчёт общего числа непрочитанных сообщений
+  Stream<int> watchTotalUnread() {
+    final sumCol = chats.unreadCount.sum();
+    final query = selectOnly(chats)..addColumns([sumCol]);
+    return query.watchSingleOrNull().map((row) => row?.read(sumCol) ?? 0);
+  }
+
   /// Получить все чаты, отсортированные по updatedAt (убывание)
   Future<List<DbChat>> getChats() async {
     await ensureInitialized();
-    return (select(chats)..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+    return (select(chats)
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+          ]))
         .get();
   }
 
@@ -288,6 +424,9 @@ class AppDatabase extends _$AppDatabase {
     await batch((b) {
       b.insertAllOnConflictUpdate(chats, chatCompanions);
     });
+    if (chatCompanions.any((c) => c.chatType.value == 'saved')) {
+      await _cleanupDuplicateSavedChats();
+    }
   }
 
   /// Удалить чат по server chatId
@@ -296,16 +435,102 @@ class AppDatabase extends _$AppDatabase {
     await (delete(chats)..where((t) => t.chatId.equals(chatId))).go();
   }
 
-  /// Обновить unread count для чата
+  /// Обновить unread count для чата с гарантированным оповещением реактивных стримов Drift
   Future<void> updateUnreadCount(String chatId, int count) async {
     await ensureInitialized();
     await (update(chats)..where((t) => t.chatId.equals(chatId)))
-        .write(const ChatsCompanion(unreadCount: Value.absent()));
-    // Используем raw update для установки конкретного значения
-    await customStatement(
-      'UPDATE chats SET unread_count = ? WHERE chat_id = ?',
-      [count, chatId],
+        .write(ChatsCompanion(unreadCount: Value(count)));
+  }
+
+  /// Пакетное закрепление / открепление чатов
+  Future<void> batchSetPinned(List<String> chatIds, bool isPinned) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds)))
+        .write(ChatsCompanion(isPinned: Value(isPinned)));
+  }
+
+  /// Пакетная отметка чатов как прочитанные
+  Future<void> batchMarkAsRead(List<String> chatIds) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds)))
+        .write(const ChatsCompanion(unreadCount: Value(0)));
+  }
+
+  /// Пакетное удаление чатов и их сообщений
+  Future<void> batchDeleteChats(List<String> chatIds) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await batch((b) {
+      b.deleteWhere(chats, (t) => t.chatId.isIn(chatIds));
+      b.deleteWhere(messages, (t) => t.chatId.isIn(chatIds));
+    });
+  }
+
+  /// Обновить последнее сообщение чата и updatedAt
+  Future<void> updateChatLastMessage({
+    required String chatId,
+    required String content,
+    required String createdAt,
+    String messageType = 'text',
+    bool isRound = false,
+    String? fileUrl,
+    String? groupedId,
+    bool incrementUnread = false,
+  }) async {
+    await ensureInitialized();
+    final existing = await getChat(chatId);
+    if (existing == null) return;
+    final newUnread =
+        incrementUnread ? existing.unreadCount + 1 : existing.unreadCount;
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        lastMessage: Value(content),
+        lastMessageTime: Value(createdAt),
+        lastMessageType: Value(messageType),
+        lastMessageIsRound: Value(isRound),
+        lastMessageFileUrl: Value(fileUrl),
+        lastMessageGroupedId: Value(groupedId),
+        updatedAt: Value(createdAt),
+        unreadCount: Value(newUnread),
+      ),
     );
+  }
+
+  /// Пересчитать последнее сообщение чата на основе последней записи в таблице сообщений.
+  /// При отсутствии локальных сообщений НЕ затирает existing.lastMessage, если не передан allowClear: true.
+  Future<void> refreshChatLastMessageFromDb(String chatId, {bool allowClear = false}) async {
+    await ensureInitialized();
+    final lastMsg = await getLastMessageForChat(chatId);
+    final existing = await getChat(chatId);
+    if (existing == null) return;
+
+    if (lastMsg != null) {
+      final isRound = lastMsg.isRound || lastMsg.messageType == 'round';
+      await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+        ChatsCompanion(
+          lastMessage: Value(lastMsg.content),
+          lastMessageTime: Value(lastMsg.createdAt),
+          lastMessageType: Value(lastMsg.messageType),
+          lastMessageIsRound: Value(isRound),
+          lastMessageFileUrl: Value(lastMsg.fileUrl),
+          lastMessageGroupedId: Value(lastMsg.groupedId),
+          updatedAt: Value(lastMsg.createdAt),
+        ),
+      );
+    } else if (allowClear) {
+      await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+        const ChatsCompanion(
+          lastMessage: Value(null),
+          lastMessageTime: Value(null),
+          lastMessageType: Value(null),
+          lastMessageIsRound: Value(false),
+          lastMessageFileUrl: Value(null),
+          lastMessageGroupedId: Value(null),
+        ),
+      );
+    }
   }
 
   /// Частичное обновление чата (только переданные поля)
@@ -329,18 +554,56 @@ class AppDatabase extends _$AppDatabase {
         .write(MessagesCompanion(senderAvatarUrl: Value(avatarUrl)));
   }
 
+  /// Дедупликация чатов "Избранное": оставляет один канонический чат, переносит сообщения и удаляет дубликаты
+  Future<void> _cleanupDuplicateSavedChats([String? userId]) async {
+    final savedChatsList = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
+    if (savedChatsList.length <= 1) return;
+
+    // Предпочитаем серверный ID (не начинающийся на 'saved_') как канонический
+    final canonicalChat = savedChatsList.firstWhere(
+      (c) => !c.chatId.startsWith('saved_'),
+      orElse: () => savedChatsList.first,
+    );
+
+    for (final c in savedChatsList) {
+      if (c.chatId != canonicalChat.chatId) {
+        // Переносим сообщения на канонический чат
+        await customStatement(
+          'UPDATE messages SET chat_id = ? WHERE chat_id = ?',
+          [canonicalChat.chatId, c.chatId],
+        );
+        // Удаляем лишнюю запись чата
+        await (delete(chats)..where((t) => t.chatId.equals(c.chatId))).go();
+      }
+    }
+    debugPrint('AppDatabase: Cleaned up duplicate saved chats, kept ${canonicalChat.chatId}');
+  }
+
   /// Убедиться, что чат "Избранное" существует локально
   Future<void> ensureSavedChatExists(String userId) async {
     await ensureInitialized();
-    final existing = await (select(chats)..where((t) => t.chatType.equals('saved'))).getSingleOrNull();
-    if (existing == null) {
+    await _cleanupDuplicateSavedChats(userId);
+    final existing = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
+    final mgr = AccountManager();
+    final account = (mgr.currentAccount?.userId == userId ? mgr.currentAccount : null) ??
+        mgr.accounts.where((acc) => acc.userId == userId).firstOrNull ??
+        mgr.currentAccount;
+    if (existing.isEmpty) {
       await saveChat(ChatsCompanion(
         chatId: Value('saved_$userId'),
         chatType: const Value('saved'),
         name: const Value('Избранное'),
+        avatarUrl: Value(account?.avatarUrl),
         updatedAt: Value(DateTime.now().toIso8601String()),
       ));
       debugPrint('AppDatabase: Created local "Saved Messages" chat for $userId');
+    } else if (account?.avatarUrl != null && account!.avatarUrl!.isNotEmpty) {
+      final first = existing.first;
+      if (first.avatarUrl == null || first.avatarUrl!.isEmpty) {
+        await (update(chats)..where((t) => t.chatId.equals(first.chatId))).write(
+          ChatsCompanion(avatarUrl: Value(account.avatarUrl)),
+        );
+      }
     }
   }
 
@@ -348,14 +611,26 @@ class AppDatabase extends _$AppDatabase {
   Future<void> migrateSavedChatId(String localSavedId, String serverSavedId) async {
     if (localSavedId == serverSavedId) return;
     await ensureInitialized();
-    await customStatement(
-      'UPDATE chats SET chat_id = ? WHERE chat_id = ?',
-      [serverSavedId, localSavedId],
-    );
+
+    // Сначала переносим сообщения
     await customStatement(
       'UPDATE messages SET chat_id = ? WHERE chat_id = ?',
       [serverSavedId, localSavedId],
     );
+
+    // Проверяем, существует ли уже серверный чат в базе
+    final serverChat = await (select(chats)..where((t) => t.chatId.equals(serverSavedId))).getSingleOrNull();
+    if (serverChat != null) {
+      // Серверный чат уже вставлен, удаляем локальный плейсхолдер во избежание дубликатов
+      await (delete(chats)..where((t) => t.chatId.equals(localSavedId))).go();
+    } else {
+      // Серверного чата еще нет, переименовываем локальный плейсхолдер
+      await customStatement(
+        'UPDATE chats SET chat_id = ? WHERE chat_id = ?',
+        [serverSavedId, localSavedId],
+      );
+    }
+    await _cleanupDuplicateSavedChats();
   }
 
   // === СООБЩЕНИЯ ===
@@ -543,6 +818,92 @@ class AppDatabase extends _$AppDatabase {
     await (delete(bankingCards)..where((t) => t.id.equals(id))).go();
   }
 
+  /// Получить чат "Избранное" (saved)
+  Future<DbChat?> getSavedChat() async {
+    await ensureInitialized();
+    final list = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
+    if (list.isEmpty) return null;
+    return list.firstWhere(
+      (c) => !c.chatId.startsWith('saved_'),
+      orElse: () => list.first,
+    );
+  }
+
+  /// Найти личный чат с конкретным пользователем по otherUserId
+  Future<DbChat?> getPrivateChatWithUser(String targetUserId) async {
+    if (targetUserId.isEmpty) return null;
+    await ensureInitialized();
+    final list = await (select(chats)
+          ..where((t) => t.chatType.equals('private') & t.otherUserId.equals(targetUserId)))
+        .get();
+    return list.firstOrNull;
+  }
+
+  /// Получить медиафайлы чата (фото и обычные видео, без кружочков)
+  Future<List<DbMessage>> getSharedMediaForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('image') | t.messageType.equals('video')) &
+              t.isRound.equals(false) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Получить документы/файлы чата
+  Future<List<DbMessage>> getSharedFilesForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('file') | t.messageType.equals('document')) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Получить голосовые сообщения и видео-кружочки чата
+  Future<List<DbMessage>> getSharedVoiceForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('voice') |
+                  t.messageType.equals('round') |
+                  t.isRound.equals(true)) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Получить сообщения со ссылками в чате
+  Future<List<DbMessage>> getSharedLinksForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.content.like('%http://%') |
+                  t.content.like('%https://%') |
+                  t.content.like('%www.%') |
+                  t.entities.like('%"url"%') |
+                  t.entities.like('%"text_link"%')))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
   /// Очистить все данные локальной базы (сообщения, чаты, состояние синхронизации, карты)
   Future<void> clearAllData() async {
     await ensureInitialized();
@@ -555,3 +916,4 @@ class AppDatabase extends _$AppDatabase {
     debugPrint('AppDatabase: All local data cleared');
   }
 }
+

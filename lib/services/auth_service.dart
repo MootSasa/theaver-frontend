@@ -12,7 +12,6 @@ import 'deep_link_service.dart';
 import 'websocket_service.dart';
 import 'notification_service.dart';
 import '../screens/auth/login_screen.dart';
-import '../screens/main/main_screen.dart';
 import '../utils/swipe_back_route.dart';
 import '../l10n/app_localizations.dart';
 
@@ -218,7 +217,13 @@ class AuthService {
 
       // 3. Clear local SQLite database and media cache
       try {
-        await AppDatabase().clearAllData();
+        if (accountManager.accounts.isEmpty) {
+          await AppDatabase.deleteAllDatabases();
+        } else if (currentUserId != null) {
+          await AppDatabase.removeUserDatabase(currentUserId);
+        } else {
+          await AppDatabase().clearAllData();
+        }
       } catch (e) {
         debugPrint('Logout: error clearing AppDatabase: $e');
       }
@@ -328,7 +333,6 @@ class AuthService {
       final accountManager = AccountManager();
       final terminatedAccount = accountManager.currentAccount;
       final currentUserId = terminatedAccount?.userId;
-      final terminatedUsername = terminatedAccount?.username ?? terminatedAccount?.displayName ?? '';
       if (currentUserId != null) {
         await accountManager.removeAccount(currentUserId);
       }
@@ -602,16 +606,24 @@ class AuthService {
         if (data['success'] == true) {
           // Update account profile
           final accountManager = AccountManager();
-          await accountManager.updateAccountProfile(
-            accountManager.currentAccount!.userId,
-            username: data['user']?['username'],
-            displayName: data['user']?['display_name'],
-            avatarUrl: data['user']?['avatar_url'],
-            name: data['user']?['name'],
-            surname: data['user']?['surname'],
-            email: data['user']?['email'],
-            phone: data['user']?['phone'],
-          );
+          final currentAcc = accountManager.currentAccount;
+          if (currentAcc != null) {
+            final userJson = data['user'] as Map<String, dynamic>?;
+            final birthdayStr = userJson?['birthday'] as String?;
+            final parsedBirthday = birthdayStr != null ? DateTime.tryParse(birthdayStr) : null;
+            await accountManager.updateAccountProfile(
+              currentAcc.userId,
+              username: userJson?['username'],
+              displayName: userJson?['display_name'],
+              avatarUrl: userJson?['avatar_url'],
+              name: userJson?['name'],
+              surname: userJson?['surname'],
+              email: userJson?['email'],
+              phone: userJson?['phone'],
+              bio: userJson?['bio'],
+              birthday: parsedBirthday,
+            );
+          }
           return {
             'success': true,
             'user': data['user'],
@@ -1015,10 +1027,13 @@ class AuthService {
     required String email,
     required String phone,
     String? avatarUrl,
+    String? bio,
+    DateTime? birthday,
     bool requiresServerValidation = false,
   }) async {
     final accountManager = AccountManager();
     final currentAcc = accountManager.currentAccount;
+    final birthdayIso = birthday?.toIso8601String().split('T').first;
 
     // Проверяем, изменились ли никнейм или телефон относительно текущего сохраненного профиля
     final isUsernameChanged = currentAcc != null &&
@@ -1054,6 +1069,8 @@ class AuthService {
             'email': email,
             'phone': phone,
             if (avatarUrl != null) 'avatar_url': avatarUrl,
+            if (bio != null) 'bio': bio,
+            if (birthdayIso != null) 'birthday': birthdayIso,
           }),
         ).timeout(const Duration(seconds: 5));
 
@@ -1071,6 +1088,8 @@ class AuthService {
                 surname: surname,
                 email: email,
                 phone: phone,
+                bio: bio,
+                birthday: birthday,
               );
             }
             await accountManager.clearPendingProfileSync();
@@ -1116,6 +1135,8 @@ class AuthService {
         surname: surname,
         email: email,
         phone: phone,
+        bio: bio,
+        birthday: birthday,
       );
     }
 
@@ -1128,6 +1149,8 @@ class AuthService {
           'username': username,
           'email': email,
           'phone': phone,
+          if (bio != null) 'bio': bio,
+          if (birthdayIso != null) 'birthday': birthdayIso,
         });
         return {
           'success': true,
@@ -1149,6 +1172,8 @@ class AuthService {
           'email': email,
           'phone': phone,
           if (avatarUrl != null) 'avatar_url': avatarUrl,
+          if (bio != null) 'bio': bio,
+          if (birthdayIso != null) 'birthday': birthdayIso,
         }),
       ).timeout(const Duration(seconds: 5));
 
@@ -1171,6 +1196,8 @@ class AuthService {
         'username': username,
         'email': email,
         'phone': phone,
+        if (bio != null) 'bio': bio,
+        if (birthdayIso != null) 'birthday': birthdayIso,
       });
 
       return {
@@ -1185,6 +1212,8 @@ class AuthService {
         'username': username,
         'email': email,
         'phone': phone,
+        if (bio != null) 'bio': bio,
+        if (birthdayIso != null) 'birthday': birthdayIso,
       });
 
       return {

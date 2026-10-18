@@ -110,9 +110,8 @@ class _LiquidGlassBottomBarState extends State<LiquidGlassBottomBar> {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = MediaQuery.platformBrightnessOf(context);
-    final isDark = brightness == Brightness.dark;
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     final glassProvider = context.watch<LiquidGlassProvider>();
     final effectiveStyle = widget.glassStyle ??

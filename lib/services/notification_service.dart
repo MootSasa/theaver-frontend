@@ -542,16 +542,17 @@ class NotificationService {
           }
         } else {
           // Мобильные платформы (Android / iOS):
-          showInAppBanner(
-            chatId: chatId,
-            chatName: chatName,
-            senderName: senderName,
-            messageText: messageText,
-            avatarUrl: avatarUrl,
-            isGroup: isGroup,
-          );
-          // В фоне показываем локальное уведомление ТОЛЬКО если push-сервисы не активны (например, нет Google/Huawei)
-          if (!_isAppInForeground && (_pushToken == null || _pushToken!.isEmpty)) {
+          if (_isAppInForeground) {
+            showInAppBanner(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: avatarUrl,
+              isGroup: isGroup,
+            );
+          } else {
+            // В фоне показываем локальное уведомление в системной шторке
             await showMessageNotification(
               chatId: chatId,
               chatName: chatName,
@@ -882,6 +883,17 @@ class NotificationService {
                 senderName: senderName,
                 messageText: messageText,
                 isGroup: isGroup,
+              );
+            } else {
+              showMessageNotification(
+                chatId: chatId,
+                chatName: chatName,
+                senderName: senderName,
+                messageText: messageText,
+                avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
+                mediaUrl: data['media_url']?.toString(),
+                isGroup: isGroup,
+                messageId: messageId,
               );
             }
           }

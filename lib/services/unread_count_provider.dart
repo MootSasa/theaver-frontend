@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'websocket_service.dart';
 import 'chat_service.dart';
-import 'auth_service.dart';
 import 'notification_service.dart';
 
 /// Provider that manages unread message counts per chat.
@@ -20,24 +19,30 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Currently open chat ID — messages in this chat should NOT increment unread
   String? _currentlyOpenChatId;
 
-  /// Current user ID for filtering own messages
-  String? _currentUserId;
-
   /// Stream subscription for WebSocket events
   StreamSubscription<WebSocketEvent>? _wsSubscription;
 
   /// Get unread count for a specific chat
   int getCount(String chatId) => _counts[chatId] ?? 0;
 
-  /// Get total unread count across all chats
-  int get totalUnread => _counts.values.fold(0, (sum, count) => sum + count);
+  /// Check whether a chat is manually marked as unread
+  bool isMarkedUnread(String chatId) => _counts[chatId] == -1;
+
+  /// Check whether a chat has unread messages or is marked as unread
+  bool hasUnread(String chatId) => (_counts[chatId] ?? 0) > 0 || _counts[chatId] == -1;
+
+  /// Get total unread count across all chats (marked unread chats count as +1)
+  int get totalUnread => _counts.values.fold(
+        0,
+        (sum, count) => sum + (count == -1 ? 1 : (count > 0 ? count : 0)),
+      );
 
   /// Get number of chats with unread messages for a specific filter
   int getUnreadChatCountForFilter(bool Function(String chatId, String chatType) matchesFilter) {
     int count = 0;
     _counts.forEach((chatId, unreadCount) {
       // We need chat type info here — the caller should pass it
-      if (unreadCount > 0) count++;
+      if (unreadCount > 0 || unreadCount == -1) count++;
     });
     return count;
   }
@@ -50,8 +55,6 @@ class UnreadCountProvider extends ChangeNotifier {
 
   /// Initialize: load counts from server and subscribe to WebSocket
   Future<void> initialize() async {
-    _currentUserId = await AuthService.getUserId();
-
     // Subscribe to WebSocket events
     _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
     _wsService.subscribe(WebSocketEventType.unreadCountUpdated, _onUnreadCountUpdated);
@@ -62,7 +65,7 @@ class UnreadCountProvider extends ChangeNotifier {
   void loadFromChats(List<Chat> chats) {
     _counts.clear();
     for (final chat in chats) {
-      if (chat.unreadCount > 0) {
+      if (chat.unreadCount > 0 || chat.unreadCount == -1) {
         _counts[chat.id] = chat.unreadCount;
       }
     }
@@ -83,13 +86,20 @@ class UnreadCountProvider extends ChangeNotifier {
   void increment(String chatId) {
     // Don't increment if user is currently in this chat
     if (_currentlyOpenChatId == chatId) return;
-    _counts[chatId] = (_counts[chatId] ?? 0) + 1;
+    final current = _counts[chatId] ?? 0;
+    _counts[chatId] = current == -1 ? 1 : current + 1;
     notifyListeners();
   }
 
   /// Optimistically decrement unread count for a chat (when messages marked as read)
   void decrement(String chatId, int count) {
     final current = _counts[chatId] ?? 0;
+    if (current == -1) {
+      _counts.remove(chatId);
+      NotificationService().cancelChatNotifications(chatId);
+      notifyListeners();
+      return;
+    }
     final newCount = (current - count).clamp(0, current);
     if (newCount == 0) {
       _counts.remove(chatId);
@@ -130,23 +140,23 @@ class UnreadCountProvider extends ChangeNotifier {
     }
   }
 
-  /// Handle new_message — optimistically increment unread for non-open chats
+  /// Handle new_message — authoritative count is managed by unread_count_updated event
   void _onNewMessage(WebSocketEvent event) {
     final chatId = event.data['chat_id']?.toString();
-    final messageData = event.data['message'] as Map<String, dynamic>?;
-    final senderId = messageData?['sender_id']?.toString();
-
     if (chatId == null) return;
 
-    // Don't increment for own messages
-    if (senderId != null && senderId == _currentUserId) return;
-
-    // Don't increment if user is currently in this chat
-    if (_currentlyOpenChatId == chatId) return;
-
-    // Optimistically increment — server will send unreadCountUpdated as confirmation
-    _counts[chatId] = (_counts[chatId] ?? 0) + 1;
-    notifyListeners();
+    // If payload contains authoritative unread_count, apply it.
+    // Do NOT blindly increment here, as the server broadcasts unread_count_updated
+    // with the exact count from PostgreSQL on every new message.
+    if (event.data.containsKey('unread_count') && event.data['unread_count'] is int) {
+      final unreadCount = event.data['unread_count'] as int;
+      if (unreadCount == 0) {
+        _counts.remove(chatId);
+      } else {
+        _counts[chatId] = unreadCount;
+      }
+      notifyListeners();
+    }
   }
 
   /// Persist counts to local storage

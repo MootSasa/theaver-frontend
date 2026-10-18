@@ -56,6 +56,8 @@ String? getValidAvatarUrl(String? url) {
   }
 }
 
+final Map<String, MemoryImage> _dataUrlMemoryImageCache = {};
+
 /// Creates an ImageProvider from an avatar URL or local file path.
 /// Supports network URLs (http/https via CachedNetworkImageProvider with offline disk cache),
 /// local file paths, and data: URLs (base64).
@@ -76,12 +78,19 @@ ImageProvider? avatarImageProvider(String? url, {String? localFallbackPath}) {
 
   // Handle data: URLs (base64 encoded avatars stored in DB)
   if (url.startsWith('data:')) {
+    final cached = _dataUrlMemoryImageCache[url];
+    if (cached != null) return cached;
     try {
       final commaIndex = url.indexOf(',');
       if (commaIndex == -1) return null;
       final base64Str = url.substring(commaIndex + 1);
       final bytes = base64Decode(base64Str);
-      return MemoryImage(bytes);
+      final provider = MemoryImage(bytes);
+      if (_dataUrlMemoryImageCache.length > 64) {
+        _dataUrlMemoryImageCache.remove(_dataUrlMemoryImageCache.keys.first);
+      }
+      _dataUrlMemoryImageCache[url] = provider;
+      return provider;
     } catch (_) {
       return null;
     }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:drift/drift.dart' as drift;
 import '../config/app_config.dart';
 import 'auth_service.dart';
 import 'database/app_database.dart';
@@ -47,6 +48,12 @@ class Chat {
     this.lastMessageGroupedId,
     this.draft,
   });
+
+  /// Whether this chat has been manually marked as unread (represented by unreadCount == -1).
+  bool get isMarkedUnread => unreadCount == -1;
+
+  /// Whether this chat has unread messages or is marked as unread.
+  bool get hasUnread => unreadCount > 0 || isMarkedUnread;
 
   /// True if the last message in this chat is a round video note («кружочек»)
   bool get isLastMessageRoundVideo =>
@@ -710,6 +717,54 @@ class Message {
     );
   }
 
+  /// Convert Message to Drift MessagesCompanion
+  MessagesCompanion toCompanion({String? fallbackChatId}) {
+    final effectiveChatId = chatId.isNotEmpty ? chatId : (fallbackChatId ?? '');
+    final hasServerId = sendStatus == 1 && id.isNotEmpty;
+    return MessagesCompanion(
+      serverId: hasServerId ? drift.Value(id) : const drift.Value.absent(),
+      localId: drift.Value(localId ?? id),
+      chatId: drift.Value(effectiveChatId),
+      senderId: drift.Value(senderId),
+      content: drift.Value(content),
+      messageType: drift.Value(messageType),
+      fileUrl: drift.Value(fileUrl),
+      fileName: drift.Value(fileName),
+      replyToMessageId: drift.Value(replyToMessageId),
+      isQuote: drift.Value(isQuote),
+      quoteText: drift.Value(quoteText),
+      quoteOffset: drift.Value(quoteOffset),
+      quoteLength: drift.Value(quoteLength),
+      replyToSenderId: drift.Value(replyInfo?.senderId),
+      replyToSenderName: drift.Value(replyInfo?.senderName),
+      replyToContent: drift.Value(replyInfo?.content),
+      replyToMessageType: drift.Value(replyInfo?.messageType ?? 'text'),
+      isRead: drift.Value(isRead),
+      isEdited: drift.Value(isEdited),
+      sendStatus: drift.Value(sendStatus),
+      senderName: drift.Value(senderName),
+      senderAvatarUrl: drift.Value(senderAvatarUrl),
+      createdAt: drift.Value(createdAt),
+      reactions: reactions.isNotEmpty || myReactions.isNotEmpty
+          ? drift.Value(jsonEncode({
+              'reactions': reactions,
+              'my_reactions': myReactions.toList(),
+            }))
+          : const drift.Value.absent(),
+      isRound: drift.Value(isRound),
+      groupedId: drift.Value(groupedId),
+      entities: entities.isNotEmpty
+          ? drift.Value(jsonEncode(entities.map((e) => e.toJson()).toList()))
+          : const drift.Value.absent(),
+      linkPreviewOptions: linkPreviewOptions != null
+          ? drift.Value(jsonEncode(linkPreviewOptions!.toJson()))
+          : const drift.Value.absent(),
+      mediaPayload: mediaPayload != null && mediaPayload!.isNotEmpty
+          ? drift.Value(jsonEncode(mediaPayload))
+          : const drift.Value.absent(),
+    );
+  }
+
   /// Copy with method for updating message state
   Message copyWith({
     String? id,
@@ -1069,7 +1124,13 @@ class ChatService {
         List<Message> messages = [];
         if (data['messages'] != null && data['messages'] is List) {
           for (var msg in data['messages']) {
-            messages.add(Message.fromJson(msg));
+            if (msg is Map) {
+              final map = Map<String, dynamic>.from(msg);
+              if (map['chat_id'] == null || map['chat_id'].toString().isEmpty) {
+                map['chat_id'] = chatId;
+              }
+              messages.add(Message.fromJson(map));
+            }
           }
         }
         return {

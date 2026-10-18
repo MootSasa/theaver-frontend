@@ -23,6 +23,7 @@ import '../../utils/haptic_utils.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/settings_service.dart';
+import '../../services/profile_instant_cache.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
@@ -30,7 +31,6 @@ import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
 import 'package:http/http.dart' as http;
 import '../auth/login_screen.dart';
-import '../main/main_screen.dart';
 import '../../services/database/app_database.dart';
 import '../../services/cache_service.dart';
 import '../../services/websocket_service.dart';
@@ -343,6 +343,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     _currentAccount = _accountManager.currentAccount;
     _accountManager.addListener(_onAccountChanged);
     _loadUpdateChannel();
+    ProfileInstantCache.instance.warmupSelf();
   }
 
   void _onAccountChanged() {
@@ -907,7 +908,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
       // 3. Clear SQLite database (all chats, messages, sync states, cards)
       try {
-        await AppDatabase().clearAllData();
+        await AppDatabase.deleteAllDatabases();
       } catch (e) {
         debugPrint('_clearAllData: error clearing AppDatabase: $e');
       }

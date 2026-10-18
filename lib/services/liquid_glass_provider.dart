@@ -22,18 +22,16 @@ class LiquidGlassProvider extends ChangeNotifier {
   double _blur = 8.0;
 
   /// Текущий режим Liquid Glass дизайна.
-  /// Всегда [GlassMode.disabled] на неподдерживаемых платформах.
-  GlassMode get mode => isSupported ? _mode : GlassMode.disabled;
+  GlassMode get mode => _mode;
 
   /// Включён ли какой-либо стеклянный дизайн (lite или full).
-  /// Всегда `false` на неподдерживаемых платформах.
-  bool get enabled => isSupported && _mode != GlassMode.disabled;
+  bool get enabled => _mode != GlassMode.disabled;
 
   /// Включён ли облегчённый режим (FakeGlass).
-  bool get isLite => isSupported && _mode == GlassMode.lite;
+  bool get isLite => _mode == GlassMode.lite;
 
   /// Включён ли полный режим (LiquidGlass).
-  bool get isFull => isSupported && _mode == GlassMode.full;
+  bool get isFull => _mode == GlassMode.full;
 
   /// Доступность Liquid Glass на текущей платформе
   bool get isSupported => SettingsService.isLiquidGlassSupported;
@@ -172,11 +170,6 @@ class LiquidGlassProvider extends ChangeNotifier {
   /// Инициализация из SettingsService
   void init() {
     _mode = _settingsService.glassMode;
-    // Если платформа не поддерживается, принудительно сбрасываем
-    if (!isSupported && _mode != GlassMode.disabled) {
-      _mode = GlassMode.disabled;
-      _settingsService.saveGlassMode(GlassMode.disabled);
-    }
     _lightAngle = _settingsService.manualLightAngle;
     _blur = _settingsService.glassBlur;
     notifyListeners();
@@ -184,7 +177,6 @@ class LiquidGlassProvider extends ChangeNotifier {
 
   /// Установить режим Liquid Glass дизайна
   Future<void> setMode(GlassMode value) async {
-    if (!isSupported) return; // Запрещаем включение на неподдерживаемых платформах
     if (_mode == value) return;
     _mode = value;
     await _settingsService.saveGlassMode(value);

@@ -14,7 +14,7 @@ class SyncService {
   factory SyncService() => _instance;
   SyncService._internal();
 
-  final AppDatabase _db = AppDatabase();
+  AppDatabase get _db => AppDatabase();
   // ignore: unused_field — будет использоваться для real-time sync через WebSocket
   final WebSocketService _ws = WebSocketService();
   final _uuid = const Uuid();
@@ -175,6 +175,59 @@ class SyncService {
           payload['message_type'] == 'round'),
       groupedId: Value(groupedId),
     ));
+
+    // Also update chat's last message if message is newer
+    final chat = await _db.getChat(chatId);
+    final msgCreatedAt = payload['created_at']?.toString() ?? '';
+    final safeCreatedAt = msgCreatedAt.isNotEmpty
+        ? msgCreatedAt
+        : DateTime.now().toIso8601String();
+    final isRound = payload['is_round'] == true ||
+        payload['message_type'] == 'round';
+    final messageType = payload['message_type']?.toString() ?? 'text';
+    final content = payload['content']?.toString() ?? '';
+
+    if (chat != null) {
+      bool isNewer = true;
+      if (chat.lastMessageTime != null) {
+        final newTime = DateTime.tryParse(safeCreatedAt);
+        final oldTime = DateTime.tryParse(chat.lastMessageTime!);
+        if (newTime != null && oldTime != null) {
+          isNewer = newTime.isAfter(oldTime) || newTime.isAtSameMomentAs(oldTime);
+        } else {
+          isNewer = safeCreatedAt.compareTo(chat.lastMessageTime!) >= 0;
+        }
+      }
+      if (isNewer) {
+        await _db.updateChatLastMessage(
+          chatId: chatId,
+          content: content,
+          createdAt: safeCreatedAt,
+          messageType: messageType,
+          isRound: isRound,
+          fileUrl: payload['file_url']?.toString(),
+          groupedId: groupedId,
+          incrementUnread: false,
+        );
+      }
+    } else {
+      // Upsert chat stub so it immediately appears in the chat list
+      await _db.saveChat(ChatsCompanion(
+        chatId: Value(chatId),
+        chatType: Value(payload['chat_type']?.toString() ?? 'private'),
+        name: Value(payload['sender_name']?.toString() ?? 'Чат'),
+        avatarUrl: Value(payload['sender_avatar_url']?.toString()),
+        lastMessage: Value(content),
+        lastMessageTime: Value(safeCreatedAt),
+        lastMessageType: Value(messageType),
+        lastMessageIsRound: Value(isRound),
+        lastMessageFileUrl: Value(payload['file_url']?.toString()),
+        lastMessageGroupedId: Value(groupedId),
+        otherUserId: Value(payload['sender_id']?.toString()),
+        updatedAt: Value(safeCreatedAt),
+        unreadCount: const Value(1),
+      ));
+    }
   }
 
   Future<void> _applyEditMessage(Map<String, dynamic> payload) async {
@@ -192,12 +245,20 @@ class SyncService {
 
     await _db.updateMessageContent(
         serverId, payload['content']?.toString() ?? '', entitiesStr);
+    final chatId = payload['chat_id']?.toString();
+    if (chatId != null) {
+      await _db.refreshChatLastMessageFromDb(chatId);
+    }
   }
 
   Future<void> _applyDeleteMessage(Map<String, dynamic> payload) async {
     final serverId = payload['message_id']?.toString();
     if (serverId == null) return;
     await _db.deleteMessage(serverId);
+    final chatId = payload['chat_id']?.toString();
+    if (chatId != null) {
+      await _db.refreshChatLastMessageFromDb(chatId);
+    }
   }
 
   Future<void> _applyReadStatus(Map<String, dynamic> payload) async {
@@ -215,11 +276,24 @@ class SyncService {
     final existing = await _db.getChat(chatId);
     if (existing != null) return;
 
+    final chatType = payload['chat_type']?.toString() ?? 'private';
+    String name = payload['name']?.toString() ?? '';
+    if (name.trim().isEmpty || name.trim() == '?') {
+      if (chatType == 'saved') {
+        name = 'Избранное';
+      } else if (chatType == 'private') {
+        name = 'Пользователь';
+      } else {
+        name = 'Чат';
+      }
+    }
+
     await _db.saveChat(ChatsCompanion(
       chatId: Value(chatId),
-      chatType: Value(payload['chat_type']?.toString() ?? 'private'),
-      name: Value(payload['name']?.toString() ?? ''),
+      chatType: Value(chatType),
+      name: Value(name),
       avatarUrl: Value(payload['avatar_url']?.toString()),
+      otherUserId: Value(payload['other_user_id']?.toString()),
       updatedAt: Value(payload['updated_at']?.toString() ??
           DateTime.now().toIso8601String()),
       unreadCount: const Value(0),

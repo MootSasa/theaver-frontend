@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'glass_mode.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -252,15 +250,8 @@ class SettingsService {
   // ============ Liquid Glass дизайн ============
 
   /// Проверяет, поддерживает ли текущая платформа Liquid Glass
-  /// Доступно только на Android, iOS и macOS
-  static bool get isLiquidGlassSupported {
-    if (kIsWeb) return false;
-    try {
-      return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
-    } catch (_) {
-      return false;
-    }
-  }
+  /// Доступно на всех платформах (Android, iOS, macOS, Windows, Linux и Web)
+  static bool get isLiquidGlassSupported => true;
 
   /// Получить настройку Liquid Glass дизайна (устаревший, для совместимости)
   bool get liquidGlassDesign => _cachedLiquidGlassDesign ?? false;

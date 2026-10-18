@@ -3,9 +3,9 @@ import '../settings/profile_screen.dart';
 
 /// Унифицированный экран профиля пользователя.
 ///
-/// Делегирует отображение в общий [ProfileScreen], обеспечивая единый дизайн,
-/// физику пружинного расширения аватарки, Liquid Glass и плавные Hero-переходы
-/// между чатом и экраном профиля.
+/// Делегирует отображение в общий [ProfileScreen] с типом [ProfileEntityType.user],
+/// обеспечивая единый дизайн, физику пружинного расширения аватарки, Liquid Glass
+/// и плавные Hero-переходы между чатом и экраном профиля.
 class UserProfileScreen extends StatelessWidget {
   final String userId;
   final String? initialName;
@@ -16,6 +16,8 @@ class UserProfileScreen extends StatelessWidget {
   final String? heroTag;
   final VoidCallback? onVoiceCall;
   final VoidCallback? onVideoCall;
+  final VoidCallback? onSearchInChat;
+  final ValueChanged<String>? onJumpToMessageId;
 
   const UserProfileScreen({
     super.key,
@@ -28,20 +30,26 @@ class UserProfileScreen extends StatelessWidget {
     this.heroTag,
     this.onVoiceCall,
     this.onVideoCall,
+    this.onSearchInChat,
+    this.onJumpToMessageId,
   });
 
   @override
   Widget build(BuildContext context) {
+    final isSelf = userId.isEmpty;
     return ProfileScreen(
-      userId: userId,
-      initialName: initialName,
+      entityType: isSelf ? ProfileEntityType.self : ProfileEntityType.user,
+      userId: isSelf ? null : userId,
+      initialName: isSelf ? null : initialName,
       initialAvatarUrl: initialAvatarUrl,
-      initialIsOnline: isOnline,
-      initialLastSeen: lastSeen,
+      initialIsOnline: isSelf ? null : isOnline,
+      initialLastSeen: isSelf ? null : lastSeen,
       chatId: chatId,
       heroTag: heroTag ?? (userId.isNotEmpty ? userId : (initialName ?? 'profile')),
-      onVoiceCall: onVoiceCall,
-      onVideoCall: onVideoCall,
+      onVoiceCall: isSelf ? null : onVoiceCall,
+      onVideoCall: isSelf ? null : onVideoCall,
+      onSearchInChat: onSearchInChat,
+      onJumpToMessageId: onJumpToMessageId,
     );
   }
 }
