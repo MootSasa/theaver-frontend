@@ -52,18 +52,34 @@ def parse_semver(v_str):
     return 0, 0, 0
 
 
+def parse_tag_sort_key(tag_str):
+    clean = tag_str.lstrip("v")
+    base_part = clean.split("-", 1)[0]
+    major, minor, patch = parse_semver(base_part)
+    if "-" not in clean:
+        # Stable release ranks higher than pre-release of the same X.Y.Z
+        return (major, minor, patch, 1, 0)
+    prerelease_part = clean.split("-", 1)[1]
+    nums = re.findall(r"\d+", prerelease_part)
+    pre_num = int(nums[-1]) if nums else 0
+    return (major, minor, patch, 0, pre_num)
+
+
 def get_all_version_tags():
-    # Return list of version tags sorted by version descending
+    # Return list of version tags sorted by semantic version descending
     # First try tags reachable from HEAD
-    out, code = run_git(["tag", "--merged", "HEAD", "-l", "v[0-9]*", "--sort=-v:refname"])
+    out, code = run_git(["tag", "--merged", "HEAD", "-l", "v[0-9]*"])
     if code == 0 and out.strip():
         tags = [t.strip() for t in out.strip().splitlines() if t.strip()]
         if tags:
+            tags.sort(key=parse_tag_sort_key, reverse=True)
             return tags
     # Fallback to all version tags in repo
-    out, code = run_git(["tag", "-l", "v[0-9]*", "--sort=-v:refname"])
+    out, code = run_git(["tag", "-l", "v[0-9]*"])
     if code == 0 and out.strip():
-        return [t.strip() for t in out.strip().splitlines() if t.strip()]
+        tags = [t.strip() for t in out.strip().splitlines() if t.strip()]
+        tags.sort(key=parse_tag_sort_key, reverse=True)
+        return tags
     return []
 
 
@@ -173,6 +189,10 @@ def analyze_commits(commits):
     for c in commits:
         sub = c["subject"]
         msg = c["message"]
+
+        # Skip automatic merge commits from cluttering changelog
+        if sub.startswith("Merge pull request ") or sub.startswith("Merge branch ") or sub.startswith("Merge remote-tracking branch "):
+            continue
         
         # Check for breaking changes in subject or body
         if "BREAKING CHANGE:" in msg or "BREAKING-CHANGE:" in msg:
@@ -312,33 +332,25 @@ def main():
         if bump == "custom" and args.custom_version:
             clean_version = args.custom_version.lstrip("v")
         elif channel != "stable":
-            # In a pre-release channel:
-            # If the latest tag is already a pre-release for the current base version:
-            if tag_semver == (base_major, base_minor, base_patch) and is_latest_tag_prerelease:
+            # In a pre-release channel (beta / alpha):
+            # Advance semver on every release according to Conventional Commits (major / minor / patch),
+            # or adopt pubspec.yaml version if it was manually bumped higher than the latest tag.
+            if pub_semver > tag_semver:
+                clean_version = pub_ver_str
+            else:
                 if bump == "major":
                     clean_version = f"{base_major + 1}.0.0"
-                elif args.bump == "minor":
+                elif bump == "minor":
                     clean_version = f"{base_major}.{base_minor + 1}.0"
-                else:
-                    clean_version = base_ver_str
-            else:
-                # Starting or advancing version cycle
-                if pub_semver > tag_semver:
-                    clean_version = pub_ver_str
-                else:
-                    if bump == "major":
-                        clean_version = f"{base_major + 1}.0.0"
-                    elif bump == "minor":
-                        clean_version = f"{base_major}.{base_minor + 1}.0"
-                    else: # patch
-                        clean_version = f"{base_major}.{base_minor}.{base_patch + 1}"
+                else:  # patch
+                    clean_version = f"{base_major}.{base_minor}.{base_patch + 1}"
 
             if channel == "beta":
                 version = f"{clean_version}-beta.{build_number}"
             else:
                 version = f"{clean_version}-alpha.{build_number}"
             is_prerelease = True
-        else: # channel == "stable"
+        else:  # channel == "stable"
             if is_latest_tag_prerelease:
                 clean_version = tag_clean if tag_semver >= pub_semver else pub_ver_str
             else:
