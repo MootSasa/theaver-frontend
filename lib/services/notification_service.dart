@@ -34,7 +34,7 @@ export '../widgets/notifications/in_app_notification_banner.dart' show InAppNoti
 
 /// Скачивает или достает из временного кэша изображение для отображения в уведомлениях
 Future<String?> downloadOrGetCachedImage(String? url, {String prefix = 'notif_img'}) async {
-  if (url == null || url.isEmpty) return null;
+  if (kIsWeb || url == null || url.isEmpty) return null;
   try {
     // 1. Data URLs (Base64 avatar string from backend/database)
     if (url.startsWith('data:')) {
@@ -112,6 +112,7 @@ Future<String?> downloadOrGetCachedAvatar(String? url) =>
 /// Фоновый обработчик FCM сообщений (должен быть top-level функцией)
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  if (kIsWeb) return;
   // Если сообщение содержит notification-payload, Google Play Services уже показал его в шторке
   if (message.notification != null) {
     debugPrint('NotificationService: background notification already displayed by system tray');
@@ -126,7 +127,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await localNotifications.initialize(
     const InitializationSettings(android: androidSettings, iOS: iosSettings),
   );
-  if (Platform.isAndroid) {
+  if (!kIsWeb && Platform.isAndroid) {
     final androidPlugin = localNotifications
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     await androidPlugin?.createNotificationChannel(const AndroidNotificationChannel(
@@ -145,7 +146,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final data = message.data;
   if (data['type'] == 'read_status_updated') {
     final cid = data['chat_id']?.toString();
-    if (cid != null && cid.isNotEmpty && Platform.isAndroid) {
+    if (cid != null && cid.isNotEmpty && !kIsWeb && Platform.isAndroid) {
       try {
         const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
         await nativeChannel.invokeMethod('cancelChatNotifications', {'chat_id': cid});
@@ -390,7 +391,9 @@ class NotificationService {
       debugPrint('NotificationService: detected push service = ${_detector.serviceType}');
 
       // 2. Инициализация для конкретной платформы
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      if (kIsWeb) {
+        debugPrint('NotificationService: web platform -> using WebSocket in-app banners');
+      } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
         await _initDesktopNotifications();
       } else {
         // Локальные уведомления на Android / iOS
@@ -423,6 +426,7 @@ class NotificationService {
   }
 
   Future<void> _initDesktopNotifications() async {
+    if (kIsWeb) return;
     try {
       await DesktopTrayService().init();
       await localNotifier.setup(
@@ -510,7 +514,16 @@ class NotificationService {
 
         if (_isDuplicateNotification(chatId, messageText, messageId: messageId)) return;
 
-        if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        if (kIsWeb) {
+          showInAppBanner(
+            chatId: chatId,
+            chatName: chatName,
+            senderName: senderName,
+            messageText: messageText,
+            avatarUrl: avatarUrl,
+            isGroup: isGroup,
+          );
+        } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
           bool isFocused = false;
           try {
             isFocused = await windowManager.isFocused();
@@ -650,6 +663,7 @@ class NotificationService {
   // ============ Local Notifications ============
 
   Future<void> _initLocalNotifications() async {
+    if (kIsWeb) return;
     const androidSettings = AndroidInitializationSettings('@drawable/ic_notification');
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: false,
@@ -661,7 +675,7 @@ class NotificationService {
       onDidReceiveNotificationResponse: _onLocalNotificationTap,
     );
 
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       final androidPlugin = _localNotifications
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       await androidPlugin?.requestNotificationsPermission();
@@ -690,7 +704,7 @@ class NotificationService {
   }
 
   Future<void> _createNotificationChannels() async {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     final androidPlugin = _localNotifications
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     if (androidPlugin == null) return;
@@ -978,7 +992,7 @@ class NotificationService {
     debugPrint('NotificationService: navigating to chat $chatId');
 
     // On Desktop, bring window to front
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
       try {
         await DesktopTrayService().showAndFocusWindow();
       } catch (e) {
@@ -1085,6 +1099,7 @@ class NotificationService {
     bool isGroup = false,
     String? messageId,
   }) async {
+    if (kIsWeb) return;
     if (!shouldShowNotification(chatId)) return;
 
     final effective = _settingsProvider?.getEffectiveSettings(chatId);
@@ -1231,6 +1246,7 @@ class NotificationService {
     required String callerName,
     bool isVideo = false,
   }) async {
+    if (kIsWeb) return;
     const androidDetails = AndroidNotificationDetails(
       'calls', 'Звонки',
       channelDescription: 'Уведомления о входящих звонках',
@@ -1252,6 +1268,7 @@ class NotificationService {
 
   void updateUnreadCount(int count) {
     _unreadCount = count;
+    if (kIsWeb) return;
     if (Platform.isAndroid && count > 0) {
       _showBadgeSummary(count);
     } else if (Platform.isAndroid && count == 0) {
@@ -1272,6 +1289,7 @@ class NotificationService {
   }
 
   Future<void> cancelChatNotifications(String chatId, {String? chatTitle}) async {
+    if (kIsWeb) return;
     // 1. Desktop local_notifier
     final desktopNotifications = _desktopNotifications.remove(chatId);
     if (desktopNotifications != null) {
@@ -1346,6 +1364,7 @@ class NotificationService {
   }
 
   Future<void> cancelAllNotifications() async {
+    if (kIsWeb) return;
     for (final list in _desktopNotifications.values) {
       for (final n in list) {
         try {
@@ -1490,7 +1509,7 @@ class NotificationService {
   /// 3. Вызывает серверный эндпоинт POST /api/notifications/test для проверки реального push-канала
   Future<Map<String, dynamic>> sendTestNotification() async {
     // 1. Показываем локальное уведомление в системе
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
       try {
         final notification = LocalNotification(
           identifier: 'test_${DateTime.now().millisecondsSinceEpoch}',
@@ -1505,7 +1524,7 @@ class NotificationService {
       } catch (e) {
         debugPrint('NotificationService: desktop test notification error: $e');
       }
-    } else {
+    } else if (!kIsWeb) {
       try {
         const androidDetails = AndroidNotificationDetails(
           'private_chats',

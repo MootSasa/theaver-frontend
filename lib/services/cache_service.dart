@@ -101,6 +101,7 @@ class CacheService {
 
   /// Get directories that contain temporary / cache data
   Future<List<Directory>> _getCacheDirectories() async {
+    if (kIsWeb) return <Directory>[];
     final dirs = <Directory>[];
     try {
       final tempDir = await getTemporaryDirectory();

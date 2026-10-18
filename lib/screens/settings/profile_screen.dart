@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
@@ -2282,7 +2283,7 @@ class ProfileScreenState extends State<ProfileScreen>
     }
     final nextDay = nextBday.add(const Duration(days: 1));
 
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       try {
         const channel = MethodChannel('app.theaver.messenger/calendar');
         final startUtcMs =

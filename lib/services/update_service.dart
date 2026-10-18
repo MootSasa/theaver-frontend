@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -89,7 +91,7 @@ class AppUpdateService {
   final Dio _dio = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(minutes: 5),
+      receiveTimeout: const Duration(minutes: 10),
     ),
   );
 
@@ -117,9 +119,18 @@ class AppUpdateService {
   Future<String> getChannel() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(prefChannelKey) ?? 'stable';
+      final saved = prefs.getString(prefChannelKey);
+      if (saved != null && saved.isNotEmpty) {
+        return saved;
+      }
+      final currentVer = AppConfig.currentVersion.toLowerCase();
+      if (currentVer.contains('alpha') || currentVer.contains('dev')) {
+        return 'alpha';
+      }
+      // Default to 'beta' so users receive both beta and stable updates
+      return 'beta';
     } catch (_) {
-      return 'stable';
+      return 'beta';
     }
   }
 
@@ -135,21 +146,32 @@ class AppUpdateService {
 
   /// Текущий номер сборки приложения
   Future<int> getCurrentBuildNumber() async {
+    if (AppConfig.appBuildNumber > 1) {
+      return AppConfig.appBuildNumber;
+    }
     try {
       final info = await PackageInfo.fromPlatform();
-      return int.tryParse(info.buildNumber) ?? AppConfig.appBuildNumber;
+      final rawBuild = int.tryParse(info.buildNumber) ?? AppConfig.currentBuildNumber;
+      // Flutter --split-per-abi prefixes versionCode with 1000 / 2000 / 4000
+      if (!kIsWeb && Platform.isAndroid && rawBuild >= 1000 && rawBuild < 10000) {
+        return rawBuild % 1000;
+      }
+      return rawBuild;
     } catch (_) {
-      return AppConfig.appBuildNumber;
+      return AppConfig.currentBuildNumber;
     }
   }
 
-  /// Текущая версия приложения (например, 1.0.0)
+  /// Текущая версия приложения (например, 1.4.0-beta.270)
   Future<String> getCurrentVersion() async {
+    if (AppConfig.appVersion != '1.0.0' && AppConfig.appVersion.isNotEmpty) {
+      return AppConfig.appVersion;
+    }
     try {
       final info = await PackageInfo.fromPlatform();
-      return info.version.isNotEmpty ? info.version : AppConfig.appVersion;
+      return info.version.isNotEmpty ? info.version : AppConfig.currentVersion;
     } catch (_) {
-      return AppConfig.appVersion;
+      return AppConfig.currentVersion;
     }
   }
 
@@ -228,6 +250,8 @@ class AppUpdateService {
 
   /// Запросить информацию о наличии обновления на сервере
   Future<AppUpdateInfo> checkForUpdate({bool silent = false, String? channel}) async {
+    if (kIsWeb) return AppUpdateInfo.noUpdate();
+
     try {
       final platform = getPlatform();
       final arch = await getArchitecture();
@@ -282,15 +306,35 @@ class AppUpdateService {
     } catch (_) {}
   }
 
-  /// Скачать файл APK во временную директорию
+  /// Скачать файл обновления во временную директорию с проверкой SHA-256
   Future<File?> downloadApk({
     required String downloadUrl,
     required void Function(int received, int total) onProgress,
+    String? expectedSha256,
     CancelToken? cancelToken,
   }) async {
+    if (kIsWeb) return null;
+
     try {
-      final tempDir = await getTemporaryDirectory();
-      final savePath = '${tempDir.path}/theaver_update.apk';
+      Directory targetDir = await getTemporaryDirectory();
+      if (Platform.isAndroid) {
+        try {
+          final extDirs = await getExternalCacheDirectories();
+          if (extDirs != null && extDirs.isNotEmpty) {
+            targetDir = extDirs.first;
+          }
+        } catch (_) {}
+      }
+
+      String fileName = 'theaver_update.apk';
+      try {
+        final uri = Uri.parse(downloadUrl);
+        if (uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty) {
+          fileName = uri.pathSegments.last;
+        }
+      } catch (_) {}
+
+      final savePath = '${targetDir.path}/$fileName';
       final file = File(savePath);
       if (await file.exists()) {
         try {
@@ -303,27 +347,98 @@ class AppUpdateService {
         savePath,
         onReceiveProgress: onProgress,
         cancelToken: cancelToken,
+        deleteOnError: true,
         options: Options(
-          responseType: ResponseType.bytes,
           followRedirects: true,
         ),
       );
 
       if (await file.exists()) {
+        final length = await file.length();
+        if (length <= 0) {
+          await file.delete();
+          throw Exception('Скачанный файл пуст');
+        }
+
+        if (expectedSha256 != null && expectedSha256.trim().isNotEmpty) {
+          final digest = await sha256.bind(file.openRead()).first;
+          final actualHex = digest.toString().toLowerCase();
+          final expectedHex = expectedSha256.trim().toLowerCase();
+          if (actualHex != expectedHex) {
+            await file.delete();
+            throw Exception('Контрольная сумма SHA-256 не совпала (файл повреждён при загрузке)');
+          }
+        }
+
         return file;
       }
     } catch (e) {
-      debugPrint('[AppUpdateService] APK download failed: $e');
+      debugPrint('[AppUpdateService] Update download failed: $e');
       rethrow;
     }
     return null;
   }
 
-  /// Запустить установщик пакета через Android Intent
+  /// Запустить установщик пакета (Android APK или автообновление на Windows/Desktop)
   Future<OpenResult> installApk(String filePath) async {
-    return await OpenFile.open(
-      filePath,
-      type: 'application/vnd.android.package-archive',
-    );
+    if (kIsWeb) {
+      return OpenResult(type: ResultType.error, message: 'Not supported on Web');
+    }
+
+    if (Platform.isAndroid) {
+      return await OpenFile.open(
+        filePath,
+        type: 'application/vnd.android.package-archive',
+      );
+    }
+
+    if (Platform.isWindows && filePath.toLowerCase().endsWith('.zip')) {
+      try {
+        final bytes = await File(filePath).readAsBytes();
+        final archive = ZipDecoder().decodeBytes(bytes);
+        final tempDir = await getTemporaryDirectory();
+        final stagingDir = Directory('${tempDir.path}\\theaver_update_staging');
+        if (await stagingDir.exists()) {
+          await stagingDir.delete(recursive: true);
+        }
+        await stagingDir.create(recursive: true);
+
+        for (final file in archive) {
+          final filename = file.name.replaceAll('/', '\\');
+          if (file.isFile) {
+            final data = file.content as List<int>;
+            final outFile = File('${stagingDir.path}\\$filename');
+            await outFile.parent.create(recursive: true);
+            await outFile.writeAsBytes(data);
+          } else {
+            await Directory('${stagingDir.path}\\$filename').create(recursive: true);
+          }
+        }
+
+        final exeFile = File(Platform.resolvedExecutable);
+        final appDir = exeFile.parent.path;
+        final exeName = exeFile.uri.pathSegments.last;
+        final scriptFile = File('${tempDir.path}\\theaver_apply_update.bat');
+        final scriptContent = '''@echo off
+chcp 65001 >nul
+timeout /t 2 /nobreak >nul
+xcopy /E /Y /I "${stagingDir.path}\\*" "$appDir\\" >nul
+start "" "$appDir\\$exeName"
+del "%~f0"
+''';
+        await scriptFile.writeAsString(scriptContent);
+        await Process.start(
+          'cmd.exe',
+          ['/c', scriptFile.path],
+          mode: ProcessStartMode.detached,
+        );
+        exit(0);
+      } catch (e) {
+        debugPrint('[AppUpdateService] Windows auto-update fallback: $e');
+        return await OpenFile.open(filePath);
+      }
+    }
+
+    return await OpenFile.open(filePath);
   }
 }

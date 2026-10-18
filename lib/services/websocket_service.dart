@@ -125,6 +125,7 @@ class WebSocketService {
 
   /// Initialize KeepAlive background service based on saved settings
   Future<void> initKeepAlive() async {
+    if (kIsWeb) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       _isKeepAliveEnabled = prefs.getBool('bg_connection_enabled') ?? false;
@@ -143,7 +144,7 @@ class WebSocketService {
       await prefs.setBool('bg_connection_enabled', enabled);
     } catch (_) {}
 
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       try {
         const channel = MethodChannel('app.theaver.messenger/push_detector');
         if (enabled) {

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:open_file/open_file.dart' show ResultType;
 import '../../../services/update_service.dart';
 import '../../../utils/haptic_utils.dart';
 
@@ -68,13 +69,15 @@ class _UpdateDialogState extends State<UpdateDialog> {
     try {
       final file = await AppUpdateService.instance.downloadApk(
         downloadUrl: widget.update.downloadUrl,
+        expectedSha256: widget.update.sha256,
         cancelToken: _cancelToken,
         onProgress: (received, total) {
           if (!mounted) return;
-          if (total > 0) {
-            final percent = (received / total).clamp(0.0, 1.0);
+          final effectiveTotal = total > 0 ? total : widget.update.apkSizeBytes;
+          if (effectiveTotal > 0) {
+            final percent = (received / effectiveTotal).clamp(0.0, 1.0);
             final recMB = (received / (1024 * 1024)).toStringAsFixed(1);
-            final totMB = (total / (1024 * 1024)).toStringAsFixed(1);
+            final totMB = (effectiveTotal / (1024 * 1024)).toStringAsFixed(1);
             setState(() {
               _progress = percent;
               _downloadedText = '$recMB MB / $totMB MB';
@@ -126,7 +129,12 @@ class _UpdateDialogState extends State<UpdateDialog> {
     HapticUtils.tap();
     try {
       final res = await AppUpdateService.instance.installApk(path);
-      debugPrint('[UpdateDialog] Install result: ${res.message}');
+      debugPrint('[UpdateDialog] Install result: ${res.type} - ${res.message}');
+      if (res.type != ResultType.done && mounted) {
+        setState(() {
+          _errorMessage = 'Не удалось запустить установщик: ${res.message}';
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
