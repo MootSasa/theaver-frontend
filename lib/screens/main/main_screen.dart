@@ -2135,7 +2135,9 @@ class _MainScreenState extends State<MainScreen>
                 children: [
                   Flexible(
                     child: Text(
-                      chat.name,
+                      chat.chatType == 'saved'
+                          ? context.l10n.translate('chat_saved_messages')
+                          : chat.name,
                       style: TextStyle(
                         fontWeight: hasUnread ? FontWeight.w600 : FontWeight.w500,
                       ),
@@ -2619,14 +2621,15 @@ class _MainScreenState extends State<MainScreen>
         break;
       case 'saved':
         final effectiveSavedAvatar = chat.avatarUrl ?? _accountManager.currentAccount?.avatarUrl ?? _accountManager.currentAccount?.localAvatarPath;
+        final translatedSaved = context.l10n.translate('chat_saved_messages');
         // Open saved chat as a special chat with yourself
         Navigator.push(
           context,
           SwipeBackPageRoute(
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              otherUserName: context.l10n.translate('chat_saved_messages').isNotEmpty
-                  ? context.l10n.translate('chat_saved_messages')
+              otherUserName: translatedSaved != 'chat_saved_messages'
+                  ? translatedSaved
                   : 'Избранное',
               otherUserAvatar: effectiveSavedAvatar,
             ),

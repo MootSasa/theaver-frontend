@@ -1,5 +1,6 @@
 package app.theaver.messenger
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.media.MediaCodec
@@ -8,6 +9,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.os.Build
+import android.provider.CalendarContract
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -17,6 +19,7 @@ import java.nio.ByteBuffer
 class MainActivity : FlutterFragmentActivity() {
     private val CHANNEL = "com.example.app/cutout"
     private val MUXER_CHANNEL = "com.example.app/media_muxer"
+    private val CALENDAR_CHANNEL = "app.theaver.messenger/calendar"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -24,6 +27,41 @@ class MainActivity : FlutterFragmentActivity() {
         // Register push detector MethodChannel handler
         val pushDetector = PushDetectorHandler(this)
         pushDetector.setup(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CALENDAR_CHANNEL).setMethodCallHandler { call, result ->
+            if (call.method == "addBirthdayEvent") {
+                try {
+                    val title = call.argument<String>("title") ?: "Birthday"
+                    val description = call.argument<String>("description") ?: ""
+                    val chooserTitle = call.argument<String>("chooserTitle") ?: title
+                    val beginTime = (call.argument<Number>("beginTimeMillis")
+                        ?: call.argument<Number>("beginTime"))?.toLong()
+                        ?: System.currentTimeMillis()
+                    val endTime = (call.argument<Number>("endTimeMillis")
+                        ?: call.argument<Number>("endTime"))?.toLong()
+                        ?: (beginTime + 86400000L)
+
+                    val intent = Intent(Intent.ACTION_INSERT).apply {
+                        setDataAndType(
+                            CalendarContract.Events.CONTENT_URI,
+                            "vnd.android.cursor.dir/event"
+                        )
+                        putExtra(CalendarContract.Events.TITLE, title)
+                        putExtra(CalendarContract.Events.DESCRIPTION, description)
+                        putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, true)
+                        putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, beginTime)
+                        putExtra(CalendarContract.EXTRA_EVENT_END_TIME, endTime)
+                        putExtra(CalendarContract.Events.RRULE, "FREQ=YEARLY")
+                    }
+                    startActivity(Intent.createChooser(intent, chooserTitle))
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.success(false)
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "getCutoutInfo") {

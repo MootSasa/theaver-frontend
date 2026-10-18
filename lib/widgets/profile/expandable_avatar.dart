@@ -1,9 +1,9 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 
@@ -30,6 +30,13 @@ class ExpandableAvatar extends StatefulWidget {
 
   /// Фактор расширения: 0.0 = маленькая круглая, 1.0 = большая квадратная
   final double expandFactor;
+
+  /// Прогресс перетягивания вниз поверх уже раскрытой аватарки (0.0 .. 1.0) для Telegram-зума
+  final double overExpandProgress;
+
+  /// Величина опережения нижнего контента относительно аватарки при натяжении сворачивания (в dp),
+  /// на которую поднимается нижняя граница альфа-растворения фото, чтобы имя не заходило под аватарку и её блюр
+  final double bottomCollapseOverlap;
 
   /// Флаг направления (сохранён для обратной совместимости)
   final bool isCollapsing;
@@ -58,6 +65,9 @@ class ExpandableAvatar extends StatefulWidget {
   /// Уведомление о смене активной аватарки
   final ValueChanged<int>? onPageChanged;
 
+  /// Опциональный обработчик начала вертикального перетаскивания
+  final GestureDragStartCallback? onVerticalDragStart;
+
   /// Опциональный обработчик вертикального перетаскивания (для плавного сворачивания/разворачивания)
   final GestureDragUpdateCallback? onVerticalDragUpdate;
 
@@ -70,6 +80,8 @@ class ExpandableAvatar extends StatefulWidget {
     this.avatarFile,
     this.onTap,
     this.expandFactor = 0.0,
+    this.overExpandProgress = 0.0,
+    this.bottomCollapseOverlap = 0.0,
     this.isCollapsing = false,
     this.tintColor,
     this.backgroundColor,
@@ -79,6 +91,7 @@ class ExpandableAvatar extends StatefulWidget {
     this.pageController,
     this.initialPage,
     this.onPageChanged,
+    this.onVerticalDragStart,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
   }) : super(key: key);
@@ -127,10 +140,19 @@ class ExpandableAvatar extends StatefulWidget {
 }
 
 class _ExpandableAvatarState extends State<ExpandableAvatar> {
-  /// Текущая страница в PageView (только в развёрнутом режиме)
+  static const int _kInfiniteLoopMultiplier = 10000;
+  static const int _kInfiniteCenterBase = 5000;
+
+  final GlobalKey _pageViewKey = GlobalKey();
+  late PageController _loopPageController;
+
+  /// Текущий реальный индекс аватарки (0 .. avatarUrls.length - 1)
   int _currentPage = 0;
 
-  /// Количество аватарок при последней перестройке (для сброса страницы)
+  /// Текущая виртуальная страница в бесконечном PageView
+  int _currentVirtualPage = 0;
+
+  /// Количество аватарок при последней перестройке (для синхронизации виртуальной страницы)
   int _lastAvatarCount = 0;
 
   /// Основной URL аватарки (последняя / новейшая)
@@ -140,17 +162,30 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     return null;
   }
 
-  @override
-  void didUpdateWidget(ExpandableAvatar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.avatarUrls.length != _lastAvatarCount) {
-      _lastAvatarCount = widget.avatarUrls.length;
-      if (_currentPage >= widget.avatarUrls.length) {
-        _currentPage = 0;
-      }
+  int _virtualPageForRealIndex(int realIndex, int count) {
+    if (count <= 1) return 0;
+    final safeReal = ((realIndex % count) + count) % count;
+    if (_currentVirtualPage > 0) {
+      final currentReal = ((_currentVirtualPage % count) + count) % count;
+      int diff = safeReal - currentReal;
+      if (diff > count ~/ 2) diff -= count;
+      if (diff < -(count ~/ 2)) diff += count;
+      return _currentVirtualPage + diff;
     }
-    if (widget.initialPage != null && widget.initialPage != oldWidget.initialPage) {
-      _currentPage = widget.initialPage!;
+    return _kInfiniteCenterBase * count + safeReal;
+  }
+
+  void _ensureLoopControllerSynced() {
+    final count = widget.avatarUrls.length;
+    if (count <= 1) return;
+    if (_currentVirtualPage <= 0) {
+      _currentVirtualPage =
+          _kInfiniteCenterBase * count + _currentPage.clamp(0, count - 1);
+    }
+    if (!_loopPageController.hasClients &&
+        _loopPageController.initialPage != _currentVirtualPage) {
+      _loopPageController.dispose();
+      _loopPageController = PageController(initialPage: _currentVirtualPage);
     }
   }
 
@@ -158,31 +193,123 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
   void initState() {
     super.initState();
     _lastAvatarCount = widget.avatarUrls.length;
-    if (widget.initialPage != null) {
-      _currentPage = widget.initialPage!;
+    if (widget.initialPage != null && _lastAvatarCount > 0) {
+      _currentPage = widget.initialPage!.clamp(0, _lastAvatarCount - 1);
     }
+    _currentVirtualPage = _lastAvatarCount > 1
+        ? _kInfiniteCenterBase * _lastAvatarCount + _currentPage
+        : 0;
+    _loopPageController = PageController(initialPage: _currentVirtualPage);
+  }
+
+  @override
+  void didUpdateWidget(ExpandableAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final count = widget.avatarUrls.length;
+    // При начале сворачивания из квадрата в круг плавно возвращаем карусель к главному фото (0)
+    if (widget.expandFactor < 0.98 && oldWidget.expandFactor >= 0.98) {
+      if (_currentPage != 0 && count > 1) {
+        _currentPage = 0;
+        _currentVirtualPage = _virtualPageForRealIndex(0, count);
+        if (_loopPageController.hasClients) {
+          _loopPageController.animateToPage(
+            _currentVirtualPage,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOutCubic,
+          );
+        }
+      }
+    }
+
+    if (count != _lastAvatarCount) {
+      _lastAvatarCount = count;
+      if (count == 0 || _currentPage >= count) {
+        _currentPage = 0;
+      }
+      _currentVirtualPage =
+          count > 1 ? _kInfiniteCenterBase * count + _currentPage : 0;
+      if (_loopPageController.hasClients && count > 1) {
+        _loopPageController.jumpToPage(_currentVirtualPage);
+      } else {
+        _loopPageController.dispose();
+        _loopPageController = PageController(initialPage: _currentVirtualPage);
+      }
+    } else if (widget.initialPage != null &&
+        widget.initialPage != oldWidget.initialPage &&
+        count > 0) {
+      final targetReal = widget.initialPage!.clamp(0, count - 1);
+      if (targetReal != _currentPage) {
+        _currentPage = targetReal;
+        if (count > 1) {
+          _currentVirtualPage = _virtualPageForRealIndex(targetReal, count);
+          if (_loopPageController.hasClients) {
+            if (widget.expandFactor < 0.98) {
+              _loopPageController.animateToPage(
+                _currentVirtualPage,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOutCubic,
+              );
+            } else {
+              _loopPageController.jumpToPage(_currentVirtualPage);
+            }
+          } else {
+            _loopPageController.dispose();
+            _loopPageController =
+                PageController(initialPage: _currentVirtualPage);
+          }
+        }
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _loopPageController.dispose();
+    super.dispose();
   }
 
   void _prevPhoto() {
-    if (_currentPage > 0 && widget.pageController != null && widget.pageController!.hasClients) {
-      widget.pageController!.animateToPage(
-        _currentPage - 1,
-        duration: const Duration(milliseconds: 260),
+    final count = widget.avatarUrls.length;
+    if (count <= 1) return;
+    if (_loopPageController.hasClients) {
+      final currentVirtual =
+          _loopPageController.page?.round() ?? _currentVirtualPage;
+      _loopPageController.animateToPage(
+        currentVirtual - 1,
+        duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
       );
-      HapticUtils.selection();
+    } else {
+      final targetPage = _currentPage > 0 ? _currentPage - 1 : count - 1;
+      setState(() {
+        _currentPage = targetPage;
+        _currentVirtualPage = _virtualPageForRealIndex(targetPage, count);
+      });
+      widget.onPageChanged?.call(targetPage);
     }
+    HapticUtils.selection();
   }
 
   void _nextPhoto() {
-    if (_currentPage < widget.avatarUrls.length - 1 && widget.pageController != null && widget.pageController!.hasClients) {
-      widget.pageController!.animateToPage(
-        _currentPage + 1,
-        duration: const Duration(milliseconds: 260),
+    final count = widget.avatarUrls.length;
+    if (count <= 1) return;
+    if (_loopPageController.hasClients) {
+      final currentVirtual =
+          _loopPageController.page?.round() ?? _currentVirtualPage;
+      _loopPageController.animateToPage(
+        currentVirtual + 1,
+        duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
       );
-      HapticUtils.selection();
+    } else {
+      final targetPage = _currentPage < count - 1 ? _currentPage + 1 : 0;
+      setState(() {
+        _currentPage = targetPage;
+        _currentVirtualPage = _virtualPageForRealIndex(targetPage, count);
+      });
+      widget.onPageChanged?.call(targetPage);
     }
+    HapticUtils.selection();
   }
 
   @override
@@ -193,9 +320,13 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     final screenWidth = MediaQuery.of(context).size.width;
     final largeSize = screenWidth;
     final progress = widget.expandFactor.clamp(0.0, 1.0);
+    final extraOverPullSize = 36.0 *
+        Curves.easeOutCubic
+            .transform(widget.overExpandProgress.clamp(0.0, 1.0));
 
-    // Нелинейный расчет размера аватарки ("эффект заевшего механизма")
-    final size = ExpandableAvatar.calculateAvatarSize(largeSize, progress);
+    // Нелинейный расчет размера аватарки ("эффект заевшего механизма") + небольшое увеличение при вытягивании вниз
+    final size = ExpandableAvatar.calculateAvatarSize(largeSize, progress) +
+        extraOverPullSize;
 
     // Расчет скругления (до порога 0.38 строго круг)
     final borderRadius = ExpandableAvatar.calculateBorderRadius(size, progress);
@@ -210,6 +341,10 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     // Сброс страницы на первую при полном сворачивании
     if (progress < 0.01 && _currentPage != 0) {
       _currentPage = 0;
+      if (widget.avatarUrls.length > 1) {
+        _currentVirtualPage =
+            _kInfiniteCenterBase * widget.avatarUrls.length;
+      }
     }
 
     final isFullyExpanded = progress >= 0.85;
@@ -219,7 +354,10 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         : primaryUrl;
     final targetUrl = currentUrl ?? primaryUrl;
 
-    final bool enableInnerHero = widget.chatAvatarHeroTag == null;
+    // В развёрнутом режиме (или когда внешний тег отключён для открытия просмотрщика)
+    // включаем внутренний Hero для плавного перелёта самой аватарки в полноэкранный просмотр.
+    final bool enableInnerHero =
+        widget.chatAvatarHeroTag == null || isFullyExpanded;
 
     Widget avatarContent;
 
@@ -249,59 +387,92 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
               : const SizedBox.expand()));
     }
 
-    Widget avatarWidget = GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: isFullyExpanded && widget.avatarUrls.length > 1 ? null : widget.onTap,
-      onVerticalDragUpdate: widget.onVerticalDragUpdate,
-      onVerticalDragEnd: widget.onVerticalDragEnd,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(borderRadius),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(borderRadius),
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            fit: StackFit.expand,
-            children: [
-              // 1. Основное изображение аватарки
-              Positioned.fill(
-                child: Container(
-                  color: bgColor,
-                  child: avatarContent,
-                ),
-              ),
+    final dissolveProgress = Curves.easeInOutCubic
+        .transform(((progress - 0.38) / 0.62).clamp(0.0, 1.0));
 
-              // 2. Буквенный плейсхолдер если нет фото
-              if (widget.avatarFile == null && widget.avatarUrls.isEmpty)
-                Center(
-                  child: Text(
-                    widget.displayName.isNotEmpty
-                        ? widget.displayName[0].toUpperCase()
-                        : '?',
-                    style: TextStyle(
-                      color: bgColor.computeLuminance() > 0.5 ? Colors.black54 : Colors.white70,
-                      fontSize: iconSize,
-                      fontWeight: FontWeight.w300,
-                    ),
-                  ),
-                ),
-
-              // 3. Верхний градиентный скрайм для контраста индикаторов историй
-              _buildTopGradientScrim(progress),
-
-              // 4. Stories-style индикаторы нескольких фото
-              _buildStoryIndicators(context, progress),
-            ],
+    Widget innerStack = Stack(
+      clipBehavior: Clip.hardEdge,
+      fit: StackFit.expand,
+      children: [
+        // 1. Основное изображение аватарки
+        Positioned.fill(
+          child: Container(
+            color: bgColor,
+            child: avatarContent,
           ),
         ),
+
+        // 2. Буквенный плейсхолдер если нет фото
+        if (widget.avatarFile == null && widget.avatarUrls.isEmpty)
+          Center(
+            child: Text(
+              widget.displayName.isNotEmpty
+                  ? widget.displayName[0].toUpperCase()
+                  : '?',
+              style: TextStyle(
+                color: bgColor.computeLuminance() > 0.5
+                    ? Colors.black54
+                    : Colors.white70,
+                fontSize: iconSize,
+                fontWeight: FontWeight.w300,
+              ),
+            ),
+          ),
+
+        // 3. Верхний градиентный скрайм для контраста индикаторов историй
+        _buildTopGradientScrim(progress),
+
+        // 4. Stories-style индикаторы нескольких фото
+        _buildStoryIndicators(context, progress),
+      ],
+    );
+
+    // Истинное альфа-растворение нижней кромки развёрнутой аватарки в реальный фон/градиент экрана
+    if (dissolveProgress > 0.001) {
+      final safeSize = math.max(1.0, size);
+      final overlapShift =
+          (widget.bottomCollapseOverlap * dissolveProgress).clamp(0.0, safeSize * 0.45);
+      final endStop = ((safeSize - overlapShift) / safeSize).clamp(0.10, 1.0);
+      final dissolveHeight = 44.0 * dissolveProgress;
+      final startStop =
+          (endStop - (dissolveHeight / safeSize)).clamp(0.0, endStop);
+      final midStop =
+          (startStop + (endStop - startStop) * 0.55).clamp(startStop, endStop);
+
+      innerStack = ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (Rect bounds) {
+          return LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            stops: [0.0, startStop, midStop, endStop, 1.0],
+            colors: [
+              Colors.white,
+              Colors.white,
+              Colors.white.withValues(alpha: 1.0 - 0.55 * dissolveProgress),
+              Colors.white.withValues(alpha: 1.0 - 1.0 * dissolveProgress),
+              Colors.white.withValues(alpha: 1.0 - 1.0 * dissolveProgress),
+            ],
+          ).createShader(bounds);
+        },
+        child: innerStack,
+      );
+    }
+
+    Widget avatarContentBox = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: innerStack,
       ),
     );
 
-    if (widget.chatAvatarHeroTag != null) {
-      avatarWidget = Hero(
+    if (widget.chatAvatarHeroTag != null && !isFullyExpanded) {
+      avatarContentBox = Hero(
         tag: widget.chatAvatarHeroTag!,
         flightShuttleBuilder: (
           flightContext,
@@ -323,19 +494,32 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
             ),
           );
         },
-        child: avatarWidget,
+        child: avatarContentBox,
       );
     }
 
-    return avatarWidget;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: isFullyExpanded && widget.avatarUrls.length > 1 ? null : widget.onTap,
+      onVerticalDragStart: widget.onVerticalDragStart,
+      onVerticalDragUpdate: widget.onVerticalDragUpdate,
+      onVerticalDragEnd: widget.onVerticalDragEnd,
+      child: avatarContentBox,
+    );
   }
 
   /// Stories-style сегментированные индикаторы вверху фото
-  Widget _buildStoryIndicators(BuildContext context, double progress) {
+  Widget _buildStoryIndicators(
+    BuildContext context,
+    double progress, [
+    double overPullFade = 1.0,
+  ]) {
     if (widget.avatarUrls.length <= 1) return const SizedBox.shrink();
 
     // Плавно проявляются при приближении к полному раскрытию (от 0.65 до 1.0)
-    final opacity = Curves.easeIn.transform(((progress - 0.65) / 0.35).clamp(0.0, 1.0));
+    final opacity = Curves.easeIn
+            .transform(((progress - 0.65) / 0.35).clamp(0.0, 1.0)) *
+        overPullFade;
     if (opacity <= 0.001) return const SizedBox.shrink();
 
     final topPadding = MediaQuery.of(context).padding.top;
@@ -373,8 +557,10 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
   }
 
   /// Градиентный скрайм в верхней части для гарантированной читаемости индикаторов и элементов шапки
-  Widget _buildTopGradientScrim(double progress) {
-    final opacity = Curves.easeIn.transform(((progress - 0.5) / 0.5).clamp(0.0, 1.0));
+  Widget _buildTopGradientScrim(double progress, [double overPullFade = 1.0]) {
+    final opacity =
+        Curves.easeIn.transform(((progress - 0.5) / 0.5).clamp(0.0, 1.0)) *
+            overPullFade;
     if (opacity <= 0.001) return const SizedBox.shrink();
 
     return Positioned(
@@ -399,7 +585,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     );
   }
 
-  /// Строит PageView для плавного свайпа аватарок в развёрнутом режиме
+  /// Строит PageView для плавного бесконечного свайпа аватарок в развёрнутом режиме
   Widget _buildPageView(
     double width,
     double height,
@@ -409,24 +595,39 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Alignment imgAlignment = Alignment.topCenter,
     bool enableHero = true,
   ]) {
+    _ensureLoopControllerSynced();
+    final count = widget.avatarUrls.length;
     return PageView.builder(
-      controller: widget.pageController,
+      key: _pageViewKey,
+      controller: _loopPageController,
       physics: const BouncingScrollPhysics(),
-      itemCount: widget.avatarUrls.length,
-      onPageChanged: (index) {
-        setState(() {
-          _currentPage = index;
-        });
-        widget.onPageChanged?.call(index);
+      itemCount: count * _kInfiniteLoopMultiplier,
+      onPageChanged: (virtualIndex) {
+        if (count == 0) return;
+        _currentVirtualPage = virtualIndex;
+        final realIndex = ((virtualIndex % count) + count) % count;
+        if (_currentPage != realIndex) {
+          setState(() {
+            _currentPage = realIndex;
+          });
+          widget.onPageChanged?.call(realIndex);
+        }
       },
-      itemBuilder: (context, index) {
-        final url = widget.avatarUrls[index];
+      itemBuilder: (context, virtualIndex) {
+        if (count == 0) return const SizedBox.shrink();
+        final realIndex = ((virtualIndex % count) + count) % count;
+        final url = widget.avatarUrls[realIndex];
+        final currentVirtual = _loopPageController.hasClients
+            ? (_loopPageController.page?.round() ??
+                _virtualPageForRealIndex(_currentPage, count))
+            : _virtualPageForRealIndex(_currentPage, count);
+        final isActiveVirtualPage = virtualIndex == currentVirtual;
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapUp: (details) {
             final dx = details.localPosition.dx;
             final w = width;
-            if (widget.avatarUrls.length > 1) {
+            if (count > 1) {
               if (dx < w * 0.30) {
                 _prevPhoto();
               } else if (dx > w * 0.70) {
@@ -438,7 +639,16 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
               widget.onTap?.call();
             }
           },
-          child: _buildAvatarImage(url, width, height, bgColor, iconSize, isDark, imgAlignment, enableHero),
+          child: _buildAvatarImage(
+            url,
+            width,
+            height,
+            bgColor,
+            iconSize,
+            isDark,
+            imgAlignment,
+            enableHero && isActiveVirtualPage,
+          ),
         );
       },
     );
@@ -463,23 +673,19 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Widget imageWidget;
 
     if (url.startsWith('data:')) {
-      try {
-        final commaIndex = url.indexOf(',');
-        if (commaIndex == -1) {
-          return _avatarErrorWidget(bgColor, iconSize, isDark);
-        }
-        final base64Str = url.substring(commaIndex + 1);
-        final bytes = base64Decode(base64Str);
-        imageWidget = Image.memory(
-          bytes,
+      final provider = avatarImageProvider(url);
+      if (provider != null) {
+        imageWidget = Image(
+          image: provider,
           fit: BoxFit.cover,
           alignment: imgAlignment,
           width: width,
           height: height,
+          gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) =>
               _avatarErrorWidget(bgColor, iconSize, isDark),
         );
-      } catch (_) {
+      } else {
         return _avatarErrorWidget(bgColor, iconSize, isDark);
       }
     } else if (url.startsWith('file://')) {
@@ -493,6 +699,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
             alignment: imgAlignment,
             width: width,
             height: height,
+            gaplessPlayback: true,
             errorBuilder: (context, error, stackTrace) =>
                 _avatarErrorWidget(bgColor, iconSize, isDark),
           );
@@ -511,6 +718,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
           alignment: imgAlignment,
           width: width,
           height: height,
+          gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) =>
               _avatarErrorWidget(bgColor, iconSize, isDark),
         );
@@ -523,6 +731,8 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
             alignment: imgAlignment,
             width: width,
             height: height,
+            fadeInDuration: Duration.zero,
+            fadeOutDuration: Duration.zero,
             placeholder: (context, _) => Container(
               width: width,
               height: height,
@@ -545,10 +755,9 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         ? '${widget.heroTagPrefix}_$url'
         : 'avatar_hero_$url';
 
-    final double initialRadius = lerpDouble(
-      width / 2,
-      0.0,
-      Curves.easeIn.transform(widget.expandFactor.clamp(0.0, 1.0)),
+    final double initialRadius = ExpandableAvatar.calculateBorderRadius(
+      width,
+      widget.expandFactor.clamp(0.0, 1.0),
     );
 
     return Hero(
@@ -562,15 +771,20 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
       ) {
         final CurvedAnimation curvedAnimation = CurvedAnimation(
           parent: animation,
-          curve: Curves.fastOutSlowIn,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
         );
         return AnimatedBuilder(
           animation: curvedAnimation,
           builder: (context, child) {
-            final double currentRadius = lerpDouble(initialRadius, 0.0, curvedAnimation.value);
+            final double currentRadius =
+                lerpDouble(initialRadius, 0.0, curvedAnimation.value);
             return ClipRRect(
               borderRadius: BorderRadius.circular(currentRadius),
-              child: toHeroContext.widget,
+              child: Material(
+                type: MaterialType.transparency,
+                child: SizedBox.expand(child: imageWidget),
+              ),
             );
           },
         );
@@ -580,13 +794,14 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
   }
 
   Widget _avatarErrorWidget(Color bgColor, double iconSize, bool isDark) {
+    final color = bgColor.computeLuminance() > 0.5 ? Colors.black38 : Colors.white38;
     return Container(
       color: bgColor,
       child: Center(
-        child: Icon(
-          Icons.broken_image_outlined,
-          color: bgColor.computeLuminance() > 0.5 ? Colors.black38 : Colors.white38,
-          size: iconSize,
+        child: iconoir.MediaImage(
+          color: color,
+          width: iconSize,
+          height: iconSize,
         ),
       ),
     );

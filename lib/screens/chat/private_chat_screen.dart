@@ -23,6 +23,7 @@ import '../../services/unread_count_provider.dart';
 import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
+import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
 import '../../services/database/app_database.dart';
@@ -242,7 +243,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
     if (widget.otherUserId != null) {
       _otherUserId = widget.otherUserId;
+      if (_otherUserId!.isNotEmpty) {
+        ProfileInstantCache.instance.prefetchUser(
+          _otherUserId!,
+          chatId: widget.chatId,
+        );
+      }
     }
+    ProfileInstantCache.instance.prefetchSharedContent(widget.chatId);
     WidgetsBinding.instance.addObserver(this);
     _loadData();
     _initWebSocket();
@@ -1299,6 +1307,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             _isOtherUserOnline = participant.isOnline;
             _otherUserLastSeen = participant.lastSeen;
           });
+          ProfileInstantCache.instance.prefetchUser(
+            participant.id,
+            chatId: widget.chatId,
+          );
           break;
         }
       }
@@ -2391,7 +2403,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   @override
   Widget build(BuildContext context) {
     _updateInputHeight();
-    final displayName = widget.otherUserName ?? _chatName;
+    final rawDisplayName = widget.otherUserName ?? _chatName;
+    final displayName = (_chatType == 'saved' ||
+            rawDisplayName == 'chat_saved_messages' ||
+            rawDisplayName == 'chat_saved')
+        ? context.l10n.translate('chat_saved_messages')
+        : rawDisplayName;
 
     return Consumer<LiquidGlassProvider>(
       builder: (context, glassProvider, _) {
@@ -2410,6 +2427,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           },
           appBar: Builder(
             builder: (context) {
+              final isSavedChat = _chatType == 'saved' ||
+                  _otherUserId == null ||
+                  _otherUserId!.isEmpty ||
+                  (_currentUserId != null && _otherUserId == _currentUserId);
               final heroTag = _otherUserId ?? displayName;
               return FloatingGlassAppBar(
                 name: displayName,
@@ -2424,15 +2445,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 onTitleTap: _viewUserProfile,
                 onViewProfile: _viewUserProfile,
                 profileScreenBuilder: (routeContext) => UserProfileScreen(
-                  userId: _otherUserId ?? '',
-                  initialName: displayName,
+                  userId: isSavedChat ? '' : (_otherUserId ?? ''),
+                  initialName: isSavedChat ? null : displayName,
                   initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
-                  isOnline: _isOtherUserOnline,
-                  lastSeen: _otherUserLastSeen,
+                  isOnline: isSavedChat ? null : _isOtherUserOnline,
+                  lastSeen: isSavedChat ? null : _otherUserLastSeen,
                   chatId: widget.chatId,
                   heroTag: heroTag,
-                  onVoiceCall: _startVoiceCall,
-                  onVideoCall: _startVideoCall,
+                  onVoiceCall: isSavedChat ? null : _startVoiceCall,
+                  onVideoCall: isSavedChat ? null : _startVideoCall,
+                  onSearchInChat: _searchMessages,
+                  onJumpToMessageId: _scrollToMessage,
                 ),
                 onVoiceCall: _startVoiceCall,
                 onVideoCall: _startVideoCall,
@@ -3563,26 +3586,35 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Navigate to user profile screen
   void _viewUserProfile() {
-    if (_otherUserId != null) {
-      final displayName = _chatName.isNotEmpty ? _chatName : widget.otherUserName;
-      final heroTag = _otherUserId ?? displayName;
-      Navigator.push(
-        context,
-        SwipeBackPageRoute(
-          builder: (_) => UserProfileScreen(
-            userId: _otherUserId!,
-            initialName: displayName,
-            initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
-            isOnline: _isOtherUserOnline,
-            lastSeen: _otherUserLastSeen,
-            chatId: widget.chatId,
-            heroTag: heroTag,
-            onVoiceCall: _startVoiceCall,
-            onVideoCall: _startVideoCall,
-          ),
+    final isSavedChat = _chatType == 'saved' ||
+        _otherUserId == null ||
+        _otherUserId!.isEmpty ||
+        (_currentUserId != null && _otherUserId == _currentUserId);
+    final rawDisplayName = _chatName.isNotEmpty ? _chatName : widget.otherUserName;
+    final displayName = (isSavedChat ||
+            rawDisplayName == 'chat_saved_messages' ||
+            rawDisplayName == 'chat_saved')
+        ? context.l10n.translate('chat_saved_messages')
+        : rawDisplayName;
+    final heroTag = _otherUserId ?? displayName;
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => UserProfileScreen(
+          userId: isSavedChat ? '' : _otherUserId!,
+          initialName: isSavedChat ? null : displayName,
+          initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+          isOnline: isSavedChat ? null : _isOtherUserOnline,
+          lastSeen: isSavedChat ? null : _otherUserLastSeen,
+          chatId: widget.chatId,
+          heroTag: heroTag,
+          onVoiceCall: isSavedChat ? null : _startVoiceCall,
+          onVideoCall: isSavedChat ? null : _startVideoCall,
+          onSearchInChat: _searchMessages,
+          onJumpToMessageId: _scrollToMessage,
         ),
-      );
-    }
+      ),
+    );
   }
 
   /// Open search screen for this chat

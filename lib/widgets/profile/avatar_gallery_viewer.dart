@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 
+import '../../l10n/app_localizations.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/haptic_utils.dart';
 
@@ -90,6 +91,7 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
   late int _currentIndex;
   late PageController _pageController;
   bool _isSaving = false;
+  double _verticalDragOffset = 0.0;
 
   @override
   void initState() {
@@ -152,6 +154,14 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
     return null;
   }
 
+  String _tr(BuildContext context, String key, String fallback) {
+    try {
+      final val = context.l10n.translate(key);
+      if (val.isNotEmpty && val != key) return val;
+    } catch (_) {}
+    return fallback;
+  }
+
   Future<void> _saveToGallery() async {
     if (_currentIndex >= widget.avatarUrls.length) return;
     setState(() => _isSaving = true);
@@ -176,9 +186,13 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
       HapticUtils.impact();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Фото сохранено в память устройства'),
-            duration: Duration(seconds: 2),
+          SnackBar(
+            content: Text(_tr(
+              context,
+              'profile_avatar_saved',
+              'Фото сохранено в память устройства',
+            )),
+            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -186,7 +200,12 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
       debugPrint('[AvatarGalleryViewer] Error saving image: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка сохранения: $e')),
+          SnackBar(
+            content: Text(
+              _tr(context, 'profile_save_error', 'Ошибка сохранения: {error}')
+                  .replaceAll('{error}', e.toString()),
+            ),
+          ),
         );
       }
     } finally {
@@ -199,10 +218,13 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
     final url = widget.avatarUrls[_currentIndex];
     final file = await _getLocalImageFile(url);
     if (file != null && await file.exists()) {
+      final shareText = (widget.displayName != null && widget.displayName!.isNotEmpty)
+          ? widget.displayName!
+          : 'Theaver';
       await SharePlus.instance.share(
         ShareParams(
           files: [XFile(file.path)],
-          text: widget.displayName != null ? 'Аватар ${widget.displayName}' : 'Аватар Theaver',
+          text: shareText,
         ),
       );
     }
@@ -211,137 +233,168 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
   @override
   Widget build(BuildContext context) {
     final totalCount = widget.avatarUrls.length;
+    final titleText = totalCount > 1
+        ? _tr(context, 'profile_avatar_counter', '{current} из {total}')
+            .replaceAll('{current}', '${_currentIndex + 1}')
+            .replaceAll('{total}', '$totalCount')
+        : (widget.displayName ?? _tr(context, 'profile_avatar_title', 'Аватар'));
+
+    final dragProgress = (_verticalDragOffset.abs() / 260.0).clamp(0.0, 1.0);
+    final bgOpacity = (1.0 - dragProgress * 0.72).clamp(0.0, 1.0);
+    final uiOpacity = (1.0 - dragProgress * 1.4).clamp(0.0, 1.0);
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.black.withValues(alpha: bgOpacity),
       extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.4),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          totalCount > 1 ? '${_currentIndex + 1} из $totalCount' : (widget.displayName ?? 'Аватар'),
-          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-        ),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.share_outlined, color: Colors.white),
-            tooltip: 'Поделиться',
-            onPressed: _shareImage,
-          ),
-          IconButton(
-            icon: _isSaving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                  )
-                : const Icon(Icons.download_rounded, color: Colors.white),
-            tooltip: 'Сохранить',
-            onPressed: _saveToGallery,
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Colors.white),
-            onSelected: (value) {
-              switch (value) {
-                case 'save':
-                  _saveToGallery();
-                  break;
-                case 'share':
-                  _shareImage();
-                  break;
-                case 'choose':
-                  Navigator.pop(context);
-                  widget.onChoosePhoto?.call();
-                  break;
-                case 'delete':
-                  HapticUtils.heavy();
-                  widget.onDelete?.call(_currentIndex);
-                  if (widget.avatarUrls.length <= 1) {
-                    Navigator.pop(context);
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(kToolbarHeight),
+        child: Opacity(
+          opacity: uiOpacity,
+          child: AppBar(
+            backgroundColor: Colors.black.withValues(alpha: 0.4 * bgOpacity),
+            elevation: 0,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text(
+              titleText,
+              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            centerTitle: true,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.share_outlined, color: Colors.white),
+                tooltip: _tr(context, 'share', 'Поделиться'),
+                onPressed: _shareImage,
+              ),
+              IconButton(
+                icon: _isSaving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.download_rounded, color: Colors.white),
+                tooltip: _tr(context, 'profile_save', 'Сохранить'),
+                onPressed: _saveToGallery,
+              ),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, color: Colors.white),
+                onSelected: (value) {
+                  switch (value) {
+                    case 'save':
+                      _saveToGallery();
+                      break;
+                    case 'share':
+                      _shareImage();
+                      break;
+                    case 'choose':
+                      Navigator.pop(context);
+                      widget.onChoosePhoto?.call();
+                      break;
+                    case 'delete':
+                      HapticUtils.heavy();
+                      widget.onDelete?.call(_currentIndex);
+                      if (widget.avatarUrls.length <= 1) {
+                        Navigator.pop(context);
+                      }
+                      break;
                   }
-                  break;
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'save',
-                child: ListTile(
-                  leading: Icon(Icons.save_alt, color: Color(0xFF0088CC)),
-                  title: Text('Сохранить в галерею'),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'share',
-                child: ListTile(
-                  leading: Icon(Icons.share, color: Color(0xFF0088CC)),
-                  title: Text('Поделиться'),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
-              if (widget.onChoosePhoto != null)
-                const PopupMenuItem(
-                  value: 'choose',
-                  child: ListTile(
-                    leading: Icon(Icons.add_a_photo, color: Color(0xFF0088CC)),
-                    title: Text('Выбрать новое фото'),
-                    contentPadding: EdgeInsets.zero,
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'save',
+                    child: ListTile(
+                      leading: const Icon(Icons.save_alt, color: Color(0xFF0088CC)),
+                      title: Text(_tr(context, 'profile_save_to_gallery', 'Сохранить в галерею')),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-              if (widget.onDelete != null)
-                const PopupMenuItem(
-                  value: 'delete',
-                  child: ListTile(
-                    leading: Icon(Icons.delete_outline, color: Colors.red),
-                    title: Text('Удалить фото', style: TextStyle(color: Colors.red)),
-                    contentPadding: EdgeInsets.zero,
+                  PopupMenuItem(
+                    value: 'share',
+                    child: ListTile(
+                      leading: const Icon(Icons.share, color: Color(0xFF0088CC)),
+                      title: Text(_tr(context, 'share', 'Поделиться')),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
+                  if (widget.onChoosePhoto != null)
+                    PopupMenuItem(
+                      value: 'choose',
+                      child: ListTile(
+                        leading: const Icon(Icons.add_a_photo, color: Color(0xFF0088CC)),
+                        title: Text(_tr(context, 'profile_choose_new_photo', 'Выбрать новое фото')),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  if (widget.onDelete != null)
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: ListTile(
+                        leading: const Icon(Icons.delete_outline, color: Colors.red),
+                        title: Text(
+                          _tr(context, 'profile_delete_photo', 'Удалить фото'),
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
-        ],
+        ),
       ),
       body: GestureDetector(
+        onVerticalDragUpdate: (details) {
+          setState(() {
+            _verticalDragOffset += details.delta.dy;
+          });
+        },
         onVerticalDragEnd: (details) {
-          // Свайп вверх или вниз для закрытия
-          if (details.primaryVelocity != null && details.primaryVelocity!.abs() > 400) {
+          final velocity = details.primaryVelocity ?? 0.0;
+          if (_verticalDragOffset.abs() > 85.0 || velocity.abs() > 400.0) {
             Navigator.pop(context);
+          } else {
+            setState(() {
+              _verticalDragOffset = 0.0;
+            });
           }
         },
         child: Stack(
           children: [
             if (totalCount > 0)
-              PhotoViewGallery.builder(
-                scrollPhysics: const BouncingScrollPhysics(),
-                builder: (context, index) {
-                  final url = widget.avatarUrls[index];
-                  final provider = avatarImageProvider(url) ?? NetworkImage(url);
-                  final tag = widget.heroTagPrefix != null ? '${widget.heroTagPrefix}_$url' : 'avatar_hero_$url';
-                  return PhotoViewGalleryPageOptions(
-                    imageProvider: provider,
-                    initialScale: PhotoViewComputedScale.contained,
-                    minScale: PhotoViewComputedScale.contained,
-                    maxScale: PhotoViewComputedScale.covered * 3.5,
-                    heroAttributes: PhotoViewHeroAttributes(tag: tag),
-                  );
-                },
-                itemCount: totalCount,
-                loadingBuilder: (context, event) => const Center(
-                  child: CircularProgressIndicator(color: Color(0xFF0088CC)),
+              Transform.translate(
+                offset: Offset(0, _verticalDragOffset),
+                child: PhotoViewGallery.builder(
+                  scrollPhysics: const BouncingScrollPhysics(),
+                  builder: (context, index) {
+                    final url = widget.avatarUrls[index];
+                    final provider = avatarImageProvider(url) ?? NetworkImage(url);
+                    final tag = widget.heroTagPrefix != null ? '${widget.heroTagPrefix}_$url' : 'avatar_hero_$url';
+                    return PhotoViewGalleryPageOptions(
+                      imageProvider: provider,
+                      filterQuality: FilterQuality.medium,
+                      initialScale: PhotoViewComputedScale.contained,
+                      minScale: PhotoViewComputedScale.contained,
+                      maxScale: PhotoViewComputedScale.covered * 3.5,
+                      heroAttributes: PhotoViewHeroAttributes(tag: tag),
+                    );
+                  },
+                  itemCount: totalCount,
+                  loadingBuilder: (context, event) => const Center(
+                    child: CircularProgressIndicator(color: Color(0xFF0088CC)),
+                  ),
+                  backgroundDecoration: const BoxDecoration(color: Colors.transparent),
+                  pageController: _pageController,
+                  onPageChanged: (index) {
+                    setState(() {
+                      _currentIndex = index;
+                    });
+                    widget.onPageChanged?.call(index);
+                  },
                 ),
-                backgroundDecoration: const BoxDecoration(color: Colors.black),
-                pageController: _pageController,
-                onPageChanged: (index) {
-                  setState(() {
-                    _currentIndex = index;
-                  });
-                  widget.onPageChanged?.call(index);
-                },
               ),
 
             // Точки-индикаторы снизу (если аватарок больше 1)
@@ -350,21 +403,24 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
                 bottom: 30,
                 left: 0,
                 right: 0,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(totalCount, (index) {
-                    return Container(
-                      width: 7,
-                      height: 7,
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _currentIndex == index
-                            ? Colors.white
-                            : Colors.white.withValues(alpha: 0.35),
-                      ),
-                    );
-                  }),
+                child: Opacity(
+                  opacity: uiOpacity,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(totalCount, (index) {
+                      return Container(
+                        width: 7,
+                        height: 7,
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _currentIndex == index
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.35),
+                        ),
+                      );
+                    }),
+                  ),
                 ),
               ),
           ],

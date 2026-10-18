@@ -6,6 +6,7 @@ import '../config/app_config.dart';
 import '../models/name_color_preset.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
+import 'profile_instant_cache.dart';
 
 /// Модель палитры фона профиля
 class ProfileColorPreset {
@@ -475,6 +476,61 @@ class ProfileThemeProvider extends ChangeNotifier {
       _syncWithBackend(nameColorPresetId: preset.id, replyStripStyle: style.name);
     }
     notifyListeners();
+  }
+
+  final Map<String, ProfileColorPreset> _peerPresetCache = {};
+
+  /// Получить закэшированный пресет оформления чужого пользователя синхронно (Frame 0)
+  ProfileColorPreset? getCachedUserPreset(String userId) {
+    if (userId.isEmpty) return null;
+    if (userId == _currentUserId) return _currentPreset;
+    return _peerPresetCache[userId] ??
+        ProfileInstantCache.instance.getUserColorPresetSync(userId);
+  }
+
+  /// Загрузить пресет оформления конкретного пользователя с кэшированием в SharedPreferences и памяти
+  Future<ProfileColorPreset?> fetchUserPreset(String userId) async {
+    if (userId.isEmpty) return null;
+    if (userId == _currentUserId) return _currentPreset;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedId = prefs.getString(_prefPresetKey(userId));
+      if (cachedId != null && cachedId.isNotEmpty) {
+        final preset = ProfileColorPresets.getById(cachedId);
+        _peerPresetCache[userId] = preset;
+        ProfileInstantCache.instance.putUserColorPreset(userId, preset);
+      }
+
+      final token = await AuthService.getToken();
+      if (token != null) {
+        final response = await http.get(
+          Uri.parse('${AppConfig.baseUrl}/api/user/appearance/$userId'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+        );
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data['success'] == true && data['appearance'] is Map) {
+            final app = data['appearance'] as Map<String, dynamic>;
+            final pcId = app['profile_color_preset_id']?.toString();
+            if (pcId != null && pcId.isNotEmpty) {
+              await prefs.setString(_prefPresetKey(userId), pcId);
+              final preset = ProfileColorPresets.getById(pcId);
+              _peerPresetCache[userId] = preset;
+              ProfileInstantCache.instance.putUserColorPreset(userId, preset);
+              return preset;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[ProfileThemeProvider] Error fetching peer preset for $userId: $e');
+    }
+    return _peerPresetCache[userId] ??
+        ProfileInstantCache.instance.getUserColorPresetSync(userId);
   }
 
   Future<void> resetToDefault() async {

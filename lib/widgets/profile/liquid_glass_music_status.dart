@@ -1,15 +1,14 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../services/liquid_glass_provider.dart';
 
-/// Горизонтальная стеклянная плашка музыкального статуса.
+/// Компактная центрированная капсула музыкального статуса (`♪ Название трека - Автор >`).
 ///
-/// Показывает иконку ноты + название трека + автора песни.
-/// Если музыка не установлена — виджет не отображается.
-///
-/// При нажатии — пока ничего не происходит (TODO: в будущем —
-/// воспроизведение музыки другим пользователем).
+/// Располагается по центру между круглыми кнопками быстрых действий и информационной панелью.
+/// Если музыка не установлена — виджет не отображается (`SizedBox.shrink()`).
 class LiquidGlassMusicStatus extends StatelessWidget {
   /// Включён ли стеклянный дизайн (полный или облегчённый)
   final bool enabled;
@@ -17,183 +16,186 @@ class LiquidGlassMusicStatus extends StatelessWidget {
   /// Включён ли облегчённый режим (FakeGlass вместо LiquidGlass)
   final bool isLite;
 
-  /// Название трека (если null — виджет скрыт)
+  /// Название трека (если null или пусто — виджет скрыт)
   final String? trackTitle;
 
   /// Автор песни
   final String? trackAuthor;
 
-  /// Локализованная подпись «Музыка»
+  /// Коллбэк при нажатии на капсулу
+  final VoidCallback? onTap;
+
+  /// Активен ли цветной/градиентный пресет профиля
+  final bool hasColoredTheme;
+
+  /// Локализованная подпись «Музыка» (сохранена для обратной совместимости)
   final String musicLabel;
 
   const LiquidGlassMusicStatus({
     Key? key,
     required this.enabled,
     this.isLite = false,
+    this.hasColoredTheme = false,
     this.trackTitle,
     this.trackAuthor,
+    this.onTap,
     this.musicLabel = 'Музыка',
   }) : super(key: key);
 
+  String get _formattedText {
+    final title = (trackTitle ?? '').trim();
+    final author = (trackAuthor ?? '').trim();
+    if (author.isNotEmpty) {
+      return '$title - $author';
+    }
+    return title;
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Если трек не установлен — не показываем виджет
-    if (trackTitle == null || trackTitle!.isEmpty) {
+    if (trackTitle == null || trackTitle!.trim().isEmpty) {
       return const SizedBox.shrink();
     }
 
-    if (enabled) {
-      return _buildGlassStatus(context);
-    }
-    return _buildClassicStatus(context);
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.82,
+        ),
+        child: enabled
+            ? _buildGlassPill(context)
+            : _buildClassicPill(context),
+      ),
+    );
   }
 
-  /// Стеклянная плашка
-  Widget _buildGlassStatus(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  Widget _buildPillRow(Color textColor, Color mutedColor) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        iconoir.MusicDoubleNote(
+          width: 14,
+          height: 14,
+          color: mutedColor,
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            _formattedText,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w500,
+              color: textColor,
+              letterSpacing: -0.1,
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        iconoir.NavArrowRight(
+          width: 14,
+          height: 14,
+          color: mutedColor,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGlassPill(BuildContext context) {
+    final isDark =
+        Theme.of(context).brightness == Brightness.dark || hasColoredTheme;
     final glassProvider = context.watch<LiquidGlassProvider>();
     final glassStyle = glassProvider.createStyle(
       context: context,
+      isDarkOverride: isDark,
       isLiteOverride: isLite,
-    );
-
-    final statusContent = Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: isDark
-          ? null
-          : BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: Colors.black.withValues(alpha: 0.12),
-                width: 0.5,
-              ),
-            ),
-      child: Row(
-        children: [
-          // Иконка ноты
-          Icon(
-            Icons.music_note,
-            size: 20,
-            color: isDark ? Colors.white70 : const Color(0xFF0088CC),
-          ),
-          const SizedBox(width: 12),
-          // Название трека + автор
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  trackTitle!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: isDark ? Colors.white : Colors.black87,
-                  ),
-                ),
-                if (trackAuthor != null && trackAuthor!.isNotEmpty)
-                  Text(
-                    trackAuthor!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? Colors.white54 : Colors.black54,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          // Иконка «play» — задел на будущее
-          Icon(
-            Icons.play_circle_outline,
-            size: 24,
-            color: isDark ? Colors.white38 : const Color(0xFF0088CC).withValues(alpha: 0.5),
-          ),
-        ],
+      color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
+      refractionIndex: 1.15,
+      refractionWidth: 22.0,
+      shape: const LiquidGlassShape.roundedRectangle(
+        cornerRadius: 15,
       ),
     );
 
-    // TODO: при нажатии — воспроизведение музыки (задел на будущее)
+    final textColor = isDark
+        ? Colors.white.withValues(alpha: 0.9)
+        : Colors.black.withValues(alpha: 0.85);
+    final mutedColor = isDark
+        ? Colors.white.withValues(alpha: 0.65)
+        : Colors.black.withValues(alpha: 0.55);
+
+    final content = Container(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: isDark
+          ? null
+          : BoxDecoration(
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(
+                color: Colors.black.withValues(alpha: 0.08),
+                width: 0.5,
+              ),
+            ),
+      child: _buildPillRow(textColor, mutedColor),
+    );
+
     return GestureDetector(
-      onTap: () {
-        // TODO: реализовать воспроизведение музыки
-      },
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: LiquidGlassLens(
-        style: glassStyle.copyWith(
-          shape: const LiquidGlassShape.continuousRoundedRectangle(
-            cornerRadius: 24,
-          ),
-        ),
-        child: statusContent,
+        style: glassStyle,
+        child: content,
       ),
     );
   }
 
-  /// Классическая плашка (без glass)
-  Widget _buildClassicStatus(BuildContext context) {
+  Widget _buildClassicPill(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark || hasColoredTheme;
+    final textColor = isDark
+        ? Colors.white.withValues(alpha: 0.92)
+        : theme.colorScheme.onSurface;
+    final mutedColor = isDark
+        ? Colors.white.withValues(alpha: 0.68)
+        : theme.colorScheme.onSurfaceVariant;
 
-    // TODO: при нажатии — воспроизведение музыки (задел на будущее)
     return GestureDetector(
-      onTap: () {
-        // TODO: реализовать воспроизведение музыки
-      },
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: theme.colorScheme.outline.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              Icons.music_note,
-              size: 20,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    trackTitle!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: theme.colorScheme.onSurface,
-                    ),
-                  ),
-                  if (trackAuthor != null && trackAuthor!.isNotEmpty)
-                    Text(
-                      trackAuthor!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.play_circle_outline,
-              size: 24,
-              color: theme.colorScheme.primary.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(15),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.06),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
             ),
           ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(15),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: Container(
+              height: 30,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0x992C2C2E)
+                    : const Color(0xB3FFFFFF),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.12)
+                      : Colors.black.withValues(alpha: 0.08),
+                  width: 0.5,
+                ),
+              ),
+              child: _buildPillRow(textColor, mutedColor),
+            ),
+          ),
         ),
       ),
     );

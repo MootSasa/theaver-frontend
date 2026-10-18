@@ -21,6 +21,7 @@ import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
+import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../l10n/app_localizations.dart';
@@ -257,6 +258,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addObserver(this);
+    ProfileInstantCache.instance.prefetchGroupOrChannel(widget.chatId);
     _loadData();
     _initWebSocket();
 

@@ -23,6 +23,7 @@ import '../../utils/haptic_utils.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/settings_service.dart';
+import '../../services/profile_instant_cache.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
@@ -342,6 +343,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     _currentAccount = _accountManager.currentAccount;
     _accountManager.addListener(_onAccountChanged);
     _loadUpdateChannel();
+    ProfileInstantCache.instance.warmupSelf();
   }
 
   void _onAccountChanged() {

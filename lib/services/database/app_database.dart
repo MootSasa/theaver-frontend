@@ -818,6 +818,92 @@ class AppDatabase extends _$AppDatabase {
     await (delete(bankingCards)..where((t) => t.id.equals(id))).go();
   }
 
+  /// Получить чат "Избранное" (saved)
+  Future<DbChat?> getSavedChat() async {
+    await ensureInitialized();
+    final list = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();
+    if (list.isEmpty) return null;
+    return list.firstWhere(
+      (c) => !c.chatId.startsWith('saved_'),
+      orElse: () => list.first,
+    );
+  }
+
+  /// Найти личный чат с конкретным пользователем по otherUserId
+  Future<DbChat?> getPrivateChatWithUser(String targetUserId) async {
+    if (targetUserId.isEmpty) return null;
+    await ensureInitialized();
+    final list = await (select(chats)
+          ..where((t) => t.chatType.equals('private') & t.otherUserId.equals(targetUserId)))
+        .get();
+    return list.firstOrNull;
+  }
+
+  /// Получить медиафайлы чата (фото и обычные видео, без кружочков)
+  Future<List<DbMessage>> getSharedMediaForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('image') | t.messageType.equals('video')) &
+              t.isRound.equals(false) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Получить документы/файлы чата
+  Future<List<DbMessage>> getSharedFilesForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('file') | t.messageType.equals('document')) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Получить голосовые сообщения и видео-кружочки чата
+  Future<List<DbMessage>> getSharedVoiceForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('voice') |
+                  t.messageType.equals('round') |
+                  t.isRound.equals(true)) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Получить сообщения со ссылками в чате
+  Future<List<DbMessage>> getSharedLinksForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.content.like('%http://%') |
+                  t.content.like('%https://%') |
+                  t.content.like('%www.%') |
+                  t.entities.like('%"url"%') |
+                  t.entities.like('%"text_link"%')))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
   /// Очистить все данные локальной базы (сообщения, чаты, состояние синхронизации, карты)
   Future<void> clearAllData() async {
     await ensureInitialized();
@@ -830,3 +916,4 @@ class AppDatabase extends _$AppDatabase {
     debugPrint('AppDatabase: All local data cleared');
   }
 }
+

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import '../../config/app_config.dart';
+import '../../l10n/app_localizations.dart';
 import '../../utils/image_utils.dart';
 
 /// Transparent 1x1 PNG bytes for temporary fallback
@@ -190,7 +191,15 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      'QR-код',
+                      () {
+                        try {
+                          final tr = context.l10n.translate('profile_qr_code');
+                          if (tr.isNotEmpty && tr != 'profile_qr_code') {
+                            return tr;
+                          }
+                        } catch (_) {}
+                        return 'QR-код';
+                      }(),
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
