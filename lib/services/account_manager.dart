@@ -255,11 +255,23 @@ class AccountManager extends ChangeNotifier {
     
     if (kIsWeb) {
       final webInfo = await deviceInfo.webBrowserInfo;
+      final browser = webInfo.browserName.name;
+      final platform = (webInfo.platform ?? 'Web').trim();
+      String shortVersion = browser;
+      final ua = webInfo.userAgent ?? webInfo.appVersion ?? '';
+      final match = RegExp(r'(Edg|OPR|YaBrowser|Chrome|Firefox|Version)/([\d.]+)').firstMatch(ua);
+      if (match != null) {
+        shortVersion = '${match.group(1)} ${match.group(2)}';
+      } else if (ua.length > 48) {
+        shortVersion = ua.substring(0, 48);
+      } else if (ua.isNotEmpty) {
+        shortVersion = ua;
+      }
       return DeviceInfo(
-        deviceName: '${webInfo.browserName.name} on ${webInfo.platform ?? 'Web'}',
+        deviceName: '$browser on ${platform.isNotEmpty ? platform : 'Web'}',
         deviceType: DeviceType.web,
-        os: webInfo.platform ?? 'Web',
-        osVersion: webInfo.appVersion ?? 'Unknown',
+        os: platform.isNotEmpty ? platform : 'Web',
+        osVersion: shortVersion,
       );
     }
     
