@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -285,7 +286,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
   }
 
   Future<void> _extractLocalFirstFrame(String filePath) async {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     try {
       const channel = MethodChannel('com.example.app/media_muxer');
       final res = await channel.invokeMethod<Map<dynamic, dynamic>>(

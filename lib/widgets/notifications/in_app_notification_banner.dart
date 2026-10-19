@@ -1,6 +1,7 @@
 import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
@@ -53,7 +54,8 @@ class InAppNotificationBanner extends StatefulWidget {
     VoidCallback? onTap,
     VoidCallback? onDismiss,
   }) {
-    final overlayState = Overlay.maybeOf(context, rootOverlay: true);
+    final overlayState = DeepLinkService().navigatorKey.currentState?.overlay ??
+        Overlay.maybeOf(context, rootOverlay: true);
     if (overlayState == null) return;
 
     _activeTopBannerOverlay?.remove();
@@ -109,7 +111,8 @@ class InAppNotificationBanner extends StatefulWidget {
     required String message,
     Duration duration = const Duration(seconds: 5),
   }) {
-    final overlayState = Overlay.maybeOf(context, rootOverlay: true);
+    final overlayState = DeepLinkService().navigatorKey.currentState?.overlay ??
+        Overlay.maybeOf(context, rootOverlay: true);
     if (overlayState == null) return;
 
     _activeBottomSyncOverlay?.remove();

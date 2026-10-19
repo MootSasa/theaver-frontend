@@ -1442,6 +1442,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             messageType: fileMessageType,
             fileUrl: uploadResult.url,
             fileName: uploadResult.fileName,
+            mediaPayload: uploadResult.toMediaPayload(),
             replyToMessageId: replyTo?.id,
             entities: (i == 0) ? effectiveEntities : null,
           );
@@ -1989,6 +1990,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   Future<void> _downloadFile(String fileUrl, String fileName) async {
     try {
+      if (kIsWeb) {
+        final uri = Uri.parse(AppConfig.resolveMediaUrl(fileUrl) ?? fileUrl);
+        await launchUrl(uri, webOnlyWindowName: '_blank');
+        return;
+      }
       final filePath = await _fileService.downloadToDownloads(
         fileUrl,
         fileName,
@@ -3276,6 +3282,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         localId: pendingLocalId,
         fileUrl: uploadResult.url,
         fileName: uploadResult.fileName,
+        mediaPayload: uploadResult.toMediaPayload(),
         replyToMessageId: replyTo?.id,
         isQuote: replyIsQuote,
         quoteText: replyQuoteText,
@@ -3437,6 +3444,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         localId: pendingLocalId,
         fileUrl: uploadResult.url,
         fileName: uploadResult.fileName,
+        mediaPayload: uploadResult.toMediaPayload(),
         isRound: true,
         replyToMessageId: replyTo?.id,
         isQuote: replyIsQuote,

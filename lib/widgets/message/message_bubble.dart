@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -1331,11 +1332,6 @@ class MessageBubble extends StatelessWidget {
             tag: heroTag,
             localFilePath: localPath,
           );
-          onFileTap?.call(
-            localPath ?? resolvedUrl,
-            message.fileName ?? 'image.jpg',
-            'image',
-          );
         },
       );
     }
@@ -1397,7 +1393,7 @@ class MessageBubble extends StatelessWidget {
       fileUrl: resolvedUrl,
       fileName: message.fileName ??
           (message.content.trim().isNotEmpty ? message.content.trim() : 'file'),
-      fileSize: 0,
+      fileSize: (message.mediaFileSize ?? 0).toDouble(),
     );
   }
 
@@ -1538,7 +1534,7 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
   }
 
   Future<void> _extractLocalFirstFrame(String filePath) async {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     try {
       const channel = MethodChannel('com.example.app/media_muxer');
       final res = await channel.invokeMethod<Map<dynamic, dynamic>>(

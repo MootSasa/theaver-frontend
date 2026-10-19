@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -321,18 +323,53 @@ class FileService {
     }
   }
 
-  /// Download a file from the server
+  /// Download a file from the server (accepts either a full URL or an objectName)
   Future<File> downloadFile(
-    String objectName,
+    String urlOrObjectName,
     String savePath, {
     void Function(double progress)? onProgress,
   }) async {
     try {
-      final headers = await _getHeaders();
+      // 1. Check if urlOrObjectName is already a local file on disk
+      if (!urlOrObjectName.startsWith('http://') &&
+          !urlOrObjectName.startsWith('https://') &&
+          (urlOrObjectName.startsWith('/') || urlOrObjectName.contains('\\'))) {
+        final localFile = File(urlOrObjectName);
+        if (await localFile.exists() && await localFile.length() > 0) {
+          onProgress?.call(1.0);
+          if (localFile.path == savePath) return localFile;
+          return await localFile.copy(savePath);
+        }
+      }
+
+      // 2. Check MediaCacheManager first to avoid redundant network downloads
+      final resolvedUrl = (urlOrObjectName.startsWith('http://') ||
+              urlOrObjectName.startsWith('https://') ||
+              urlOrObjectName.startsWith('/'))
+          ? (AppConfig.resolveMediaUrl(urlOrObjectName) ?? urlOrObjectName)
+          : '$baseUrl/api/files/download/$urlOrObjectName';
+
+      try {
+        final cached = await MediaCacheManager.instance.getCachedFile(resolvedUrl) ??
+            await MediaCacheManager.instance.getCachedFile(urlOrObjectName);
+        if (cached != null && await cached.exists() && await cached.length() > 0) {
+          onProgress?.call(1.0);
+          if (cached.path == savePath) return cached;
+          return await cached.copy(savePath);
+        }
+      } catch (_) {}
+
+      // 3. Download via Dio (only attach Bearer token for API endpoints, not direct MinIO URLs)
+      final isApiEndpoint = resolvedUrl.contains('/api/');
+      final headers = isApiEndpoint ? await _getHeaders() : <String, String>{};
+
       await _dio.download(
-        '$baseUrl/api/files/download/$objectName',
+        resolvedUrl,
         savePath,
-        options: Options(headers: headers),
+        options: Options(
+          headers: headers,
+          followRedirects: true,
+        ),
         onReceiveProgress: (received, total) {
           if (onProgress != null && total > 0) {
             onProgress(received / total);
@@ -342,54 +379,86 @@ class FileService {
       return File(savePath);
     } on DioException catch (e) {
       throw FileDownloadException('Download failed: ${e.message}');
-      }
     }
-  
-    /// Download a file to the default downloads directory
-    /// Returns the path where the file was saved
-    Future<String> downloadToDownloads(
-      String objectName,
-      String fileName, {
-      String? customDownloadPath,
-      void Function(double progress)? onProgress,
-    }) async {
-      try {
-        // Get download directory
-        String downloadDir;
-        if (customDownloadPath != null && customDownloadPath.isNotEmpty) {
-          downloadDir = customDownloadPath;
-        } else {
-          // Use default downloads directory
-          final defaultDir = await getDefaultDownloadDirectory();
-          downloadDir = defaultDir;
-        }
-  
-        // Ensure directory exists
-        final dir = Directory(downloadDir);
-        if (!await dir.exists()) {
-          await dir.create(recursive: true);
-        }
-  
-        // Generate unique filename if file already exists
-        String finalPath = path.join(downloadDir, fileName);
-        final file = File(finalPath);
-        if (await file.exists()) {
-          final ext = path.extension(fileName);
-          final nameWithoutExt = path.basenameWithoutExtension(fileName);
-          int counter = 1;
-          while (await File(finalPath).exists()) {
-            finalPath = path.join(downloadDir, '${nameWithoutExt}_$counter$ext');
-            counter++;
+  }
+
+  /// Download a file to the default downloads directory
+  /// Returns the path where the file was saved
+  Future<String> downloadToDownloads(
+    String objectName,
+    String fileName, {
+    String? customDownloadPath,
+    void Function(double progress)? onProgress,
+  }) async {
+    try {
+      final safeFileName = fileName.trim().isNotEmpty
+          ? fileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
+          : 'downloaded_file';
+
+      final configuredCustomPath = customDownloadPath?.isNotEmpty == true
+          ? customDownloadPath
+          : SettingsService().storageSettings.downloadPath;
+
+      // On Android (when no custom directory is forced), save via native MediaStore.Downloads
+      // so it works reliably on Android 10-15+ (Scoped Storage) and appears in system Downloads.
+      if (!kIsWeb &&
+          Platform.isAndroid &&
+          (configuredCustomPath == null || configuredCustomPath.isEmpty)) {
+        try {
+          final tempDir = await getTemporaryDirectory();
+          final tempPath = path.join(tempDir.path, 'dl_${DateTime.now().millisecondsSinceEpoch}_$safeFileName');
+          final tempFile = await downloadFile(objectName, tempPath, onProgress: onProgress);
+          const channel = MethodChannel('app.theaver.messenger/installer');
+          final savedUriOrPath = await channel.invokeMethod<String>('saveToDownloads', {
+            'filePath': tempFile.path,
+            'fileName': safeFileName,
+          });
+          try {
+            if (await tempFile.exists()) await tempFile.delete();
+          } catch (_) {}
+          if (savedUriOrPath != null && savedUriOrPath.isNotEmpty) {
+            return savedUriOrPath;
           }
+        } catch (e) {
+          debugPrint('[FileService] Native saveToDownloads fallback: $e');
         }
-  
-        // Download file
-        await downloadFile(objectName, finalPath, onProgress: onProgress);
-        return finalPath;
-      } catch (e) {
-        throw FileDownloadException('Failed to download to downloads: $e');
       }
+
+      // Get download directory
+      String downloadDir;
+      if (configuredCustomPath != null && configuredCustomPath.isNotEmpty) {
+        downloadDir = configuredCustomPath;
+      } else {
+        final defaultDir = await getDefaultDownloadDirectory();
+        downloadDir = defaultDir;
+      }
+
+      // Ensure directory exists
+      final dir = Directory(downloadDir);
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+
+      // Generate unique filename if file already exists
+      String finalPath = path.join(downloadDir, safeFileName);
+      final file = File(finalPath);
+      if (await file.exists()) {
+        final ext = path.extension(safeFileName);
+        final nameWithoutExt = path.basenameWithoutExtension(safeFileName);
+        int counter = 1;
+        while (await File(finalPath).exists()) {
+          finalPath = path.join(downloadDir, '${nameWithoutExt}_$counter$ext');
+          counter++;
+        }
+      }
+
+      // Download file
+      await downloadFile(objectName, finalPath, onProgress: onProgress);
+      return finalPath;
+    } catch (e) {
+      throw FileDownloadException('Failed to download to downloads: $e');
     }
+  }
   
     /// Get default download directory based on user settings and platform
     Future<String> getDefaultDownloadDirectory() async {

@@ -29,6 +29,7 @@ import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/channel_screen.dart';
 import '../utils/swipe_back_route.dart';
 import '../widgets/notifications/in_app_notification_banner.dart';
+import 'web_notification_helper.dart';
 
 export '../widgets/notifications/in_app_notification_banner.dart' show InAppNotificationData;
 
@@ -392,7 +393,11 @@ class NotificationService {
 
       // 2. Инициализация для конкретной платформы
       if (kIsWeb) {
-        debugPrint('NotificationService: web platform -> using WebSocket in-app banners');
+        debugPrint('NotificationService: web platform -> using WebSocket in-app banners + Browser Notifications');
+        WebNotificationHelper.init(
+          onTabHidden: onAppPause,
+          onTabVisible: onAppResume,
+        );
       } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
         await _initDesktopNotifications();
       } else {
@@ -515,6 +520,35 @@ class NotificationService {
         if (_isDuplicateNotification(chatId, messageText, messageId: messageId)) return;
 
         if (kIsWeb) {
+          final effective = _settingsProvider?.getEffectiveSettings(chatId);
+          final soundEnabled = effective?.soundEnabled ?? true;
+          if (soundEnabled) {
+            WebNotificationHelper.playNotificationSound();
+          }
+          final showPreview = effective?.previewEnabled ?? true;
+          final displayTitle = isGroup ? chatName : (senderName.isNotEmpty ? senderName : chatName);
+          final displayBody = showPreview
+              ? (isGroup && senderName.isNotEmpty ? '$senderName: $messageText' : messageText)
+              : 'Новое сообщение';
+
+          if (!WebNotificationHelper.isTabFocused || currentActiveChatId != chatId) {
+            WebNotificationHelper.showBrowserNotification(
+              title: displayTitle,
+              body: displayBody,
+              iconUrl: getValidAvatarUrl(avatarUrl),
+              tag: 'chat_$chatId',
+              onTap: () {
+                _navigateFromNotificationData({
+                  'chat_id': chatId,
+                  'chat_name': chatName,
+                  'sender_name': senderName,
+                  'avatar_url': avatarUrl,
+                  'is_group': isGroup,
+                  'type': 'new_message',
+                });
+              },
+            );
+          }
           showInAppBanner(
             chatId: chatId,
             chatName: chatName,

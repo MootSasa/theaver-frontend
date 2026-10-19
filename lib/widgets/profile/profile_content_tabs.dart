@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -745,10 +746,19 @@ class ProfileSectionPageContent extends StatelessWidget {
     );
 
     try {
+      if (kIsWeb) {
+        final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        final uri = Uri.tryParse(resolved);
+        if (uri != null) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        }
+        return;
+      }
       final fileService = FileService();
-      final objectName = rawUrl.split('/').last;
-      final savedPath = await fileService.downloadToDownloads(objectName, fileName);
-      await fileService.openFile(savedPath);
+      final savedPath = await fileService.downloadToDownloads(rawUrl, fileName);
+      if (!savedPath.startsWith('content://')) {
+        await fileService.openFile(savedPath);
+      }
     } catch (_) {
       final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
       final uri = Uri.tryParse(resolved);

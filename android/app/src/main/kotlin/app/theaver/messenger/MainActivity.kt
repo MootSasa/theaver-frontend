@@ -9,17 +9,38 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.os.Build
+import android.net.Uri
+import android.os.Environment
 import android.provider.CalendarContract
+import android.provider.MediaStore
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.nio.ByteBuffer
 
 class MainActivity : FlutterFragmentActivity() {
     private val CHANNEL = "com.example.app/cutout"
     private val MUXER_CHANNEL = "com.example.app/media_muxer"
     private val CALENDAR_CHANNEL = "app.theaver.messenger/calendar"
+    private val INSTALLER_CHANNEL = "app.theaver.messenger/installer"
+    private var pendingApkPath: String? = null
+
+    override fun onResume() {
+        super.onResume()
+        val path = pendingApkPath
+        if (path != null) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+                pendingApkPath = null
+                try {
+                    launchApkInstaller(File(path))
+                } catch (_: Exception) {}
+            }
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -27,6 +48,63 @@ class MainActivity : FlutterFragmentActivity() {
         // Register push detector MethodChannel handler
         val pushDetector = PushDetectorHandler(this)
         pushDetector.setup(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, INSTALLER_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "installApk" -> {
+                    val filePath = call.argument<String>("filePath")
+                    if (filePath.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "Missing filePath", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        val file = File(filePath)
+                        if (!file.exists() || file.length() <= 0L) {
+                            result.error("FILE_NOT_FOUND", "APK file does not exist or is empty: $filePath", null)
+                            return@setMethodCallHandler
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                            pendingApkPath = filePath
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:$packageName")
+                            ).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success("permission_requested")
+                        } else {
+                            pendingApkPath = null
+                            launchApkInstaller(file)
+                            result.success("started")
+                        }
+                    } catch (e: Exception) {
+                        result.error("INSTALL_ERROR", e.message, null)
+                    }
+                }
+                "saveToDownloads" -> {
+                    val sourcePath = call.argument<String>("sourcePath")
+                    val fileName = call.argument<String>("fileName") ?: "file"
+                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
+                    if (sourcePath.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "Missing sourcePath", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        val srcFile = File(sourcePath)
+                        if (!srcFile.exists()) {
+                            result.error("FILE_NOT_FOUND", "Source file not found", null)
+                            return@setMethodCallHandler
+                        }
+                        val savedLocation = saveFileToPublicDownloads(srcFile, fileName, mimeType)
+                        result.success(savedLocation)
+                    } catch (e: Exception) {
+                        result.error("SAVE_ERROR", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CALENDAR_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "addBirthdayEvent") {
@@ -267,5 +345,59 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
         return cutoutList
+    }
+
+    private fun launchApkInstaller(file: File) {
+        val apkUri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        } else {
+            Uri.fromFile(file)
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(intent)
+    }
+
+    private fun saveFileToPublicDownloads(srcFile: File, fileName: String, mimeType: String): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = android.content.ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = applicationContext.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Failed to create MediaStore Downloads entry")
+            resolver.openOutputStream(uri)?.use { out ->
+                srcFile.inputStream().use { input ->
+                    input.copyTo(out)
+                }
+            } ?: throw IllegalStateException("Failed to open MediaStore output stream")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return "/storage/emulated/0/Download/$fileName"
+        } else {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadsDir.exists()) {
+                downloadsDir.mkdirs()
+            }
+            var destFile = File(downloadsDir, fileName)
+            val dotIdx = fileName.lastIndexOf('.')
+            val baseName = if (dotIdx != -1) fileName.substring(0, dotIdx) else fileName
+            val ext = if (dotIdx != -1) fileName.substring(dotIdx) else ""
+            var counter = 1
+            while (destFile.exists()) {
+                destFile = File(downloadsDir, "${baseName}_$counter$ext")
+                counter++
+            }
+            srcFile.copyTo(destFile, overwrite = true)
+            return destFile.absolutePath
+        }
     }
 }
