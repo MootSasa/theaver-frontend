@@ -113,7 +113,8 @@ class MediaCacheManager {
   /// Checks if the file is cached locally on disk and exists
   Future<File?> getCachedFile(String url) async {
     if (kIsWeb || url.isEmpty) return null;
-    final cachedPath = _localPathCache[url];
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    final cachedPath = _localPathCache[url] ?? _localPathCache[resolvedUrl];
     if (cachedPath != null) {
       final f = File(cachedPath);
       if (await f.exists()) {
@@ -123,16 +124,19 @@ class MediaCacheManager {
           } else {
             await f.delete();
             _localPathCache.remove(url);
+            _localPathCache.remove(resolvedUrl);
           }
         } catch (_) {}
       } else {
         _localPathCache.remove(url);
+        _localPathCache.remove(resolvedUrl);
       }
     }
 
     final filename = getCacheFilename(url);
+    final resolvedFilename = getCacheFilename(resolvedUrl);
     final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final filenamesToCheck = {filename, legacySanitized};
+    final filenamesToCheck = {filename, resolvedFilename, legacySanitized};
 
     for (final fname in filenamesToCheck) {
       // 1. Check primary application cache directory
@@ -143,6 +147,7 @@ class MediaCacheManager {
         if (await f.exists()) {
           if (await f.length() > 0) {
             _localPathCache[url] = targetPath;
+            _localPathCache[resolvedUrl] = targetPath;
             return f;
           } else {
             await f.delete();
@@ -158,6 +163,7 @@ class MediaCacheManager {
         if (await f.exists()) {
           if (await f.length() > 0) {
             _localPathCache[url] = targetPath;
+            _localPathCache[resolvedUrl] = targetPath;
             return f;
           } else {
             await f.delete();
@@ -242,35 +248,105 @@ class MediaCacheManager {
     }
   }
 
-  /// Deletes a specific media file from disk cache and memory
-  Future<void> deleteMedia(String url) async {
-    cancelDownload(url);
-    _localPathCache.remove(url);
-    _progressNotifiers.remove(url);
-    _byteProgressNotifiers.remove(url);
-    if (kIsWeb) return;
+  /// Seeds the local media cache directly from a local file (e.g. just-recorded voice/video note
+  /// or compressed image after upload), avoiding re-downloading our own sent media and cleaning up temp files.
+  Future<File?> seedCacheFromFile(
+    String remoteUrl,
+    File sourceFile, {
+    bool deleteSourceIfTemp = true,
+  }) async {
+    if (kIsWeb || remoteUrl.isEmpty) return null;
+    try {
+      if (!await sourceFile.exists()) return null;
+      final len = await sourceFile.length();
+      if (len <= 0) return null;
 
+      final mediaDir = await getMediaCacheDirectory();
+      final resolvedUrl = AppConfig.resolveMediaUrl(remoteUrl) ?? remoteUrl;
+      final targetFilename = getCacheFilename(resolvedUrl);
+      final targetPath = path.join(mediaDir.path, targetFilename);
+      final targetFile = File(targetPath);
+
+      if (path.canonicalize(sourceFile.path) != path.canonicalize(targetPath)) {
+        await sourceFile.copy(targetPath);
+
+        if (deleteSourceIfTemp) {
+          try {
+            final tempDir = await getTemporaryDirectory();
+            final normSource = path.normalize(sourceFile.path);
+            final normTemp = path.normalize(tempDir.path);
+            final base = path.basename(normSource);
+            final isTempUpload = normSource.startsWith(normTemp) &&
+                (base.startsWith('voice_note_') ||
+                    base.startsWith('video_note_') ||
+                    base.startsWith('send_') ||
+                    base.startsWith('image_picker') ||
+                    base.startsWith('scaled_'));
+            if (isTempUpload) {
+              await sourceFile.delete();
+            }
+          } catch (_) {}
+        }
+      }
+
+      _localPathCache[remoteUrl] = targetPath;
+      _localPathCache[resolvedUrl] = targetPath;
+      return targetFile;
+    } catch (e) {
+      debugPrint('MediaCacheManager.seedCacheFromFile error: $e');
+      return null;
+    }
+  }
+
+  /// Deletes a specific media file from disk cache and memory, returning freed bytes
+  Future<int> deleteMedia(String url) async {
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    cancelDownload(url);
+    if (resolvedUrl != url) cancelDownload(resolvedUrl);
+    _localPathCache.remove(url);
+    _localPathCache.remove(resolvedUrl);
+    _progressNotifiers.remove(url);
+    _progressNotifiers.remove(resolvedUrl);
+    _byteProgressNotifiers.remove(url);
+    _byteProgressNotifiers.remove(resolvedUrl);
+    if (kIsWeb) return 0;
+
+    int freedBytes = 0;
     final filename = getCacheFilename(url);
+    final resolvedFilename = getCacheFilename(resolvedUrl);
     final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final filenamesToCheck = {filename, legacySanitized};
+    final filenamesToCheck = {filename, resolvedFilename, legacySanitized};
 
     for (final name in filenamesToCheck) {
       try {
         final cacheDir = await getApplicationCacheDirectory();
         final f1 = File(path.join(cacheDir.path, 'miptgram_media', name));
-        if (await f1.exists()) await f1.delete();
+        if (await f1.exists()) {
+          freedBytes += await f1.length();
+          await f1.delete();
+        }
         final tmp1 = File(path.join(cacheDir.path, 'miptgram_media', '$name.tmp'));
-        if (await tmp1.exists()) await tmp1.delete();
+        if (await tmp1.exists()) {
+          freedBytes += await tmp1.length();
+          await tmp1.delete();
+        }
       } catch (_) {}
 
       try {
         final docDir = await getApplicationDocumentsDirectory();
         final f2 = File(path.join(docDir.path, 'miptgram_media', name));
-        if (await f2.exists()) await f2.delete();
+        if (await f2.exists()) {
+          freedBytes += await f2.length();
+          await f2.delete();
+        }
         final tmp2 = File(path.join(docDir.path, 'miptgram_media', '$name.tmp'));
-        if (await tmp2.exists()) await tmp2.delete();
+        if (await tmp2.exists()) {
+          freedBytes += await tmp2.length();
+          await tmp2.delete();
+        }
       } catch (_) {}
     }
+    return freedBytes;
   }
 
   /// Evicts a specific media file from disk cache and memory (alias for deleteMedia)

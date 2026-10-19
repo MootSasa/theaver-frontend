@@ -1389,6 +1389,7 @@ class _MainScreenState extends State<MainScreen>
                 await AuthService.logout();
                 await AppDatabase.deleteAllDatabases();
                 await CacheService().clearCache();
+                await CacheService().clearAllPermanentUserDirs();
                 await _accountManager.clearAll();
                 final prefs = await SharedPreferences.getInstance();
                 await prefs.clear();

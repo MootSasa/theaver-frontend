@@ -86,6 +86,21 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
     super.dispose();
   }
 
+  Future<void> _cleanupOldWallpaperFiles(Directory wallpaperDir, {String? keepPath}) async {
+    try {
+      if (!await wallpaperDir.exists()) return;
+      await for (final entity in wallpaperDir.list()) {
+        if (entity is File && entity.path.contains('chat_wallpaper_')) {
+          if (keepPath == null || entity.path != keepPath) {
+            try {
+              await entity.delete();
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<void> _pickImage() async {
     final picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
@@ -99,6 +114,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
 
     final localFile = File('${wallpaperDir.path}/chat_wallpaper_${DateTime.now().millisecondsSinceEpoch}.png');
     await localFile.writeAsBytes(await image.readAsBytes());
+    await _cleanupOldWallpaperFiles(wallpaperDir, keepPath: localFile.path);
 
     setState(() {
       _currentWallpaper = _currentWallpaper.copyWith(
@@ -138,6 +154,10 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
         await context.read<WallpaperProvider>().setWallpaper(_currentWallpaper.imagePath!);
       } else {
         await context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
+        try {
+          final appDir = await getApplicationDocumentsDirectory();
+          await _cleanupOldWallpaperFiles(Directory('${appDir.path}/wallpapers'));
+        } catch (_) {}
       }
 
       if (mounted) {

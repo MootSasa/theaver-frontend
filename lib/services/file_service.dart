@@ -8,6 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import '../config/app_config.dart';
 import 'auth_service.dart';
+import 'media_cache_manager.dart';
+import 'settings_service.dart';
 
 /// Service for handling file operations with MinIO backend
 class FileService {
@@ -72,7 +74,11 @@ class FileService {
       );
 
       if (response.statusCode == 200 && response.data['success'] == true) {
-        return UploadResult.fromJson(response.data);
+        final result = UploadResult.fromJson(response.data);
+        if (result.url.isNotEmpty) {
+          await MediaCacheManager.instance.seedCacheFromFile(result.url, file);
+        }
+        return result;
       } else {
         throw FileUploadException(
           response.data['message'] ?? 'Upload failed',
@@ -193,7 +199,11 @@ class FileService {
     );
 
     if (completeResponse.statusCode == 200 && completeResponse.data['success'] == true) {
-      return UploadResult.fromJson(completeResponse.data);
+      final result = UploadResult.fromJson(completeResponse.data);
+      if (result.url.isNotEmpty) {
+        await MediaCacheManager.instance.seedCacheFromFile(result.url, file);
+      }
+      return result;
     } else {
       throw FileUploadException(
         completeResponse.data['message'] ?? 'Failed to complete chunked upload',
@@ -350,7 +360,7 @@ class FileService {
           downloadDir = customDownloadPath;
         } else {
           // Use default downloads directory
-          final defaultDir = await _getDefaultDownloadDirectory();
+          final defaultDir = await getDefaultDownloadDirectory();
           downloadDir = defaultDir;
         }
   
@@ -381,8 +391,19 @@ class FileService {
       }
     }
   
-    /// Get default download directory based on platform
-    Future<String> _getDefaultDownloadDirectory() async {
+    /// Get default download directory based on user settings and platform
+    Future<String> getDefaultDownloadDirectory() async {
+      // 0. Check user-configured custom download path from SettingsService
+      try {
+        final customPath = SettingsService().storageSettings.downloadPath;
+        if (customPath != null && customPath.isNotEmpty) {
+          final customDir = Directory(customPath);
+          if (await customDir.exists()) {
+            return customDir.path;
+          }
+        }
+      } catch (_) {}
+
       // 1. Try platform-provided Downloads directory (desktop and supported mobile)
       try {
         final downloadsDir = await getDownloadsDirectory();

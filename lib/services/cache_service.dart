@@ -5,6 +5,8 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config/app_config.dart';
+import 'database/app_database.dart';
 import 'media_cache_manager.dart';
 
 /// Representation of a single media category in cache
@@ -15,6 +17,23 @@ class CacheCategoryInfo {
 
   const CacheCategoryInfo({
     required this.key,
+    required this.sizeBytes,
+    required this.fileCount,
+  });
+
+  String get sizeHuman => CacheService.formatBytes(sizeBytes);
+}
+
+/// Local cache usage info for a single chat
+class ChatCacheInfo {
+  final String chatId;
+  final String chatName;
+  final int sizeBytes;
+  final int fileCount;
+
+  const ChatCacheInfo({
+    required this.chatId,
+    required this.chatName,
     required this.sizeBytes,
     required this.fileCount,
   });
@@ -83,6 +102,8 @@ class CacheService {
     if (_videoExtensions.contains(ext)) return 'videos';
     if (_audioExtensions.contains(ext)) return 'audio';
     if (_fileExtensions.contains(ext)) return 'files';
+    // CachedNetworkImage / DefaultCacheManager stores images in libCachedImageData (often with .bin extension)
+    if (filePath.contains('libCachedImageData')) return 'photos';
     return 'other';
   }
 
@@ -103,18 +124,25 @@ class CacheService {
   Future<List<Directory>> _getCacheDirectories() async {
     if (kIsWeb) return <Directory>[];
     final dirs = <Directory>[];
+    final seenDirPaths = <String>{};
+
+    void addUniqueDir(Directory dir) {
+      final norm = p.canonicalize(dir.path);
+      if (seenDirPaths.add(norm)) {
+        dirs.add(dir);
+      }
+    }
+
     try {
       final tempDir = await getTemporaryDirectory();
-      dirs.add(tempDir);
+      addUniqueDir(tempDir);
     } catch (e) {
       debugPrint('CacheService: getTemporaryDirectory error: $e');
     }
 
     try {
       final appCacheDir = await getApplicationCacheDirectory();
-      if (!dirs.any((d) => d.path == appCacheDir.path)) {
-        dirs.add(appCacheDir);
-      }
+      addUniqueDir(appCacheDir);
     } catch (e) {
       debugPrint('CacheService: getApplicationCacheDirectory error: $e');
     }
@@ -122,8 +150,8 @@ class CacheService {
     try {
       final docDir = await getApplicationDocumentsDirectory();
       final legacyMediaDir = Directory(p.join(docDir.path, 'miptgram_media'));
-      if (await legacyMediaDir.exists() && !dirs.any((d) => d.path == legacyMediaDir.path)) {
-        dirs.add(legacyMediaDir);
+      if (await legacyMediaDir.exists()) {
+        addUniqueDir(legacyMediaDir);
       }
     } catch (e) {
       debugPrint('CacheService: legacy documents media dir error: $e');
@@ -132,10 +160,11 @@ class CacheService {
     return dirs;
   }
 
-  /// Recursively collect all regular files from given directories
+  /// Recursively collect all unique regular files from cache directories
   Future<List<File>> _collectCacheFiles() async {
     final dirs = await _getCacheDirectories();
     final files = <File>[];
+    final seenFilePaths = <String>{};
 
     for (final dir in dirs) {
       if (!dir.existsSync()) continue;
@@ -148,10 +177,14 @@ class CacheService {
             if (fileName.endsWith('.db') ||
                 fileName.endsWith('.sqlite') ||
                 fileName.endsWith('.db-wal') ||
-                fileName.endsWith('.db-shm')) {
+                fileName.endsWith('.db-shm') ||
+                fileName.endsWith('.db-journal')) {
               continue;
             }
-            files.add(entity);
+            final canonicalPath = p.canonicalize(entity.path);
+            if (seenFilePaths.add(canonicalPath)) {
+              files.add(entity);
+            }
           }
         }
       } catch (e) {
@@ -220,6 +253,111 @@ class CacheService {
     );
   }
 
+  /// Calculate local disk cache breakdown by chat using local SQLite database + disk cache files
+  Future<List<ChatCacheInfo>> getLocalChatCacheStats() async {
+    if (kIsWeb) return <ChatCacheInfo>[];
+    try {
+      final db = AppDatabase();
+      final chats = await db.getChats();
+      final chatNames = <String, String>{};
+      for (final c in chats) {
+        chatNames[c.chatId] = c.chatType == 'saved'
+            ? (c.name.isNotEmpty ? c.name : 'Избранное')
+            : (c.name.isNotEmpty ? c.name : 'Чат');
+      }
+
+      final messages = await db.getMessagesWithFiles();
+      final byChatSize = <String, int>{};
+      final byChatCount = <String, int>{};
+      final seenChatFiles = <String, Set<String>>{};
+
+      for (final msg in messages) {
+        final rawUrl = msg.fileUrl;
+        if (rawUrl == null || rawUrl.isEmpty) continue;
+
+        File? cachedFile = await MediaCacheManager.instance.getCachedFile(rawUrl);
+        if (cachedFile == null &&
+            (msg.messageType == 'image' || msg.messageType == 'sticker')) {
+          try {
+            final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+            final info = await DefaultCacheManager().getFileFromCache(resolvedUrl);
+            cachedFile = info?.file;
+          } catch (_) {}
+        }
+
+        if (cachedFile != null && cachedFile.existsSync()) {
+          final canonical = p.canonicalize(cachedFile.path);
+          final seen = seenChatFiles.putIfAbsent(msg.chatId, () => <String>{});
+          if (seen.add(canonical)) {
+            try {
+              final len = cachedFile.lengthSync();
+              if (len > 0) {
+                byChatSize[msg.chatId] = (byChatSize[msg.chatId] ?? 0) + len;
+                byChatCount[msg.chatId] = (byChatCount[msg.chatId] ?? 0) + 1;
+              }
+            } catch (_) {}
+          }
+        }
+      }
+
+      final result = <ChatCacheInfo>[];
+      for (final entry in byChatSize.entries) {
+        if (entry.value <= 0) continue;
+        result.add(ChatCacheInfo(
+          chatId: entry.key,
+          chatName: chatNames[entry.key] ?? 'Чат',
+          sizeBytes: entry.value,
+          fileCount: byChatCount[entry.key] ?? 1,
+        ));
+      }
+      result.sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
+      return result;
+    } catch (e) {
+      debugPrint('CacheService: getLocalChatCacheStats error: $e');
+      return <ChatCacheInfo>[];
+    }
+  }
+
+  /// Clear local cached media files belonging to a specific chat, returning freed bytes.
+  /// Preserves messages and cloud media in MinIO so files can be re-downloaded on demand.
+  Future<int> clearChatCache(String chatId) async {
+    if (kIsWeb || chatId.isEmpty) return 0;
+    var freedBytes = 0;
+    try {
+      final db = AppDatabase();
+      final messages = await db.getMessagesWithFiles(chatId: chatId);
+      final processedUrls = <String>{};
+
+      for (final msg in messages) {
+        final rawUrl = msg.fileUrl;
+        if (rawUrl == null || rawUrl.isEmpty) continue;
+        if (!processedUrls.add(rawUrl)) continue;
+
+        freedBytes += await MediaCacheManager.instance.deleteMedia(rawUrl);
+
+        try {
+          final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+          final cachedInfo = await DefaultCacheManager().getFileFromCache(resolvedUrl);
+          if (cachedInfo != null && await cachedInfo.file.exists()) {
+            freedBytes += await cachedInfo.file.length();
+          }
+          await DefaultCacheManager().removeFile(resolvedUrl);
+          if (resolvedUrl != rawUrl) {
+            await DefaultCacheManager().removeFile(rawUrl);
+          }
+        } catch (_) {}
+      }
+
+      try {
+        PaintingBinding.instance.imageCache.clear();
+        PaintingBinding.instance.imageCache.clearLiveImages();
+      } catch (_) {}
+    } catch (e) {
+      debugPrint('CacheService: clearChatCache error: $e');
+    }
+    return freedBytes;
+  }
+
   /// Clear local device cache by selective categories.
   /// Does NOT touch server cloud storage or chat messages.
   Future<int> clearCache({
@@ -276,12 +414,73 @@ class CacheService {
     return freedBytes;
   }
 
+  /// Cleans up permanent files and SharedPreferences keys scoped to a specific [userId] on logout.
+  Future<void> clearUserPermanentData(String userId) async {
+    if (userId.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final localWallpaperPath = prefs.getString('${userId}_chat_wallpaper_path');
+      await prefs.remove('instant_profile_user_v1_$userId');
+      await prefs.remove('local_avatar_history_$userId');
+      await prefs.remove('pending_avatars_$userId');
+      await prefs.remove('${userId}_chat_wallpaper_path');
+      await prefs.remove('${userId}_chat_wallpaper_url');
+      await prefs.remove('${userId}_cached_custom_themes');
+      await prefs.remove('${userId}_theme_overrides');
+
+      if (!kIsWeb) {
+        if (localWallpaperPath != null &&
+            localWallpaperPath.isNotEmpty &&
+            localWallpaperPath.contains('/wallpapers/')) {
+          try {
+            final wf = File(localWallpaperPath);
+            if (await wf.exists()) await wf.delete();
+          } catch (_) {}
+        }
+
+        final docDir = await getApplicationDocumentsDirectory();
+        final avatarsDir = Directory(p.join(docDir.path, 'avatars'));
+        if (await avatarsDir.exists()) {
+          await for (final entity in avatarsDir.list()) {
+            if (entity is File && p.basename(entity.path).startsWith('avatar_${userId}_')) {
+              try {
+                await entity.delete();
+              } catch (_) {}
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('CacheService: clearUserPermanentData error: $e');
+    }
+  }
+
+  /// Deletes all permanent user asset directories (avatars, wallpapers, imported_wallpapers, legacy media)
+  /// when all accounts are logged out or when the user performs a full data reset.
+  Future<void> clearAllPermanentUserDirs() async {
+    if (kIsWeb) return;
+    try {
+      final docDir = await getApplicationDocumentsDirectory();
+      for (final folder in ['avatars', 'wallpapers', 'imported_wallpapers', 'miptgram_media']) {
+        try {
+          final d = Directory(p.join(docDir.path, folder));
+          if (await d.exists()) {
+            await d.delete(recursive: true);
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('CacheService: clearAllPermanentUserDirs error: $e');
+    }
+  }
+
   /// Execute automatic cache cleanup based on Keep Media period and Max Cache Size limit.
   /// Safe to invoke on app start and in background.
   Future<int> runAutoCleanup({
     String keepMediaPeriod = 'forever',
     int maxCacheSizeBytes = 0,
   }) async {
+    if (kIsWeb) return 0;
     var freedBytes = 0;
 
     final Duration? maxAge = switch (keepMediaPeriod) {
@@ -292,10 +491,29 @@ class CacheService {
     };
 
     final files = await _collectCacheFiles();
+    final now = DateTime.now();
+    final apkStaleCutoff = now.subtract(const Duration(hours: 24));
+    final apkActiveCutoff = now.subtract(const Duration(hours: 1));
+
+    // 0. Always clean up stale APK update installers older than 24 hours
+    for (final file in List<File>.from(files)) {
+      final base = p.basename(file.path);
+      if (base.startsWith('theaver-update-') && base.endsWith('.apk')) {
+        try {
+          final stat = file.statSync();
+          if (stat.modified.isBefore(apkStaleCutoff)) {
+            final size = stat.size;
+            file.deleteSync();
+            files.remove(file);
+            freedBytes += size;
+          }
+        } catch (_) {}
+      }
+    }
 
     // 1. Age-based eviction if period != forever
     if (maxAge != null) {
-      final cutoff = DateTime.now().subtract(maxAge);
+      final cutoff = now.subtract(maxAge);
       for (final file in List<File>.from(files)) {
         try {
           final stat = file.statSync();
@@ -316,7 +534,14 @@ class CacheService {
 
       for (final file in files) {
         try {
+          final base = p.basename(file.path);
           final stat = file.statSync();
+          // Do not evict an APK installer that was downloaded within the last hour
+          if (base.startsWith('theaver-update-') &&
+              base.endsWith('.apk') &&
+              stat.modified.isAfter(apkActiveCutoff)) {
+            continue;
+          }
           currentTotal += stat.size;
           fileEntries.add((file: file, modified: stat.modified, size: stat.size));
         } catch (_) {}
@@ -335,6 +560,10 @@ class CacheService {
           } catch (_) {}
         }
       }
+    }
+
+    if (freedBytes > 0) {
+      MediaCacheManager.instance.clearMemoryCache();
     }
 
     return freedBytes;

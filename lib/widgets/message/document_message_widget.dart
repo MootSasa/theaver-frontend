@@ -1,13 +1,13 @@
-import 'dart:io' show Platform, File, Directory;
+import 'dart:io' show File, Directory;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
+import '../../services/file_service.dart';
 
 enum DownloadStatus { idle, downloading, downloaded, failed }
 
@@ -272,22 +272,12 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   }
 
   Future<Directory> _getSaveDirectory() async {
-    if (Platform.isAndroid) {
-      final dir = await getExternalStorageDirectory();
-      if (dir == null) {
-        throw Exception('Could not get external storage directory');
-      }
-      return dir;
-    } else if (Platform.isIOS) {
-      return await getApplicationDocumentsDirectory();
-    } else {
-      // For Linux, Windows, macOS
-      final dir = await getDownloadsDirectory();
-      if (dir == null) {
-        throw Exception('Could not get downloads directory');
-      }
-      return dir;
+    final pathStr = await FileService().getDefaultDownloadDirectory();
+    final dir = Directory(pathStr);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
     }
+    return dir;
   }
 
   Future<void> _openDownloadedFile() async {
