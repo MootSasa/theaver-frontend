@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
@@ -270,6 +271,15 @@ class ProfileSectionPageContent extends StatelessWidget {
         HapticUtils.tap();
         onMemberTap?.call(member);
       },
+      onSecondaryTapUp: (details) {
+        HapticUtils.selection();
+        _showMemberContextMenuAtPosition(
+          context,
+          details.globalPosition,
+          member,
+          canEditThisMember: canEditThisMember,
+        );
+      },
       onLongPress: canEditThisMember
           ? () {
               HapticUtils.selection();
@@ -365,9 +375,14 @@ class ProfileSectionPageContent extends StatelessWidget {
               const SizedBox(width: 6),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: () {
+                onTapUp: (details) {
                   HapticUtils.tap();
-                  _showMemberActionsSheet(context, member);
+                  _showMemberContextMenuAtPosition(
+                    context,
+                    details.globalPosition,
+                    member,
+                    canEditThisMember: canEditThisMember,
+                  );
                 },
                 child: Padding(
                   padding: const EdgeInsets.all(4.0),
@@ -540,6 +555,15 @@ class ProfileSectionPageContent extends StatelessWidget {
                 _showMessageItemSheet(context, msg, resolvedUrl: resolvedUrl);
               }
             },
+            onSecondaryTapUp: (details) {
+              HapticUtils.selection();
+              _showMessageContextMenuAtPosition(
+                context,
+                details.globalPosition,
+                msg,
+                resolvedUrl: resolvedUrl,
+              );
+            },
             onLongPress: () {
               HapticUtils.selection();
               _showMessageItemSheet(context, msg, resolvedUrl: resolvedUrl);
@@ -653,6 +677,15 @@ class ProfileSectionPageContent extends StatelessWidget {
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => _downloadAndOpenFile(context, msg, fileName),
+                onSecondaryTapUp: (details) {
+                  HapticUtils.selection();
+                  _showMessageContextMenuAtPosition(
+                    context,
+                    details.globalPosition,
+                    msg,
+                    fileName: fileName,
+                  );
+                },
                 onLongPress: () {
                   HapticUtils.selection();
                   _showMessageItemSheet(context, msg, fileName: fileName);
@@ -809,6 +842,15 @@ class ProfileSectionPageContent extends StatelessWidget {
                     await launchUrl(uri, mode: LaunchMode.externalApplication);
                   }
                 },
+                onSecondaryTapUp: (details) {
+                  HapticUtils.selection();
+                  _showMessageContextMenuAtPosition(
+                    context,
+                    details.globalPosition,
+                    msg,
+                    linkUrl: primaryUrl,
+                  );
+                },
                 onLongPress: () {
                   HapticUtils.selection();
                   _showMessageItemSheet(context, msg, linkUrl: primaryUrl);
@@ -946,6 +988,15 @@ class ProfileSectionPageContent extends StatelessWidget {
                   return GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () => _playVoiceOrRound(msg),
+                    onSecondaryTapUp: (details) {
+                      HapticUtils.selection();
+                      _showMessageContextMenuAtPosition(
+                        context,
+                        details.globalPosition,
+                        msg,
+                        resolvedUrl: msg.fileUrl,
+                      );
+                    },
                     onLongPress: () {
                       HapticUtils.selection();
                       _showMessageItemSheet(context, msg);
@@ -1056,8 +1107,238 @@ class ProfileSectionPageContent extends StatelessWidget {
   }
 
   // ============================================================
-  // Контекстное меню элемента (Перейти к сообщению / Скопировать)
+  // Компактное контекстное меню у курсора (ПКМ) и BottomSheet
   // ============================================================
+
+  void _showMemberContextMenuAtPosition(
+    BuildContext context,
+    Offset globalPosition,
+    ProfileMemberItem member, {
+    required bool canEditThisMember,
+  }) {
+    final isAdmin = member.role == 'admin';
+    final actions = <_ProfileContextMenuAction>[
+      _ProfileContextMenuAction(
+        label: _tr(context, 'open_profile', 'Открыть профиль'),
+        iconBuilder: (color, size) => iconoir.User(
+          width: size,
+          height: size,
+          color: color,
+        ),
+        onTap: () => onMemberTap?.call(member),
+      ),
+      if (canEditThisMember && onToggleAdminRole != null)
+        _ProfileContextMenuAction(
+          label: isAdmin
+              ? _tr(context, 'group_demote_admin', 'Снять права администратора')
+              : _tr(context, 'group_promote_admin', 'Назначить администратором'),
+          iconBuilder: (color, size) => iconoir.Shield(
+            width: size,
+            height: size,
+            color: color,
+          ),
+          onTap: () => onToggleAdminRole!(member),
+        ),
+      if (canEditThisMember && onRemoveMember != null)
+        _ProfileContextMenuAction(
+          label: _tr(context, 'group_remove_member', 'Удалить из чата'),
+          isDestructive: true,
+          iconBuilder: (color, size) => iconoir.UserXmark(
+            width: size,
+            height: size,
+            color: color,
+          ),
+          onTap: () => onRemoveMember!(member),
+        ),
+    ];
+
+    _showCompactContextMenu(context, globalPosition, actions);
+  }
+
+  void _showMessageContextMenuAtPosition(
+    BuildContext context,
+    Offset globalPosition,
+    DbMessage msg, {
+    String? resolvedUrl,
+    String? fileName,
+    String? linkUrl,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final actions = <_ProfileContextMenuAction>[
+      if (onJumpToMessage != null)
+        _ProfileContextMenuAction(
+          label: _tr(context, 'jump_to_message', 'Перейти к сообщению в чате'),
+          iconBuilder: (color, size) => iconoir.ChatBubble(
+            width: size,
+            height: size,
+            color: color,
+          ),
+          onTap: () => onJumpToMessage!(msg),
+        ),
+      if (linkUrl != null)
+        _ProfileContextMenuAction(
+          label: _tr(context, 'copy_link', 'Скопировать ссылку'),
+          iconBuilder: (color, size) => iconoir.Copy(
+            width: size,
+            height: size,
+            color: color,
+          ),
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: linkUrl));
+            GlassToastService().show(
+              context,
+              _tr(context, 'copied_to_clipboard', 'Скопировано в буфер обмена'),
+              iconWidget: iconoir.Copy(
+                width: 18,
+                height: 18,
+                color: isDark ? Colors.white : Colors.black87,
+              ),
+            );
+          },
+        ),
+      if (fileName != null || (resolvedUrl != null && resolvedUrl.isNotEmpty))
+        _ProfileContextMenuAction(
+          label: _tr(context, 'download_file', 'Скачать / Открыть'),
+          iconBuilder: (color, size) => iconoir.Download(
+            width: size,
+            height: size,
+            color: color,
+          ),
+          onTap: () {
+            _downloadAndOpenFile(
+              context,
+              msg,
+              fileName ?? 'media_${msg.localId}',
+            );
+          },
+        ),
+    ];
+
+    if (actions.isEmpty) return;
+    _showCompactContextMenu(context, globalPosition, actions);
+  }
+
+  void _showCompactContextMenu(
+    BuildContext context,
+    Offset globalPosition,
+    List<_ProfileContextMenuAction> actions,
+  ) {
+    if (actions.isEmpty) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const double menuWidth = 248.0;
+    const double itemHeight = 42.0;
+    final double menuHeight = actions.length * itemHeight + 12.0;
+
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Dismiss',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 150),
+      pageBuilder: (dialogCtx, animation, secondaryAnimation) {
+        final screenSize = MediaQuery.of(dialogCtx).size;
+        final double left = globalPosition.dx.clamp(
+          12.0,
+          math.max(12.0, screenSize.width - menuWidth - 12.0),
+        );
+        final double top = globalPosition.dy.clamp(
+          12.0,
+          math.max(12.0, screenSize.height - menuHeight - 12.0),
+        );
+        final bool alignRight =
+            globalPosition.dx + menuWidth + 12.0 > screenSize.width;
+        final bool alignBottom =
+            globalPosition.dy + menuHeight + 12.0 > screenSize.height;
+
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(dialogCtx).pop(),
+                onSecondaryTap: () => Navigator.of(dialogCtx).pop(),
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              left: left,
+              top: top,
+              width: menuWidth,
+              child: ScaleTransition(
+                alignment: Alignment(
+                  alignRight ? 1.0 : -1.0,
+                  alignBottom ? 1.0 : -1.0,
+                ),
+                scale: CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOutCubic,
+                  reverseCurve: Curves.easeInCubic,
+                ),
+                child: FadeTransition(
+                  opacity: CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOut,
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha: isDark ? 0.34 : 0.14,
+                            ),
+                            blurRadius: 20,
+                            offset: const Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: BackdropFilter(
+                          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xCC2C2C2E)
+                                  : const Color(0xE6FFFFFF),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.14)
+                                    : Colors.black.withValues(alpha: 0.08),
+                                width: 0.5,
+                              ),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (final action in actions)
+                                  _CompactContextMenuRow(
+                                    action: action,
+                                    isDark: isDark,
+                                    onSelect: () {
+                                      Navigator.of(dialogCtx).pop();
+                                      action.onTap();
+                                    },
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   void _showMessageItemSheet(
     BuildContext context,
@@ -1256,5 +1537,91 @@ class ProfileSectionPageContent extends StatelessWidget {
     return _tr(context, 'profile_date_at_time', '{date} в {time}')
         .replaceAll('{date}', '$d.$m.$y')
         .replaceAll('{time}', '$hh:$mm');
+  }
+}
+
+class _ProfileContextMenuAction {
+  final String label;
+  final bool isDestructive;
+  final Widget Function(Color color, double size) iconBuilder;
+  final VoidCallback onTap;
+
+  const _ProfileContextMenuAction({
+    required this.label,
+    required this.iconBuilder,
+    required this.onTap,
+    this.isDestructive = false,
+  });
+}
+
+class _CompactContextMenuRow extends StatefulWidget {
+  final _ProfileContextMenuAction action;
+  final bool isDark;
+  final VoidCallback onSelect;
+
+  const _CompactContextMenuRow({
+    required this.action,
+    required this.isDark,
+    required this.onSelect,
+  });
+
+  @override
+  State<_CompactContextMenuRow> createState() => _CompactContextMenuRowState();
+}
+
+class _CompactContextMenuRowState extends State<_CompactContextMenuRow> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final defaultColor = widget.isDark
+        ? Colors.white.withValues(alpha: 0.92)
+        : const Color(0xFF1C1C1E);
+    final itemColor =
+        widget.action.isDestructive ? Colors.redAccent : defaultColor;
+    final hoverBg = widget.isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.black.withValues(alpha: 0.06);
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticUtils.tap();
+          widget.onSelect();
+        },
+        child: Container(
+          height: 42.0,
+          margin: const EdgeInsets.symmetric(horizontal: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: _hovered ? hoverBg : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              widget.action.iconBuilder(itemColor, 19.0),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  widget.action.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w500,
+                    color: itemColor,
+                    letterSpacing: -0.15,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

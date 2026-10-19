@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
@@ -250,6 +251,13 @@ class ProfileScreenState extends State<ProfileScreen>
   late ScrollController _scrollController;
   late PageController _avatarPageController;
   int _currentAvatarIndex = 0;
+
+  final FocusNode _keyboardFocusNode = FocusNode();
+  Timer? _wheelSnapTimer;
+  double _lastWheelDy = 0.0;
+  double _horizontalWheelAccum = 0.0;
+  DateTime? _lastHorizontalSwitchTime;
+  PointerDeviceKind _lastPointerKind = PointerDeviceKind.touch;
 
   bool get _canEditGroupOrChannel =>
       (_isGroup || _isChannel) && (_myRole == 'owner' || _myRole == 'admin');
@@ -501,6 +509,8 @@ class ProfileScreenState extends State<ProfileScreen>
 
   @override
   void dispose() {
+    _wheelSnapTimer?.cancel();
+    _keyboardFocusNode.dispose();
     if (_isSelf) {
       AvatarSyncService().removeListener(_onAvatarSyncChanged);
     }
@@ -2479,7 +2489,162 @@ class ProfileScreenState extends State<ProfileScreen>
     });
   }
 
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) return;
+    if (_isAnyMenuOpen) {
+      _closeAllMenus();
+      return;
+    }
+
+    final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+    final dx = isShiftPressed && event.scrollDelta.dx == 0.0
+        ? event.scrollDelta.dy
+        : event.scrollDelta.dx;
+    final dy = isShiftPressed && event.scrollDelta.dx == 0.0
+        ? 0.0
+        : event.scrollDelta.dy;
+
+    if (dx.abs() > dy.abs() && dx.abs() > 0.5) {
+      _handleHorizontalWheelDelta(dx);
+      return;
+    }
+
+    if (dy == 0.0) return;
+    _scrollByMouseDelta(dy);
+  }
+
+  void _handlePointerPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    if (_isAnyMenuOpen) {
+      _closeAllMenus();
+      return;
+    }
+    final dx = -event.panDelta.dx;
+    final dy = -event.panDelta.dy;
+    if (dx.abs() > dy.abs() * 1.3 && dx.abs() > 1.0) {
+      _handleHorizontalWheelDelta(dx);
+      return;
+    }
+    if (dy != 0.0) {
+      _scrollByMouseDelta(dy);
+    }
+  }
+
+  void _scrollByMouseDelta(double dy) {
+    if (!_scrollController.hasClients) return;
+    _wheelSnapTimer?.cancel();
+    _lastWheelDy = dy;
+
+    final currentScroll = _scrollController.offset;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final target = (currentScroll + dy).clamp(0.0, maxScroll);
+    if ((target - currentScroll).abs() > 0.01) {
+      _scrollController.jumpTo(target);
+    }
+
+    _wheelSnapTimer =
+        Timer(const Duration(milliseconds: 200), _snapHeaderAfterWheel);
+  }
+
+  void _snapHeaderAfterWheel() {
+    if (!mounted || !_scrollController.hasClients || _isPointerDown) return;
+    final currentOffset = _scrollController.offset;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final snapThreshold = math.min(_headerCollapseSnapExtent, maxScroll);
+
+    if (snapThreshold > 1.0 &&
+        currentOffset > 0.5 &&
+        currentOffset < snapThreshold - 0.5) {
+      final double target;
+      if (_lastWheelDy > 20.0 && currentOffset >= snapThreshold * 0.22) {
+        target = snapThreshold;
+      } else if (_lastWheelDy < -20.0 &&
+          currentOffset <= snapThreshold * 0.78) {
+        target = 0.0;
+      } else {
+        target = currentOffset >= snapThreshold * 0.45 ? snapThreshold : 0.0;
+      }
+      if ((target - currentOffset).abs() > 0.5) {
+        final durationMs =
+            (200 + (target - currentOffset).abs() * 0.40).clamp(200.0, 420.0);
+        _scrollController.animateTo(
+          target,
+          duration: Duration(milliseconds: durationMs.round()),
+          curve: Curves.decelerate,
+        );
+      }
+    }
+  }
+
+  void _handleHorizontalWheelDelta(double dx) {
+    final now = DateTime.now();
+    if (_lastHorizontalSwitchTime != null &&
+        now.difference(_lastHorizontalSwitchTime!).inMilliseconds < 280) {
+      return;
+    }
+    if ((_horizontalWheelAccum > 0 && dx < 0) ||
+        (_horizontalWheelAccum < 0 && dx > 0)) {
+      _horizontalWheelAccum = 0.0;
+    }
+    _horizontalWheelAccum += dx;
+    if (_horizontalWheelAccum.abs() >= 36.0) {
+      final sections = _buildSections(context.l10n);
+      final safeIdx = _selectedSectionIndex.clamp(
+          0, math.max<int>(0, sections.length - 1));
+      if (_horizontalWheelAccum > 0 && safeIdx < sections.length - 1) {
+        _lastHorizontalSwitchTime = now;
+        _horizontalWheelAccum = 0.0;
+        HapticUtils.selection();
+        _selectSection(safeIdx + 1);
+      } else if (_horizontalWheelAccum < 0 && safeIdx > 0) {
+        _lastHorizontalSwitchTime = now;
+        _horizontalWheelAccum = 0.0;
+        HapticUtils.selection();
+        _selectSection(safeIdx - 1);
+      }
+    }
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (ModalRoute.of(context)?.isCurrent != true) {
+      return KeyEventResult.ignored;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      if (_isAnyMenuOpen) {
+        _closeAllMenus();
+      } else {
+        Navigator.maybePop(context);
+      }
+      return KeyEventResult.handled;
+    }
+
+    final sections = _buildSections(context.l10n);
+    final safeIdx =
+        _selectedSectionIndex.clamp(0, math.max<int>(0, sections.length - 1));
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      if (safeIdx > 0) {
+        HapticUtils.selection();
+        _selectSection(safeIdx - 1);
+        return KeyEventResult.handled;
+      }
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      if (safeIdx < sections.length - 1) {
+        HapticUtils.selection();
+        _selectSection(safeIdx + 1);
+        return KeyEventResult.handled;
+      }
+    }
+
+    return KeyEventResult.ignored;
+  }
+
   void _handleVerticalDragStart(DragStartDetails details) {
+    if (details.kind != null) {
+      _lastPointerKind = details.kind!;
+    }
+    _wheelSnapTimer?.cancel();
     if (_isAnyMenuOpen) {
       _ignoreDragForMenuDismiss = true;
       _closeAllMenus();
@@ -2577,6 +2742,10 @@ class ProfileScreenState extends State<ProfileScreen>
         if (remainingDy <= 0.01) {
           return;
         }
+      }
+
+      if (_lastPointerKind == PointerDeviceKind.mouse) {
+        return;
       }
 
       if (_isAvatarExpanded) {
@@ -3190,12 +3359,21 @@ class ProfileScreenState extends State<ProfileScreen>
           body: _isLoading
               ? const Center(
                   child: CircularProgressIndicator(color: Color(0xFF0088CC)))
-              : GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onVerticalDragStart: _handleVerticalDragStart,
-                  onVerticalDragUpdate: _handleVerticalDragUpdate,
-                  onVerticalDragEnd: _handleVerticalDragEnd,
-                  child: Stack(
+              : Focus(
+                  focusNode: _keyboardFocusNode,
+                  autofocus: true,
+                  onKeyEvent: _handleKeyEvent,
+                  child: Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (e) => _lastPointerKind = e.kind,
+                    onPointerSignal: _handlePointerSignal,
+                    onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onVerticalDragStart: _handleVerticalDragStart,
+                      onVerticalDragUpdate: _handleVerticalDragUpdate,
+                      onVerticalDragEnd: _handleVerticalDragEnd,
+                      child: Stack(
                     key: _profileStackKey,
                     children: [
                       // 1. Основной адаптивный фон экрана
@@ -3675,6 +3853,8 @@ class ProfileScreenState extends State<ProfileScreen>
                     ],
                   ),
                 ),
+              ),
+            ),
         ),
       ),
     );
