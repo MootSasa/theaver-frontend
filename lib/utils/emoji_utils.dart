@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
@@ -24,6 +25,10 @@ class EmojiUtils {
 
   /// Loads and registers the Apple Emoji font from assets.
   static Future<void> loadAppleEmojiFont() async {
+    if (kIsWeb) {
+      // Skip downloading the 44 MB AppleColorEmoji.ttf into WebAssembly memory on Web
+      return;
+    }
     debugPrint('DEBUG: EmojiUtils.loadAppleEmojiFont() started from assets');
     if (isFontLoaded.value || isFontLoading.value) {
       return;
@@ -48,7 +53,7 @@ class EmojiUtils {
   }
 
   /// The font family name to use in TextStyle.fontFamilyFallback
-  static List<String> get fontFallbacks => [_fontFamily];
+  static List<String> get fontFallbacks => kIsWeb ? const [] : [_fontFamily];
 
   /// Returns the top 7 most frequent emojis for reactions.
   static List<String> getFrequentEmojis() {
@@ -73,7 +78,7 @@ class EmojiUtils {
       emoji,
       style: (fallbackStyle ?? const TextStyle()).copyWith(
         fontSize: size,
-        fontFamily: _fontFamily,
+        fontFamily: kIsWeb ? null : _fontFamily,
       ),
     );
   }
@@ -91,7 +96,7 @@ class EmojiUtils {
             TextSpan(
               text: emoji,
               style: style.copyWith(
-                fontFamily: _fontFamily,
+                fontFamily: kIsWeb ? null : _fontFamily,
                 fontSize: (style.fontSize ?? 14.0),
               ),
             ),

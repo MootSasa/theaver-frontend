@@ -152,8 +152,13 @@ class AppConfig {
     if (_customApiUrl != null && _customApiUrl!.isNotEmpty) {
       return _customApiUrl!;
     }
-    if (kIsWeb && _webDiscoveredApiUrl != null && _webDiscoveredApiUrl!.isNotEmpty) {
-      return _webDiscoveredApiUrl!;
+    if (kIsWeb) {
+      if (_webDiscoveredApiUrl == null) {
+        _discoverWebUrls();
+      }
+      if (_webDiscoveredApiUrl != null && _webDiscoveredApiUrl!.isNotEmpty) {
+        return _webDiscoveredApiUrl!;
+      }
     }
     if (envApiUrl.isNotEmpty) {
       return _cleanUrl(envApiUrl)!;
@@ -169,8 +174,13 @@ class AppConfig {
     if (_customApiUrl != null && _customApiUrl!.isNotEmpty) {
       return deriveWsUrl(_customApiUrl!);
     }
-    if (kIsWeb && _webDiscoveredWsUrl != null && _webDiscoveredWsUrl!.isNotEmpty) {
-      return _webDiscoveredWsUrl!;
+    if (kIsWeb) {
+      if (_webDiscoveredWsUrl == null) {
+        _discoverWebUrls();
+      }
+      if (_webDiscoveredWsUrl != null && _webDiscoveredWsUrl!.isNotEmpty) {
+        return _webDiscoveredWsUrl!;
+      }
     }
     if (envWsUrl.isNotEmpty) {
       return _cleanUrl(envWsUrl)!;
@@ -189,8 +199,13 @@ class AppConfig {
     if (_customApiUrl != null && _customApiUrl!.isNotEmpty) {
       return deriveStorageUrl(_customApiUrl!);
     }
-    if (kIsWeb && _webDiscoveredStorageUrl != null && _webDiscoveredStorageUrl!.isNotEmpty) {
-      return _webDiscoveredStorageUrl!;
+    if (kIsWeb) {
+      if (_webDiscoveredStorageUrl == null) {
+        _discoverWebUrls();
+      }
+      if (_webDiscoveredStorageUrl != null && _webDiscoveredStorageUrl!.isNotEmpty) {
+        return _webDiscoveredStorageUrl!;
+      }
     }
     if (envStorageUrl.isNotEmpty) {
       return _cleanUrl(envStorageUrl)!;
@@ -206,8 +221,13 @@ class AppConfig {
     if (_customWebUrl != null && _customWebUrl!.isNotEmpty) {
       return _customWebUrl!;
     }
-    if (kIsWeb && _webDiscoveredWebUrl != null && _webDiscoveredWebUrl!.isNotEmpty) {
-      return _webDiscoveredWebUrl!;
+    if (kIsWeb) {
+      if (_webDiscoveredWebUrl == null) {
+        _discoverWebUrls();
+      }
+      if (_webDiscoveredWebUrl != null && _webDiscoveredWebUrl!.isNotEmpty) {
+        return _webDiscoveredWebUrl!;
+      }
     }
     if (envWebUrl.isNotEmpty) {
       return _cleanUrl(envWebUrl)!;
@@ -258,8 +278,8 @@ class AppConfig {
     try {
       final uri = Uri.parse(trimmed.contains('://') ? trimmed : 'http://$trimmed');
       
-      // Check for production domain pattern: api.theaver.app -> storage.theaver.app
-      if (uri.host == 'api.theaver.app' || uri.host == 'api.theaver.app') {
+      // Check for production domain pattern: api.theaver.app / theaver.app -> storage.theaver.app
+      if (uri.host == 'api.theaver.app' || uri.host == 'theaver.app' || uri.host == 'app.theaver.app') {
         return '${uri.scheme}://storage.theaver.app';
       }
       if (uri.host.startsWith('api.')) {
@@ -360,17 +380,25 @@ class AppConfig {
       final host = baseUri.host.isNotEmpty ? baseUri.host : 'localhost';
       final port = baseUri.hasPort ? baseUri.port : (scheme == 'https' ? 443 : 80);
       final isStandardPort = (scheme == 'https' && port == 443) || (scheme == 'http' && port == 80);
+      final wsScheme = scheme == 'https' ? 'wss' : 'ws';
+      final origin = '$scheme://$host${isStandardPort ? '' : ':$port'}';
 
-      _webDiscoveredWebUrl = '$scheme://$host${isStandardPort ? '' : ':$port'}';
+      _webDiscoveredWebUrl = origin;
 
-      if (host == 'theaver.app' || host == 'app.theaver.app' || host == 'theaver.app' || host == 'app.theaver.app') {
+      if (host == 'theaver.app' || host == 'app.theaver.app') {
+        // Use same-origin API and WebSocket (proxied by Nginx at /api/ and /api/ws)
+        // to eliminate cross-origin CORS preflight failures and subdomain blocking.
+        _webDiscoveredApiUrl = origin;
+        _webDiscoveredWsUrl = '$wsScheme://$host${isStandardPort ? '' : ':$port'}/api/ws';
+        _webDiscoveredStorageUrl = defaultProdStorageBaseUrl;
+        _webDiscoveredWebUrl = origin;
+      } else if (host == 'api.theaver.app') {
         _webDiscoveredApiUrl = defaultProdApiBaseUrl;
         _webDiscoveredWsUrl = defaultProdWsBaseUrl;
         _webDiscoveredStorageUrl = defaultProdStorageBaseUrl;
         _webDiscoveredWebUrl = defaultProdWebBaseUrl;
       } else {
         // LAN IP or localhost
-        final wsScheme = scheme == 'https' ? 'wss' : 'ws';
         _webDiscoveredApiUrl = '$scheme://$host:8080';
         _webDiscoveredWsUrl = '$wsScheme://$host:8080/api/ws';
         _webDiscoveredStorageUrl = '$scheme://$host:9000';
