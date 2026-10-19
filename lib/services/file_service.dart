@@ -702,6 +702,18 @@ class UploadResult {
 
   int get fileSize => size;
 
+  Map<String, dynamic> toMediaPayload() {
+    return {
+      if (fileId > 0) 'file_id': fileId,
+      if (size > 0) 'file_size': size,
+      if (thumbBase64 != null && thumbBase64!.isNotEmpty) 'thumb_base64': thumbBase64,
+      if (thumbUrl != null && thumbUrl!.isNotEmpty) 'thumb_url': thumbUrl,
+      if (width > 0) 'width': width,
+      if (height > 0) 'height': height,
+      if (duration > 0) 'duration': duration,
+    };
+  }
+
   factory UploadResult.fromJson(Map<String, dynamic> json) {
     return UploadResult(
       fileId: json['file_id'] ?? 0,
