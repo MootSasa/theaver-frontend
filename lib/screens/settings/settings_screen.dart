@@ -913,9 +913,10 @@ class _SettingsScreenState extends State<SettingsScreen>
         debugPrint('_clearAllData: error clearing AppDatabase: $e');
       }
 
-      // 4. Clear disk and image cache
+      // 4. Clear disk, image cache, and permanent user directories (avatars, wallpapers)
       try {
         await CacheService().clearCache();
+        await CacheService().clearAllPermanentUserDirs();
       } catch (e) {
         debugPrint('_clearAllData: error clearing CacheService: $e');
       }

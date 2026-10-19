@@ -1,4 +1,5 @@
 import 'dart:ui' show ImageFilter;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
@@ -45,7 +46,7 @@ class _StorageScreenState extends State<StorageScreen> {
   String _keepMediaPeriod = 'forever';
   int _maxCacheSizeBytes = 0;
 
-  // Real storage data from server
+  // Real storage data from server / local per-chat cache
   String _totalUsed = '0 B';
   int _totalUsedBytes = 0;
   List<_MediaTypeStorage> _byType = [];
@@ -67,6 +68,28 @@ class _StorageScreenState extends State<StorageScreen> {
     _loadData();
   }
 
+  Future<void> _loadLocalChatStats() async {
+    if (kIsWeb) return;
+    try {
+      final localChats = await _cacheService.getLocalChatCacheStats();
+      if (mounted) {
+        setState(() {
+          _byChat = localChats
+              .map((c) => _ChatStorage(
+                    chatId: c.chatId,
+                    chatName: c.chatName,
+                    sizeBytes: c.sizeBytes,
+                    fileCount: c.fileCount,
+                    sizeHuman: c.sizeHuman,
+                  ))
+              .toList();
+        });
+      }
+    } catch (e) {
+      debugPrint('StorageScreen: _loadLocalChatStats error: $e');
+    }
+  }
+
   Future<void> _loadData() async {
     _autoDownloadSettings = _settingsService.storageSettings;
     try {
@@ -77,6 +100,7 @@ class _StorageScreenState extends State<StorageScreen> {
       } else {
         _cacheBreakdown = await _cacheService.getCacheStats();
       }
+      await _loadLocalChatStats();
     } catch (e) {
       debugPrint('StorageScreen: cacheService load error: $e');
     }
@@ -104,10 +128,12 @@ class _StorageScreenState extends State<StorageScreen> {
                   ?.map((e) => _MediaTypeStorage.fromJson(e))
                   .toList() ??
               [];
-          _byChat = (response.data['by_chat'] as List?)
-                  ?.map((e) => _ChatStorage.fromJson(e))
-                  .toList() ??
-              [];
+          if (kIsWeb) {
+            _byChat = (response.data['by_chat'] as List?)
+                    ?.map((e) => _ChatStorage.fromJson(e))
+                    .toList() ??
+                [];
+          }
         });
       }
     } catch (e) {
@@ -193,6 +219,7 @@ class _StorageScreenState extends State<StorageScreen> {
 
       // 3. Refresh statistics
       final updatedBreakdown = await _cacheService.getCacheStats();
+      await _loadLocalChatStats();
       await _loadStorageInfo();
 
       if (mounted) {
@@ -224,24 +251,38 @@ class _StorageScreenState extends State<StorageScreen> {
     setState(() => _isClearing = true);
 
     try {
-      final token = await AuthService.getToken();
-      final dio = Dio();
-      await dio.post(
-        '${AppConfig.baseUrl}/api/settings/storage/clear',
-        data: {'chat_id': chatId},
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
-      );
+      // 1. Clear local cached media files for this chat
+      final freed = await _cacheService.clearChatCache(chatId);
 
-      // Also refresh local cache
+      // 2. Notify server (non-blocking)
+      try {
+        final token = await AuthService.getToken();
+        if (token != null) {
+          final dio = Dio();
+          await dio.post(
+            '${AppConfig.baseUrl}/api/settings/storage/clear',
+            data: {'chat_id': chatId},
+            options: Options(headers: {'Authorization': 'Bearer $token'}),
+          );
+        }
+      } catch (e) {
+        debugPrint('StorageScreen: server chat clear error: $e');
+      }
+
+      // 3. Refresh local cache breakdown and per-chat cache list
       final updatedBreakdown = await _cacheService.getCacheStats();
+      await _loadLocalChatStats();
       await _loadStorageInfo();
 
       if (mounted) {
         setState(() {
           _cacheBreakdown = updatedBreakdown;
         });
+        final freedStr = CacheService.formatBytes(freed);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(l10n.translate('storage_clear_success'))),
+          SnackBar(
+            content: Text('${l10n.translate('storage_clear_success')} ($freedStr)'),
+          ),
         );
       }
     } catch (e) {
@@ -277,6 +318,7 @@ class _StorageScreenState extends State<StorageScreen> {
   }
 
   Future<void> _selectDownloadPath() async {
+    if (kIsWeb) return;
     final l10n = context.l10n;
     String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
     if (selectedDirectory != null) {
@@ -427,16 +469,17 @@ class _StorageScreenState extends State<StorageScreen> {
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // Use local cache breakdown if available, else server stats
-    final hasLocal = _cacheBreakdown.totalBytes > 0;
-    final totalBytes = hasLocal ? _cacheBreakdown.totalBytes : _totalUsedBytes;
-    final totalHuman = hasLocal ? _cacheBreakdown.totalHuman : _totalUsed;
+    // On native platforms (!kIsWeb), always show real local device cache (even when 0 B after clearing).
+    // On Web (kIsWeb), show server cloud storage breakdown.
+    const useLocal = !kIsWeb;
+    final totalBytes = useLocal ? _cacheBreakdown.totalBytes : _totalUsedBytes;
+    final totalHuman = useLocal ? _cacheBreakdown.totalHuman : _totalUsed;
 
-    final pBytes = hasLocal ? _cacheBreakdown.photos.sizeBytes : _findServerTypeBytes('photos');
-    final vBytes = hasLocal ? _cacheBreakdown.videos.sizeBytes : _findServerTypeBytes('videos');
-    final aBytes = hasLocal ? _cacheBreakdown.audio.sizeBytes : _findServerTypeBytes('audio');
-    final fBytes = hasLocal ? _cacheBreakdown.files.sizeBytes : _findServerTypeBytes('files');
-    final oBytes = hasLocal ? _cacheBreakdown.other.sizeBytes : _findServerTypeBytes('other');
+    final pBytes = useLocal ? _cacheBreakdown.photos.sizeBytes : _findServerTypeBytes('photos');
+    final vBytes = useLocal ? _cacheBreakdown.videos.sizeBytes : _findServerTypeBytes('videos');
+    final aBytes = useLocal ? _cacheBreakdown.audio.sizeBytes : _findServerTypeBytes('audio');
+    final fBytes = useLocal ? _cacheBreakdown.files.sizeBytes : _findServerTypeBytes('files');
+    final oBytes = useLocal ? _cacheBreakdown.other.sizeBytes : _findServerTypeBytes('other');
 
     final child = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -998,18 +1041,20 @@ class _StorageScreenState extends State<StorageScreen> {
         _autoDownloadExpansionTile(l10n, l10n.translate('storage_on_cellular'), cellular: true),
         const Divider(height: 1),
         _autoDownloadExpansionTile(l10n, l10n.translate('storage_on_roaming'), roaming: true),
-        const Divider(height: 1),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(l10n.translate('storage_download_path')),
-          subtitle: Text(
-            _autoDownloadSettings.downloadPath ?? l10n.translate('storage_download_path_default'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+        if (!kIsWeb) ...[
+          const Divider(height: 1),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(l10n.translate('storage_download_path')),
+            subtitle: Text(
+              _autoDownloadSettings.downloadPath ?? l10n.translate('storage_download_path_default'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: const Icon(Icons.folder_open),
+            onTap: _selectDownloadPath,
           ),
-          trailing: const Icon(Icons.folder_open),
-          onTap: _selectDownloadPath,
-        ),
+        ],
       ],
     );
 

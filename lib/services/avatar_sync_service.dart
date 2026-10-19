@@ -109,7 +109,7 @@ class AvatarSyncService extends ChangeNotifier {
     return validList;
   }
 
-  /// Удаляет аватар из локальной истории и очереди.
+  /// Удаляет аватар из локальной истории, очереди и с диска (если это локальный файл).
   Future<void> removeAvatar(String userId, String avatarUrlOrPath) async {
     final prefs = await SharedPreferences.getInstance();
     final pendingList = prefs.getStringList(_pendingKey(userId)) ?? [];
@@ -120,7 +120,41 @@ class AvatarSyncService extends ChangeNotifier {
     if (historyList.remove(avatarUrlOrPath)) {
       await prefs.setStringList(_historyKey(userId), historyList);
     }
+    if (!kIsWeb &&
+        !avatarUrlOrPath.startsWith('http://') &&
+        !avatarUrlOrPath.startsWith('https://') &&
+        !avatarUrlOrPath.startsWith('data:') &&
+        avatarUrlOrPath.contains('/avatars/')) {
+      try {
+        final f = File(avatarUrlOrPath);
+        if (await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
+    }
     notifyListeners();
+  }
+
+  /// Очищает все локальные файлы и ключи аватарок конкретного пользователя (при выходе из аккаунта).
+  Future<void> clearUserAvatars(String userId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_pendingKey(userId));
+      await prefs.remove(_historyKey(userId));
+      if (!kIsWeb) {
+        final appDir = await getApplicationDocumentsDirectory();
+        final avatarsDir = Directory('${appDir.path}/avatars');
+        if (await avatarsDir.exists()) {
+          await for (final entity in avatarsDir.list()) {
+            if (entity is File && entity.path.contains('avatar_${userId}_')) {
+              try {
+                await entity.delete();
+              } catch (_) {}
+            }
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   /// Последовательно синхронизирует все отложенные локальные аватары с сервером.

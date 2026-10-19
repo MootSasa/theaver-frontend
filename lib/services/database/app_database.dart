@@ -904,6 +904,20 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// Получить все сообщения с прикреплёнными файлами (для подсчёта и очистки локального кэша по чатам)
+  Future<List<DbMessage>> getMessagesWithFiles({String? chatId}) async {
+    await ensureInitialized();
+    final stmt = select(messages)
+      ..where((t) {
+        final hasFile = t.fileUrl.isNotNull() & t.fileUrl.isNotValue('');
+        if (chatId != null && chatId.isNotEmpty) {
+          return t.chatId.equals(chatId) & hasFile;
+        }
+        return hasFile;
+      });
+    return stmt.get();
+  }
+
   /// Очистить все данные локальной базы (сообщения, чаты, состояние синхронизации, карты)
   Future<void> clearAllData() async {
     await ensureInitialized();

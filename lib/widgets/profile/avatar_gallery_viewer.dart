@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart' hide FileService;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'package:share_plus/share_plus.dart';
@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 
 import '../../l10n/app_localizations.dart';
+import '../../services/file_service.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/haptic_utils.dart';
 
@@ -173,9 +174,9 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
         throw Exception('Unable to load image');
       }
 
-      // Сохраняем во внешнюю директорию Загрузок / Изображений
-      final dir = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
-      final downloadsDir = Directory('${dir.path}/Download');
+      // Сохраняем в пользовательскую директорию Загрузок
+      final downloadDirPath = await FileService().getDefaultDownloadDirectory();
+      final downloadsDir = Directory(downloadDirPath);
       if (!await downloadsDir.exists()) {
         await downloadsDir.create(recursive: true);
       }

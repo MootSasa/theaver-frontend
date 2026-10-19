@@ -215,22 +215,22 @@ class AuthService {
         await accountManager.clearCurrentAccount();
       }
 
-      // 3. Clear local SQLite database and media cache
+      // 3. Clear local SQLite database, user-scoped permanent files, and media cache
+      if (currentUserId != null) {
+        await CacheService().clearUserPermanentData(currentUserId);
+      }
       try {
         if (accountManager.accounts.isEmpty) {
           await AppDatabase.deleteAllDatabases();
+          await CacheService().clearCache();
+          await CacheService().clearAllPermanentUserDirs();
         } else if (currentUserId != null) {
           await AppDatabase.removeUserDatabase(currentUserId);
         } else {
           await AppDatabase().clearAllData();
         }
       } catch (e) {
-        debugPrint('Logout: error clearing AppDatabase: $e');
-      }
-      try {
-        await CacheService().clearCache();
-      } catch (e) {
-        debugPrint('Logout: error clearing CacheService: $e');
+        debugPrint('Logout: error clearing local storage: $e');
       }
 
       // 4. Remote network cleanup in background with short timeout so it never blocks UI
