@@ -544,6 +544,64 @@ jobs:
           path: dist/ios/*.ipa
           retention-days: 7
 
+  build-web:
+    name: 🌐 Build Web SPA Bundle
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Inject Version into pubspec.yaml
+        run: |
+          python3 -c "import re; p='pubspec.yaml'; s=open(p,'r',encoding='utf-8').read(); open(p,'w',encoding='utf-8').write(re.sub(r'version:\s*[^\n]+', 'version: ${{ needs.prepare-release.outputs.clean_version }}+${{ needs.prepare-release.outputs.build_number }}', s))"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.9'
+          cache: true
+
+      - name: Install dependencies & patch web plugins
+        run: |
+          flutter pub get
+          PKG_DIR=$(find "$HOME/.pub-cache" -type d -name "ios_color_picker-*" 2>/dev/null | head -n 1 || true)
+          if [ -n "$PKG_DIR" ] && [ -d "$PKG_DIR/lib" ] && [ ! -f "$PKG_DIR/lib/ios_color_picker_web.dart" ]; then
+            printf "import 'package:flutter_web_plugins/flutter_web_plugins.dart';\nclass IosColorPickerWeb {\n  static void registerWith(Registrar registrar) {}\n}\n" > "$PKG_DIR/lib/ios_color_picker_web.dart"
+          fi
+          for yaml in $(find "$HOME/.pub-cache" -type f -path "*/liquid_glass_renderer*/pubspec.yaml" 2>/dev/null || true); do
+            sed -i '/^flutter:/,$d' "$yaml"
+          done
+
+      - name: Build & Package Flutter Web Bundle
+        run: |
+          VER="${{ needs.prepare-release.outputs.version }}"
+          BUILD="${{ needs.prepare-release.outputs.build_number }}"
+          CH="${{ needs.prepare-release.outputs.channel }}"
+          BDATE="$(date +'%d.%m.%Y')"
+          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE"
+
+          echo "🌐 Building Flutter Web bundle (v$VER #$BUILD, channel: $CH)..."
+          flutter build web --release --no-web-resources-cdn $DEFINES
+
+          rm -f build/web/assets/assets/fonts/AppleColorEmoji*
+          if [ -f build/web/flutter_bootstrap.js ]; then
+            sed -i 's/serviceWorkerSettings:/_disabledServiceWorkerSettings:/g' build/web/flutter_bootstrap.js
+          fi
+          printf 'self.addEventListener("install",function(e){self.skipWaiting()});self.addEventListener("activate",function(e){e.waitUntil(caches.keys().then(function(k){return Promise.all(k.map(function(c){return caches.delete(c)}))}).then(function(){return self.registration.unregister()}).then(function(){return self.clients.matchAll()}).then(function(c){c.forEach(function(cl){if(cl.url&&"navigate"in cl){cl.navigate(cl.url)}})}))});\n' > build/web/flutter_service_worker.js
+
+          mkdir -p dist/web
+          tar -czf "dist/web/theaver-v${VER}-${CH}-web.tar.gz" -C build/web .
+          echo "Prepared Web bundle:"
+          ls -lh dist/web/
+
+      - name: Upload Web Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-binaries
+          path: dist/web/*.tar.gz
+          retention-days: 7
+
   publish-and-deploy:
     name: 🚀 Deploy to Storage & Create GitHub Release
     needs:
@@ -553,6 +611,7 @@ jobs:
       - build-linux
       - build-macos
       - build-ios
+      - build-web
     if: |
       always() &&
       needs.prepare-release.result == 'success' &&
@@ -564,7 +623,8 @@ jobs:
           needs.build-windows.result == 'success' ||
           needs.build-linux.result == 'success' ||
           needs.build-macos.result == 'success' ||
-          needs.build-ios.result == 'success'
+          needs.build-ios.result == 'success' ||
+          needs.build-web.result == 'success'
         ))
       )
     runs-on: ubuntu-latest
@@ -618,6 +678,13 @@ jobs:
         continue-on-error: true
         with:
           name: ios-binaries
+          path: dist/
+
+      - name: Download Web Binaries
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: web-binaries
           path: dist/
 
       - name: List Artifacts to Deploy

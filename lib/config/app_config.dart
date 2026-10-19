@@ -110,7 +110,7 @@ class AppConfig {
 
       if (kIsWeb) {
         final savedChannel = prefs.getString('update_channel');
-        await syncWebVersionFromServer(channel: savedChannel);
+        await syncWebVersionFromServer(channel: webDomainChannel ?? savedChannel);
       }
 
       _initialized = true;
@@ -286,7 +286,11 @@ class AppConfig {
       final uri = Uri.parse(trimmed.contains('://') ? trimmed : 'http://$trimmed');
       
       // Check for production domain pattern: api.theaver.app / theaver.app -> storage.theaver.app
-      if (uri.host == 'api.theaver.app' || uri.host == 'theaver.app' || uri.host == 'app.theaver.app') {
+      if (uri.host == 'api.theaver.app' ||
+          uri.host == 'theaver.app' ||
+          uri.host == 'app.theaver.app' ||
+          uri.host == 'beta.theaver.app' ||
+          uri.host == 'alpha.theaver.app') {
         return '${uri.scheme}://storage.theaver.app';
       }
       if (uri.host.startsWith('api.')) {
@@ -392,7 +396,10 @@ class AppConfig {
 
       _webDiscoveredWebUrl = origin;
 
-      if (host == 'theaver.app' || host == 'app.theaver.app') {
+      if (host == 'theaver.app' ||
+          host == 'app.theaver.app' ||
+          host == 'beta.theaver.app' ||
+          host == 'alpha.theaver.app') {
         // Use same-origin API and WebSocket (proxied by Nginx at /api/ and /api/ws)
         // to eliminate cross-origin CORS preflight failures and subdomain blocking.
         _webDiscoveredApiUrl = origin;
@@ -466,10 +473,41 @@ class AppConfig {
   /// Dynamic application build number (from PackageInfo / server if available, otherwise appBuildNumber)
   static int get currentBuildNumber => _currentBuildNumber;
 
+  /// Returns the Web release channel enforced by the current domain on Flutter Web
+  /// (`alpha.theaver.app` -> `'alpha'`, `beta.theaver.app` -> `'beta'`, `theaver.app` -> `'stable'`),
+  /// or `null` when running on `localhost` / custom dev hosts.
+  static String? get webDomainChannel {
+    if (!kIsWeb) return null;
+    final host = Uri.base.host.toLowerCase();
+    if (host.startsWith('alpha.')) return 'alpha';
+    if (host.startsWith('beta.')) return 'beta';
+    if (host == 'theaver.app' || host == 'app.theaver.app') return 'stable';
+    return null;
+  }
+
+  /// Returns the canonical Web subdomain URL for a given release channel.
+  static String getWebChannelUrl(String channel) {
+    switch (channel.toLowerCase().trim()) {
+      case 'alpha':
+        return 'https://alpha.theaver.app';
+      case 'beta':
+        return 'https://beta.theaver.app';
+      default:
+        return 'https://theaver.app';
+    }
+  }
+
   /// Synchronizes the current Web version, build number, and build date from the backend server.
   static Future<void> syncWebVersionFromServer({String? channel}) async {
+    // If this Web bundle was compiled by CI with an explicit APP_VERSION and is served on a production subdomain,
+    // keep its exact compiled version metadata.
+    if (appVersion != '1.0.0' && appVersion.isNotEmpty && webDomainChannel != null) {
+      return;
+    }
     try {
-      final ch = (channel != null && channel.isNotEmpty) ? channel : 'beta';
+      final ch = (channel != null && channel.isNotEmpty)
+          ? channel
+          : (webDomainChannel ?? 'beta');
       final apiBase = baseUrl.replaceAll(RegExp(r'/+$'), '');
       final uri = Uri.parse('$apiBase/api/app/check-update?platform=web&channel=$ch');
       final response = await http.get(uri).timeout(const Duration(seconds: 3));

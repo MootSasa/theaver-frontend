@@ -37,6 +37,7 @@ import '../../services/websocket_service.dart';
 import '../../services/notification_service.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../services/update_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'widgets/update_dialog.dart';
 
 /// Экран настроек.
@@ -165,7 +166,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                 const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Stable (Стабильный)', style: TextStyle(fontWeight: FontWeight.w600)),
+                    Text(
+                      kIsWeb ? 'Stable — theaver.app' : 'Stable (Стабильный)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                     Text('Рекомендуется для всех пользователей', style: TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
                 ),
@@ -186,7 +190,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                 const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Beta (Бета-тестирование)', style: TextStyle(fontWeight: FontWeight.w600)),
+                    Text(
+                      kIsWeb ? 'Beta — beta.theaver.app' : 'Beta (Бета-тестирование)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                     Text('Новые функции до официального релиза', style: TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
                 ),
@@ -207,7 +214,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                 const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Alpha / Dev (Разработка)', style: TextStyle(fontWeight: FontWeight.w600)),
+                    Text(
+                      kIsWeb ? 'Alpha — alpha.theaver.app' : 'Alpha / Dev (Разработка)',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                     Text('Ранние сборки для тестирования', style: TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
                 ),
@@ -221,6 +231,11 @@ class _SettingsScreenState extends State<SettingsScreen>
     if (selected != null && selected != _updateChannel) {
       await AppUpdateService.instance.setChannel(selected);
       if (kIsWeb) {
+        if (AppConfig.webDomainChannel != null) {
+          final targetUrl = AppConfig.getWebChannelUrl(selected);
+          await launchUrl(Uri.parse(targetUrl), webOnlyWindowName: '_self');
+          return;
+        }
         await AppConfig.syncWebVersionFromServer(channel: selected);
       }
       if (mounted) {

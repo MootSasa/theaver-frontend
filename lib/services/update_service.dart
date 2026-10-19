@@ -117,6 +117,10 @@ class AppUpdateService {
 
   /// Получить выбранный канал обновлений ('stable', 'beta', 'alpha')
   Future<String> getChannel() async {
+    final domainChannel = AppConfig.webDomainChannel;
+    if (domainChannel != null && domainChannel.isNotEmpty) {
+      return domainChannel;
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
       final saved = prefs.getString(prefChannelKey);
