@@ -89,11 +89,11 @@ jobs:
           Write-Host "Executing: flutter build windows --${{ inputs.build_type }} $extraArgs"
           flutter build windows --${{ inputs.build_type }} $extraArgs
 
-      - name: Package Windows Bundle into ZIP
+      - name: Package Windows Portable ZIP & Setup Installer
         shell: pwsh
         run: |
           $buildMode = if ("${{ inputs.build_type }}" -eq "release") { "Release" } else { "Debug" }
-          $projectDir = "${{ steps.locate_project.outputs.path }}"
+          $projectDir = (Resolve-Path "${{ steps.locate_project.outputs.path }}").Path
           $releaseDir = Join-Path $projectDir "build/windows/x64/runner/$buildMode"
           $zipOutput = "theaver-windows-${{ inputs.build_type }}-x64.zip"
           
@@ -105,11 +105,28 @@ jobs:
           Write-Host "Compressing $releaseDir into $zipOutput..."
           Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOutput -Force
           Write-Host "Created $zipOutput"
+          
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $issPath = Join-Path $projectDir "windows/installer/setup.iss"
+          if ((Test-Path $iscc) -and (Test-Path $issPath)) {
+            $outDir = (Get-Location).Path
+            $setupBaseName = "theaver-windows-${{ inputs.build_type }}-x64-setup"
+            $iconPath = Join-Path $projectDir "windows/runner/resources/app_icon.ico"
+            & $iscc `
+              "/DMySourceDir=$releaseDir" `
+              "/DMyOutputDir=$outDir" `
+              "/DMyOutputBaseFilename=$setupBaseName" `
+              "/DMyIconFile=$iconPath" `
+              $issPath
+          }
 
       - name: Upload Windows x64 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: theaver-windows-${{ inputs.build_type }}-x64
-          path: theaver-windows-${{ inputs.build_type }}-x64.zip
+          path: |
+            theaver-windows-${{ inputs.build_type }}-x64.zip
+            theaver-windows-${{ inputs.build_type }}-x64-setup.exe
           if-no-files-found: error
           retention-days: 30
+

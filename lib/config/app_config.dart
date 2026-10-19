@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -105,6 +107,11 @@ class AppConfig {
           }
         }
       } catch (_) {}
+
+      if (kIsWeb) {
+        final savedChannel = prefs.getString('update_channel');
+        await syncWebVersionFromServer(channel: savedChannel);
+      }
 
       _initialized = true;
       debugPrint('[AppConfig] Initialized - API: $baseUrl, WS: $wsUrl, Storage: $storageUrl, Web: $webBaseUrl, Version: $_currentVersion (#$_currentBuildNumber)');
@@ -445,16 +452,53 @@ class AppConfig {
   static const String _defaultBuildDate = '08.08.2026';
   static const String _envBuildDate = String.fromEnvironment('BUILD_DATE');
 
-  /// Build date (from --dart-define=BUILD_DATE or default)
-  static String get buildDate => _envBuildDate.isNotEmpty ? _envBuildDate : _defaultBuildDate;
-
-  // Runtime values loaded dynamically from PackageInfo (pubspec.yaml / platform)
+  // Runtime values loaded dynamically from PackageInfo (pubspec.yaml / platform) or backend on Web
   static String _currentVersion = appVersion;
   static int _currentBuildNumber = appBuildNumber;
+  static String _currentBuildDate = _envBuildDate.isNotEmpty ? _envBuildDate : _defaultBuildDate;
 
-  /// Dynamic application version (from PackageInfo if available, otherwise appVersion)
+  /// Build date (from --dart-define=BUILD_DATE, server release date on Web, or default)
+  static String get buildDate => _currentBuildDate;
+
+  /// Dynamic application version (from PackageInfo / server if available, otherwise appVersion)
   static String get currentVersion => _currentVersion;
 
-  /// Dynamic application build number (from PackageInfo if available, otherwise appBuildNumber)
+  /// Dynamic application build number (from PackageInfo / server if available, otherwise appBuildNumber)
   static int get currentBuildNumber => _currentBuildNumber;
+
+  /// Synchronizes the current Web version, build number, and build date from the backend server.
+  static Future<void> syncWebVersionFromServer({String? channel}) async {
+    try {
+      final ch = (channel != null && channel.isNotEmpty) ? channel : 'beta';
+      final apiBase = baseUrl.replaceAll(RegExp(r'/+$'), '');
+      final uri = Uri.parse('$apiBase/api/app/check-update?platform=web&channel=$ch');
+      final response = await http.get(uri).timeout(const Duration(seconds: 3));
+      if (response.statusCode == 200 && response.body.isNotEmpty) {
+        final data = jsonDecode(response.body);
+        if (data is Map) {
+          final latestVer = (data['latest_version'] as String?)?.trim() ?? '';
+          final latestBuild = (data['latest_build'] as num?)?.toInt() ?? 0;
+          final updatedAtRaw = (data['updated_at'] as String?)?.trim() ?? '';
+
+          if (latestVer.isNotEmpty && latestVer != '1.0.0') {
+            _currentVersion = latestVer;
+          }
+          if (latestBuild > 0) {
+            _currentBuildNumber = latestBuild;
+          }
+          if (updatedAtRaw.isNotEmpty) {
+            final dt = DateTime.tryParse(updatedAtRaw)?.toLocal();
+            if (dt != null && dt.year > 2020) {
+              final d = dt.day.toString().padLeft(2, '0');
+              final m = dt.month.toString().padLeft(2, '0');
+              _currentBuildDate = '$d.$m.${dt.year}';
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[AppConfig] Web version sync skipped: $e');
+    }
+  }
 }
+

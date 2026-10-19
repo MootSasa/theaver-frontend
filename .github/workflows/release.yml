@@ -237,25 +237,50 @@ jobs:
           $bdate = (Get-Date -Format "dd.MM.yyyy")
           flutter build windows --release --dart-define="APP_VERSION=$ver" --dart-define="APP_BUILD_NUMBER=$build" --dart-define="BUILD_DATE=$bdate"
 
-      - name: Package Windows Bundle into ZIP
+      - name: Package Windows Portable ZIP & Setup Installer
         shell: pwsh
         run: |
           $ver = "${{ needs.prepare-release.outputs.version }}"
           $ch = "${{ needs.prepare-release.outputs.channel }}"
-          $releaseDir = "build/windows/x64/runner/Release"
-          New-Item -ItemType Directory -Force -Path "dist/windows"
-          $zipOutput = "dist/windows/theaver-v${ver}-${ch}-windows-x64.zip"
+          $releaseDir = (Resolve-Path "build/windows/x64/runner/Release").Path
+          New-Item -ItemType Directory -Force -Path "dist/windows" | Out-Null
+          $outDir = (Resolve-Path "dist/windows").Path
+          $zipOutput = Join-Path $outDir "theaver-v${ver}-${ch}-windows-x64.zip"
           
           Write-Host "Compressing $releaseDir into $zipOutput..."
           Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOutput -Force
           Write-Host "Created $zipOutput"
+          
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (Test-Path $iscc) {
+            $setupBaseName = "theaver-v${ver}-${ch}-windows-x64-setup"
+            $iconPath = (Resolve-Path "windows/runner/resources/app_icon.ico").Path
+            Write-Host "Building Windows Setup Installer ($setupBaseName.exe)..."
+            & $iscc `
+              "/DMyAppVersion=$ver" `
+              "/DMySourceDir=$releaseDir" `
+              "/DMyOutputDir=$outDir" `
+              "/DMyOutputBaseFilename=$setupBaseName" `
+              "/DMyIconFile=$iconPath" `
+              "windows/installer/setup.iss"
+            Write-Host "Created Windows Setup Installer in $outDir"
+          } else {
+            Write-Warning "Inno Setup compiler (ISCC.exe) not found, skipping installer build."
+          }
+          Get-ChildItem $outDir
 
       - name: Upload Windows Binaries
         uses: actions/upload-artifact@v4
         with:
           name: windows-binaries
-          path: dist/windows/*.zip
+          path: |
+            dist/windows/*.zip
+            dist/windows/*.exe
           retention-days: 7
+
 
   build-linux:
     name: 🐧 Build Linux x64

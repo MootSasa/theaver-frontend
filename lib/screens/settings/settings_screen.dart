@@ -68,6 +68,10 @@ class _SettingsScreenState extends State<SettingsScreen>
     HapticUtils.tap();
 
     try {
+      if (kIsWeb) {
+        await AppConfig.syncWebVersionFromServer(channel: _updateChannel);
+        if (mounted) setState(() {});
+      }
       final update = await AppUpdateService.instance.checkForUpdate(silent: false);
       if (!mounted) return;
 
@@ -134,6 +138,9 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   Future<void> _loadUpdateChannel() async {
     final ch = await AppUpdateService.instance.getChannel();
+    if (kIsWeb) {
+      await AppConfig.syncWebVersionFromServer(channel: ch);
+    }
     if (mounted) {
       setState(() => _updateChannel = ch);
     }
@@ -213,6 +220,9 @@ class _SettingsScreenState extends State<SettingsScreen>
 
     if (selected != null && selected != _updateChannel) {
       await AppUpdateService.instance.setChannel(selected);
+      if (kIsWeb) {
+        await AppConfig.syncWebVersionFromServer(channel: selected);
+      }
       if (mounted) {
         setState(() => _updateChannel = selected);
         ScaffoldMessenger.of(context).showSnackBar(
