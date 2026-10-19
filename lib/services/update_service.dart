@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:open_file/open_file.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -328,14 +329,20 @@ class AppUpdateService {
     if (kIsWeb) return null;
 
     try {
-      Directory targetDir = await getTemporaryDirectory();
-      if (Platform.isAndroid) {
-        try {
+      Directory targetDir;
+      try {
+        targetDir = await getTemporaryDirectory();
+      } catch (_) {
+        if (Platform.isAndroid) {
           final extDirs = await getExternalCacheDirectories();
           if (extDirs != null && extDirs.isNotEmpty) {
             targetDir = extDirs.first;
+          } else {
+            rethrow;
           }
-        } catch (_) {}
+        } else {
+          rethrow;
+        }
       }
 
       String fileName = 'theaver_update.apk';
@@ -398,6 +405,17 @@ class AppUpdateService {
     }
 
     if (Platform.isAndroid) {
+      try {
+        const channel = MethodChannel('app.theaver.messenger/installer');
+        final res = await channel.invokeMethod<String>('installApk', {
+          'filePath': filePath,
+        });
+        if (res == 'done' || res == 'settings_opened') {
+          return OpenResult(type: ResultType.done, message: res ?? 'done');
+        }
+      } catch (e) {
+        debugPrint('[AppUpdateService] Native installApk channel failed, falling back to OpenFile: $e');
+      }
       return await OpenFile.open(
         filePath,
         type: 'application/vnd.android.package-archive',

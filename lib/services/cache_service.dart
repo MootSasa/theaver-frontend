@@ -153,8 +153,27 @@ class CacheService {
       if (await legacyMediaDir.exists()) {
         addUniqueDir(legacyMediaDir);
       }
+      final internalDownloadsDir = Directory(p.join(docDir.path, 'Downloads'));
+      if (await internalDownloadsDir.exists()) {
+        addUniqueDir(internalDownloadsDir);
+      }
     } catch (e) {
       debugPrint('CacheService: legacy documents media dir error: $e');
+    }
+
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final extCacheDirs = await getExternalCacheDirectories();
+        if (extCacheDirs != null) {
+          for (final d in extCacheDirs) {
+            if (await d.exists()) {
+              addUniqueDir(d);
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('CacheService: getExternalCacheDirectories error: $e');
+      }
     }
 
     return dirs;
@@ -275,12 +294,14 @@ class CacheService {
         final rawUrl = msg.fileUrl;
         if (rawUrl == null || rawUrl.isEmpty) continue;
 
-        File? cachedFile = await MediaCacheManager.instance.getCachedFile(rawUrl);
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        File? cachedFile = await MediaCacheManager.instance.getCachedFile(rawUrl) ??
+            await MediaCacheManager.instance.getCachedFile(resolvedUrl);
         if (cachedFile == null &&
             (msg.messageType == 'image' || msg.messageType == 'sticker')) {
           try {
-            final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-            final info = await DefaultCacheManager().getFileFromCache(resolvedUrl);
+            final info = await DefaultCacheManager().getFileFromCache(resolvedUrl) ??
+                await DefaultCacheManager().getFileFromCache(rawUrl);
             cachedFile = info?.file;
           } catch (_) {}
         }
@@ -497,8 +518,8 @@ class CacheService {
 
     // 0. Always clean up stale APK update installers older than 24 hours
     for (final file in List<File>.from(files)) {
-      final base = p.basename(file.path);
-      if (base.startsWith('theaver-update-') && base.endsWith('.apk')) {
+      final base = p.basename(file.path).toLowerCase();
+      if (base.endsWith('.apk')) {
         try {
           final stat = file.statSync();
           if (stat.modified.isBefore(apkStaleCutoff)) {
@@ -534,11 +555,10 @@ class CacheService {
 
       for (final file in files) {
         try {
-          final base = p.basename(file.path);
+          final base = p.basename(file.path).toLowerCase();
           final stat = file.statSync();
           // Do not evict an APK installer that was downloaded within the last hour
-          if (base.startsWith('theaver-update-') &&
-              base.endsWith('.apk') &&
+          if (base.endsWith('.apk') &&
               stat.modified.isAfter(apkActiveCutoff)) {
             continue;
           }

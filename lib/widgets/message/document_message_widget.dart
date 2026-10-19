@@ -1,13 +1,13 @@
 import 'dart:io' show File, Directory;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:open_file/open_file.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../services/file_service.dart';
+import '../../services/media_cache_manager.dart';
 
 enum DownloadStatus { idle, downloading, downloaded, failed }
 
@@ -31,16 +31,21 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   DownloadStatus _status = DownloadStatus.idle;
   double _progress = 0.0;
   String? _downloadedFilePath;
+  double _resolvedFileSize = 0.0;
 
   @override
   void initState() {
     super.initState();
+    _resolvedFileSize = widget.fileSize;
     _checkFileExists();
   }
 
   @override
   void didUpdateWidget(DocumentMessageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.fileSize > 0 && widget.fileSize != _resolvedFileSize) {
+      _resolvedFileSize = widget.fileSize;
+    }
     if (oldWidget.fileName != widget.fileName || oldWidget.fileUrl != widget.fileUrl) {
       _checkFileExists();
     }
@@ -49,6 +54,28 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   Future<void> _checkFileExists() async {
     if (kIsWeb) return;
     try {
+      // 1. Check MediaCacheManager first
+      final cached = await MediaCacheManager.instance.getCachedFile(
+        widget.fileUrl,
+      );
+      if (cached != null && await cached.exists()) {
+        final len = await cached.length();
+        if (len > 0) {
+          if (mounted) {
+            setState(() {
+              _status = DownloadStatus.downloaded;
+              _downloadedFilePath = cached.path;
+              _progress = 1.0;
+              if (_resolvedFileSize <= 0) {
+                _resolvedFileSize = len.toDouble();
+              }
+            });
+          }
+          return;
+        }
+      }
+
+      // 2. Check default Downloads directory
       final dir = await _getSaveDirectory();
       final file = File('${dir.path}/${widget.fileName}');
       if (await file.exists()) {
@@ -59,6 +86,9 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
               _status = DownloadStatus.downloaded;
               _downloadedFilePath = file.path;
               _progress = 1.0;
+              if (_resolvedFileSize <= 0) {
+                _resolvedFileSize = len.toDouble();
+              }
             });
           }
         }
@@ -68,6 +98,9 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
 
   String _formatSize(double bytes) {
     if (bytes <= 0) return '';
+    if (bytes < 1024) {
+      return '${bytes.toInt()} B';
+    }
     if (bytes < 1024 * 1024) {
       return '${(bytes / 1024).toStringAsFixed(1)} KB';
     }
@@ -76,7 +109,8 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final formattedSize = _formatSize(widget.fileSize);
+    final effectiveSize = widget.fileSize > 0 ? widget.fileSize : _resolvedFileSize;
+    final formattedSize = _formatSize(effectiveSize);
     return GestureDetector(
       onTap: _status == DownloadStatus.downloaded ? _showFileOptions : null,
       child: Container(
@@ -171,99 +205,88 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   }
 
   Future<void> _startDownload() async {
-      setState(() {
-        _status = DownloadStatus.downloading;
-        _progress = 0.0;
-      });
-  
-      try {
-        if (kIsWeb) {
-          await _downloadWeb();
-        } else {
-          await _downloadWithProgress();
-        }
-      } catch (e) {
-        if (mounted) {
-          setState(() {
-            _status = DownloadStatus.failed;
-            _progress = 0.0;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Download failed: ${e.toString()}')),
-          );
-        }
+    setState(() {
+      _status = DownloadStatus.downloading;
+      _progress = 0.0;
+    });
+
+    try {
+      if (kIsWeb) {
+        await _downloadWeb();
+      } else {
+        await _downloadWithProgress();
       }
-    }
-  
-    Future<void> _downloadWeb() async {
-      final uri = Uri.tryParse(widget.fileUrl);
-      if (uri != null) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-  
-      // Show notification that download started
+    } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Download started for ${widget.fileName}')),
-        );
-        // Reset state since we can't track progress in web
         setState(() {
-          _status = DownloadStatus.idle;
+          _status = DownloadStatus.failed;
           _progress = 0.0;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Download failed: ${e.toString()}')),
+        );
       }
     }
+  }
+
+  Future<void> _downloadWeb() async {
+    final uri = Uri.tryParse(widget.fileUrl);
+    if (uri != null) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+
+    // Show notification that download started
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download started for ${widget.fileName}')),
+      );
+      // Reset state since we can't track progress in web
+      setState(() {
+        _status = DownloadStatus.idle;
+        _progress = 0.0;
+      });
+    }
+  }
 
   Future<void> _downloadWithProgress() async {
-    final request = http.Request('GET', Uri.parse(widget.fileUrl));
-    final response = await request.send();
+    // 1. Download into MediaCacheManager so it is cached and tracked in storage statistics
+    final cachedFile = await MediaCacheManager.instance.downloadMedia(
+      widget.fileUrl,
+      onProgress: (p) {
+        if (mounted) {
+          setState(() {
+            _progress = p;
+          });
+        }
+      },
+    );
 
-    if (response.statusCode != 200) {
-      throw Exception('Failed to download file: ${response.statusCode}');
+    if (cachedFile == null || !await cachedFile.exists()) {
+      throw Exception('Failed to download file');
     }
 
-    final contentLength = response.contentLength;
-    final dir = await _getSaveDirectory();
-    String baseName = widget.fileName;
-    String extension = '';
-    final dotIndex = baseName.lastIndexOf('.');
-    if (dotIndex != -1) {
-      extension = baseName.substring(dotIndex);
-      baseName = baseName.substring(0, dotIndex);
-    }
+    final fileLen = await cachedFile.length();
+    String openablePath = cachedFile.path;
 
-    File file = File('${dir.path}/${widget.fileName}');
-    int counter = 1;
-    while (await file.exists()) {
-      file = File('${dir.path}/$baseName ($counter)$extension');
-      counter++;
-    }
-
-    final sink = file.openWrite();
-    int totalBytes = 0;
-
-    await for (final List<int> chunk in response.stream) {
-      totalBytes += chunk.length;
-      final progress = contentLength != null
-          ? totalBytes / contentLength
-          : 0.0; // Indeterminate if no content length
-
-      if (mounted) {
-        setState(() {
-          _progress = progress;
-        });
+    // 2. Also save to user's Downloads folder (or MediaStore.Downloads on Android)
+    try {
+      final savedPath = await FileService().downloadToDownloads(
+        widget.fileUrl,
+        widget.fileName,
+      );
+      if (!savedPath.startsWith('content://')) {
+        openablePath = savedPath;
       }
-
-      sink.add(chunk);
-    }
-
-    await sink.close();
+    } catch (_) {}
 
     if (mounted) {
       setState(() {
         _status = DownloadStatus.downloaded;
         _progress = 1.0;
-        _downloadedFilePath = file.path;
+        _downloadedFilePath = openablePath;
+        if (_resolvedFileSize <= 0 && fileLen > 0) {
+          _resolvedFileSize = fileLen.toDouble();
+        }
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Файл скачан. Нажмите на файл, чтобы открыть.')),
