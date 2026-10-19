@@ -31,16 +31,106 @@
 
   <title>Theaver</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #0F172A;
+      overflow: hidden;
+    }
+    #theaver-loader {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background-color: #0F172A;
+      z-index: 999999;
+      transition: opacity 0.25s ease-out;
+    }
+    #theaver-loader .logo {
+      width: 72px;
+      height: 72px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, #0088CC, #00A8E8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(0, 136, 204, 0.35);
+      margin-bottom: 20px;
+    }
+    #theaver-loader .logo svg {
+      width: 38px;
+      height: 38px;
+      fill: #FFFFFF;
+    }
+    #theaver-loader .spinner {
+      width: 24px;
+      height: 24px;
+      border: 2.5px solid rgba(0, 136, 204, 0.25);
+      border-top-color: #0088CC;
+      border-radius: 50%;
+      animation: theaver-spin 0.8s linear infinite;
+    }
+    @keyframes theaver-spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+  <script>
+    // Self-healing cleanup for stale Flutter service workers and CacheStorage
+    (function() {
+      var CLEANUP_KEY = 'theaver_sw_cleanup_v3';
+      try {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            var hadSw = registrations && registrations.length > 0;
+            var unregisterPromises = (registrations || []).map(function(reg) {
+              return reg.unregister();
+            });
+            return Promise.all(unregisterPromises).then(function() {
+              if ('caches' in window) {
+                return caches.keys().then(function(keys) {
+                  return Promise.all(keys.map(function(key) {
+                    return caches.delete(key);
+                  }));
+                });
+              }
+            }).then(function() {
+              if (hadSw && !sessionStorage.getItem(CLEANUP_KEY)) {
+                sessionStorage.setItem(CLEANUP_KEY, '1');
+                window.location.reload();
+              }
+            });
+          }).catch(function() {});
+        }
+      } catch (e) {}
+
+      window.addEventListener('flutter-first-frame', function() {
+        var loader = document.getElementById('theaver-loader');
+        if (loader) {
+          loader.style.opacity = '0';
+          setTimeout(function() {
+            if (loader && loader.parentNode) {
+              loader.parentNode.removeChild(loader);
+            }
+          }, 260);
+        }
+      });
+    })();
+  </script>
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
-
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
+  <div id="theaver-loader">
+    <div class="logo">
+      <svg viewBox="0 0 24 24">
+        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+      </svg>
+    </div>
+    <div class="spinner"></div>
+  </div>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
