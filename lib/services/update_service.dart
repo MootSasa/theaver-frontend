@@ -213,15 +213,23 @@ class AppUpdateService {
       } else if (Platform.isWindows) {
         final archEnv = Platform.environment['PROCESSOR_ARCHITECTURE']?.toLowerCase() ?? '';
         final archW6432 = Platform.environment['PROCESSOR_ARCHITEW6432']?.toLowerCase() ?? '';
+        String winArch = 'x64';
         if (archEnv.contains('arm64') || archW6432.contains('arm64')) {
-          return 'arm64';
+          winArch = 'arm64';
+        } else if (archEnv.contains('amd64') || archEnv.contains('x64') || archW6432.contains('amd64')) {
+          winArch = 'x64';
+        } else if (archEnv.contains('x86')) {
+          winArch = 'x86';
         }
-        if (archEnv.contains('amd64') || archEnv.contains('x64') || archW6432.contains('amd64')) {
-          return 'x64';
-        }
-        if (archEnv.contains('x86')) {
-          return 'x86';
-        }
+        try {
+          final appDir = File(Platform.resolvedExecutable).parent.path;
+          final hasUninstaller = File('$appDir\\unins000.exe').existsSync() ||
+              File('$appDir\\unins001.exe').existsSync();
+          if (hasUninstaller) {
+            return '$winArch-installer';
+          }
+        } catch (_) {}
+        return winArch;
       } else if (Platform.isMacOS) {
         final v = Platform.version.toLowerCase();
         if (v.contains('arm64') || v.contains('aarch64')) return 'arm64';
@@ -392,8 +400,46 @@ class AppUpdateService {
       );
     }
 
-    if (Platform.isWindows && filePath.toLowerCase().endsWith('.zip')) {
+    final lowerPath = filePath.toLowerCase();
+
+    // Windows Installer (.exe)
+    if (Platform.isWindows && lowerPath.endsWith('.exe')) {
       try {
+        final currentPid = pid;
+        final exeFile = File(Platform.resolvedExecutable);
+        final appDir = exeFile.parent.path;
+        final exeName = exeFile.uri.pathSegments.last;
+        final tempDir = await getTemporaryDirectory();
+        final scriptFile = File('${tempDir.path}\\theaver_apply_installer.bat');
+        final scriptContent = '''@echo off
+chcp 65001 >nul
+ping 127.0.0.1 -n 2 >nul
+taskkill /F /PID $currentPid >nul 2>&1
+ping 127.0.0.1 -n 2 >nul
+"$filePath" /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /DIR="$appDir"
+if exist "$appDir\\$exeName" (
+  start "" /D "$appDir" "$appDir\\$exeName"
+)
+del /F /Q "$filePath" >nul 2>&1
+del "%~f0"
+''';
+        await scriptFile.writeAsString(scriptContent);
+        await Process.start(
+          'cmd.exe',
+          ['/c', scriptFile.path],
+          mode: ProcessStartMode.detached,
+        );
+        exit(0);
+      } catch (e) {
+        debugPrint('[AppUpdateService] Windows installer auto-update fallback: $e');
+        return await OpenFile.open(filePath);
+      }
+    }
+
+    // Windows Portable (.zip)
+    if (Platform.isWindows && lowerPath.endsWith('.zip')) {
+      try {
+        final currentPid = pid;
         final bytes = await File(filePath).readAsBytes();
         final archive = ZipDecoder().decodeBytes(bytes);
         final tempDir = await getTemporaryDirectory();
@@ -405,6 +451,7 @@ class AppUpdateService {
 
         for (final file in archive) {
           final filename = file.name.replaceAll('/', '\\');
+          if (filename.isEmpty) continue;
           if (file.isFile) {
             final data = file.content as List<int>;
             final outFile = File('${stagingDir.path}\\$filename');
@@ -415,15 +462,29 @@ class AppUpdateService {
           }
         }
 
+        // If the ZIP had a single root folder, unwrap it so its contents copy directly into appDir
+        String sourceDir = stagingDir.path;
+        final entries = await stagingDir.list().toList();
+        if (entries.length == 1 && entries.first is Directory) {
+          sourceDir = entries.first.path;
+        }
+
         final exeFile = File(Platform.resolvedExecutable);
         final appDir = exeFile.parent.path;
         final exeName = exeFile.uri.pathSegments.last;
         final scriptFile = File('${tempDir.path}\\theaver_apply_update.bat');
         final scriptContent = '''@echo off
 chcp 65001 >nul
-timeout /t 2 /nobreak >nul
-xcopy /E /Y /I "${stagingDir.path}\\*" "$appDir\\" >nul
-start "" "$appDir\\$exeName"
+ping 127.0.0.1 -n 2 >nul
+taskkill /F /PID $currentPid >nul 2>&1
+ping 127.0.0.1 -n 2 >nul
+robocopy "$sourceDir" "$appDir" /E /IS /IT /IM /R:15 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul
+if %ERRORLEVEL% GEQ 8 (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/c robocopy \\"$sourceDir\\" \\"$appDir\\" /E /IS /IT /IM /R:10 /W:1' -Verb RunAs -Wait"
+)
+rmdir /S /Q "${stagingDir.path}" >nul 2>&1
+del /F /Q "$filePath" >nul 2>&1
+start "" /D "$appDir" "$appDir\\$exeName"
 del "%~f0"
 ''';
         await scriptFile.writeAsString(scriptContent);
@@ -436,6 +497,99 @@ del "%~f0"
       } catch (e) {
         debugPrint('[AppUpdateService] Windows auto-update fallback: $e');
         return await OpenFile.open(filePath);
+      }
+    }
+
+    // Linux (.tar.gz / .tgz)
+    if (Platform.isLinux && (lowerPath.endsWith('.tar.gz') || lowerPath.endsWith('.tgz'))) {
+      try {
+        final currentPid = pid;
+        final tempDir = await getTemporaryDirectory();
+        final stagingDir = Directory('${tempDir.path}/theaver_update_staging');
+        if (await stagingDir.exists()) {
+          await stagingDir.delete(recursive: true);
+        }
+        await stagingDir.create(recursive: true);
+
+        final tarResult = await Process.run('tar', ['-xzf', filePath, '-C', stagingDir.path]);
+        if (tarResult.exitCode == 0) {
+          final exeFile = File(Platform.resolvedExecutable);
+          final appDir = exeFile.parent.path;
+          final exeName = exeFile.uri.pathSegments.last;
+          final scriptFile = File('${tempDir.path}/theaver_apply_update.sh');
+          final scriptContent = '''#!/bin/sh
+sleep 1
+kill -9 $currentPid 2>/dev/null || true
+sleep 1
+cp -rf "${stagingDir.path}/." "$appDir/"
+chmod +x "$appDir/$exeName"
+rm -rf "${stagingDir.path}" "$filePath"
+cd "$appDir" && "./$exeName" >/dev/null 2>&1 &
+rm -f "\$0"
+''';
+          await scriptFile.writeAsString(scriptContent);
+          await Process.run('chmod', ['+x', scriptFile.path]);
+          await Process.start(
+            '/bin/sh',
+            [scriptFile.path],
+            mode: ProcessStartMode.detached,
+          );
+          exit(0);
+        }
+      } catch (e) {
+        debugPrint('[AppUpdateService] Linux auto-update fallback: $e');
+      }
+    }
+
+    // macOS (.zip)
+    if (Platform.isMacOS && lowerPath.endsWith('.zip')) {
+      try {
+        final currentPid = pid;
+        final tempDir = await getTemporaryDirectory();
+        final stagingDir = Directory('${tempDir.path}/theaver_update_staging');
+        if (await stagingDir.exists()) {
+          await stagingDir.delete(recursive: true);
+        }
+        await stagingDir.create(recursive: true);
+
+        final dittoRes = await Process.run('ditto', ['-x', '-k', filePath, stagingDir.path]);
+        if (dittoRes.exitCode == 0) {
+          final entries = await stagingDir.list().toList();
+          Directory? newAppBundle;
+          for (final entry in entries) {
+            if (entry is Directory && entry.path.endsWith('.app')) {
+              newAppBundle = entry;
+              break;
+            }
+          }
+          final exeFile = File(Platform.resolvedExecutable);
+          // .../Theaver.app/Contents/MacOS/theaver -> .../Theaver.app
+          final currentAppBundle = exeFile.parent.parent.parent;
+          if (newAppBundle != null && currentAppBundle.path.endsWith('.app')) {
+            final scriptFile = File('${tempDir.path}/theaver_apply_update.sh');
+            final scriptContent = '''#!/bin/sh
+sleep 1
+kill -9 $currentPid 2>/dev/null || true
+sleep 1
+rm -rf "${currentAppBundle.path}"
+mv "${newAppBundle.path}" "${currentAppBundle.path}"
+xattr -cr "${currentAppBundle.path}" 2>/dev/null || true
+rm -rf "${stagingDir.path}" "$filePath"
+open "${currentAppBundle.path}"
+rm -f "\$0"
+''';
+            await scriptFile.writeAsString(scriptContent);
+            await Process.run('chmod', ['+x', scriptFile.path]);
+            await Process.start(
+              '/bin/sh',
+              [scriptFile.path],
+              mode: ProcessStartMode.detached,
+            );
+            exit(0);
+          }
+        }
+      } catch (e) {
+        debugPrint('[AppUpdateService] macOS auto-update fallback: $e');
       }
     }
 
