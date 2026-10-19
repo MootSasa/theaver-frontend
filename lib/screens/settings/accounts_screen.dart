@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
@@ -371,7 +372,7 @@ class _AccountTile extends StatelessWidget {
               debugPrint('[_AccountTile] Avatar error for ${account.userId}: $e');
             },
             child: (account.avatarUrl == null || account.avatarUrl!.isEmpty) &&
-                    (account.localAvatarPath == null || !File(account.localAvatarPath!).existsSync())
+                    (account.localAvatarPath == null || kIsWeb || !File(account.localAvatarPath!).existsSync())
             ? Text(
                 (account.displayName ?? account.username ?? '?')[0].toUpperCase(),
                 style: const TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.bold),

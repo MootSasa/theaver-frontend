@@ -1,4 +1,5 @@
 import 'dart:io' show File;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -54,18 +55,19 @@ class _FullscreenPhotoViewerState extends State<FullscreenPhotoViewer> {
   @override
   void initState() {
     super.initState();
-    if (widget.localFilePath != null && widget.localFilePath!.isNotEmpty) {
+    if (!kIsWeb && widget.localFilePath != null && widget.localFilePath!.isNotEmpty) {
       final f = File(widget.localFilePath!);
       if (f.existsSync()) {
         _cachedFile = f;
       }
     }
-    if (_cachedFile == null) {
+    if (!kIsWeb && _cachedFile == null) {
       _checkLocalCache();
     }
   }
 
   Future<void> _checkLocalCache() async {
+    if (kIsWeb) return;
     final f = await MediaCacheManager.instance.getCachedFile(widget.url);
     if (f != null && mounted) {
       setState(() => _cachedFile = f);
@@ -73,7 +75,7 @@ class _FullscreenPhotoViewerState extends State<FullscreenPhotoViewer> {
   }
 
   ImageProvider _imageProvider() {
-    if (_cachedFile != null && _cachedFile!.existsSync()) {
+    if (!kIsWeb && _cachedFile != null && _cachedFile!.existsSync()) {
       return FileImage(_cachedFile!);
     }
 
@@ -92,10 +94,10 @@ class _FullscreenPhotoViewerState extends State<FullscreenPhotoViewer> {
         return CachedNetworkImageProvider(url);
       }
     }
-    if (url.startsWith('file://')) {
+    if (!kIsWeb && url.startsWith('file://')) {
       return FileImage(File(Uri.parse(url).toFilePath()));
     }
-    if (url.startsWith('/') && !url.startsWith('//')) {
+    if (!kIsWeb && url.startsWith('/') && !url.startsWith('//') && File(url).existsSync()) {
       return FileImage(File(url));
     }
 

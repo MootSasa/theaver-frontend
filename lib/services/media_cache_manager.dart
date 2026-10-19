@@ -112,7 +112,7 @@ class MediaCacheManager {
 
   /// Checks if the file is cached locally on disk and exists
   Future<File?> getCachedFile(String url) async {
-    if (url.isEmpty) return null;
+    if (kIsWeb || url.isEmpty) return null;
     final cachedPath = _localPathCache[url];
     if (cachedPath != null) {
       final f = File(cachedPath);
@@ -171,7 +171,7 @@ class MediaCacheManager {
 
   /// Checks if a partial download file (.tmp) exists and returns its current progress
   Future<DownloadByteProgress?> getPartialProgress(String url, {int? totalSize}) async {
-    if (url.isEmpty) return null;
+    if (kIsWeb || url.isEmpty) return null;
     final filename = getCacheFilename(url);
     final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
     final filenamesToCheck = {filename, legacySanitized};
@@ -220,6 +220,7 @@ class MediaCacheManager {
   /// Clears all downloaded media files from disk (both cache and legacy directories)
   Future<void> clearDiskCache() async {
     clearMemoryCache();
+    if (kIsWeb) return;
     try {
       final cacheDir = await getApplicationCacheDirectory();
       final mediaCacheDir = Directory(path.join(cacheDir.path, 'miptgram_media'));
@@ -247,6 +248,7 @@ class MediaCacheManager {
     _localPathCache.remove(url);
     _progressNotifiers.remove(url);
     _byteProgressNotifiers.remove(url);
+    if (kIsWeb) return;
 
     final filename = getCacheFilename(url);
     final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
@@ -276,6 +278,7 @@ class MediaCacheManager {
 
   /// Computes the total size in bytes of downloaded media files in cache
   Future<int> getCacheSizeBytes() async {
+    if (kIsWeb) return 0;
     int total = 0;
     try {
       final cacheDir = await getApplicationCacheDirectory();
@@ -347,7 +350,7 @@ class MediaCacheManager {
     void Function(DownloadByteProgress progress)? onByteProgress,
     int? expectedTotalSize,
   }) async {
-    if (url.isEmpty) return null;
+    if (kIsWeb || url.isEmpty) return null;
 
     final existing = await getCachedFile(url);
     if (existing != null) {

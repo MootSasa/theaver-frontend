@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/theav_theme.dart';
@@ -297,7 +298,7 @@ class _ChatPreviewCardState extends State<ChatPreviewCard> {
             BlendMode.srcIn,
           ),
         );
-      } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
+      } else if (!kIsWeb && wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
         patternWidget = TiledWallpaperPattern(
           filePath: wp.customSvgPath!,
           colorFilter: ColorFilter.mode(

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../utils/haptic_utils.dart';
@@ -688,7 +689,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
       } else {
         return _avatarErrorWidget(bgColor, iconSize, isDark);
       }
-    } else if (url.startsWith('file://')) {
+    } else if (!kIsWeb && url.startsWith('file://')) {
       try {
         final filePath = Uri.parse(url).toFilePath();
         final file = File(filePath);
@@ -710,10 +711,9 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
       }
     } else {
-      final localFile = File(url);
-      if (localFile.existsSync()) {
+      if (!kIsWeb && File(url).existsSync()) {
         imageWidget = Image.file(
-          localFile,
+          File(url),
           fit: BoxFit.cover,
           alignment: imgAlignment,
           width: width,

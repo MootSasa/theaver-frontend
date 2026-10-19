@@ -84,6 +84,7 @@ class AvatarSyncService extends ChangeNotifier {
 
   /// Возвращает список всех несинхронизированных локальных путей аватарок.
   Future<List<String>> getPendingAvatarPaths(String userId) async {
+    if (kIsWeb) return [];
     final prefs = await SharedPreferences.getInstance();
     final list = prefs.getStringList(_pendingKey(userId)) ?? [];
     final existing = <String>[];
@@ -101,7 +102,7 @@ class AvatarSyncService extends ChangeNotifier {
     final list = prefs.getStringList(_historyKey(userId)) ?? [];
     final validList = <String>[];
     for (final p in list) {
-      if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('data:') || await File(p).exists()) {
+      if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('data:') || (!kIsWeb && await File(p).exists())) {
         validList.add(p);
       }
     }
@@ -124,6 +125,7 @@ class AvatarSyncService extends ChangeNotifier {
 
   /// Последовательно синхронизирует все отложенные локальные аватары с сервером.
   Future<void> syncPendingAvatar(String userId) async {
+    if (kIsWeb) return;
     if (_syncingUsers.contains(userId)) {
       debugPrint('[AvatarSyncService] Sync already in progress for userId=$userId');
       return;

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -536,7 +537,7 @@ class TheavThemeService extends ChangeNotifier {
             final isBuiltIn = builtInThemes.any((b) => b.id == c.id);
             final existing = isBuiltIn ? _themeOverrides[c.id] : map[c.id];
             TheavTheme toStore = c.copyWith(isBuiltIn: isBuiltIn);
-            if (existing != null) {
+            if (!kIsWeb && existing != null) {
               // If local existing theme has an image file that exists on disk, keep imagePath
               if (c.wallpaper.type == 'image' &&
                   (c.wallpaper.imagePath == null || !File(c.wallpaper.imagePath!).existsSync()) &&
@@ -555,7 +556,8 @@ class TheavThemeService extends ChangeNotifier {
             }
 
             // Trigger background download of cloud wallpaper image if needed
-            if (toStore.wallpaper.type == 'image' &&
+            if (!kIsWeb &&
+                toStore.wallpaper.type == 'image' &&
                 (toStore.wallpaper.imageUrl != null && toStore.wallpaper.imageUrl!.isNotEmpty) &&
                 (toStore.wallpaper.imagePath == null || !File(toStore.wallpaper.imagePath!).existsSync())) {
               _downloadCloudWallpaperIfNeeded(toStore);
@@ -598,6 +600,7 @@ class TheavThemeService extends ChangeNotifier {
 
   /// Download cloud wallpaper image to local storage for offline use
   Future<void> _downloadCloudWallpaperIfNeeded(TheavTheme theme) async {
+    if (kIsWeb) return;
     if (theme.wallpaper.type != 'image' || theme.wallpaper.imageUrl == null) return;
     final url = theme.wallpaper.imageUrl!;
     if (url.isEmpty) return;
@@ -678,7 +681,7 @@ class TheavThemeService extends ChangeNotifier {
     }
 
     // If saving to cloud and wallpaper is a local image without a remote imageUrl, upload it
-    if (saveToCloud && themeToSave.wallpaper.type == 'image') {
+    if (!kIsWeb && saveToCloud && themeToSave.wallpaper.type == 'image') {
       final imgPath = themeToSave.wallpaper.imagePath;
       if (imgPath != null &&
           (themeToSave.wallpaper.imageUrl == null || themeToSave.wallpaper.imageUrl!.isEmpty)) {
@@ -881,7 +884,7 @@ class TheavThemeService extends ChangeNotifier {
     archive.addFile(ArchiveFile('theme.json', manifestBytes.length, manifestBytes));
 
     // 2. Custom wallpaper asset if present
-    if (theme.wallpaper.imagePath != null && await File(theme.wallpaper.imagePath!).exists()) {
+    if (!kIsWeb && theme.wallpaper.imagePath != null && await File(theme.wallpaper.imagePath!).exists()) {
       final file = File(theme.wallpaper.imagePath!);
       final imgBytes = await file.readAsBytes();
       archive.addFile(ArchiveFile('wallpaper.png', imgBytes.length, imgBytes));
@@ -919,7 +922,7 @@ class TheavThemeService extends ChangeNotifier {
       } catch (e) {
         debugPrint('TheavThemeService: Error bundling remote wallpaper: $e');
       }
-    } else if (theme.wallpaper.customSvgPath != null) {
+    } else if (!kIsWeb && theme.wallpaper.customSvgPath != null) {
       final file = File(theme.wallpaper.customSvgPath!);
       if (await file.exists()) {
         final svgBytes = await file.readAsBytes();
@@ -956,7 +959,7 @@ class TheavThemeService extends ChangeNotifier {
     final Map<String, dynamic> data = jsonDecode(jsonStr);
 
     String? localWallpaperPath;
-    if (wallpaperFile != null) {
+    if (!kIsWeb && wallpaperFile != null) {
       final appDir = await getApplicationDocumentsDirectory();
       final targetDir = Directory('${appDir.path}/imported_wallpapers');
       if (!await targetDir.exists()) {

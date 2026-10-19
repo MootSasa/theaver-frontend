@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 
@@ -267,17 +268,17 @@ class TheavWallpaper {
   /// Whether wallpaper has a valid image source (local file or remote URL)
   bool get hasImage {
     if (type != 'image') return false;
-    if (imagePath != null && imagePath!.isNotEmpty && File(imagePath!).existsSync()) return true;
+    if (!kIsWeb && imagePath != null && imagePath!.isNotEmpty && File(imagePath!).existsSync()) return true;
     if (imageUrl != null && imageUrl!.isNotEmpty) return true;
     return false;
   }
 
   /// Get ImageProvider for photo wallpaper, checking local file first, then fallback path, then remote cached URL.
   ImageProvider? getImageProvider({String? fallbackPath}) {
-    if (imagePath != null && imagePath!.isNotEmpty && File(imagePath!).existsSync()) {
+    if (!kIsWeb && imagePath != null && imagePath!.isNotEmpty && File(imagePath!).existsSync()) {
       return FileImage(File(imagePath!));
     }
-    if (fallbackPath != null && fallbackPath.isNotEmpty && File(fallbackPath).existsSync()) {
+    if (!kIsWeb && fallbackPath != null && fallbackPath.isNotEmpty && File(fallbackPath).existsSync()) {
       return FileImage(File(fallbackPath));
     }
     if (imageUrl != null && imageUrl!.isNotEmpty) {
@@ -293,7 +294,7 @@ class TheavWallpaper {
       if (validUrl != null && validUrl.isNotEmpty) {
         if (validUrl.startsWith('http://') || validUrl.startsWith('https://')) {
           return CachedNetworkImageProvider(validUrl);
-        } else if (File(validUrl).existsSync()) {
+        } else if (!kIsWeb && File(validUrl).existsSync()) {
           return FileImage(File(validUrl));
         }
       }
