@@ -2182,6 +2182,7 @@ class ProfileScreenState extends State<ProfileScreen>
       final account = _accountManager.currentAccount;
       final topAvatar = _avatarUrls.isNotEmpty ? _avatarUrls.first : null;
       final isLocalAvatar = topAvatar != null &&
+          !kIsWeb &&
           (topAvatar.startsWith('/') ||
               topAvatar.startsWith('file:') ||
               File(topAvatar).existsSync());

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
@@ -48,38 +49,40 @@ class _RoundVideoThumbnailState extends State<RoundVideoThumbnail> {
     if (rawUrl == null || rawUrl.isEmpty) return;
 
     try {
-      // 1. Check if local .thumb.jpg exists directly for local path
-      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
-        final localPath =
-            rawUrl.startsWith('file://') ? Uri.parse(rawUrl).toFilePath() : rawUrl;
-        final directThumb = File('$localPath.thumb.jpg');
-        if (await directThumb.exists()) {
-          if (mounted) setState(() => _cachedThumbFile = directThumb);
-          return;
-        }
-      }
-
-      // 2. Check temporary directory for cached thumbnail by filename
-      final uri = Uri.tryParse(rawUrl);
-      final fileName = uri != null && uri.pathSegments.isNotEmpty
-          ? uri.pathSegments.last
-          : rawUrl.split(Platform.pathSeparator).last;
-
-      if (fileName.isNotEmpty) {
-        final tempDir = await getTemporaryDirectory();
-        final candidate = File('${tempDir.path}/$fileName.thumb.jpg');
-        if (await candidate.exists()) {
-          if (mounted) setState(() => _cachedThumbFile = candidate);
-          return;
-        }
-
-        // Also check if local video file exists in tempDir
-        final localVideoCandidate = File('${tempDir.path}/$fileName');
-        if (await localVideoCandidate.exists()) {
-          final candidateThumb = File('${localVideoCandidate.path}.thumb.jpg');
-          if (await candidateThumb.exists()) {
-            if (mounted) setState(() => _cachedThumbFile = candidateThumb);
+      if (!kIsWeb) {
+        // 1. Check if local .thumb.jpg exists directly for local path
+        if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+          final localPath =
+              rawUrl.startsWith('file://') ? Uri.parse(rawUrl).toFilePath() : rawUrl;
+          final directThumb = File('$localPath.thumb.jpg');
+          if (await directThumb.exists()) {
+            if (mounted) setState(() => _cachedThumbFile = directThumb);
             return;
+          }
+        }
+
+        // 2. Check temporary directory for cached thumbnail by filename
+        final uri = Uri.tryParse(rawUrl);
+        final fileName = uri != null && uri.pathSegments.isNotEmpty
+            ? uri.pathSegments.last
+            : rawUrl.split(Platform.pathSeparator).last;
+
+        if (fileName.isNotEmpty) {
+          final tempDir = await getTemporaryDirectory();
+          final candidate = File('${tempDir.path}/$fileName.thumb.jpg');
+          if (await candidate.exists()) {
+            if (mounted) setState(() => _cachedThumbFile = candidate);
+            return;
+          }
+
+          // Also check if local video file exists in tempDir
+          final localVideoCandidate = File('${tempDir.path}/$fileName');
+          if (await localVideoCandidate.exists()) {
+            final candidateThumb = File('${localVideoCandidate.path}.thumb.jpg');
+            if (await candidateThumb.exists()) {
+              if (mounted) setState(() => _cachedThumbFile = candidateThumb);
+              return;
+            }
           }
         }
       }
@@ -92,13 +95,15 @@ class _RoundVideoThumbnailState extends State<RoundVideoThumbnail> {
       if (resolvedUri != null &&
           (resolvedUri.scheme == 'http' || resolvedUri.scheme == 'https')) {
         controller = VideoPlayerController.networkUrl(resolvedUri);
-      } else {
+      } else if (!kIsWeb) {
         final filePath = resolvedUrl.startsWith('file://')
             ? Uri.parse(resolvedUrl).toFilePath()
             : resolvedUrl;
         final file = File(filePath);
         if (!await file.exists()) return;
         controller = VideoPlayerController.file(file);
+      } else {
+        return;
       }
 
       await controller.initialize();
@@ -130,7 +135,7 @@ class _RoundVideoThumbnailState extends State<RoundVideoThumbnail> {
     final size = widget.size;
 
     Widget previewContent;
-    if (_cachedThumbFile != null) {
+    if (!kIsWeb && _cachedThumbFile != null) {
       previewContent = Image.file(
         _cachedThumbFile!,
         width: size,

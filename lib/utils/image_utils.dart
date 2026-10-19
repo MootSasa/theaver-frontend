@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 
@@ -22,15 +23,17 @@ String? getValidAvatarUrl(String? url) {
   }
   
   // Local file path or file:// URI
-  if (url.startsWith('file://')) {
+  if (!kIsWeb && url.startsWith('file://')) {
     final file = File(Uri.parse(url).toFilePath());
     if (file.existsSync()) return url;
-  } else if (url.contains(':\\') || url.contains(':/')) {
+  } else if (!kIsWeb && (url.contains(':\\') || url.contains(':/'))) {
     final file = File(url);
     if (file.existsSync()) return url;
   } else if (url.startsWith('/')) {
-    final file = File(url);
-    if (file.existsSync()) return url;
+    if (!kIsWeb) {
+      final file = File(url);
+      if (file.existsSync()) return url;
+    }
     // Relative URL on backend (e.g. /avatars/xyz.jpg or /api/...)
     final base = AppConfig.baseUrl;
     final cleanBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
@@ -42,16 +45,20 @@ String? getValidAvatarUrl(String? url) {
     if (uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https')) {
       return url;
     }
-    // Fallback: check if local file path without scheme
-    final file = File(url);
-    if (file.existsSync()) return url;
-    return null;
-  } catch (e) {
-    // Check if it's a valid local file path even if URI parsing failed
-    try {
+    if (!kIsWeb) {
+      // Fallback: check if local file path without scheme
       final file = File(url);
       if (file.existsSync()) return url;
-    } catch (_) {}
+    }
+    return null;
+  } catch (e) {
+    if (!kIsWeb) {
+      // Check if it's a valid local file path even if URI parsing failed
+      try {
+        final file = File(url);
+        if (file.existsSync()) return url;
+      } catch (_) {}
+    }
     return null;
   }
 }
@@ -69,7 +76,7 @@ ImageProvider? avatarImageProvider(String? url, {String? localFallbackPath}) {
 
   // If URL is missing, try fallback local path
   if (url == null || url.isEmpty) {
-    if (localFallbackPath != null) {
+    if (!kIsWeb && localFallbackPath != null) {
       final f = File(localFallbackPath);
       if (f.existsSync()) return FileImage(f);
     }
@@ -96,23 +103,25 @@ ImageProvider? avatarImageProvider(String? url, {String? localFallbackPath}) {
     }
   }
 
-  // Handle local file paths or file:// URIs
-  if (url.startsWith('file://')) {
-    try {
-      final file = File(Uri.parse(url).toFilePath());
-      if (file.existsSync()) return FileImage(file);
-    } catch (_) {}
-  }
-  
-  final localFile = File(url);
-  if (localFile.existsSync()) {
-    return FileImage(localFile);
+  // Handle local file paths or file:// URIs on non-Web platforms
+  if (!kIsWeb) {
+    if (url.startsWith('file://')) {
+      try {
+        final file = File(Uri.parse(url).toFilePath());
+        if (file.existsSync()) return FileImage(file);
+      } catch (_) {}
+    }
+
+    final localFile = File(url);
+    if (localFile.existsSync()) {
+      return FileImage(localFile);
+    }
   }
 
   // Network URL or relative backend path
   final validUrl = getValidAvatarUrl(url);
   if (validUrl == null || (!validUrl.startsWith('http://') && !validUrl.startsWith('https://'))) {
-    if (localFallbackPath != null) {
+    if (!kIsWeb && localFallbackPath != null) {
       final f = File(localFallbackPath);
       if (f.existsSync()) return FileImage(f);
     }

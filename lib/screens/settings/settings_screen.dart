@@ -747,7 +747,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                     debugPrint('[SettingsScreen] Failed to render avatar: $e');
                   },
                   child: (account.avatarUrl == null || account.avatarUrl!.isEmpty) &&
-                          (account.localAvatarPath == null || !File(account.localAvatarPath!).existsSync())
+                          (account.localAvatarPath == null || kIsWeb || !File(account.localAvatarPath!).existsSync())
                       ? Text(
                           (account.displayName ?? account.username ?? '?')[0].toUpperCase(),
                           style: const TextStyle(

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:inspire_blur/inspire_blur.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -236,7 +237,7 @@ class ChatScaffold extends StatelessWidget {
               BlendMode.srcIn,
             ),
           );
-        } else if (wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
+        } else if (!kIsWeb && wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
           patternWidget = TiledWallpaperPattern(
             filePath: wp.customSvgPath!,
             colorFilter: ColorFilter.mode(
@@ -272,7 +273,7 @@ class ChatScaffold extends StatelessWidget {
     }
 
     final wallpaperPath = context.watch<WallpaperProvider?>()?.wallpaperPath;
-    if (wallpaperPath != null && wallpaperPath.isNotEmpty) {
+    if (!kIsWeb && wallpaperPath != null && wallpaperPath.isNotEmpty) {
       final file = File(wallpaperPath);
       if (file.existsSync()) {
         return Positioned.fill(

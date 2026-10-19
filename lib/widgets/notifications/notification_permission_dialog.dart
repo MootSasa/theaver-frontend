@@ -1,4 +1,5 @@
 import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,7 +13,7 @@ class NotificationPermissionDialog {
   /// Проверяет статус разрешений и показывает диалог, если они ещё не запрошены.
   static Future<void> checkAndPrompt(BuildContext context) async {
     // Уведомления через системные диалоги запрашиваются на мобильных платформах (Android / iOS)
-    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) return;
 
     try {
       final prefs = await SharedPreferences.getInstance();
