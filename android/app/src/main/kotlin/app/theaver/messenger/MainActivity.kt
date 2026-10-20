@@ -58,7 +58,7 @@ class MainActivity : FlutterFragmentActivity() {
                 try {
                     val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
                     val activeNet = cm?.activeNetwork
-                    val caps = if (activeNet != null) cm.getNetworkCapabilities(activeNet) else null
+                    val caps = if (activeNet != null) cm?.getNetworkCapabilities(activeNet) else null
                     val netType = when {
                         caps == null -> "none"
                         caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
@@ -68,7 +68,7 @@ class MainActivity : FlutterFragmentActivity() {
                                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
                             } else {
                                 @Suppress("DEPRECATION")
-                                cm.activeNetworkInfo?.isRoaming != true
+                                (cm?.activeNetworkInfo?.isRoaming != true)
                             }
                             if (!notRoaming) "roaming" else "cellular"
                         }
