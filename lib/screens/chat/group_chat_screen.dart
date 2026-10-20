@@ -602,7 +602,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void _onMessageEdited(WebSocketEvent event) {
     final messageId = event.data['message_id']?.toString();
     final newContent = event.data['content']?.toString();
-    if (messageId == null || newContent == null) return;
+    if (messageId == null) return;
 
     List<MessageEntity>? newEntities;
     if (event.data['entities'] != null) {
@@ -614,14 +614,31 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       } catch (_) {}
     }
 
+    Map<String, dynamic>? newMediaPayload;
+    if (event.data['media_payload'] is Map) {
+      newMediaPayload =
+          Map<String, dynamic>.from(event.data['media_payload'] as Map);
+    } else if (event.data['poll'] is Map) {
+      newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
+    }
+
+    final isPollEvent =
+        event.data['message_type'] == 'poll' || newMediaPayload != null;
+    if (newContent == null && newMediaPayload == null) return;
+
+    String? effectiveContent = newContent;
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
         if (index != -1) {
-          _messages[index] = _messages[index].copyWith(
-            content: newContent,
-            entities: newEntities ?? _messages[index].entities,
-            isEdited: true,
+          final current = _messages[index];
+          effectiveContent ??= current.content;
+          final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          _messages[index] = current.copyWith(
+            content: effectiveContent,
+            entities: newEntities ?? current.entities,
+            mediaPayload: newMediaPayload ?? current.mediaPayload,
+            isEdited: isPollMsg ? current.isEdited : true,
           );
           _updateFeedItems();
         }
@@ -631,10 +648,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     try {
       AppDatabase().updateMessageContent(
         messageId,
-        newContent,
+        effectiveContent ?? '',
         newEntities != null && newEntities.isNotEmpty
             ? jsonEncode(newEntities.map((e) => e.toJson()).toList())
             : null,
+        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
+        !isPollEvent,
       );
     } catch (_) {}
   }

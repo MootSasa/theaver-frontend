@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../config/app_config.dart';
@@ -667,20 +668,89 @@ class MediaCacheManager {
     }
   }
 
-  /// Evaluates whether media should auto-download based on user Settings and size limits
+  static const MethodChannel _networkChannel =
+      MethodChannel('app.theaver.messenger/network');
+  String _cachedNetworkType = 'wifi';
+  DateTime? _lastNetworkCheckTime;
+  bool _isCheckingNetwork = false;
+
+  void _refreshNetworkTypeIfNeeded() {
+    if (kIsWeb) return;
+    final now = DateTime.now();
+    if (_isCheckingNetwork) return;
+    if (_lastNetworkCheckTime != null &&
+        now.difference(_lastNetworkCheckTime!).inSeconds < 10) {
+      return;
+    }
+    _isCheckingNetwork = true;
+    _lastNetworkCheckTime = now;
+    Future.microtask(() async {
+      try {
+        if (Platform.isAndroid) {
+          final result = await _networkChannel.invokeMethod<String>('getNetworkType');
+          if (result != null && result.isNotEmpty) {
+            _cachedNetworkType = result;
+            return;
+          }
+        }
+        // Fallback via NetworkInterface names (wlan/eth/en -> wifi, rmnet/ccmni/pdp -> cellular)
+        final interfaces = await NetworkInterface.list(
+          includeLoopback: false,
+          type: InternetAddressType.any,
+        );
+        bool hasWifi = false;
+        bool hasCellular = false;
+        for (final iface in interfaces) {
+          final name = iface.name.toLowerCase();
+          if (name.startsWith('wlan') ||
+              name.startsWith('eth') ||
+              name.startsWith('en') ||
+              name.startsWith('wi-fi')) {
+            hasWifi = true;
+          } else if (name.startsWith('rmnet') ||
+              name.startsWith('ccmni') ||
+              name.startsWith('pdp') ||
+              name.startsWith('wwan') ||
+              name.startsWith('cell')) {
+            hasCellular = true;
+          }
+        }
+        if (hasWifi) {
+          _cachedNetworkType = 'wifi';
+        } else if (hasCellular) {
+          _cachedNetworkType = 'cellular';
+        }
+      } catch (_) {
+        // Keep previous cached network type
+      } finally {
+        _isCheckingNetwork = false;
+      }
+    });
+  }
+
+  /// Evaluates whether media should auto-download based on user Settings, real connectivity, and size limits
   bool shouldAutoDownload({
     required String messageType,
     int? fileSize,
     bool? isWifi,
   }) {
+    _refreshNetworkTypeIfNeeded();
     final settings = SettingsService().storageSettings;
-    final wifi = isWifi ?? true;
+    final String netType = isWifi != null
+        ? (isWifi ? 'wifi' : 'cellular')
+        : _cachedNetworkType;
+    if (netType == 'none') return false;
+
+    final bool wifi = netType == 'wifi';
+    final bool roaming = netType == 'roaming';
     final size = fileSize ?? 0;
 
     if (messageType == 'photo' || messageType == 'image') {
       final allowed = wifi
           ? settings.autoDownloadPhotosOnWifi
-          : settings.autoDownloadPhotosOnCellular;
+          : (roaming
+              ? settings.autoDownloadPhotosOnRoaming
+              : settings.autoDownloadPhotosOnCellular);
       if (!allowed) return false;
       return size <= 10 * 1024 * 1024;
     }
@@ -688,7 +758,9 @@ class MediaCacheManager {
     if (messageType == 'video') {
       final allowed = wifi
           ? settings.autoDownloadVideosOnWifi
-          : settings.autoDownloadVideosOnCellular;
+          : (roaming
+              ? settings.autoDownloadVideosOnRoaming
+              : settings.autoDownloadVideosOnCellular);
       if (!allowed) return false;
       return wifi ? size <= 15 * 1024 * 1024 : size <= 5 * 1024 * 1024;
     }
@@ -696,7 +768,9 @@ class MediaCacheManager {
     if (messageType == 'file' || messageType == 'document') {
       final allowed = wifi
           ? settings.autoDownloadFilesOnWifi
-          : settings.autoDownloadFilesOnCellular;
+          : (roaming
+              ? settings.autoDownloadFilesOnRoaming
+              : settings.autoDownloadFilesOnCellular);
       if (!allowed) return false;
       return size <= 3 * 1024 * 1024;
     }
@@ -704,7 +778,9 @@ class MediaCacheManager {
     if (messageType == 'audio' || messageType == 'voice') {
       final allowed = wifi
           ? settings.autoDownloadAudioOnWifi
-          : settings.autoDownloadAudioOnCellular;
+          : (roaming
+              ? settings.autoDownloadAudioOnRoaming
+              : settings.autoDownloadAudioOnCellular);
       if (!allowed) return false;
       return size <= 10 * 1024 * 1024;
     }

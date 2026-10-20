@@ -59,12 +59,27 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
       return;
     }
 
-    final options = _optionControllers.map((c) => c.text.trim()).where((t) => t.isNotEmpty).toList();
+    final options = <String>[];
+    int? mappedCorrectOptionId;
+    for (int i = 0; i < _optionControllers.length; i++) {
+      final text = _optionControllers[i].text.trim();
+      if (text.isNotEmpty) {
+        if (_isQuiz && _correctOptionId == i) {
+          mappedCorrectOptionId = options.length;
+        }
+        options.add(text);
+      }
+    }
+
     if (options.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(l10n.translate('poll_error_min_options'))),
       );
       return;
+    }
+
+    if (_isQuiz && mappedCorrectOptionId == null) {
+      mappedCorrectOptionId = 0;
     }
 
     setState(() => _isSending = true);
@@ -80,8 +95,8 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
           'is_anonymous': _isAnonymous,
           'is_multiple_choice': _isMultipleChoice,
           'is_quiz': _isQuiz,
-          if (_isQuiz && _correctOptionId != null)
-            'correct_option_id': _correctOptionId,
+          if (_isQuiz && mappedCorrectOptionId != null)
+            'correct_option_id': mappedCorrectOptionId,
         },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );

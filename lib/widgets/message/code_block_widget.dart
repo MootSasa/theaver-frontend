@@ -7,6 +7,7 @@ import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/profile_theme_provider.dart';
@@ -64,6 +65,9 @@ class CodeBlockWidget extends StatelessWidget {
       height: 1.4,
     );
 
+    final String copyCodeLabel = context.l10n.translate('format_copy_code').toUpperCase();
+    final String codeCopiedMessage = context.l10n.translate('format_code_copied');
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final double maxAvailableWidth = constraints.hasBoundedWidth
@@ -92,9 +96,9 @@ class CodeBlockWidget extends StatelessWidget {
         }
 
         final copyTextPainter = TextPainter(
-          text: const TextSpan(
-            text: 'КОПИРОВАТЬ КОД',
-            style: TextStyle(
+          text: TextSpan(
+            text: copyCodeLabel,
+            style: const TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.bold,
             ),
@@ -182,7 +186,7 @@ class CodeBlockWidget extends StatelessWidget {
                               Clipboard.setData(ClipboardData(text: code));
                               GlassToastService().show(
                                 context, 
-                                'Код скопирован в буфер обмена',
+                                codeCopiedMessage,
                                 iconWidget: iconoir.Copy(
                                   width: 18,
                                   height: 18,
@@ -210,7 +214,7 @@ class CodeBlockWidget extends StatelessWidget {
                                     ),
                                     const SizedBox(width: 6),
                                     Text(
-                                      'КОПИРОВАТЬ КОД',
+                                      copyCodeLabel,
                                       style: TextStyle(
                                         color: isDark ? Colors.grey[400] : Colors.grey[600],
                                         fontSize: 11,

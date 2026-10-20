@@ -720,14 +720,21 @@ class AppDatabase extends _$AppDatabase {
         .write(MessagesCompanion(sendStatus: Value(status)));
   }
 
-  /// Обновить контент сообщения (редактирование)
-  Future<void> updateMessageContent(String serverId, String content,
-      [String? entities]) async {
+  /// Обновить контент сообщения (редактирование / обновление payload опроса)
+  Future<void> updateMessageContent(
+    String serverId,
+    String content, [
+    String? entities,
+    String? mediaPayload,
+    bool isEdited = true,
+  ]) async {
     await (update(messages)..where((t) => t.serverId.equals(serverId)))
         .write(MessagesCompanion(
       content: Value(content),
       entities: entities != null ? Value(entities) : const Value.absent(),
-      isEdited: const Value(true),
+      mediaPayload:
+          mediaPayload != null ? Value(mediaPayload) : const Value.absent(),
+      isEdited: Value(isEdited),
     ));
   }
 

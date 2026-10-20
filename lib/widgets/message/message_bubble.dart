@@ -31,9 +31,13 @@ import 'media_download_button.dart';
 import '../../services/media_cache_manager.dart';
 import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
+import 'poll_message_widget.dart';
 
 /// Радиус скругления "облачка" сообщения.
 const double kMessageBorderRadius = 18.0;
+
+/// Максимальная ширина "облачка" сообщения в пикселях (для широких экранов и планшетов).
+const double kMaxMessageBubbleWidth = 460.0;
 
 /// Role of a child inside [BubbleLayoutWidget].
 enum BubbleChildRole {
@@ -450,6 +454,13 @@ class RenderBubbleLayout extends RenderBox
       measuredSenderWidth = senderName.size.width;
     }
 
+    // 1b. Measure reply natural width with loose constraints if present
+    double measuredReplyWidth = 0.0;
+    if (reply != null) {
+      reply.layout(BoxConstraints(maxWidth: constraints.maxWidth), parentUsesSize: true);
+      measuredReplyWidth = reply.size.width;
+    }
+
     // 2. Measure content with loose constraints (unconstricted natural width up to maxWidth)
     content.layout(constraints.loosen(), parentUsesSize: true);
     final double contentWidth = content.size.width;
@@ -461,9 +472,7 @@ class RenderBubbleLayout extends RenderBox
     final double metaHeight = metadata.size.height;
 
     // 4. Header width baseline
-    final double effectiveReplyWidth = replyWidth > 0.0
-        ? replyWidth
-        : (reply != null ? reply.getMinIntrinsicWidth(double.infinity) : 0.0);
+    final double effectiveReplyWidth = math.max(measuredReplyWidth, replyWidth);
     final double effectiveHeaderWidth = math.max(
       effectiveReplyWidth,
       senderName != null ? math.max(senderNameWidth, measuredSenderWidth) : 0.0,
@@ -834,6 +843,7 @@ class MessageBubble extends StatelessWidget {
     final bool previewAtBottom = hasEffectivePreview && !showAbove && !hasMedia;
 
     final bool endsWithBlock =
+        message.messageType == 'poll' ||
         trimmedContent.endsWith('```') ||
         trimmedContent.endsWith(r'$$') ||
         trimmedContent.endsWith(r'\]') ||
@@ -941,12 +951,16 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
-    final double maxBubbleWidth = MediaQuery.of(context).size.width * 0.76 - 24.0; // 24 = horizontal padding
+    final double maxOuterBubbleWidth = math.min(
+      MediaQuery.of(context).size.width * 0.76,
+      kMaxMessageBubbleWidth,
+    );
+    final double maxBubbleWidth = maxOuterBubbleWidth - 24.0; // 24 = horizontal padding
     final double metadataWidthEstimate = _calculateMetadataWidth(context);
 
-    // Prepare Reply Widget if present
+    // Prepare Reply Widget if present (natural width is measured accurately by RenderBubbleLayout)
     Widget? replyWidget;
-    double replyWidthEstimate = 0.0;
+    const double replyWidthEstimate = 0.0;
 
     if (message.hasReply) {
       replyWidget = MessageReplyInfo(
@@ -962,31 +976,21 @@ class MessageBubble extends StatelessWidget {
           message.replyInfo?.chatId,
         ),
       );
-
-      final String replyText = message.quoteText ?? message.replyInfo?.content ?? '';
-      final String senderTitle = (message.replyInfo?.senderId == currentUserId ? 'Вы' : message.replyInfo?.senderName) ?? 'Сообщение';
-      
-      // Fast estimate avoiding synchronous TextPainter.layout() during build
-      final double estimatedTextWidth = math.max(senderTitle.length * 8.0, replyText.length * 7.0);
-      replyWidthEstimate = (estimatedTextWidth + 28.0).clamp(60.0, maxBubbleWidth);
     } else if (chatType == 'saved' && (message.forwardFromName?.isNotEmpty ?? false || message.senderName.isNotEmpty)) {
       replyWidget = MessageReplyInfo.forwarded(
         authorName: message.forwardFromName ?? message.senderName,
         isMe: isMe,
       );
-      replyWidthEstimate = 120.0;
     }
 
     Widget? senderNameWidget;
-    double senderNameWidthEstimate = 0.0;
+    const double senderNameWidthEstimate = 0.0;
     if (!isMe && senderName != null && senderName!.isNotEmpty) {
       final style = TextStyle(
         fontSize: 13,
         fontWeight: FontWeight.bold,
         color: effectivePreset.primaryColor,
       );
-      // Measured precisely by RenderBubbleLayout during layout; fast baseline here
-      senderNameWidthEstimate = (senderName!.length * 8.0).clamp(0.0, maxBubbleWidth);
 
       senderNameWidget = Padding(
         padding: const EdgeInsets.only(bottom: 4.0),
@@ -1000,7 +1004,20 @@ class MessageBubble extends StatelessWidget {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
     Widget textBodyWidget;
-    if (isBigEmoji) {
+    if (message.messageType == 'poll') {
+      textBodyWidget = PollMessageWidget(
+        chatId: message.chatId,
+        messageId: message.id,
+        currentUserId: currentUserId,
+        questionFallback: message.content,
+        pollData: message.mediaPayload,
+        isMe: isMe,
+        isDark: isDark,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+      );
+    } else if (isBigEmoji) {
       textBodyWidget = Padding(
         padding: const EdgeInsets.symmetric(vertical: 6.0),
         child: GestureDetector(
@@ -1250,7 +1267,7 @@ class MessageBubble extends StatelessWidget {
     Widget bubbleCore = Container(
       margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
       constraints: BoxConstraints(
-        maxWidth: MediaQuery.of(context).size.width * 0.76,
+        maxWidth: maxOuterBubbleWidth,
       ),
       child: ViewportGradientBox(
         borderRadius: BorderRadius.circular(effectiveBubbleRadius),

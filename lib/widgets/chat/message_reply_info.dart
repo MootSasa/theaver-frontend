@@ -415,6 +415,9 @@ class MessageReplyInfo extends StatelessWidget {
         case 'sticker':
           mediaLabel = '🎭 Стикер';
           break;
+        case 'poll':
+          mediaLabel = hasCaption ? '📊 ' : '📊 Опрос';
+          break;
         default:
           mediaLabel = '';
       }
@@ -472,7 +475,6 @@ class MessageReplyInfo extends StatelessWidget {
     return GestureDetector(
       onTap: isDeleted ? null : onTap,
       child: Container(
-        width: double.infinity,
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
@@ -493,7 +495,8 @@ class MessageReplyInfo extends StatelessWidget {
               const SizedBox(width: 8),
 
               // Quoted content
-              Expanded(
+              Flexible(
+                fit: FlexFit.loose,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,

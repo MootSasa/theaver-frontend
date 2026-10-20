@@ -489,6 +489,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                           controller: richCtrl,
                           accentColor: quoteAccentColor,
                           cardColor: quoteCardColor,
+                          repaint: Listenable.merge([richCtrl, _scrollController]),
                         )
                       : null,
                   foregroundPainter: hasSpoilers && richCtrl != null
@@ -497,7 +498,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                           controller: richCtrl,
                           color: spoilerColor,
                           particles: _spoilerParticles,
-                          repaint: _spoilerController,
+                          repaint: Listenable.merge([_spoilerController, _scrollController]),
                         )
                       : null,
                   child: CustomPaint(
@@ -506,7 +507,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                             fieldKey: _fieldKey,
                             controller: widget.controller,
                             color: cursorColor,
-                            repaint: _blinkController,
+                            repaint: Listenable.merge([_blinkController, _scrollController]),
                             opacityAnimation: _blinkController,
                           )
                         : null,
@@ -760,7 +761,8 @@ class InputQuotePainter extends CustomPainter {
     required this.controller,
     required this.accentColor,
     required this.cardColor,
-  });
+    required Listenable repaint,
+  }) : super(repaint: repaint);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -778,8 +780,20 @@ class InputQuotePainter extends CustomPainter {
         .toList();
     if (quoteSpans.isEmpty) return;
 
+    final editableTopLeft = renderBox.globalToLocal(renderEditable.localToGlobal(Offset.zero));
+    final editableBottomRight = renderBox.globalToLocal(
+      renderEditable.localToGlobal(Offset(renderEditable.size.width, renderEditable.size.height)),
+    );
+
     canvas.save();
-    canvas.clipRect(Offset.zero & size);
+    canvas.clipRect(
+      Rect.fromLTRB(
+        0.0,
+        math.max(0.0, editableTopLeft.dy - 3.0),
+        size.width,
+        math.min(size.height, editableBottomRight.dy + 3.0),
+      ),
+    );
 
     for (final span in quoteSpans) {
       final start = span.start.clamp(0, text.length);
@@ -837,7 +851,7 @@ class InputQuotePainter extends CustomPainter {
       );
       canvas.drawRRect(stripRRect, Paint()..color = accentColor);
 
-      // 3. Draw quote-solid icon in upper-right corner
+      // 3. Draw quote-solid icon in upper-right corner (and chevron if collapsible)
       final quotePath = Path();
       // Left quotation mark
       quotePath.moveTo(9.21, 12.75);
@@ -871,8 +885,11 @@ class InputQuotePainter extends CustomPainter {
       quotePath.cubicTo(13.25, 11.97, 14.03, 12.75, 15.0, 12.75);
       quotePath.close();
 
+      final isCollapsible = span.type == 'collapse';
+      final quoteIconRightOffset = isCollapsible ? 32.0 : 22.0;
+
       canvas.save();
-      canvas.translate(quoteRect.right - 22.0, quoteRect.top + 4.0);
+      canvas.translate(quoteRect.right - quoteIconRightOffset, quoteRect.top + 4.0);
       canvas.scale(14.0 / 24.0);
       canvas.drawPath(
         quotePath,
@@ -881,6 +898,22 @@ class InputQuotePainter extends CustomPainter {
           ..style = PaintingStyle.fill,
       );
       canvas.restore();
+
+      if (isCollapsible) {
+        final chevronPaint = Paint()
+          ..color = accentColor.withValues(alpha: 0.65)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round;
+        final cx = quoteRect.right - 12.0;
+        final cy = quoteRect.top + 11.0;
+        final chevronPath = Path()
+          ..moveTo(cx - 3.5, cy - 1.5)
+          ..lineTo(cx, cy + 2.0)
+          ..lineTo(cx + 3.5, cy - 1.5);
+        canvas.drawPath(chevronPath, chevronPaint);
+      }
     }
 
     canvas.restore();
@@ -1417,6 +1450,24 @@ class _TelegramTextSelectionToolbarState
                     textStyle: const TextStyle(fontWeight: FontWeight.w500),
                     onTap: () {
                       TextFormattingUtils.applyFormatting(widget.controller, 'spoiler');
+                      _hideToolbar();
+                    },
+                  ),
+                  _buildMenuItem(
+                    icon: const iconoir.QuoteSolid(color: _kMintAccent, width: 20, height: 20),
+                    label: 'Цитировать',
+                    textStyle: const TextStyle(fontWeight: FontWeight.w500),
+                    onTap: () {
+                      TextFormattingUtils.applyFormatting(widget.controller, 'quote');
+                      _hideToolbar();
+                    },
+                  ),
+                  _buildMenuItem(
+                    icon: const iconoir.NavArrowDown(color: _kMintAccent, width: 20, height: 20),
+                    label: 'Сворачиваемая цитата',
+                    textStyle: const TextStyle(fontWeight: FontWeight.w500),
+                    onTap: () {
+                      TextFormattingUtils.applyFormatting(widget.controller, 'collapse');
                       _hideToolbar();
                     },
                   ),

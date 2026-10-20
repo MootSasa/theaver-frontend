@@ -119,7 +119,7 @@ class _CollapsibleBlockquoteWidgetState
         )..layout(maxWidth: maxContentWidth);
 
         final bool didExceed = collapsedPainter.didExceedMaxLines;
-        final bool showToggle = widget.isCollapsible || didExceed;
+        final bool showToggle = widget.isCollapsible;
 
         if (widget.isCollapsible && !didExceed) {
           collapsedPainter = TextPainter(
