@@ -29,7 +29,7 @@ class MessageContextMenuService {
     bool canManagePoll = false,
     ValueChanged<Map<String, dynamic>>? onPollUpdated,
   }) {
-    if (_isShowing) return;
+    if (_isShowing || message.isUnsupported) return;
 
     final RenderBox? renderBox =
         messageKey.currentContext?.findRenderObject() as RenderBox?;

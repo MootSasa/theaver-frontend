@@ -1000,5 +1000,10 @@
   "profile_save_to_gallery": "Сохранить в галерею",
   "profile_choose_new_photo": "Выбрать новое фото",
   "chat_saved_messages": "Избранное",
-  "chat_saved": "Избранное"
+  "chat_saved": "Избранное",
+  "message_unsupported_text": "Сообщение не поддерживается в Вашей версии Theaver.\nПожалуйста, обновитесь до последней версии.",
+  "message_unsupported_update_btn": "Обновить Theaver",
+  "message_unsupported_preview": "Неподдерживаемое сообщение",
+  "app_up_to_date": "У вас установлена последняя версия Theaver",
+  "check_updates_error": "Не удалось проверить обновления"
 }

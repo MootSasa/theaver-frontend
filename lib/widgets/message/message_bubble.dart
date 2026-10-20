@@ -32,6 +32,7 @@ import '../../services/media_cache_manager.dart';
 import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
 import 'poll_message_widget.dart';
+import 'unsupported_message_widget.dart';
 
 /// Радиус скругления "облачка" сообщения.
 const double kMessageBorderRadius = 18.0;
@@ -757,10 +758,11 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isUnsupported = message.isUnsupported;
     final String? resolvedFileUrl = AppConfig.resolveMediaUrl(message.fileUrl);
-    final bool hasMedia = _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
-    final bool hasCaption = _hasCaption;
-    final bool isBigEmoji = !hasMedia && _isSingleEmoji;
+    final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
+    final bool hasCaption = !isUnsupported && _hasCaption;
+    final bool isBigEmoji = !isUnsupported && !hasMedia && _isSingleEmoji;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
@@ -1250,19 +1252,31 @@ class MessageBubble extends StatelessWidget {
 
     final Widget bubbleContent = hasMedia
         ? mediaContentWidget!
-        : MessageBubbleLayout(
-            content: textBodyWidget,
-            metadata: metadataWidget,
-            text: message.content,
-            textStyle: textStyle,
-            hasBlockElement: endsWithBlock,
-            isBigEmoji: isBigEmoji,
-            replyWidget: replyWidget,
-            replyWidth: replyWidthEstimate,
-            senderNameWidget: senderNameWidget,
-            senderNameWidth: senderNameWidthEstimate,
-            metadataWidth: metadataWidthEstimate,
-          );
+        : (isUnsupported
+            ? UnsupportedMessageWidget(
+                message: message,
+                isMe: isMe,
+                isDark: isDark,
+                textColor: bubbleTextColor,
+                subtextColor: bubbleSubtextColor,
+                accentColor: effectivePreset.primaryColor,
+                metadata: metadataWidget,
+                replyWidget: replyWidget,
+                senderNameWidget: senderNameWidget,
+              )
+            : MessageBubbleLayout(
+                content: textBodyWidget,
+                metadata: metadataWidget,
+                text: message.content,
+                textStyle: textStyle,
+                hasBlockElement: endsWithBlock,
+                isBigEmoji: isBigEmoji,
+                replyWidget: replyWidget,
+                replyWidth: replyWidthEstimate,
+                senderNameWidget: senderNameWidget,
+                senderNameWidth: senderNameWidthEstimate,
+                metadataWidth: metadataWidthEstimate,
+              ));
 
     Widget bubbleCore = Container(
       margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),

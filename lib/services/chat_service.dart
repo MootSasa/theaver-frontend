@@ -64,6 +64,25 @@ class Chat {
               lastMessage == 'Видеосообщение' ||
               lastMessage == 'Video message'));
 
+  /// True if the last message in this chat has an unsupported type.
+  bool get isLastMessageUnsupported {
+    if (lastMessageType == null || lastMessageType!.isEmpty) return false;
+    if (lastMessageType == 'unsupported') return true;
+    const supportedTypes = {
+      'text',
+      'image',
+      'photo',
+      'video',
+      'voice',
+      'audio',
+      'round',
+      'poll',
+      'document',
+      'file',
+    };
+    return !supportedTypes.contains(lastMessageType!.toLowerCase());
+  }
+
   factory Chat.fromJson(Map<String, dynamic> json) {
     final msgType = json['last_message_type']?.toString();
     final isRound = json['last_message_is_round'] == true ||
@@ -159,6 +178,24 @@ class ReplyInfo {
     this.replyStripStyle,
     this.entities = const [],
   });
+
+  /// True if this reply message type is unsupported in the current app version.
+  bool get isUnsupported {
+    if (messageType == 'unsupported') return true;
+    const supportedTypes = {
+      'text',
+      'image',
+      'photo',
+      'video',
+      'voice',
+      'audio',
+      'round',
+      'poll',
+      'document',
+      'file',
+    };
+    return !supportedTypes.contains(messageType.toLowerCase());
+  }
 
   static List<MessageEntity> _parseEntities(dynamic raw) {
     if (raw is List) {
@@ -449,6 +486,24 @@ class Message {
 
   /// Whether this message has a reply or quote
   bool get hasReply => replyToMessageId != null && replyToMessageId!.isNotEmpty;
+
+  /// True if this message type is unsupported in the current app version.
+  bool get isUnsupported {
+    if (messageType == 'unsupported') return true;
+    const supportedTypes = {
+      'text',
+      'image',
+      'photo',
+      'video',
+      'voice',
+      'audio',
+      'round',
+      'poll',
+      'document',
+      'file',
+    };
+    return !supportedTypes.contains(messageType.toLowerCase());
+  }
 
   String? get thumbBase64 => mediaPayload?['thumb_base64'] as String?;
   String? get thumbUrl => mediaPayload?['thumb_url'] as String? ?? mediaPayload?['thumbnail_url'] as String?;

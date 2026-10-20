@@ -1001,5 +1001,10 @@
   "profile_save_to_gallery": "Save to gallery",
   "profile_choose_new_photo": "Choose new photo",
   "chat_saved_messages": "Saved Messages",
-  "chat_saved": "Saved Messages"
+  "chat_saved": "Saved Messages",
+  "message_unsupported_text": "This message is not supported on your version of Theaver.\nPlease update to the latest version.",
+  "message_unsupported_update_btn": "Update Theaver",
+  "message_unsupported_preview": "Unsupported message",
+  "app_up_to_date": "You have the latest version of Theaver",
+  "check_updates_error": "Failed to check for updates"
 }

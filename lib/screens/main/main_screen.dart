@@ -2293,25 +2293,31 @@ class _MainScreenState extends State<MainScreen>
       );
     }
 
-    String? displaySubtitle = chat.lastMessage;
-    if (displaySubtitle == null || displaySubtitle.trim().isEmpty) {
-      final loc = AppLocalizations.of(context);
-      if (chat.lastMessageGroupedId != null &&
-          chat.lastMessageGroupedId!.isNotEmpty) {
-        displaySubtitle = loc?.translate('chat_album') ?? 'Album';
-      } else {
-        final msgType = chat.lastMessageType?.toLowerCase();
-        if (msgType == 'photo' || msgType == 'image') {
-          displaySubtitle = loc?.translate('chat_photo') ?? 'Photo';
-        } else if (msgType == 'video') {
-          displaySubtitle = loc?.translate('chat_video') ?? 'Video';
-        } else if (msgType == 'album') {
+    final loc = AppLocalizations.of(context);
+    String? displaySubtitle;
+    if (chat.isLastMessageUnsupported) {
+      displaySubtitle =
+          loc?.translate('message_unsupported_preview') ?? 'Unsupported message';
+    } else {
+      displaySubtitle = chat.lastMessage;
+      if (displaySubtitle == null || displaySubtitle.trim().isEmpty) {
+        if (chat.lastMessageGroupedId != null &&
+            chat.lastMessageGroupedId!.isNotEmpty) {
           displaySubtitle = loc?.translate('chat_album') ?? 'Album';
-        } else if (msgType == 'voice' || msgType == 'audio') {
-          displaySubtitle =
-              loc?.translate('chat_voice_message') ?? 'Voice message';
-        } else if (msgType == 'file') {
-          displaySubtitle = loc?.translate('chat_file') ?? 'File';
+        } else {
+          final msgType = chat.lastMessageType?.toLowerCase();
+          if (msgType == 'photo' || msgType == 'image') {
+            displaySubtitle = loc?.translate('chat_photo') ?? 'Photo';
+          } else if (msgType == 'video') {
+            displaySubtitle = loc?.translate('chat_video') ?? 'Video';
+          } else if (msgType == 'album') {
+            displaySubtitle = loc?.translate('chat_album') ?? 'Album';
+          } else if (msgType == 'voice' || msgType == 'audio') {
+            displaySubtitle =
+                loc?.translate('chat_voice_message') ?? 'Voice message';
+          } else if (msgType == 'file') {
+            displaySubtitle = loc?.translate('chat_file') ?? 'File';
+          }
         }
       }
     }

@@ -944,5 +944,10 @@
   "profile_save_to_gallery": "ギャラリーに保存",
   "profile_choose_new_photo": "新しい写真を選択",
   "chat_saved_messages": "保存済みメッセージ",
-  "chat_saved": "保存済みメッセージ"
+  "chat_saved": "保存済みメッセージ",
+  "message_unsupported_text": "お使いの Theaver のバージョンではこのメッセージはサポートされていません。\n最新バージョンにアップデートしてください。",
+  "message_unsupported_update_btn": "Theaver を更新",
+  "message_unsupported_preview": "サポートされていないメッセージ",
+  "app_up_to_date": "お使いの Theaver は最新バージョンです",
+  "check_updates_error": "アップデートの確認に失敗しました"
 }
