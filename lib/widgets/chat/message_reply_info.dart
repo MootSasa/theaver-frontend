@@ -416,7 +416,8 @@ class MessageReplyInfo extends StatelessWidget {
           mediaLabel = '🎭 Стикер';
           break;
         case 'poll':
-          mediaLabel = hasCaption ? '📊 ' : '📊 Опрос';
+          final pollLabel = context.l10n.translate('chat_poll');
+          mediaLabel = hasCaption ? '📊 ' : '📊 $pollLabel';
           break;
         default:
           mediaLabel = '';

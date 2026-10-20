@@ -3675,16 +3675,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
+    final bool isPoll = message.messageType == 'poll';
+    final bool isGroupAdmin = _participants.any(
+      (p) => p.id == _currentUserId && (p.role == 'owner' || p.role == 'admin'),
+    );
 
     MessageContextMenuService().show(
       context: context,
       message: message,
       messageKey: key,
       isMe: isMe,
+      currentUserId: _currentUserId,
+      canManagePoll: isMe || isGroupAdmin,
+      onPollUpdated: (updatedPoll) {
+        if (!mounted) return;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == message.id);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(mediaPayload: updatedPoll);
+            _updateFeedItems();
+          }
+        });
+      },
       onReply: () => _startReply(message),
-      onQuote: (isVideoNote || isVoiceNote) ? null : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
       onPin: () {},
-      onEdit: (isVideoNote || isVoiceNote) ? null : () {
+      onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
         setState(() {
           _cancelReply();
           _messageController.loadMessage(message.content, message.entities);

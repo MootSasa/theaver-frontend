@@ -1837,14 +1837,26 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
+    final bool isPoll = message.messageType == 'poll';
 
     MessageContextMenuService().show(
       context: context,
       message: message,
       messageKey: key,
       isMe: isMe,
+      currentUserId: _currentUserId,
+      canManagePoll: isMe || _isAdmin,
+      onPollUpdated: (updatedPoll) {
+        if (!mounted) return;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == message.id);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(mediaPayload: updatedPoll);
+          }
+        });
+      },
       onReply: () => _startReply(message),
-      onQuote: (!isVideoNote && !isVoiceNote) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
+      onQuote: (!isVideoNote && !isVoiceNote && !isPoll) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
       onPin: () {},
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) {},

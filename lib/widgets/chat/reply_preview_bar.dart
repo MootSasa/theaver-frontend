@@ -178,6 +178,9 @@ class ReplyPreviewBar extends StatelessWidget {
         case 'sticker':
           mediaLabel = 'Стикер';
           break;
+        case 'poll':
+          mediaLabel = context.l10n.translate('chat_poll');
+          break;
       }
       if (mediaLabel != null) {
         if (hasCaption && replyToMessage.messageType != 'sticker') {
