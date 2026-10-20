@@ -107,7 +107,7 @@ class _CollapsibleBlockquoteWidgetState
 
         final textDirection = Directionality.of(context);
 
-        final collapsedPainter = TextPainter(
+        TextPainter collapsedPainter = TextPainter(
           text: TextSpan(text: widget.text, style: quoteTextStyle),
           textDirection: textDirection,
           maxLines: 3,
@@ -121,6 +121,14 @@ class _CollapsibleBlockquoteWidgetState
 
         final bool didExceed = collapsedPainter.didExceedMaxLines;
         final bool showToggle = widget.isCollapsible || didExceed;
+
+        if (widget.isCollapsible && !didExceed) {
+          collapsedPainter = TextPainter(
+            text: TextSpan(text: widget.text, style: quoteTextStyle),
+            textDirection: textDirection,
+            maxLines: 1,
+          )..layout(maxWidth: maxContentWidth);
+        }
 
         final double collapsedHeight = collapsedPainter.height;
         final double fullHeight = fullPainter.height;
@@ -178,25 +186,24 @@ class _CollapsibleBlockquoteWidgetState
                             ),
                           ),
                           if (!showToggle)
-                            IntrinsicHeight(
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  ReplyStripWidget(
+                            Stack(
+                              children: [
+                                Positioned(
+                                  top: 0,
+                                  bottom: 0,
+                                  left: 0,
+                                  child: ReplyStripWidget(
                                     preset: effectivePreset,
                                     style: effectiveStripStyle,
                                     width: 3.5,
                                     borderRadius: 2,
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(right: 14.0),
-                                      child: quoteBody,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 11.5, right: 14.0),
+                                  child: quoteBody,
+                                ),
+                              ],
                             )
                           else
                             Row(
@@ -218,7 +225,7 @@ class _CollapsibleBlockquoteWidgetState
                                     child: SizedBox(
                                       height: currentTextHeight,
                                       child: ClipRect(
-                                        child: (progress < 1.0)
+                                        child: (progress < 1.0 && currentTextHeight < fullHeight - 1.0)
                                             ? ShaderMask(
                                                 shaderCallback: (Rect bounds) {
                                                   const double fadeHeight = 20.0;

@@ -529,5 +529,106 @@ void main() {
       expect(parsed.entities.length, equals(1));
       expect(parsed.entities.first.type, equals('underline'));
     });
+
+    test('toMarkdown handles mid-line blockquote by inserting line breaks before and after quote', () {
+      const text = 'Привет цитата пока';
+      const entities = [
+        MessageEntity(type: 'blockquote', offset: 7, length: 6, collapsed: false),
+      ];
+
+      final md = EntityParser.toMarkdown(text, entities);
+      expect(md, equals('Привет \n> цитата\n пока'));
+    });
+
+    test('toMarkdown and parseMarkdown handle overlapping (crossing) italic and spoiler modes cleanly', () {
+      // "один два три": italic on "один два" [0, 8], spoiler on "два три" [5, 12]
+      const text = 'один два три';
+      const entities = [
+        MessageEntity(type: 'italic', offset: 0, length: 8),
+        MessageEntity(type: 'spoiler', offset: 5, length: 7),
+      ];
+
+      final md = EntityParser.toMarkdown(text, entities);
+      // Italic splits at spoiler boundary and trims trailing space: "*один* ||*два* три||"
+      expect(md, equals('*один* ||*два* три||'));
+
+      final reparsed = EntityParser.parseMarkdown(md);
+      expect(reparsed.cleanText, equals(text));
+      expect(reparsed.entities.any((e) => e.type == 'spoiler' && e.offset == 5 && e.length == 7), isTrue);
+      expect(reparsed.entities.where((e) => e.type == 'italic').length, equals(2));
+    });
+
+    test('parseMarkdown handles nested bold + italic in all combinations', () {
+      final p1 = EntityParser.parseMarkdown('***bold italic***');
+      expect(p1.cleanText, equals('bold italic'));
+      expect(p1.entities.map((e) => e.type).toSet(), equals({'bold', 'italic'}));
+
+      final p2 = EntityParser.parseMarkdown('**bold *and italic***');
+      expect(p2.cleanText, equals('bold and italic'));
+      expect(
+        p2.entities.any((e) => e.type == 'bold' && e.offset == 0 && e.length == 15),
+        isTrue,
+      );
+      expect(
+        p2.entities.any((e) => e.type == 'italic' && e.offset == 5 && e.length == 10),
+        isTrue,
+      );
+
+      final p3 = EntityParser.parseMarkdown('*italic **and bold***');
+      expect(p3.cleanText, equals('italic and bold'));
+      expect(
+        p3.entities.any((e) => e.type == 'italic' && e.offset == 0 && e.length == 15),
+        isTrue,
+      );
+      expect(
+        p3.entities.any((e) => e.type == 'bold' && e.offset == 7 && e.length == 8),
+        isTrue,
+      );
+    });
+
+    test('toMarkdown splits inline formatting across newlines and blockquote boundaries', () {
+      const text = 'Первая\nВторая';
+      const entities = [
+        MessageEntity(type: 'bold', offset: 0, length: 13),
+        MessageEntity(type: 'blockquote', offset: 7, length: 6, collapsed: false),
+      ];
+
+      final md = EntityParser.toMarkdown(text, entities);
+      expect(md, equals('**Первая**\n> **Вторая**'));
+    });
+
+    test('RichTextEditingController supports stacking multiple active formats and exits span when toggled off', () {
+      final ctrl = RichTextEditingController();
+      ctrl.selection = const TextSelection.collapsed(offset: 0);
+
+      // Enable both italic and spoiler at the same time
+      ctrl.applyFormat('italic');
+      ctrl.applyFormat('spoiler');
+      expect(ctrl.isFormatActive('italic'), isTrue);
+      expect(ctrl.isFormatActive('spoiler'), isTrue);
+
+      ctrl.value = const TextEditingValue(
+        text: 'секрет',
+        selection: TextSelection.collapsed(offset: 6),
+      );
+      expect(ctrl.entities.map((e) => e.type).toSet(), equals({'italic', 'spoiler'}));
+
+      // Disable spoiler, keep italic active, and type more
+      ctrl.applyFormat('spoiler');
+      expect(ctrl.isFormatActive('spoiler'), isFalse);
+      expect(ctrl.isFormatActive('italic'), isTrue);
+
+      ctrl.value = const TextEditingValue(
+        text: 'секрет курсив',
+        selection: TextSelection.collapsed(offset: 13),
+      );
+
+      final spoilerEntity = ctrl.entities.firstWhere((e) => e.type == 'spoiler');
+      final italicEntity = ctrl.entities.firstWhere((e) => e.type == 'italic');
+      expect(spoilerEntity.offset, equals(0));
+      expect(spoilerEntity.length, equals(6)); // Only "секрет" is spoiler!
+      expect(italicEntity.offset, equals(0));
+      expect(italicEntity.length, equals(13)); // Full "секрет курсив" is merged italic!
+    });
   });
 }

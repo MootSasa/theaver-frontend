@@ -2265,6 +2265,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   void _startReply(Message message) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _messageController.clear();
+      }
       _replyToMessage = message;
       _isQuote = false;
       _quoteText = null;
@@ -2281,6 +2286,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   void _startQuote(Message message, String selectedText, int offset, int length) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _messageController.clear();
+      }
       _replyToMessage = message;
       _isQuote = true;
       _quoteText = selectedText;

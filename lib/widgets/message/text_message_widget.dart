@@ -144,6 +144,8 @@ class MathBlockSyntax extends md.BlockSyntax {
 /// Custom block syntax for collapsible blockquotes: lines starting with **>
 class CollapsibleBlockquoteBlockSyntax extends md.BlockSyntax {
   static final RegExp _pattern = RegExp(r'^[ ]{0,3}\*\*>[ ]?(.*)$');
+  static final RegExp _continuationPattern =
+      RegExp(r'^[ ]{0,3}(?:\*\*)?>[ ]?(.*)$');
 
   @override
   RegExp get pattern => _pattern;
@@ -156,15 +158,11 @@ class CollapsibleBlockquoteBlockSyntax extends md.BlockSyntax {
 
     while (!parser.isDone) {
       final currentLine = parser.current;
-      final match = pattern.firstMatch(currentLine.content);
+      final activePattern =
+          childLines.isEmpty ? _pattern : _continuationPattern;
+      final match = activePattern.firstMatch(currentLine.content);
       if (match != null) {
-        final markerStart = currentLine.content.indexOf('**>');
-        int markerEnd = markerStart + 3;
-        if (currentLine.content.length > markerEnd &&
-            (currentLine.content[markerEnd] == ' ' || currentLine.content[markerEnd] == '\t')) {
-          markerEnd++;
-        }
-        childLines.add(md.Line(currentLine.content.substring(markerEnd)));
+        childLines.add(md.Line(match.group(1) ?? ''));
         parser.advance();
         continue;
       }
@@ -269,6 +267,9 @@ class BlockquoteElementBuilder extends MarkdownElementBuilder {
         .trim()
         .replaceFirst(RegExp(r'^(?:collapse:|\*\*>\s?)\s*'), '');
 
+    final cleanQuoteText = EntityParser.parseMarkdown(rawMarkdown).cleanText.trim();
+    final effectivePlainText = cleanQuoteText.isNotEmpty ? cleanQuoteText : text;
+
     final quoteTextStyle = TextStyle(
       fontSize: 14,
       fontStyle: FontStyle.italic,
@@ -307,7 +308,7 @@ class BlockquoteElementBuilder extends MarkdownElementBuilder {
         styleSheet: MarkdownStyleSheet(
           p: quoteTextStyle,
           pPadding: EdgeInsets.zero,
-          blockSpacing: 4.0,
+          blockSpacing: 0.0,
           strong: quoteTextStyle.copyWith(fontWeight: FontWeight.bold),
           em: quoteTextStyle.copyWith(fontStyle: FontStyle.italic),
           del: quoteTextStyle.copyWith(decoration: TextDecoration.lineThrough),
@@ -349,7 +350,7 @@ class BlockquoteElementBuilder extends MarkdownElementBuilder {
     }
 
     return CollapsibleBlockquoteWidget(
-      text: text,
+      text: effectivePlainText,
       isCollapsible: isCollapsible,
       initialExpanded: false,
       isDark: isDark,
@@ -542,11 +543,22 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
 
   static final RegExp _markdownIndicator = RegExp(r'[*_~`\[$<]');
 
-  @override
-  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    final effectiveStyle = preferredStyle ?? this.preferredStyle;
-    final content = element.textContent;
+  TextStyle _resolveStyle(TextStyle? preferred, TextStyle? parent) {
+    TextStyle resolved = preferredStyle ?? const TextStyle();
+    if (preferred != null) resolved = resolved.merge(preferred);
+    if (parent != null) {
+      final combinedDecoration = (resolved.decoration != null &&
+              resolved.decoration != TextDecoration.none &&
+              parent.decoration != null &&
+              parent.decoration != TextDecoration.none)
+          ? TextDecoration.combine([resolved.decoration!, parent.decoration!])
+          : (parent.decoration ?? resolved.decoration);
+      resolved = resolved.merge(parent).copyWith(decoration: combinedDecoration);
+    }
+    return resolved;
+  }
 
+  Widget _buildSpoiler(String content, TextStyle effectiveStyle) {
     if (_markdownIndicator.hasMatch(content) || EmojiUtils.emojiRegex.hasMatch(content)) {
       return SpoilerTextWidget(
         textStyle: effectiveStyle,
@@ -568,10 +580,18 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
           styleSheet: MarkdownStyleSheet(
             p: effectiveStyle,
             pPadding: EdgeInsets.zero,
-            strong: effectiveStyle?.copyWith(fontWeight: FontWeight.bold),
-            em: effectiveStyle?.copyWith(fontStyle: FontStyle.italic),
-            del: effectiveStyle?.copyWith(decoration: TextDecoration.lineThrough),
-            code: effectiveStyle?.copyWith(
+            strong: effectiveStyle.copyWith(fontWeight: FontWeight.bold),
+            em: effectiveStyle.copyWith(fontStyle: FontStyle.italic),
+            del: effectiveStyle.copyWith(
+              decoration: effectiveStyle.decoration != null &&
+                      effectiveStyle.decoration != TextDecoration.none
+                  ? TextDecoration.combine([
+                      effectiveStyle.decoration!,
+                      TextDecoration.lineThrough,
+                    ])
+                  : TextDecoration.lineThrough,
+            ),
+            code: effectiveStyle.copyWith(
               fontFamily: 'monospace',
               backgroundColor: Colors.transparent,
             ),
@@ -579,7 +599,7 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
           builders: {
             'latex': MathElementBuilder(effectiveStyle),
             'underline': UnderlineElementBuilder(effectiveStyle),
-            'emoji': EmojiElementBuilder(fontSize: effectiveStyle?.fontSize ?? _kMessageFontSize),
+            'emoji': EmojiElementBuilder(fontSize: effectiveStyle.fontSize ?? _kMessageFontSize),
           },
         ),
       );
@@ -590,12 +610,31 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
       style: effectiveStyle,
     );
   }
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final effectiveStyle = _resolveStyle(preferredStyle, parentStyle);
+    return _buildSpoiler(element.textContent, effectiveStyle);
+  }
+
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    final effectiveStyle = _resolveStyle(preferredStyle, null);
+    return _buildSpoiler(element.textContent, effectiveStyle);
+  }
 }
 
 /// Custom syntax for underline: __...__ or <u>...</u>
 class UnderlineInlineSyntax extends md.InlineSyntax {
   UnderlineInlineSyntax()
-      : super(r'(?:(?<!\w)__(?!\s)([^_\n]+?)(?<!\s)__(?!\w)|<u>([\s\S]+?)<\/u>)');
+      : super(
+          r'(?:(?<![a-zA-Z0-9_])__(?!\s|_)((?:(?!__)[^\n])+?)(?<!\s|_)__(?![a-zA-Z0-9_])|<u>([\s\S]+?)<\/u>)',
+        );
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
@@ -612,27 +651,24 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
 
   UnderlineElementBuilder([this.baseStyle]);
 
-  static final RegExp _markdownIndicator = RegExp(r'[*_~`\[$<]');
+  static final RegExp _markdownIndicator = RegExp(r'[*_~`\[$<|]');
 
-  @override
-  Widget? visitElementAfterWithContext(
-    BuildContext context,
-    md.Element element,
-    TextStyle? preferredStyle,
-    TextStyle? parentStyle,
-  ) {
-    final effectiveStyle = parentStyle ?? preferredStyle ?? baseStyle ?? DefaultTextStyle.of(context).style;
-    final underlineStyle = effectiveStyle.copyWith(
+  TextStyle _resolveUnderlineStyle(TextStyle? preferred, TextStyle? parent, [TextStyle? fallback]) {
+    TextStyle effective = baseStyle ?? fallback ?? const TextStyle();
+    if (preferred != null) effective = effective.merge(preferred);
+    if (parent != null) effective = effective.merge(parent);
+    return effective.copyWith(
       decoration: TextDecoration.combine([
-        if (effectiveStyle.decoration != null && effectiveStyle.decoration != TextDecoration.none)
-          effectiveStyle.decoration!,
+        if (effective.decoration != null && effective.decoration != TextDecoration.none)
+          effective.decoration!,
         TextDecoration.underline,
       ]),
-      decorationColor: effectiveStyle.color,
+      decorationColor: effective.color,
       decorationThickness: 1.5,
     );
+  }
 
-    final content = element.textContent;
+  Widget _buildUnderline(String content, TextStyle underlineStyle) {
     if (_markdownIndicator.hasMatch(content) || EmojiUtils.emojiRegex.hasMatch(content)) {
       return MarkdownBody(
         data: content,
@@ -644,6 +680,7 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
           [
             md.CodeSyntax(),
             MathInlineSyntax(),
+            SpoilerInlineSyntax(),
             UnderlineInlineSyntax(),
             EmojiInlineSyntax(),
             ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
@@ -667,6 +704,7 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
         ),
         builders: {
           'latex': MathElementBuilder(underlineStyle),
+          'spoiler': SpoilerElementBuilder(underlineStyle),
           'emoji': EmojiElementBuilder(fontSize: underlineStyle.fontSize ?? _kMessageFontSize),
         },
       );
@@ -679,58 +717,24 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
   }
 
   @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final underlineStyle = _resolveUnderlineStyle(
+      preferredStyle,
+      parentStyle,
+      DefaultTextStyle.of(context).style,
+    );
+    return _buildUnderline(element.textContent, underlineStyle);
+  }
+
+  @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    final effectiveStyle = preferredStyle ?? baseStyle;
-    final underlineStyle = (effectiveStyle ?? const TextStyle()).copyWith(
-      decoration: TextDecoration.combine([
-        if (effectiveStyle?.decoration != null && effectiveStyle!.decoration != TextDecoration.none)
-          effectiveStyle.decoration!,
-        TextDecoration.underline,
-      ]),
-      decorationColor: effectiveStyle?.color,
-      decorationThickness: 1.5,
-    );
-
-    final content = element.textContent;
-    if (_markdownIndicator.hasMatch(content) || EmojiUtils.emojiRegex.hasMatch(content)) {
-      return MarkdownBody(
-        data: content,
-        selectable: false,
-        shrinkWrap: true,
-        softLineBreak: true,
-        extensionSet: md.ExtensionSet(
-          [],
-          [
-            md.CodeSyntax(),
-            MathInlineSyntax(),
-            UnderlineInlineSyntax(),
-            EmojiInlineSyntax(),
-            ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
-          ],
-        ),
-        styleSheet: MarkdownStyleSheet(
-          p: underlineStyle,
-          pPadding: EdgeInsets.zero,
-          strong: underlineStyle.copyWith(fontWeight: FontWeight.bold),
-          em: underlineStyle.copyWith(fontStyle: FontStyle.italic),
-          del: underlineStyle.copyWith(
-            decoration: TextDecoration.combine([
-              TextDecoration.underline,
-              TextDecoration.lineThrough,
-            ]),
-          ),
-        ),
-        builders: {
-          'latex': MathElementBuilder(underlineStyle),
-          'emoji': EmojiElementBuilder(fontSize: underlineStyle.fontSize ?? _kMessageFontSize),
-        },
-      );
-    }
-
-    return Text(
-      content,
-      style: underlineStyle,
-    );
+    final underlineStyle = _resolveUnderlineStyle(preferredStyle, null);
+    return _buildUnderline(element.textContent, underlineStyle);
   }
 }
 

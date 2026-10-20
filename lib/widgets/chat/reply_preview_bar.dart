@@ -9,6 +9,7 @@ import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
+import '../../utils/entity_parser.dart';
 import '../profile/reply_strip_painter.dart';
 
 /// A floating bubble shown above the message input field when the user
@@ -37,12 +38,15 @@ class ReplyPreviewBar extends StatelessWidget {
 
   /// Truncate text for preview with ...
   String _truncate(String text, {int maxLen = 60}) {
-    final clean = text
+    final parsedClean = EntityParser.parseMarkdown(text).cleanText;
+    final clean = parsedClean
         .replaceAll(RegExp(r'```[a-zA-Z0-9+#]*'), '')
         .replaceAll('```', '')
+        .replaceAll(RegExp(r'(?:^|\n)\s*(?:\*\*)?>\s?'), ' ')
+        .replaceAll(RegExp(r'\|\|'), '')
         .replaceAll(RegExp(r'`'), '')
         .replaceAll(RegExp(r'[*_~]'), '')
-        .replaceAll(RegExp(r'\n+'), ' ')
+        .replaceAll(RegExp(r'\s*\n+\s*'), ' ')
         .trim();
     if (clean.length <= maxLen) return clean;
     return '${clean.substring(0, maxLen)}...';
@@ -257,7 +261,7 @@ class ReplyPreviewBar extends StatelessWidget {
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (replyToMessage.messageType != 'text')
+                            if (!isQuote && replyToMessage.messageType != 'text')
                               Padding(
                                 padding: const EdgeInsets.only(right: 4),
                                 child: _buildMessageTypeIcon(
@@ -272,6 +276,7 @@ class ReplyPreviewBar extends StatelessWidget {
                                   previewText,
                                   style: TextStyle(
                                     fontSize: 13,
+                                    fontStyle: isQuote ? FontStyle.italic : FontStyle.normal,
                                     color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                                   ),
                                 ),

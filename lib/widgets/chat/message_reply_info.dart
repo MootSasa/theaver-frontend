@@ -7,6 +7,7 @@ import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
+import '../../utils/entity_parser.dart';
 import '../profile/reply_strip_painter.dart';
 
 /// Displays a compact reply/quote preview above a message bubble.
@@ -74,12 +75,15 @@ class MessageReplyInfo extends StatelessWidget {
   }
 
   String _cleanMarkdown(String text) {
-    return text
-        .replaceAll(RegExp(r'```[a-zA-Z0-9+#]*'), '') // Remove code block start/lang
+    final parsedClean = EntityParser.parseMarkdown(text).cleanText;
+    return parsedClean
+        .replaceAll(RegExp(r'```[a-zA-Z0-9+#]*'), '') // Remove unclosed code block start/lang
         .replaceAll('```', '') // Remove code block end
+        .replaceAll(RegExp(r'(?:^|\n)\s*(?:\*\*)?>\s?'), ' ') // Remove any leftover quote markers
+        .replaceAll(RegExp(r'\|\|'), '') // Remove any unclosed spoiler markers
         .replaceAll(RegExp(r'`'), '') // Remove inline code backticks
         .replaceAll(RegExp(r'[*_~]'), '') // Remove basic markdown formatting
-        .replaceAll(RegExp(r'\n+'), ' ') // Replace newlines with spaces for single-line preview
+        .replaceAll(RegExp(r'\s*\n+\s*'), ' ') // Replace newlines with spaces for single-line preview
         .trim();
   }
 

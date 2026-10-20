@@ -793,6 +793,8 @@ class InputQuotePainter extends CustomPainter {
 
       double minTop = double.infinity;
       double maxBottom = -double.infinity;
+      double minLeft = double.infinity;
+      double maxRight = -double.infinity;
 
       for (final box in boxes) {
         final rawRect = box.toRect();
@@ -802,11 +804,27 @@ class InputQuotePainter extends CustomPainter {
         if (localTopLeft.dy + rawRect.height > maxBottom) {
           maxBottom = localTopLeft.dy + rawRect.height;
         }
+        if (localTopLeft.dx < minLeft) minLeft = localTopLeft.dx;
+        if (localTopLeft.dx + rawRect.width > maxRight) {
+          maxRight = localTopLeft.dx + rawRect.width;
+        }
       }
 
       if (minTop >= maxBottom) continue;
 
-      final quoteRect = Rect.fromLTRB(2.0, minTop - 2.0, size.width - 2.0, maxBottom + 2.0);
+      final isMidLineStart = start > 0 && text[start - 1] != '\n';
+      final isMidLineEnd = end < text.length && text[end] != '\n';
+      final isSingleLineMidQuote =
+          (isMidLineStart || isMidLineEnd) && !text.substring(start, end).contains('\n');
+
+      final double rectLeft = isSingleLineMidQuote && isMidLineStart
+          ? (minLeft - 10.0).clamp(2.0, math.max(2.0, size.width - 28.0))
+          : 2.0;
+      final double rectRight = isSingleLineMidQuote && isMidLineEnd
+          ? (maxRight + 22.0).clamp(math.min(rectLeft + 26.0, size.width - 2.0), size.width - 2.0)
+          : size.width - 2.0;
+
+      final quoteRect = Rect.fromLTRB(rectLeft, minTop - 2.0, rectRight, maxBottom + 2.0);
       final bgRRect = RRect.fromRectAndRadius(quoteRect, const Radius.circular(6.0));
 
       // 1. Draw card background
@@ -814,7 +832,7 @@ class InputQuotePainter extends CustomPainter {
 
       // 2. Draw left vertical strip
       final stripRRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(6.0, quoteRect.top + 2.0, 3.5, quoteRect.height - 4.0),
+        Rect.fromLTWH(quoteRect.left + 4.0, quoteRect.top + 2.0, 3.5, quoteRect.height - 4.0),
         const Radius.circular(2.0),
       );
       canvas.drawRRect(stripRRect, Paint()..color = accentColor);

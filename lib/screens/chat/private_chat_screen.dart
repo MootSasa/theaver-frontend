@@ -1009,6 +1009,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   /// Start a reply to a message (full message reply)
   void _startReply(Message message) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _textController.clear();
+      }
       _replyToMessage = message;
       _isQuote = false;
       _quoteText = null;
@@ -1030,6 +1035,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   /// Start a quote reply (partial text)
   void _startQuote(Message message, String selectedText, int offset, int length) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _textController.clear();
+      }
       _replyToMessage = message;
       _isQuote = true;
       _quoteText = selectedText;

@@ -256,20 +256,16 @@ class _SpoilerTextWidgetState extends State<SpoilerTextWidget>
               // Animated particle layer
               if (!_isFullyRevealed)
                 Positioned.fill(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      _ensureParticles(constraints.maxWidth, constraints.maxHeight);
-                      return CustomPaint(
-                        painter: _TelegramSpoilerParticlePainter(
-                          childKey: _childKey,
-                          particles: _particles,
-                          color: particleColor,
-                          isMedia: widget.isMedia,
-                          revealAnimation: _isRevealing ? _revealAnimation : null,
-                          repaint: _isRevealing ? _revealAnimation : _loopController,
-                        ),
-                      );
-                    },
+                  child: CustomPaint(
+                    painter: _TelegramSpoilerParticlePainter(
+                      childKey: _childKey,
+                      particles: _particles,
+                      onEnsureParticles: _ensureParticles,
+                      color: particleColor,
+                      isMedia: widget.isMedia,
+                      revealAnimation: _isRevealing ? _revealAnimation : null,
+                      repaint: _isRevealing ? _revealAnimation : _loopController,
+                    ),
                   ),
                 ),
             ],
@@ -288,6 +284,7 @@ class _SpoilerTextWidgetState extends State<SpoilerTextWidget>
 class _TelegramSpoilerParticlePainter extends CustomPainter {
   final GlobalKey? childKey;
   final List<SpoilerParticle> particles;
+  final void Function(double width, double height)? onEnsureParticles;
   final Color color;
   final bool isMedia;
   final Animation<double>? revealAnimation;
@@ -295,6 +292,7 @@ class _TelegramSpoilerParticlePainter extends CustomPainter {
   _TelegramSpoilerParticlePainter({
     this.childKey,
     required this.particles,
+    this.onEnsureParticles,
     required this.color,
     required this.isMedia,
     this.revealAnimation,
@@ -320,7 +318,9 @@ class _TelegramSpoilerParticlePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0 || particles.isEmpty) return;
+    if (size.width <= 0 || size.height <= 0) return;
+    onEnsureParticles?.call(size.width, size.height);
+    if (particles.isEmpty) return;
 
     final revealT = revealAnimation?.value ?? 0.0;
     final remainingOpacity = (1.0 - revealT).clamp(0.0, 1.0);

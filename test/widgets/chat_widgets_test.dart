@@ -11,9 +11,11 @@ import 'package:theaver/widgets/chat/chat_scaffold.dart';
 import 'package:theaver/widgets/chat/chat_input_bar.dart';
 import 'package:theaver/widgets/chat/chat_messages_list_view.dart';
 import 'package:theaver/widgets/chat/liquid_glass_input_field.dart';
+import 'package:theaver/utils/entity_parser.dart';
 import 'package:theaver/widgets/message/code_block_widget.dart';
 import 'package:theaver/widgets/message/collapsible_blockquote_widget.dart';
 import 'package:theaver/widgets/message/message_bubble.dart';
+import 'package:theaver/widgets/message/spoiler_text_widget.dart';
 import 'package:theaver/widgets/message/text_message_widget.dart';
 import 'package:theaver/widgets/profile/reply_strip_painter.dart';
 import 'package:theaver/widgets/chat/floating_video_note_overlay.dart';
@@ -713,6 +715,45 @@ void main() {
 
       expect(find.byType(MessageBubble), findsOneWidget);
       expect(find.byType(CollapsibleBlockquoteWidget), findsOneWidget);
+    });
+
+    testWidgets('MessageBubble renders combined blockquote + spoiler + italic + bold + trailing text without layout errors', (WidgetTester tester) async {
+      const cleanText = 'Начало\nСкрытая цитата\nКонец';
+      const entities = [
+        MessageEntity(type: 'blockquote', offset: 7, length: 14, collapsed: false),
+        MessageEntity(type: 'spoiler', offset: 7, length: 14),
+        MessageEntity(type: 'bold', offset: 7, length: 7),
+        MessageEntity(type: 'italic', offset: 11, length: 10),
+      ];
+      final mdContent = EntityParser.toMarkdown(cleanText, entities);
+
+      final message = Message(
+        id: 'msg_combined_1',
+        chatId: 'chat_1',
+        senderId: 'user_2',
+        senderName: 'Alice',
+        content: mdContent,
+        entities: entities,
+        messageType: 'text',
+        isEdited: false,
+        createdAt: DateTime.now().toIso8601String(),
+      );
+
+      await tester.pumpWidget(
+        createTestApp(
+          MessageBubble(
+            message: message,
+            isMe: false,
+            currentUserId: 'me_123',
+            formatTime: (_) => '12:00',
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(CollapsibleBlockquoteWidget), findsOneWidget);
+      expect(find.byType(SpoilerTextWidget), findsOneWidget);
     });
   });
 }

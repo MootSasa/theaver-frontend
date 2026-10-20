@@ -785,15 +785,16 @@ class MessageBubble extends StatelessWidget {
     final String trimmedContent = message.content.trim();
     final List<String> contentLines = trimmedContent.split('\n');
     final String lastLine = contentLines.isNotEmpty ? contentLines.last.trim() : '';
-    final bool contentEndsWithQuote = lastLine.startsWith('>') ||
-        lastLine.startsWith('**>') ||
-        trimmedContent.startsWith('>') ||
-        trimmedContent.startsWith('**>');
+    final bool contentEndsWithQuote =
+        lastLine.startsWith('>') || lastLine.startsWith('**>');
     final bool entityEndsWithQuote = message.entities.any((e) =>
-        (e.type == 'blockquote' || e.type == 'quote') &&
+        (e.type == 'blockquote' ||
+            e.type == 'quote' ||
+            e.type == 'collapse' ||
+            e.type == 'expandable_blockquote') &&
         (e.offset + e.length >= trimmedContent.length - 2));
     final bool entityEndsWithPre = message.entities.any((e) =>
-        (e.type == 'pre' || e.type == 'code') &&
+        e.type == 'pre' &&
         (e.offset + e.length >= trimmedContent.length - 2));
 
     final NameColorPreset effectivePreset;
