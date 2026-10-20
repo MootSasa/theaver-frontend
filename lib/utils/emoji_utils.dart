@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show SynchronousFuture, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -454,6 +455,12 @@ class EmojiEffectOverlay {
       }
     }
 
+    // Generate random jitter offset (8px to 16px in any direction)
+    final random = math.Random();
+    final dx = (random.nextDouble() * 8 + 8) * (random.nextBool() ? 1 : -1);
+    final dy = (random.nextDouble() * 8 + 8) * (random.nextBool() ? 1 : -1);
+    final randomOffset = Offset(dx, dy);
+
     entry = OverlayEntry(
       builder: (context) => Positioned(
         left: 0,
@@ -465,6 +472,7 @@ class EmojiEffectOverlay {
           layerLink: layerLink,
           emojiSize: emojiSize,
           isMe: isMe,
+          jitterOffset: randomOffset,
           onComplete: safeRemove,
         ),
       ),
@@ -481,6 +489,7 @@ class _EmojiEffectWidget extends StatefulWidget {
   final LayerLink layerLink;
   final double emojiSize;
   final bool isMe;
+  final Offset jitterOffset;
   final VoidCallback onComplete;
 
   const _EmojiEffectWidget({
@@ -488,6 +497,7 @@ class _EmojiEffectWidget extends StatefulWidget {
     required this.layerLink,
     required this.emojiSize,
     required this.isMe,
+    required this.jitterOffset,
     required this.onComplete,
   });
 
@@ -532,7 +542,7 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
         showWhenUnlinked: false,
         followerAnchor: Alignment.center,
         targetAnchor: Alignment.center,
-        offset: Offset(hShift, 0),
+        offset: Offset(hShift + widget.jitterOffset.dx, widget.jitterOffset.dy),
         child: SizedBox(
           width: effectSize,
           height: effectSize,
