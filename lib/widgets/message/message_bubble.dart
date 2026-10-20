@@ -592,6 +592,7 @@ class MessageBubbleLayout extends StatelessWidget {
   final TextStyle textStyle;
   final bool hasBlockElement;
   final bool isBigEmoji;
+  final bool isMe;
   final Widget? replyWidget;
   final double replyWidth;
   final Widget? senderNameWidget;
@@ -606,6 +607,7 @@ class MessageBubbleLayout extends StatelessWidget {
     required this.textStyle,
     this.hasBlockElement = false,
     this.isBigEmoji = false,
+    this.isMe = true,
     this.replyWidget,
     this.replyWidth = 0.0,
     this.senderNameWidget,
@@ -616,7 +618,7 @@ class MessageBubbleLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (isBigEmoji) {
-      return Stack(
+      final Widget emojiStack = Stack(
         clipBehavior: Clip.none,
         children: [
           content,
@@ -625,6 +627,44 @@ class MessageBubbleLayout extends StatelessWidget {
             right: 0,
             child: metadata,
           ),
+        ],
+      );
+
+      if (senderNameWidget == null && replyWidget == null) {
+        return emojiStack;
+      }
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Container(
+            constraints: const BoxConstraints(maxWidth: 230.0),
+            margin: const EdgeInsets.only(bottom: 4.0),
+            padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 5.0),
+            decoration: BoxDecoration(
+              color: isMe
+                  ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.9)
+                  : Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(14.0),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (senderNameWidget != null) senderNameWidget!,
+                if (replyWidget != null) replyWidget!,
+              ],
+            ),
+          ),
+          emojiStack,
         ],
       );
     }
@@ -746,14 +786,11 @@ class MessageBubble extends StatelessWidget {
     return true;
   }
 
-  bool get _isSingleEmoji {
-    if (_hasMedia || message.messageType != 'text' || message.hasReply) {
-      return false;
+  int get _emojiOnlyCount {
+    if (_hasMedia || message.messageType != 'text' || message.entities.isNotEmpty) {
+      return 0;
     }
-    final trimmed = message.content.trim();
-    if (trimmed.isEmpty) return false;
-    final runes = trimmed.runes.toList();
-    return runes.length <= 2 && EmojiUtils.emojiRegex.hasMatch(trimmed);
+    return EmojiUtils.countEmojiOnly(message.content);
   }
 
   @override
@@ -762,7 +799,8 @@ class MessageBubble extends StatelessWidget {
     final String? resolvedFileUrl = AppConfig.resolveMediaUrl(message.fileUrl);
     final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
     final bool hasCaption = !isUnsupported && _hasCaption;
-    final bool isBigEmoji = !isUnsupported && !hasMedia && _isSingleEmoji;
+    final int emojiCount = (!isUnsupported && !hasMedia) ? _emojiOnlyCount : 0;
+    final bool isBigEmoji = emojiCount > 0;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
@@ -1020,17 +1058,40 @@ class MessageBubble extends StatelessWidget {
         accentColor: effectivePreset.primaryColor,
       );
     } else if (isBigEmoji) {
-      textBodyWidget = Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6.0),
-        child: GestureDetector(
-          onTap: () => HapticUtils.tap(),
-          child: EmojiUtils.appleEmoji(
-            message.content,
-            size: 64.0,
-            fallbackStyle: textStyle,
+      if (emojiCount == 1) {
+        const double emojiFontSize = 64.0;
+        final String stableKey = message.localId ?? message.id;
+        final bool shouldAutoPlay = message.sendStatus == 0 ||
+            (DateTime.tryParse(message.createdAt)
+                    ?.toLocal()
+                    .isAfter(DateTime.now().subtract(const Duration(seconds: 3))) ??
+                false);
+        textBodyWidget = Padding(
+          padding: const EdgeInsets.only(top: 4.0, bottom: 16.0, left: 4.0, right: 4.0),
+          child: LottieEmoji(
+            key: ValueKey('lottie_$stableKey'),
+            emoji: message.content,
+            width: emojiFontSize * 1.8,
+            height: emojiFontSize * 1.8,
+            style: textStyle,
+            onTap: () => HapticUtils.tap(),
+            isMe: isMe,
+            autoPlay: shouldAutoPlay,
+            autoPlayId: stableKey,
           ),
-        ),
-      );
+        );
+      } else {
+        final double multiEmojiFontSize = emojiCount <= 3 ? 44.0 : 32.0;
+        textBodyWidget = Padding(
+          padding: const EdgeInsets.only(top: 4.0, bottom: 22.0, left: 4.0, right: 4.0),
+          child: EmojiUtils.emojiOnlyText(
+            message.content,
+            fontSize: multiEmojiFontSize,
+            fallbackStyle: textStyle,
+            textAlign: isMe ? TextAlign.end : TextAlign.start,
+          ),
+        );
+      }
     } else {
       textBodyWidget = TextMessageWidget(
         text: message.content,
@@ -1271,6 +1332,7 @@ class MessageBubble extends StatelessWidget {
                 textStyle: textStyle,
                 hasBlockElement: endsWithBlock,
                 isBigEmoji: isBigEmoji,
+                isMe: isMe,
                 replyWidget: replyWidget,
                 replyWidth: replyWidthEstimate,
                 senderNameWidget: senderNameWidget,

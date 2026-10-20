@@ -847,6 +847,14 @@ class TextMessageWidget extends StatelessWidget {
 
     // Fast-path: Plain text without markdown, entities, or URLs renders instantly without AST parser
     if (!hasEntities && !hasLinks && !_markdownIndicator.hasMatch(text)) {
+      if (EmojiUtils.emojiRegex.hasMatch(text)) {
+        return Text.rich(
+          EmojiUtils.buildEmojiTextSpan(
+            text,
+            style: effectiveStyle ?? const TextStyle(),
+          ),
+        );
+      }
       return Text(
         text,
         style: effectiveStyle,

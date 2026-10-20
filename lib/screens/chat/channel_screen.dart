@@ -1382,12 +1382,25 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   Widget _buildChannelMessage(Message message) {
-    final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+    final GlobalKey key;
+    if (message.localId != null && _messageKeys.containsKey(message.localId!)) {
+      key = _messageKeys[message.localId!]!;
+      _messageKeys[message.id] = key;
+    } else {
+      key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+      if (message.localId != null) {
+        _messageKeys[message.localId!] = key;
+      }
+    }
     final isHighlighted = message.id == _highlightMessageId;
-    final bool isBigEmoji = message.messageType == 'text' &&
-        message.fileUrl == null &&
-        !message.hasReply &&
-        _isSingleEmoji(message.content);
+    final bool hasNoMedia = message.fileUrl == null || message.fileUrl!.trim().isEmpty;
+    final int emojiCount = (message.messageType == 'text' &&
+            hasNoMedia &&
+            !message.hasReply &&
+            message.entities.isEmpty)
+        ? EmojiUtils.countEmojiOnly(message.content)
+        : 0;
+    final bool isBigEmoji = emojiCount > 0;
 
     Widget messageWidget = AnimatedContainer(
       key: key,
@@ -1404,13 +1417,20 @@ class _ChannelScreenState extends State<ChannelScreen>
                 alignment: Alignment.centerLeft, // Channels usually left-aligned
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final double emojiFontSize = 64.0;
-                    
+                    const double emojiFontSize = 64.0;
+                    final String stableKey = message.localId ?? message.id;
+                    final bool shouldAutoPlay = message.sendStatus == 0 ||
+                        (DateTime.tryParse(message.createdAt)
+                                ?.toLocal()
+                                .isAfter(DateTime.now().subtract(
+                                    const Duration(seconds: 3))) ??
+                            false);
+
                     Widget metadataRow = Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.35),
+                        color: Colors.black.withValues(alpha: 0.35),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(
@@ -1422,9 +1442,9 @@ class _ChannelScreenState extends State<ChannelScreen>
                             color: Colors.white.withValues(alpha: 0.8),
                           ),
                           const SizedBox(width: 4),
-                          Text(
+                          const Text(
                             '0',
-                            style: const TextStyle(color: Colors.white, fontSize: 10),
+                            style: TextStyle(color: Colors.white, fontSize: 10),
                           ),
                           const SizedBox(width: 6),
                           Text(
@@ -1438,32 +1458,28 @@ class _ChannelScreenState extends State<ChannelScreen>
                     return Stack(
                       clipBehavior: Clip.none,
                       children: [
-                        GestureDetector(
-                          child: EmojiUtils.getAnimatedEmojiPath(message.content) != null
-                              ? LottieEmoji(
-                                  assetPath: EmojiUtils.getAnimatedEmojiPath(message.content)!,
-                                  emoji: message.content,
-                                  width: emojiFontSize * 1.8,
-                                  height: emojiFontSize * 1.8,
-                                  onTap: () => HapticUtils.tap(),
-                                  isMe: false, // In channels usually left-aligned effects
-                                  autoPlay: DateTime.tryParse(message.createdAt)
-                                          ?.toLocal()
-                                          .isAfter(DateTime.now().subtract(
-                                              const Duration(seconds: 2))) ??
-                                      false,
-                                )
-                              : Padding(
-                                  padding: const EdgeInsets.only(right: 10.0),
-                                  child: EmojiUtils.appleEmoji(
-                                    message.content,
-                                    size: emojiFontSize,
-                                  ),
-                                ),
-                        ),
+                        if (emojiCount == 1)
+                          LottieEmoji(
+                            key: ValueKey('lottie_$stableKey'),
+                            emoji: message.content,
+                            width: emojiFontSize * 1.8,
+                            height: emojiFontSize * 1.8,
+                            onTap: () => HapticUtils.tap(),
+                            isMe: false, // In channels usually left-aligned effects
+                            autoPlay: shouldAutoPlay,
+                            autoPlayId: stableKey,
+                          )
+                        else
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4.0, bottom: 20.0, right: 16.0),
+                            child: EmojiUtils.emojiOnlyText(
+                              message.content,
+                              fontSize: emojiCount <= 3 ? 44.0 : 32.0,
+                            ),
+                          ),
                         Positioned(
-                          bottom: 12,
-                          right: -16,
+                          bottom: emojiCount == 1 ? 12 : 0,
+                          right: emojiCount == 1 ? -16 : 0,
                           child: metadataRow,
                         ),
                       ],
@@ -1778,6 +1794,9 @@ class _ChannelScreenState extends State<ChannelScreen>
       onTap: () {
         _showContextMenu(message, message.senderId == _currentUserId || _isAdmin, key);
       },
+      onLongPress: () {
+        _showContextMenu(message, message.senderId == _currentUserId || _isAdmin, key, forceOpen: true);
+      },
       behavior: HitTestBehavior.opaque,
       child: Container(
         width: double.infinity,
@@ -1828,8 +1847,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
-  void _showContextMenu(Message message, bool isMe, GlobalKey key) {
-    if (message.messageType == 'text' && _isSingleEmoji(message.content)) {
+  void _showContextMenu(Message message, bool isMe, GlobalKey key, {bool forceOpen = false}) {
+    if (!forceOpen && message.messageType == 'text' && _isSingleEmoji(message.content)) {
       if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
         return;
       }
@@ -1887,20 +1906,5 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   /// Helper to check if string is exactly one emoji
-  bool _isSingleEmoji(String text) {
-    if (text.isEmpty) return false;
-    final trimmed = text.trim();
-    final chars = trimmed.characters;
-    if (chars.length != 1) return false;
-
-    final rune = chars.first.runes.first;
-    // Common emoji ranges
-    return (rune >= 0x1F300 && rune <= 0x1FAFF) ||
-        (rune >= 0x1F600 && rune <= 0x1F64F) ||
-        (rune >= 0x1F680 && rune <= 0x1F6FF) ||
-        (rune >= 0x2600 && rune <= 0x26FF) ||
-        (rune >= 0x2700 && rune <= 0x27BF) ||
-        (rune >= 0xFE00 && rune <= 0xFE0F) ||
-        (rune >= 0x1F900 && rune <= 0x1F9FF);
-  }
+  bool _isSingleEmoji(String text) => EmojiUtils.isSingleEmoji(text);
 }

@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import 'database/app_database.dart';
+import 'emoji_effect_cache_service.dart';
 import 'media_cache_manager.dart';
 
 /// Representation of a single media category in cache
@@ -97,6 +98,7 @@ class CacheService {
 
   /// Categorize file by its extension or path
   static String categorizeFile(String filePath) {
+    if (filePath.contains('emoji_effects') || filePath.contains('animated_emojis')) return 'other';
     final ext = p.extension(filePath).toLowerCase();
     if (_photoExtensions.contains(ext)) return 'photos';
     if (_videoExtensions.contains(ext)) return 'videos';
@@ -426,6 +428,10 @@ class CacheService {
           // File may be locked or already deleted
         }
       }
+    }
+
+    if (other) {
+      EmojiEffectCacheService.instance.clearMemoryCache();
     }
 
     if (photos && videos && audio && files && other) {

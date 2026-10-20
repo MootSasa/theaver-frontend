@@ -150,8 +150,14 @@ class SyncService {
       senderId: Value(payload['sender_id']?.toString() ?? ''),
       content: Value(payload['content']?.toString() ?? ''),
       messageType: Value(payload['message_type']?.toString() ?? 'text'),
-      fileUrl: Value(payload['file_url']?.toString()),
-      fileName: Value(payload['file_name']?.toString()),
+      fileUrl: Value(() {
+        final raw = payload['file_url']?.toString().trim();
+        return (raw != null && raw.isNotEmpty) ? raw : null;
+      }()),
+      fileName: Value(() {
+        final raw = payload['file_name']?.toString().trim();
+        return (raw != null && raw.isNotEmpty) ? raw : null;
+      }()),
       replyToMessageId: Value(payload['reply_to_message_id']?.toString()),
       isQuote: Value(payload['is_quote'] as bool? ?? false),
       quoteText: Value(payload['quote_text']?.toString()),

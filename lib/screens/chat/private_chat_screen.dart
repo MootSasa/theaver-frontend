@@ -2959,7 +2959,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Widget _buildMessageItem(Message message, int index) {
-    final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+    final GlobalKey key;
+    if (message.localId != null && _messageKeys.containsKey(message.localId!)) {
+      key = _messageKeys[message.localId!]!;
+      _messageKeys[message.id] = key;
+    } else {
+      key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+      if (message.localId != null) {
+        _messageKeys[message.localId!] = key;
+      }
+    }
     final bool isMe = message.senderId == _currentUserId;
     final isHighlighted = _highlightMessageId == message.id;
 
@@ -3007,6 +3016,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onTap: () {
         debugPrint('DEBUG: GestureDetector.onTap for message ${message.id}');
         _showContextMenu(message, isMe, key);
+      },
+      onLongPress: () {
+        _showContextMenu(message, isMe, key, forceOpen: true);
       },
       behavior: HitTestBehavior.opaque,
       child: Container(
@@ -4383,13 +4395,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String _formatDateLabel(DateTime dt) =>
       DateTimeUtils.formatDateSeparator(dt, context: context);
 
-  /// Show enhanced context menu on single tap
-  void _showContextMenu(Message message, bool isMe, GlobalKey key) {
+  /// Show enhanced context menu on single tap or long press
+  void _showContextMenu(Message message, bool isMe, GlobalKey key, {bool forceOpen = false}) {
     debugPrint('DEBUG: _showContextMenu called for message ${message.id}');
     
-    // Do not show context menu when clicking exactly on a big animated emoji.
-    // The GestureDetector inside _bubbleBuilder handles the animation/tap.
-    if (message.messageType == 'text' && _isSingleEmoji(message.content)) {
+    // Do not show context menu when single-tapping on a big animated emoji.
+    // Long-pressing (forceOpen: true) still opens the context menu.
+    if (!forceOpen && message.messageType == 'text' && _isSingleEmoji(message.content)) {
       if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
         return;
       }
@@ -4486,20 +4498,5 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   /// Helper to check if string is exactly one emoji
-  bool _isSingleEmoji(String text) {
-    if (text.isEmpty) return false;
-    final trimmed = text.trim();
-    final chars = trimmed.characters;
-    if (chars.length != 1) return false;
-
-    final rune = chars.first.runes.first;
-    // Common emoji ranges
-    return (rune >= 0x1F300 && rune <= 0x1FAFF) ||
-        (rune >= 0x1F600 && rune <= 0x1F64F) ||
-        (rune >= 0x1F680 && rune <= 0x1F6FF) ||
-        (rune >= 0x2600 && rune <= 0x26FF) ||
-        (rune >= 0x2700 && rune <= 0x27BF) ||
-        (rune >= 0xFE00 && rune <= 0xFE0F) ||
-        (rune >= 0x1F900 && rune <= 0x1F9FF);
-  }
+  bool _isSingleEmoji(String text) => EmojiUtils.isSingleEmoji(text);
 }
