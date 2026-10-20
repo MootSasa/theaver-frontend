@@ -483,7 +483,7 @@ class EmojiEffectOverlay {
 }
 
 class _EmojiEffectWidget extends StatefulWidget {
-  static const double effectSize = 256.0;
+  static const double effectSize = 384.0;
 
   final LottieComposition composition;
   final LayerLink layerLink;
@@ -532,9 +532,11 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
   Widget build(BuildContext context) {
     const double effectSize = _EmojiEffectWidget.effectSize;
 
+    // In Telegram's 512x512 emoji effect compositions, the emitter origin sits
+    // at x ≈ 392 (+0.265 * effectSize from horizontal center) and y = 256 (center).
     final double hShift = widget.isMe
-        ? (widget.emojiSize / 2 - effectSize / 2)
-        : (effectSize / 2 - widget.emojiSize / 2);
+        ? -effectSize * 0.265
+        : effectSize * 0.265;
 
     return IgnorePointer(
       child: CompositedTransformFollower(
