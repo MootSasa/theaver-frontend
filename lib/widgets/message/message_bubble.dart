@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -32,9 +31,13 @@ import 'media_download_button.dart';
 import '../../services/media_cache_manager.dart';
 import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
+import 'poll_message_widget.dart';
 
 /// Радиус скругления "облачка" сообщения.
 const double kMessageBorderRadius = 18.0;
+
+/// Максимальная ширина "облачка" сообщения в пикселях (для широких экранов и планшетов).
+const double kMaxMessageBubbleWidth = 460.0;
 
 /// Role of a child inside [BubbleLayoutWidget].
 enum BubbleChildRole {
@@ -293,11 +296,30 @@ class RenderBubbleLayout extends RenderBox
       return false;
     }
 
+    bool containsBlockElement(RenderObject obj) {
+      bool found = false;
+      void check(RenderObject node) {
+        if (found) return;
+        if (node is RenderMetaData && node.metaData == 'block_element') {
+          found = true;
+          return;
+        }
+        node.visitChildren(check);
+      }
+      obj.visitChildren(check);
+      return found;
+    }
+
     void visitor(RenderObject child) {
+      if (child is RenderMetaData && child.metaData == 'block_element') {
+        lastParagraphIsBlock = true;
+        lastParagraph = null;
+        return;
+      }
       if (child is RenderParagraph) {
         final text = child.text.toPlainText();
         if (text.trim().isNotEmpty) {
-          if (isInsideBlock(child)) {
+          if (isInsideBlock(child) || containsBlockElement(child)) {
             lastParagraphIsBlock = true;
             lastParagraph = null;
           } else {
@@ -307,6 +329,9 @@ class RenderBubbleLayout extends RenderBox
             paragraphCount++;
           }
         }
+        // Do not descend into WidgetSpan children (e.g. Math.tex, Spoiler, Emoji),
+        // because they are represented as \uFFFC placeholders in this RenderParagraph.
+        return;
       }
       child.visitChildren(visitor);
     }
@@ -364,7 +389,7 @@ class RenderBubbleLayout extends RenderBox
       );
       if (firstBoxes.isNotEmpty) {
         final firstBox = firstBoxes.first;
-        if ((lastBox.top - firstBox.top).abs() < 2.0) {
+        if (lastBox.top < firstBox.bottom - 2.0) {
           isSingleLine = true;
         }
       } else {
@@ -429,6 +454,13 @@ class RenderBubbleLayout extends RenderBox
       measuredSenderWidth = senderName.size.width;
     }
 
+    // 1b. Measure reply natural width with loose constraints if present
+    double measuredReplyWidth = 0.0;
+    if (reply != null) {
+      reply.layout(BoxConstraints(maxWidth: constraints.maxWidth), parentUsesSize: true);
+      measuredReplyWidth = reply.size.width;
+    }
+
     // 2. Measure content with loose constraints (unconstricted natural width up to maxWidth)
     content.layout(constraints.loosen(), parentUsesSize: true);
     final double contentWidth = content.size.width;
@@ -440,9 +472,7 @@ class RenderBubbleLayout extends RenderBox
     final double metaHeight = metadata.size.height;
 
     // 4. Header width baseline
-    final double effectiveReplyWidth = replyWidth > 0.0
-        ? replyWidth
-        : (reply != null ? reply.getMinIntrinsicWidth(double.infinity) : 0.0);
+    final double effectiveReplyWidth = math.max(measuredReplyWidth, replyWidth);
     final double effectiveHeaderWidth = math.max(
       effectiveReplyWidth,
       senderName != null ? math.max(senderNameWidth, measuredSenderWidth) : 0.0,
@@ -764,15 +794,16 @@ class MessageBubble extends StatelessWidget {
     final String trimmedContent = message.content.trim();
     final List<String> contentLines = trimmedContent.split('\n');
     final String lastLine = contentLines.isNotEmpty ? contentLines.last.trim() : '';
-    final bool contentEndsWithQuote = lastLine.startsWith('>') ||
-        lastLine.startsWith('**>') ||
-        trimmedContent.startsWith('>') ||
-        trimmedContent.startsWith('**>');
+    final bool contentEndsWithQuote =
+        lastLine.startsWith('>') || lastLine.startsWith('**>');
     final bool entityEndsWithQuote = message.entities.any((e) =>
-        (e.type == 'blockquote' || e.type == 'quote') &&
+        (e.type == 'blockquote' ||
+            e.type == 'quote' ||
+            e.type == 'collapse' ||
+            e.type == 'expandable_blockquote') &&
         (e.offset + e.length >= trimmedContent.length - 2));
     final bool entityEndsWithPre = message.entities.any((e) =>
-        (e.type == 'pre' || e.type == 'code') &&
+        e.type == 'pre' &&
         (e.offset + e.length >= trimmedContent.length - 2));
 
     final NameColorPreset effectivePreset;
@@ -812,8 +843,10 @@ class MessageBubble extends StatelessWidget {
     final bool previewAtBottom = hasEffectivePreview && !showAbove && !hasMedia;
 
     final bool endsWithBlock =
+        message.messageType == 'poll' ||
         trimmedContent.endsWith('```') ||
         trimmedContent.endsWith(r'$$') ||
+        trimmedContent.endsWith(r'\]') ||
         contentEndsWithQuote ||
         entityEndsWithQuote ||
         entityEndsWithPre ||
@@ -918,18 +951,24 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
-    final double maxBubbleWidth = MediaQuery.of(context).size.width * 0.76 - 24.0; // 24 = horizontal padding
+    final double maxOuterBubbleWidth = math.min(
+      MediaQuery.of(context).size.width * 0.76,
+      kMaxMessageBubbleWidth,
+    );
+    final double maxBubbleWidth = maxOuterBubbleWidth - 24.0; // 24 = horizontal padding
     final double metadataWidthEstimate = _calculateMetadataWidth(context);
 
-    // Prepare Reply Widget if present
+    // Prepare Reply Widget if present (natural width is measured accurately by RenderBubbleLayout)
     Widget? replyWidget;
-    double replyWidthEstimate = 0.0;
+    const double replyWidthEstimate = 0.0;
 
     if (message.hasReply) {
       replyWidget = MessageReplyInfo(
         replyInfo: message.replyInfo,
         isQuote: message.isQuote,
         quoteText: message.quoteText,
+        quoteOffset: message.quoteOffset,
+        quoteLength: message.quoteLength,
         isMe: isMe,
         currentUserId: currentUserId,
         onTap: () => onReplyTap?.call(
@@ -937,31 +976,21 @@ class MessageBubble extends StatelessWidget {
           message.replyInfo?.chatId,
         ),
       );
-
-      final String replyText = message.quoteText ?? message.replyInfo?.content ?? '';
-      final String senderTitle = (message.replyInfo?.senderId == currentUserId ? 'Вы' : message.replyInfo?.senderName) ?? 'Сообщение';
-      
-      // Fast estimate avoiding synchronous TextPainter.layout() during build
-      final double estimatedTextWidth = math.max(senderTitle.length * 8.0, replyText.length * 7.0);
-      replyWidthEstimate = (estimatedTextWidth + 28.0).clamp(60.0, maxBubbleWidth);
     } else if (chatType == 'saved' && (message.forwardFromName?.isNotEmpty ?? false || message.senderName.isNotEmpty)) {
       replyWidget = MessageReplyInfo.forwarded(
         authorName: message.forwardFromName ?? message.senderName,
         isMe: isMe,
       );
-      replyWidthEstimate = 120.0;
     }
 
     Widget? senderNameWidget;
-    double senderNameWidthEstimate = 0.0;
+    const double senderNameWidthEstimate = 0.0;
     if (!isMe && senderName != null && senderName!.isNotEmpty) {
       final style = TextStyle(
         fontSize: 13,
         fontWeight: FontWeight.bold,
         color: effectivePreset.primaryColor,
       );
-      // Measured precisely by RenderBubbleLayout during layout; fast baseline here
-      senderNameWidthEstimate = (senderName!.length * 8.0).clamp(0.0, maxBubbleWidth);
 
       senderNameWidget = Padding(
         padding: const EdgeInsets.only(bottom: 4.0),
@@ -975,7 +1004,20 @@ class MessageBubble extends StatelessWidget {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
     Widget textBodyWidget;
-    if (isBigEmoji) {
+    if (message.messageType == 'poll') {
+      textBodyWidget = PollMessageWidget(
+        chatId: message.chatId,
+        messageId: message.id,
+        currentUserId: currentUserId,
+        questionFallback: message.content,
+        pollData: message.mediaPayload,
+        isMe: isMe,
+        isDark: isDark,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+      );
+    } else if (isBigEmoji) {
       textBodyWidget = Padding(
         padding: const EdgeInsets.symmetric(vertical: 6.0),
         child: GestureDetector(
@@ -1056,14 +1098,25 @@ class MessageBubble extends StatelessWidget {
 
     Widget? mediaContentWidget;
     if (hasMedia) {
-      final double mediaWidth = math.min(maxBubbleWidth, 340.0);
-      final Widget mediaWidget = _buildMediaWidget(context, mediaWidth, resolvedFileUrl);
+      final double maxMediaWidth = math.min(maxBubbleWidth, 340.0);
+      final Size singleMediaSize = (_isImage || _isVideo)
+          ? _computeSingleMediaSize(maxMediaWidth)
+          : Size(maxMediaWidth, 220.0);
+      final double mediaWidth = (_isImage || _isVideo)
+          ? singleMediaSize.width
+          : maxMediaWidth;
+      final Widget mediaWidget = _buildMediaWidget(
+        context,
+        mediaWidth,
+        resolvedFileUrl,
+        mediaHeight: singleMediaSize.height,
+      );
 
       Widget innerContent;
       if (_isRoundVideo || _isVoice) {
         innerContent = mediaWidget;
       } else if (hasCaption) {
-        final Widget captionWidget = TextMessageWidget(
+        Widget captionWidget = TextMessageWidget(
           text: message.content,
           style: textStyle,
           isMe: isMe,
@@ -1071,6 +1124,12 @@ class MessageBubble extends StatelessWidget {
           nameColorPreset: effectivePreset,
           replyStripStyle: effectiveStripStyle,
         );
+        if (_isImage || _isVideo) {
+          captionWidget = ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: mediaWidth),
+            child: captionWidget,
+          );
+        }
 
         final bool invertMedia = message.invertMedia;
         innerContent = Column(
@@ -1208,7 +1267,7 @@ class MessageBubble extends StatelessWidget {
     Widget bubbleCore = Container(
       margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
       constraints: BoxConstraints(
-        maxWidth: MediaQuery.of(context).size.width * 0.76,
+        maxWidth: maxOuterBubbleWidth,
       ),
       child: ViewportGradientBox(
         borderRadius: BorderRadius.circular(effectiveBubbleRadius),
@@ -1257,11 +1316,32 @@ class MessageBubble extends StatelessWidget {
     return result;
   }
 
+  Size _computeSingleMediaSize(double maxAllowedWidth) {
+    final w = message.mediaWidth ?? 0;
+    final h = message.mediaHeight ?? 0;
+    if (w > 0 && h > 0) {
+      final double aspect = (w / h).clamp(0.45, 2.5).toDouble();
+      if (aspect >= 1.0) {
+        final double width = maxAllowedWidth;
+        final double height = (width / aspect).clamp(120.0, 340.0).toDouble();
+        return Size(width, height);
+      } else {
+        final double height = math.min(360.0, maxAllowedWidth / aspect);
+        final double width = (height * aspect)
+            .clamp(math.min(200.0, maxAllowedWidth), maxAllowedWidth)
+            .toDouble();
+        return Size(width, height);
+      }
+    }
+    return Size(maxAllowedWidth, 220.0);
+  }
+
   Widget _buildMediaWidget(
     BuildContext context,
     double maxWidth,
-    String resolvedUrl,
-  ) {
+    String resolvedUrl, {
+    double mediaHeight = 220.0,
+  }) {
     if (_isRoundVideo) {
       final double circleSize = math.min(240.0, MediaQuery.of(context).size.width * 0.68);
       return VideoMessageWidget(
@@ -1318,11 +1398,13 @@ class MessageBubble extends StatelessWidget {
       );
 
       return _SingleMediaBubbleWidget(
+        key: ValueKey('single_img_${message.id}_$resolvedUrl'),
         url: resolvedUrl,
         thumbBase64: thumbBase64,
         fileSize: message.mediaFileSize,
         isVideo: false,
         maxWidth: maxWidth,
+        height: mediaHeight,
         autoDownload: autoDownload,
         heroTag: heroTag,
         onTap: ([localPath]) {
@@ -1343,6 +1425,7 @@ class MessageBubble extends StatelessWidget {
       );
 
       return _SingleMediaBubbleWidget(
+        key: ValueKey('single_vid_${message.id}_$resolvedUrl'),
         url: resolvedUrl,
         thumbBase64: message.thumbBase64,
         thumbUrl: message.thumbUrl,
@@ -1350,6 +1433,7 @@ class MessageBubble extends StatelessWidget {
         duration: message.mediaDuration ?? message.duration,
         isVideo: true,
         maxWidth: maxWidth,
+        height: mediaHeight,
         autoDownload: autoDownload,
         heroTag: 'msg_video_${message.id}_$resolvedUrl',
         onTap: ([localPath]) {
@@ -1487,6 +1571,7 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
   final int? duration;
   final bool isVideo;
   final double maxWidth;
+  final double height;
   final bool autoDownload;
   final String heroTag;
   final void Function([String? localPath]) onTap;
@@ -1500,6 +1585,7 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
     this.duration,
     required this.isVideo,
     required this.maxWidth,
+    this.height = 220.0,
     required this.autoDownload,
     required this.heroTag,
     required this.onTap,
@@ -1511,6 +1597,8 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
 }
 
 class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
+  final GlobalKey<MediaDownloadButtonState> _downloadButtonKey =
+      GlobalKey<MediaDownloadButtonState>();
   File? _cachedFile;
   Uint8List? _cachedFirstFrame;
   bool _isPlayingInline = false;
@@ -1519,6 +1607,17 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
   void initState() {
     super.initState();
     _checkCache();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SingleMediaBubbleWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _cachedFile = null;
+      _cachedFirstFrame = null;
+      _isPlayingInline = false;
+      _checkCache();
+    }
   }
 
   Future<void> _checkCache() async {
@@ -1565,18 +1664,17 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final double effectiveRadius = math.max(4.0, (themeExt?.bubbleRadius ?? 16.0) - 2.0);
 
-    // If video is cached or auto-download allowed, and user tapped play inline:
-    if (widget.isVideo &&
-        (_isPlayingInline || (isCached && widget.autoDownload))) {
+    // If video is cached and user tapped play inline:
+    if (widget.isVideo && isCached && _isPlayingInline) {
       return ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: widget.maxWidth,
-          maxHeight: 280,
+          maxHeight: math.max(widget.height, 240.0),
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(effectiveRadius),
           child: InlineVideoPlayer(
-            url: _cachedFile != null ? _cachedFile!.path : widget.url,
+            url: _cachedFile!.path,
           ),
         ),
       );
@@ -1584,119 +1682,86 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
 
     return GestureDetector(
       onTap: () {
+        if (!isCached) {
+          // While not downloaded, tapping anywhere on the bubble starts/cancels download
+          _downloadButtonKey.currentState?.handleTap();
+          return;
+        }
         if (!widget.isVideo) {
           widget.onTap(_cachedFile?.path);
         } else {
-          if (isCached) {
-            setState(() => _isPlayingInline = true);
-          } else {
-            widget.onTap();
-          }
+          setState(() => _isPlayingInline = true);
         }
       },
       child: ClipRRect(
         borderRadius: BorderRadius.circular(effectiveRadius),
         child: Container(
           width: widget.maxWidth,
-          height: 220,
+          height: widget.height,
           color: const Color(0xFF181818),
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // 1. Blurred preview placeholder
+              // 1. Blurred preview placeholder (always shown until media is downloaded)
               BlurredMediaPlaceholder(
                 thumbBase64: widget.thumbBase64,
                 fit: BoxFit.cover,
               ),
 
-              // 2. Real first frame for video:
-              // If video is already cached, show clear first frame.
-              // If not cached, apply blur filter over the thumbnail so it stays blurred with download icon!
-              if (widget.isVideo) ...[
+              // 2. Real first frame for video ONLY after the video file is cached
+              if (widget.isVideo && isCached) ...[
                 if (_cachedFirstFrame != null)
                   Image.memory(
                     _cachedFirstFrame!,
                     width: widget.maxWidth,
+                    height: widget.height,
                     fit: BoxFit.cover,
+                    gaplessPlayback: true,
                   )
                 else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
-                  isCached
-                      ? Image.network(
-                          resolvedThumbUrl,
-                          width: widget.maxWidth,
-                          fit: BoxFit.cover,
-                          loadingBuilder: (context, child, loadingProgress) {
-                            if (loadingProgress == null) return child;
-                            return const SizedBox.shrink();
-                          },
-                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                        )
-                      : RepaintBoundary(
-                          child: ImageFiltered(
-                            imageFilter: ui.ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                            child: Transform.scale(
-                              scale: 1.15,
-                              child: Image.network(
-                                resolvedThumbUrl,
-                                width: widget.maxWidth,
-                                cacheWidth: (widget.maxWidth *
-                                        MediaQuery.devicePixelRatioOf(context))
-                                    .round(),
-                                fit: BoxFit.cover,
-                                loadingBuilder: (context, child, loadingProgress) {
-                                  if (loadingProgress == null) return child;
-                                  return const SizedBox.shrink();
-                                },
-                                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                              ),
-                            ),
-                          ),
-                        ),
-              ],
-
-              // 3. Full image (if photo and (cached or auto-download enabled))
-              if (!widget.isVideo) ...[
-                if (_cachedFile != null)
-                  Hero(
-                    tag: widget.heroTag,
-                    child: Image.file(
-                      _cachedFile!,
-                      width: widget.maxWidth,
-                      fit: BoxFit.cover,
-                    ),
-                  )
-                else if (widget.url.isNotEmpty && widget.autoDownload)
-                  Hero(
-                    tag: widget.heroTag,
-                    child: Image.network(
-                      widget.url,
-                      width: widget.maxWidth,
-                      cacheWidth: (widget.maxWidth *
-                              MediaQuery.devicePixelRatioOf(context))
-                          .round(),
-                      fit: BoxFit.cover,
-                      loadingBuilder: (context, child, loadingProgress) {
-                        if (loadingProgress == null) return child;
-                        return const SizedBox.shrink();
-                      },
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                    ),
+                  Image.network(
+                    resolvedThumbUrl,
+                    width: widget.maxWidth,
+                    height: widget.height,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return const SizedBox.shrink();
+                    },
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                   ),
               ],
 
-              // 3. Download button / progress / size pill overlay
+              // 3. Full image ONLY after the photo file is cached on disk
+              if (!widget.isVideo && _cachedFile != null)
+                Hero(
+                  tag: widget.heroTag,
+                  child: Image.file(
+                    _cachedFile!,
+                    width: widget.maxWidth,
+                    height: widget.height,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                ),
+
+              // 4. Download button / progress / size pill overlay
               if (widget.url.isNotEmpty && (!isCached || widget.isVideo))
                 MediaDownloadButton(
+                  key: _downloadButtonKey,
                   url: widget.url,
                   fileSize: widget.fileSize,
                   isVideo: widget.isVideo,
+                  autoDownload: widget.autoDownload,
                   onDownloaded: _checkCache,
                   onPlayVideo: () {
-                    setState(() => _isPlayingInline = true);
+                    if (_cachedFile != null) {
+                      setState(() => _isPlayingInline = true);
+                    }
                   },
                 ),
 
-              // 4. Video duration badge
+              // 5. Video duration badge
               if (widget.isVideo &&
                   widget.duration != null &&
                   widget.duration! > 0)

@@ -602,7 +602,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void _onMessageEdited(WebSocketEvent event) {
     final messageId = event.data['message_id']?.toString();
     final newContent = event.data['content']?.toString();
-    if (messageId == null || newContent == null) return;
+    if (messageId == null) return;
 
     List<MessageEntity>? newEntities;
     if (event.data['entities'] != null) {
@@ -614,14 +614,31 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       } catch (_) {}
     }
 
+    Map<String, dynamic>? newMediaPayload;
+    if (event.data['media_payload'] is Map) {
+      newMediaPayload =
+          Map<String, dynamic>.from(event.data['media_payload'] as Map);
+    } else if (event.data['poll'] is Map) {
+      newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
+    }
+
+    final isPollEvent =
+        event.data['message_type'] == 'poll' || newMediaPayload != null;
+    if (newContent == null && newMediaPayload == null) return;
+
+    String? effectiveContent = newContent;
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
         if (index != -1) {
-          _messages[index] = _messages[index].copyWith(
-            content: newContent,
-            entities: newEntities ?? _messages[index].entities,
-            isEdited: true,
+          final current = _messages[index];
+          effectiveContent ??= current.content;
+          final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          _messages[index] = current.copyWith(
+            content: effectiveContent,
+            entities: newEntities ?? current.entities,
+            mediaPayload: newMediaPayload ?? current.mediaPayload,
+            isEdited: isPollMsg ? current.isEdited : true,
           );
           _updateFeedItems();
         }
@@ -631,10 +648,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     try {
       AppDatabase().updateMessageContent(
         messageId,
-        newContent,
+        effectiveContent ?? '',
         newEntities != null && newEntities.isNotEmpty
             ? jsonEncode(newEntities.map((e) => e.toJson()).toList())
             : null,
+        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
+        !isPollEvent,
       );
     } catch (_) {}
   }
@@ -1551,6 +1570,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -2265,6 +2285,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   void _startReply(Message message) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _messageController.clear();
+      }
       _replyToMessage = message;
       _isQuote = false;
       _quoteText = null;
@@ -2281,6 +2306,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   void _startQuote(Message message, String selectedText, int offset, int length) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _messageController.clear();
+      }
       _replyToMessage = message;
       _isQuote = true;
       _quoteText = selectedText;
@@ -3253,6 +3283,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3415,6 +3446,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3643,16 +3675,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
+    final bool isPoll = message.messageType == 'poll';
+    final bool isGroupAdmin = _participants.any(
+      (p) => p.id == _currentUserId && (p.role == 'owner' || p.role == 'admin'),
+    );
 
     MessageContextMenuService().show(
       context: context,
       message: message,
       messageKey: key,
       isMe: isMe,
+      currentUserId: _currentUserId,
+      canManagePoll: isMe || isGroupAdmin,
+      onPollUpdated: (updatedPoll) {
+        if (!mounted) return;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == message.id);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(mediaPayload: updatedPoll);
+            _updateFeedItems();
+          }
+        });
+      },
       onReply: () => _startReply(message),
-      onQuote: (isVideoNote || isVoiceNote) ? null : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
       onPin: () {},
-      onEdit: (isVideoNote || isVoiceNote) ? null : () {
+      onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
         setState(() {
           _cancelReply();
           _messageController.loadMessage(message.content, message.entities);

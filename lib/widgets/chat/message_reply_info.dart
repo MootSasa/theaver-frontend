@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
@@ -7,6 +8,7 @@ import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
+import '../../utils/entity_parser.dart';
 import '../profile/reply_strip_painter.dart';
 
 /// Displays a compact reply/quote preview above a message bubble.
@@ -25,6 +27,12 @@ class MessageReplyInfo extends StatelessWidget {
   /// The quoted text fragment (for quotes)
   final String? quoteText;
 
+  /// Offset of the quoted fragment in the original message
+  final int quoteOffset;
+
+  /// Length of the quoted fragment in the original message
+  final int quoteLength;
+
   /// Callback when user taps to scroll to the original message
   final VoidCallback? onTap;
 
@@ -40,16 +48,22 @@ class MessageReplyInfo extends StatelessWidget {
   /// Optional override for the content (instead of content from replyInfo)
   final String? contentOverride;
 
+  /// Optional explicit entities override for the original message
+  final List<MessageEntity> entitiesOverride;
+
   const MessageReplyInfo({
     Key? key,
     this.replyInfo,
     this.isQuote = false,
     this.quoteText,
+    this.quoteOffset = 0,
+    this.quoteLength = 0,
     this.onTap,
     this.isMe = false,
     this.currentUserId,
     this.titleOverride,
     this.contentOverride,
+    this.entitiesOverride = const [],
   }) : super(key: key);
 
   /// Helper to create a forwarded message header
@@ -67,20 +81,211 @@ class MessageReplyInfo extends StatelessWidget {
     );
   }
 
-  String _truncate(String text, {int maxLen = 60}) {
-    final cleaned = _cleanMarkdown(text);
-    if (cleaned.length <= maxLen) return cleaned;
-    return '${cleaned.substring(0, maxLen)}...';
-  }
+  /// Builds a single-line truncated [TextSpan] preserving the original message's
+  /// formatting entities (bold, italic, underline, strikethrough, code, spoiler, link)
+  /// as well as custom emojis.
+  static TextSpan buildFormattedPreviewSpan({
+    required String rawText,
+    List<MessageEntity> entities = const [],
+    bool isQuote = false,
+    String? quoteText,
+    int quoteOffset = 0,
+    int quoteLength = 0,
+    required TextStyle baseStyle,
+    required Color accentColor,
+    required bool isDark,
+    String? prefix,
+    int maxLen = 60,
+  }) {
+    String sourceText;
+    List<MessageEntity> sourceEntities;
 
-  String _cleanMarkdown(String text) {
-    return text
-        .replaceAll(RegExp(r'```[a-zA-Z0-9+#]*'), '') // Remove code block start/lang
-        .replaceAll('```', '') // Remove code block end
-        .replaceAll(RegExp(r'`'), '') // Remove inline code backticks
-        .replaceAll(RegExp(r'[*_~]'), '') // Remove basic markdown formatting
-        .replaceAll(RegExp(r'\n+'), ' ') // Replace newlines with spaces for single-line preview
-        .trim();
+    if (isQuote && quoteText != null && quoteText.isNotEmpty) {
+      String origText = rawText;
+      List<MessageEntity> origEntities = entities;
+      if (origEntities.isEmpty && origText.isNotEmpty) {
+        final parsedOrig = EntityParser.parseMarkdown(origText);
+        origText = parsedOrig.cleanText;
+        origEntities = parsedOrig.entities;
+      }
+
+      int sliceStart = -1;
+      int sliceEnd = -1;
+      if (quoteLength > 0 &&
+          quoteOffset >= 0 &&
+          quoteOffset + quoteLength <= origText.length) {
+        sliceStart = quoteOffset;
+        sliceEnd = quoteOffset + quoteLength;
+      } else if (origText.isNotEmpty) {
+        final cleanQuote = EntityParser.parseMarkdown(quoteText).cleanText;
+        if (cleanQuote.isNotEmpty) {
+          final idx = origText.indexOf(cleanQuote);
+          if (idx != -1) {
+            sliceStart = idx;
+            sliceEnd = idx + cleanQuote.length;
+          }
+        }
+      }
+
+      if (sliceStart != -1 && sliceEnd > sliceStart && origEntities.isNotEmpty) {
+        sourceText = origText.substring(sliceStart, sliceEnd);
+        sourceEntities = <MessageEntity>[];
+        for (final e in origEntities) {
+          final s = math.max(sliceStart, e.offset);
+          final end = math.min(sliceEnd, e.offset + e.length);
+          if (s < end) {
+            sourceEntities.add(
+              e.copyWith(offset: s - sliceStart, length: end - s),
+            );
+          }
+        }
+      } else {
+        final parsedQuote = EntityParser.parseMarkdown(quoteText);
+        sourceText = parsedQuote.cleanText;
+        sourceEntities = parsedQuote.entities;
+      }
+    } else {
+      if (entities.isNotEmpty) {
+        sourceText = rawText;
+        sourceEntities = entities;
+      } else {
+        final parsed = EntityParser.parseMarkdown(rawText);
+        sourceText = parsed.cleanText;
+        sourceEntities = parsed.entities;
+      }
+    }
+
+    // If there are no formatting entities, strip any leftover unclosed markdown tokens
+    if (sourceEntities.isEmpty) {
+      sourceText = sourceText
+          .replaceAll(RegExp(r'```[a-zA-Z0-9+#]*'), '')
+          .replaceAll('```', '')
+          .replaceAll(RegExp(r'(?:^|\n)\s*(?:\*\*)?>\s?'), ' ');
+    }
+
+    // Collapse newlines and consecutive whitespace into single spaces while mapping entity indices
+    final indexMap = List<int>.filled(sourceText.length + 1, 0);
+    final sb = StringBuffer();
+    bool lastWasSpace = true; // skip leading whitespace
+    for (int i = 0; i < sourceText.length; i++) {
+      indexMap[i] = sb.length;
+      final ch = sourceText[i];
+      if (ch == '\r') continue;
+      if (ch == '\n' || ch == ' ' || ch == '\t') {
+        if (!lastWasSpace) {
+          sb.write(' ');
+          lastWasSpace = true;
+        }
+      } else {
+        sb.write(ch);
+        lastWasSpace = false;
+      }
+    }
+    indexMap[sourceText.length] = sb.length;
+
+    String singleLine = sb.toString().trimRight();
+    final bool isTruncated = singleLine.length > maxLen;
+    if (isTruncated) {
+      singleLine = singleLine.substring(0, maxLen);
+    }
+    for (int i = 0; i <= sourceText.length; i++) {
+      if (indexMap[i] > singleLine.length) {
+        indexMap[i] = singleLine.length;
+      }
+    }
+
+    final mappedEntities = <MessageEntity>[];
+    for (final e in sourceEntities) {
+      final s = indexMap[e.offset.clamp(0, sourceText.length)];
+      final end = indexMap[(e.offset + e.length).clamp(0, sourceText.length)];
+      if (s < end) {
+        mappedEntities.add(e.copyWith(offset: s, length: end - s));
+      }
+    }
+
+    final children = <InlineSpan>[];
+    if (prefix != null && prefix.isNotEmpty) {
+      children.add(EmojiUtils.buildEmojiTextSpan(prefix, style: baseStyle));
+    }
+
+    if (singleLine.isEmpty) {
+      return TextSpan(style: baseStyle, children: children);
+    }
+
+    final points = <int>{0, singleLine.length};
+    for (final e in mappedEntities) {
+      points.add(e.offset);
+      points.add(e.offset + e.length);
+    }
+    final sortedPoints = points.toList()..sort();
+
+    for (int i = 0; i < sortedPoints.length - 1; i++) {
+      final segStart = sortedPoints[i];
+      final segEnd = sortedPoints[i + 1];
+      if (segStart >= segEnd) continue;
+
+      final segText = singleLine.substring(segStart, segEnd);
+      final active = mappedEntities
+          .where((e) => e.offset <= segStart && (e.offset + e.length) >= segEnd)
+          .toList();
+
+      TextStyle segStyle = baseStyle;
+      final hasLink = active.any(
+        (e) => e.type == 'text_link' || e.type == 'link' || e.type == 'url',
+      );
+      final hasSpoiler = active.any((e) => e.type == 'spoiler');
+
+      if (hasLink) {
+        segStyle = segStyle.copyWith(color: accentColor);
+      }
+      if (hasSpoiler) {
+        segStyle = segStyle.copyWith(
+          backgroundColor:
+              isDark ? const Color(0x38FFFFFF) : const Color(0x22000000),
+          color: isDark ? Colors.white54 : Colors.black45,
+        );
+      }
+
+      final hasStrike = active.any((e) => e.type == 'strikethrough');
+      final hasUnderline = active.any((e) => e.type == 'underline') || hasLink;
+      if (hasStrike && hasUnderline) {
+        segStyle = segStyle.copyWith(
+          decoration: TextDecoration.combine([
+            TextDecoration.lineThrough,
+            TextDecoration.underline,
+          ]),
+          decorationColor: segStyle.color,
+        );
+      } else if (hasStrike) {
+        segStyle = segStyle.copyWith(
+          decoration: TextDecoration.lineThrough,
+          decorationColor: segStyle.color,
+        );
+      } else if (hasUnderline) {
+        segStyle = segStyle.copyWith(
+          decoration: TextDecoration.underline,
+          decorationColor: segStyle.color,
+        );
+      }
+
+      if (active.any((e) => e.type == 'bold')) {
+        segStyle = segStyle.copyWith(fontWeight: FontWeight.bold);
+      }
+      if (active.any((e) => e.type == 'italic')) {
+        segStyle = segStyle.copyWith(fontStyle: FontStyle.italic);
+      }
+      if (active.any((e) => e.type == 'code' || e.type == 'pre')) {
+        segStyle = segStyle.copyWith(fontFamily: 'monospace');
+      }
+
+      children.add(EmojiUtils.buildEmojiTextSpan(segText, style: segStyle));
+    }
+
+    if (isTruncated) {
+      children.add(TextSpan(text: '...', style: baseStyle));
+    }
+
+    return TextSpan(style: baseStyle, children: children);
   }
 
   Widget _buildMessageTypeIcon(String messageType, Color color, double size) {
@@ -152,45 +357,106 @@ class MessageReplyInfo extends StatelessWidget {
     final bgColor = preset.getOpaqueCardBackgroundColor(isDark);
     final textColor = p?.chatReplyText ?? (isDark ? Colors.white70 : const Color(0xFF1C2530));
 
-    // Determine preview text
-    String previewText;
+    final effectiveEntities = entitiesOverride.isNotEmpty
+        ? entitiesOverride
+        : (replyInfo?.entities ?? const <MessageEntity>[]);
+    final basePreviewStyle = TextStyle(
+      color: textColor,
+      fontSize: 12,
+    );
+
+    // Determine preview span
+    TextSpan? previewSpan;
     if (isDeleted) {
-      previewText = 'Сообщение удалено';
+      previewSpan = TextSpan(text: 'Сообщение удалено', style: basePreviewStyle);
     } else if (contentOverride != null) {
-      previewText = _truncate(contentOverride!);
+      if (contentOverride!.trim().isNotEmpty) {
+        previewSpan = buildFormattedPreviewSpan(
+          rawText: contentOverride!,
+          entities: effectiveEntities,
+          baseStyle: basePreviewStyle,
+          accentColor: accentColor,
+          isDark: isDark,
+        );
+      }
     } else if (isQuote && quoteText != null && quoteText!.isNotEmpty) {
-      previewText = _truncate(quoteText!);
+      previewSpan = buildFormattedPreviewSpan(
+        rawText: replyInfo?.content ?? quoteText!,
+        entities: effectiveEntities,
+        isQuote: true,
+        quoteText: quoteText,
+        quoteOffset: quoteOffset,
+        quoteLength: quoteLength,
+        baseStyle: basePreviewStyle,
+        accentColor: accentColor,
+        isDark: isDark,
+      );
     } else if (replyInfo != null && replyInfo!.messageType != 'text') {
       // Show media type indicator with optional caption
       final caption = replyInfo!.content.trim();
       final hasCaption = caption.isNotEmpty && caption != replyInfo!.messageType;
+      String mediaLabel;
       switch (replyInfo!.messageType) {
         case 'image':
         case 'photo':
-          previewText = hasCaption ? '📷 ${_truncate(caption)}' : '📷 Фото';
+          mediaLabel = hasCaption ? '📷 ' : '📷 Фото';
           break;
         case 'video':
-          previewText = hasCaption ? '🎥 ${_truncate(caption)}' : '🎥 Видео';
+          mediaLabel = hasCaption ? '🎥 ' : '🎥 Видео';
           break;
         case 'audio':
         case 'voice':
-          previewText = hasCaption ? '🎤 ${_truncate(caption)}' : '🎤 Голосовое сообщение';
+          mediaLabel = hasCaption ? '🎤 ' : '🎤 Голосовое сообщение';
           break;
         case 'file':
         case 'document':
-          previewText = hasCaption ? '📎 ${_truncate(caption)}' : '📎 Файл';
+          mediaLabel = hasCaption ? '📎 ' : '📎 Файл';
           break;
         case 'sticker':
-          previewText = '🎭 Стикер';
+          mediaLabel = '🎭 Стикер';
+          break;
+        case 'poll':
+          final pollLabel = context.l10n.translate('chat_poll');
+          mediaLabel = hasCaption ? '📊 ' : '📊 $pollLabel';
           break;
         default:
-          previewText = _truncate(replyInfo!.content);
+          mediaLabel = '';
       }
-    } else if (replyInfo != null) {
-      previewText = _truncate(replyInfo!.content);
-    } else {
-      previewText = '';
+      if (hasCaption && replyInfo!.messageType != 'sticker') {
+        previewSpan = buildFormattedPreviewSpan(
+          rawText: replyInfo!.content,
+          entities: effectiveEntities,
+          prefix: mediaLabel,
+          baseStyle: basePreviewStyle,
+          accentColor: accentColor,
+          isDark: isDark,
+        );
+      } else if (mediaLabel.isNotEmpty) {
+        previewSpan = EmojiUtils.buildEmojiTextSpan(
+          mediaLabel,
+          style: basePreviewStyle,
+        );
+      } else if (replyInfo!.content.trim().isNotEmpty) {
+        previewSpan = buildFormattedPreviewSpan(
+          rawText: replyInfo!.content,
+          entities: effectiveEntities,
+          baseStyle: basePreviewStyle,
+          accentColor: accentColor,
+          isDark: isDark,
+        );
+      }
+    } else if (replyInfo != null && replyInfo!.content.trim().isNotEmpty) {
+      previewSpan = buildFormattedPreviewSpan(
+        rawText: replyInfo!.content,
+        entities: effectiveEntities,
+        baseStyle: basePreviewStyle,
+        accentColor: accentColor,
+        isDark: isDark,
+      );
     }
+
+    final bool hasPreview =
+        previewSpan != null && previewSpan.toPlainText().trim().isNotEmpty;
 
     final youTitle = context.l10n.translate('chat_reply_you');
     String title = titleOverride ?? '';
@@ -210,7 +476,6 @@ class MessageReplyInfo extends StatelessWidget {
     return GestureDetector(
       onTap: isDeleted ? null : onTap,
       child: Container(
-        width: double.infinity,
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
@@ -231,7 +496,8 @@ class MessageReplyInfo extends StatelessWidget {
               const SizedBox(width: 8),
 
               // Quoted content
-              Expanded(
+              Flexible(
+                fit: FlexFit.loose,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -248,20 +514,13 @@ class MessageReplyInfo extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                    if (!isDeleted && title.isNotEmpty && previewText.isNotEmpty)
+                    if (!isDeleted && title.isNotEmpty && hasPreview)
                       const SizedBox(height: 2),
                     // Preview text
-                    if (previewText.isNotEmpty)
+                    if (hasPreview)
                       if (isQuote && !isDeleted)
                         RichText(
-                          text: EmojiUtils.buildEmojiTextSpan(
-                            previewText,
-                            style: TextStyle(
-                              color: textColor,
-                              fontSize: 12,
-                              fontStyle: FontStyle.italic,
-                            ),
-                          ),
+                          text: previewSpan,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         )
@@ -276,13 +535,7 @@ class MessageReplyInfo extends StatelessWidget {
                               ),
                             Flexible(
                               child: RichText(
-                                text: EmojiUtils.buildEmojiTextSpan(
-                                  previewText,
-                                  style: TextStyle(
-                                    color: textColor,
-                                    fontSize: 12,
-                                  ),
-                                ),
+                                text: previewSpan,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),

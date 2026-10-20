@@ -41,6 +41,7 @@ import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/message/video_message_widget.dart';
 import '../../widgets/message/voice_message_widget.dart';
+import '../../widgets/message/poll_message_widget.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/message_context_menu_service.dart';
@@ -322,22 +323,45 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _onMessageEdited(WebSocketEvent event) {
     final messageId = event.data['message_id']?.toString();
     final newContent = event.data['content']?.toString();
-    if (messageId == null || newContent == null) return;
+    if (messageId == null) return;
 
+    Map<String, dynamic>? newMediaPayload;
+    if (event.data['media_payload'] is Map) {
+      newMediaPayload =
+          Map<String, dynamic>.from(event.data['media_payload'] as Map);
+    } else if (event.data['poll'] is Map) {
+      newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
+    }
+
+    final isPollEvent =
+        event.data['message_type'] == 'poll' || newMediaPayload != null;
+    if (newContent == null && newMediaPayload == null) return;
+
+    String? effectiveContent = newContent;
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
         if (index != -1) {
-          _messages[index] = _messages[index].copyWith(
-            content: newContent,
-            isEdited: true,
+          final current = _messages[index];
+          effectiveContent ??= current.content;
+          final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          _messages[index] = current.copyWith(
+            content: effectiveContent,
+            mediaPayload: newMediaPayload ?? current.mediaPayload,
+            isEdited: isPollMsg ? current.isEdited : true,
           );
         }
       });
     }
 
     try {
-      AppDatabase().updateMessageContent(messageId, newContent);
+      AppDatabase().updateMessageContent(
+        messageId,
+        effectiveContent ?? '',
+        null,
+        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
+        !isPollEvent,
+      );
     } catch (_) {}
   }
 
@@ -883,6 +907,7 @@ class _ChannelScreenState extends State<ChannelScreen>
             senderName: replyTo.senderName,
             content: replyTo.content,
             messageType: replyTo.messageType,
+            entities: replyTo.entities,
             nameColorPresetId: isReplyToMe
                 ? profileTheme.currentNameColorPreset.id
                 : (replyTo.senderNameColorId ?? 'name_red'),
@@ -1462,6 +1487,15 @@ class _ChannelScreenState extends State<ChannelScreen>
                     replyInfo: message.replyInfo,
                     isQuote: message.isQuote,
                     quoteText: message.quoteText,
+                    quoteOffset: message.quoteOffset,
+                    quoteLength: message.quoteLength,
+                    entitiesOverride: message.replyToMessageId != null
+                        ? (_messages
+                                .where((m) => m.id == message.replyToMessageId)
+                                .map((m) => m.entities)
+                                .firstOrNull ??
+                            const [])
+                        : const [],
                     isMe: false, // In channels, usually incoming style
                     onTap: () => _handleReplyTap(message.replyToMessageId!,
                         message.replyInfo?.chatId,
@@ -1600,8 +1634,9 @@ class _ChannelScreenState extends State<ChannelScreen>
                   final double lastLineWidth =
                       lineMetrics.isNotEmpty ? lineMetrics.last.width : 0;
 
-                  // Check if content ends with a block element (Code block or LaTeX)
-                  final bool endsWithBlock = message.content.trim().endsWith('```') ||
+                  // Check if content ends with a block element (Code block, LaTeX, or Poll)
+                  final bool endsWithBlock = message.messageType == 'poll' ||
+                                             message.content.trim().endsWith('```') ||
                                              message.content.trim().endsWith('\$\$');
 
                   // Strict check for inline fitting
@@ -1666,10 +1701,34 @@ class _ChannelScreenState extends State<ChannelScreen>
                       Stack(
                         clipBehavior: Clip.none,
                         children: [
-                          TextMessageWidget(
-                            text: message.content,
-                            isMe: false,
-                          ),
+                          if (message.messageType == 'poll')
+                            PollMessageWidget(
+                              chatId: message.chatId.isNotEmpty
+                                  ? message.chatId
+                                  : widget.channelId,
+                              messageId: message.id,
+                              questionFallback: message.content,
+                              pollData: message.mediaPayload,
+                              isMe: false,
+                              isDark: Theme.of(context).brightness ==
+                                  Brightness.dark,
+                              textColor: Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? Colors.white
+                                  : Colors.black87,
+                              subtextColor: Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? Colors.grey[400]!
+                                  : Colors.grey[600]!,
+                              accentColor:
+                                  Theme.of(context).colorScheme.primary,
+                              currentUserId: _currentUserId ?? '',
+                            )
+                          else
+                            TextMessageWidget(
+                              text: message.content,
+                              isMe: false,
+                            ),
                           if (fitsInline)
                             Opacity(
                               opacity: 0,
@@ -1778,14 +1837,26 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
+    final bool isPoll = message.messageType == 'poll';
 
     MessageContextMenuService().show(
       context: context,
       message: message,
       messageKey: key,
       isMe: isMe,
+      currentUserId: _currentUserId,
+      canManagePoll: isMe || _isAdmin,
+      onPollUpdated: (updatedPoll) {
+        if (!mounted) return;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == message.id);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(mediaPayload: updatedPoll);
+          }
+        });
+      },
       onReply: () => _startReply(message),
-      onQuote: (!isVideoNote && !isVoiceNote) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
+      onQuote: (!isVideoNote && !isVoiceNote && !isPoll) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
       onPin: () {},
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) {},

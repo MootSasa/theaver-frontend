@@ -1,5 +1,6 @@
 package app.theaver.messenger
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.RectF
@@ -8,6 +9,8 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.net.Uri
 import android.os.Environment
@@ -27,6 +30,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val MUXER_CHANNEL = "com.example.app/media_muxer"
     private val CALENDAR_CHANNEL = "app.theaver.messenger/calendar"
     private val INSTALLER_CHANNEL = "app.theaver.messenger/installer"
+    private val NETWORK_CHANNEL = "app.theaver.messenger/network"
     private var pendingApkPath: String? = null
 
     override fun onResume() {
@@ -48,6 +52,36 @@ class MainActivity : FlutterFragmentActivity() {
         // Register push detector MethodChannel handler
         val pushDetector = PushDetectorHandler(this)
         pushDetector.setup(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NETWORK_CHANNEL).setMethodCallHandler { call, result ->
+            if (call.method == "getNetworkType") {
+                try {
+                    val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    val activeNet = cm?.activeNetwork
+                    val caps = if (activeNet != null) cm.getNetworkCapabilities(activeNet) else null
+                    val netType = when {
+                        caps == null -> "none"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "wifi"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                            val notRoaming = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                cm.activeNetworkInfo?.isRoaming != true
+                            }
+                            if (!notRoaming) "roaming" else "cellular"
+                        }
+                        else -> "wifi"
+                    }
+                    result.success(netType)
+                } catch (_: Exception) {
+                    result.success("wifi")
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, INSTALLER_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {

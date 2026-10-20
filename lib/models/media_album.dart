@@ -107,10 +107,47 @@ List<FeedItem> groupMessagesIntoFeedItems(
 }) {
   if (messages.isEmpty) return const [];
 
+  final byId = <String, Message>{};
+  for (final m in messages) {
+    if (m.id.isNotEmpty) {
+      byId[m.id] = m;
+    }
+    if (m.localId != null && m.localId!.isNotEmpty) {
+      byId[m.localId!] = m;
+    }
+  }
+
   final seenIds = <String>{};
   final dedupedMessages = <Message>[];
-  for (final m in messages) {
+  for (var m in messages) {
     if (seenIds.add(m.id)) {
+      if (m.replyToMessageId != null && m.replyToMessageId!.isNotEmpty) {
+        final orig = byId[m.replyToMessageId!];
+        if (orig != null &&
+            orig.entities.isNotEmpty &&
+            (m.replyInfo == null || m.replyInfo!.entities.isEmpty)) {
+          final existingInfo = m.replyInfo;
+          m = m.copyWith(
+            replyInfo: existingInfo != null
+                ? existingInfo.copyWith(
+                    entities: orig.entities,
+                    content: existingInfo.content.isNotEmpty
+                        ? existingInfo.content
+                        : orig.content,
+                  )
+                : ReplyInfo(
+                    messageId: orig.id,
+                    senderId: orig.senderId,
+                    senderName: orig.senderName,
+                    content: orig.content,
+                    messageType: orig.messageType,
+                    nameColorPresetId: orig.senderNameColorId,
+                    replyStripStyle: orig.senderReplyStripStyle,
+                    entities: orig.entities,
+                  ),
+          );
+        }
+      }
       dedupedMessages.add(m);
     }
   }
@@ -157,7 +194,7 @@ List<FeedItem> groupMessagesIntoFeedItems(
       final isFilename = m.fileName != null && content == m.fileName;
       final isFileurl = m.fileUrl != null && content == m.fileUrl;
       if (content.isNotEmpty && !isFilename && !isFileurl) {
-        caption = content;
+        caption = m.content;
         entities = m.entities;
         primary = m;
         break;

@@ -136,8 +136,9 @@ class SyncService {
         payload['invert_media'] == 1 ||
         payload['invert_media'] == 'true';
     final String? groupedId = payload['grouped_id']?.toString();
-    if (linkPreviewOptionsStr == null && payload['media_payload'] != null) {
-      linkPreviewOptionsStr = payload['media_payload'] is String
+    String? mediaPayloadStr;
+    if (payload['media_payload'] != null) {
+      mediaPayloadStr = payload['media_payload'] is String
           ? payload['media_payload'] as String
           : jsonEncode(payload['media_payload']);
     }
@@ -170,6 +171,7 @@ class SyncService {
           DateTime.now().toIso8601String()),
       entities: Value(entitiesStr),
       linkPreviewOptions: Value(linkPreviewOptionsStr),
+      mediaPayload: Value(mediaPayloadStr),
       invertMedia: Value(invertMedia),
       isRound: Value(payload['is_round'] == true ||
           payload['message_type'] == 'round'),
@@ -243,8 +245,21 @@ class SyncService {
       }
     }
 
+    String? mediaPayloadStr;
+    if (payload['media_payload'] != null) {
+      mediaPayloadStr = payload['media_payload'] is String
+          ? payload['media_payload'] as String
+          : jsonEncode(payload['media_payload']);
+    }
+
+    final isPollUpdate = payload['message_type'] == 'poll';
     await _db.updateMessageContent(
-        serverId, payload['content']?.toString() ?? '', entitiesStr);
+      serverId,
+      payload['content']?.toString() ?? '',
+      entitiesStr,
+      mediaPayloadStr,
+      !isPollUpdate,
+    );
     final chatId = payload['chat_id']?.toString();
     if (chatId != null) {
       await _db.refreshChatLastMessageFromDb(chatId);

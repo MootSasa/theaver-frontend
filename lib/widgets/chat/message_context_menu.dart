@@ -14,6 +14,9 @@ class MessageContextMenu extends StatefulWidget {
   final VoidCallback onCopy;
   final VoidCallback onPin;
   final VoidCallback? onEdit;
+  final VoidCallback? onViewPollResults;
+  final VoidCallback? onRetractVote;
+  final VoidCallback? onStopPoll;
   final VoidCallback onDelete;
   final Function(String emoji) onReaction;
   final Set<String> selectedEmojis;
@@ -29,6 +32,9 @@ class MessageContextMenu extends StatefulWidget {
     required this.onCopy,
     required this.onPin,
     this.onEdit,
+    this.onViewPollResults,
+    this.onRetractVote,
+    this.onStopPoll,
     required this.onDelete,
     required this.onReaction,
     this.selectedEmojis = const {},
@@ -78,7 +84,7 @@ class _MessageContextMenuState extends State<MessageContextMenu> with SingleTick
     final theme = Theme.of(context);
 
     // Calculate menu position - appear on the LEFT as requested
-    const double menuHeight = 280.0;
+    const double menuHeight = 320.0;
     
     double top = widget.messageOffset.dy + widget.messageSize.height + 8;
     bool showAbove = false;
@@ -173,7 +179,7 @@ class _MessageContextMenuState extends State<MessageContextMenu> with SingleTick
   Widget _buildActionPanel(ThemeData theme) {
     final bool isSending = widget.sendStatus == 0;
     return Container(
-      width: 200,
+      width: 215,
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         borderRadius: BorderRadius.circular(20),
@@ -196,6 +202,30 @@ class _MessageContextMenuState extends State<MessageContextMenu> with SingleTick
               (c) => iconoir.Quote(color: c, width: 20, height: 20),
               context.l10n.translate('format_quote'),
               widget.onQuote!,
+              theme,
+              enabled: !isSending,
+            ),
+          if (widget.onViewPollResults != null)
+            _buildActionItem(
+              (c) => iconoir.StatsReport(color: c, width: 20, height: 20),
+              context.l10n.translate('poll_view_results'),
+              widget.onViewPollResults!,
+              theme,
+              enabled: !isSending,
+            ),
+          if (widget.onRetractVote != null)
+            _buildActionItem(
+              (c) => iconoir.Undo(color: c, width: 20, height: 20),
+              context.l10n.translate('poll_retract_vote'),
+              widget.onRetractVote!,
+              theme,
+              enabled: !isSending,
+            ),
+          if (widget.onStopPoll != null)
+            _buildActionItem(
+              (c) => Icon(Icons.stop_circle_outlined, color: c, size: 20),
+              context.l10n.translate('poll_stop'),
+              widget.onStopPoll!,
               theme,
               enabled: !isSending,
             ),

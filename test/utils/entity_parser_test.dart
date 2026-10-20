@@ -496,5 +496,166 @@ void main() {
       // Trailing spaces/enters after code block are trimmed
       expect(output.endsWith('```'), isTrue);
     });
+
+    test('preserveWhitespace does not inject non-breaking spaces inside LaTeX formulas', () {
+      const input = r'Formula: $x_1   +   x_2 = 5$ and block:' '\n' r'$$\begin{pmatrix} 1   &   2 \\ 3   &   4 \end{pmatrix}$$';
+      final output = TextMessageWidget.preserveWhitespace(input);
+
+      expect(output.contains('\u00A0'), isFalse);
+      expect(output.contains(r'$x_1   +   x_2 = 5$'), isTrue);
+      expect(output.contains(r'$$\begin{pmatrix} 1   &   2 \\ 3   &   4 \end{pmatrix}$$'), isTrue);
+    });
+
+    test('parseMarkdown protects LaTeX formulas and inline code from delimiter stripping', () {
+      const input = r'Check $f^*(x) + g^*(y) = x_{1} + y_{2}$ and `def __init__(self, *args, **kwargs):` with **bold**';
+      final parsed = EntityParser.parseMarkdown(input);
+
+      // LaTeX formula and inline code contents must remain completely intact
+      expect(parsed.cleanText.contains(r'$f^*(x) + g^*(y) = x_{1} + y_{2}$'), isTrue);
+      expect(parsed.cleanText.contains('def __init__(self, *args, **kwargs):'), isTrue);
+
+      // Only 'code' and 'bold' entities should be created (no bogus italic/underline inside LaTeX or code)
+      expect(parsed.entities.map((e) => e.type).toList(), equals(['code', 'bold']));
+
+      final reconstructed = EntityParser.toMarkdown(parsed.cleanText, parsed.entities);
+      expect(reconstructed, equals(input));
+    });
+
+    test('parseMarkdown does not turn CLI flags or markdown table dashes into underline', () {
+      const input = 'Run flutter analyze --no-pub --fatal-infos and __real underline__';
+      final parsed = EntityParser.parseMarkdown(input);
+
+      expect(parsed.cleanText, equals('Run flutter analyze --no-pub --fatal-infos and real underline'));
+      expect(parsed.entities.length, equals(1));
+      expect(parsed.entities.first.type, equals('underline'));
+    });
+
+    test('toMarkdown handles mid-line blockquote by inserting line breaks before and after quote', () {
+      const text = 'Привет цитата пока';
+      const entities = [
+        MessageEntity(type: 'blockquote', offset: 7, length: 6, collapsed: false),
+      ];
+
+      final md = EntityParser.toMarkdown(text, entities);
+      expect(md, equals('Привет \n> цитата\n пока'));
+    });
+
+    test('toMarkdown and parseMarkdown handle overlapping (crossing) italic and spoiler modes cleanly', () {
+      // "один два три": italic on "один два" [0, 8], spoiler on "два три" [5, 12]
+      const text = 'один два три';
+      const entities = [
+        MessageEntity(type: 'italic', offset: 0, length: 8),
+        MessageEntity(type: 'spoiler', offset: 5, length: 7),
+      ];
+
+      final md = EntityParser.toMarkdown(text, entities);
+      // Italic splits at spoiler boundary and trims trailing space: "*один* ||*два* три||"
+      expect(md, equals('*один* ||*два* три||'));
+
+      final reparsed = EntityParser.parseMarkdown(md);
+      expect(reparsed.cleanText, equals(text));
+      expect(reparsed.entities.any((e) => e.type == 'spoiler' && e.offset == 5 && e.length == 7), isTrue);
+      expect(reparsed.entities.where((e) => e.type == 'italic').length, equals(2));
+    });
+
+    test('parseMarkdown handles nested bold + italic in all combinations', () {
+      final p1 = EntityParser.parseMarkdown('***bold italic***');
+      expect(p1.cleanText, equals('bold italic'));
+      expect(p1.entities.map((e) => e.type).toSet(), equals({'bold', 'italic'}));
+
+      final p2 = EntityParser.parseMarkdown('**bold *and italic***');
+      expect(p2.cleanText, equals('bold and italic'));
+      expect(
+        p2.entities.any((e) => e.type == 'bold' && e.offset == 0 && e.length == 15),
+        isTrue,
+      );
+      expect(
+        p2.entities.any((e) => e.type == 'italic' && e.offset == 5 && e.length == 10),
+        isTrue,
+      );
+
+      final p3 = EntityParser.parseMarkdown('*italic **and bold***');
+      expect(p3.cleanText, equals('italic and bold'));
+      expect(
+        p3.entities.any((e) => e.type == 'italic' && e.offset == 0 && e.length == 15),
+        isTrue,
+      );
+      expect(
+        p3.entities.any((e) => e.type == 'bold' && e.offset == 7 && e.length == 8),
+        isTrue,
+      );
+    });
+
+    test('toMarkdown splits inline formatting across newlines and blockquote boundaries', () {
+      const text = 'Первая\nВторая';
+      const entities = [
+        MessageEntity(type: 'bold', offset: 0, length: 13),
+        MessageEntity(type: 'blockquote', offset: 7, length: 6, collapsed: false),
+      ];
+
+      final md = EntityParser.toMarkdown(text, entities);
+      expect(md, equals('**Первая**\n> **Вторая**'));
+    });
+
+    test('RichTextEditingController supports stacking multiple active formats and exits span when toggled off', () {
+      final ctrl = RichTextEditingController();
+      ctrl.selection = const TextSelection.collapsed(offset: 0);
+
+      // Enable both italic and spoiler at the same time
+      ctrl.applyFormat('italic');
+      ctrl.applyFormat('spoiler');
+      expect(ctrl.isFormatActive('italic'), isTrue);
+      expect(ctrl.isFormatActive('spoiler'), isTrue);
+
+      ctrl.value = const TextEditingValue(
+        text: 'секрет',
+        selection: TextSelection.collapsed(offset: 6),
+      );
+      expect(ctrl.entities.map((e) => e.type).toSet(), equals({'italic', 'spoiler'}));
+
+      // Disable spoiler, keep italic active, and type more
+      ctrl.applyFormat('spoiler');
+      expect(ctrl.isFormatActive('spoiler'), isFalse);
+      expect(ctrl.isFormatActive('italic'), isTrue);
+
+      ctrl.value = const TextEditingValue(
+        text: 'секрет курсив',
+        selection: TextSelection.collapsed(offset: 13),
+      );
+
+      final spoilerEntity = ctrl.entities.firstWhere((e) => e.type == 'spoiler');
+      final italicEntity = ctrl.entities.firstWhere((e) => e.type == 'italic');
+      expect(spoilerEntity.offset, equals(0));
+      expect(spoilerEntity.length, equals(6)); // Only "секрет" is spoiler!
+      expect(italicEntity.offset, equals(0));
+      expect(italicEntity.length, equals(13)); // Full "секрет курсив" is merged italic!
+    });
+
+    test('RichTextEditingController blockquote is not italic by default and exits on double newline', () {
+      final ctrl = RichTextEditingController(text: 'Первая строка\nВторая строка\nТретья строка');
+      // Select only "Вторая строка\n" (including trailing newline)
+      ctrl.selection = const TextSelection(baseOffset: 14, extentOffset: 28);
+      ctrl.applyFormat('blockquote');
+
+      expect(ctrl.isCursorItalic, isFalse);
+      final bq = ctrl.entities.firstWhere((e) => e.type == 'blockquote');
+      // Trailing '\n' should be trimmed so "Третья строка" is not absorbed
+      expect(bq.offset, equals(14));
+      expect(bq.length, equals(13)); // "Вторая строка" without trailing \n
+
+      final md = EntityParser.toMarkdown(ctrl.cleanText, ctrl.entities);
+      expect(md, equals('Первая строка\n> Вторая строка\nТретья строка'));
+    });
+
+    test('EntityParser.toMarkdown trims trailing newlines and blank lines from blockquote so subsequent lines are not quoted', () {
+      const text = 'До\n• Пункт 1\n• Пункт 2\n   \nПосле цитаты';
+      // Even if a stored entity includes trailing newline + spaces up to "После цитаты"
+      const entities = [
+        MessageEntity(type: 'blockquote', offset: 3, length: 24, collapsed: false),
+      ];
+      final md = EntityParser.toMarkdown(text, entities);
+      expect(md, equals('До\n> • Пункт 1\n> • Пункт 2\n   \nПосле цитаты'));
+      expect(md.contains('> После цитаты'), isFalse);
+    });
   });
 }

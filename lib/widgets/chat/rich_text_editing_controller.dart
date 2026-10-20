@@ -49,11 +49,14 @@ class RichSpan {
 /// - Exporting clean text and entities for sending.
 class RichTextEditingController extends TextEditingController {
   final List<RichSpan> _spans = [];
-  String? _activeFormat;
+  final Set<String> _activeFormats = <String>{};
   String _lastText = '';
 
   /// Returns unmodifiable list of rich text spans.
   List<RichSpan> get spans => List.unmodifiable(_spans);
+
+  /// Returns unmodifiable set of currently active formats for newly typed text.
+  Set<String> get activeFormats => Set.unmodifiable(_activeFormats);
 
   RichTextEditingController({String? text, List<MessageEntity>? initialEntities})
       : super(text: text ?? '') {
@@ -71,10 +74,26 @@ class RichTextEditingController extends TextEditingController {
     }
   }
 
+  static String _normalizeType(String formatType) {
+    if (formatType == 'link') return 'text_link';
+    if (formatType == 'quote') return 'blockquote';
+    return formatType;
+  }
+
+  static bool _matchesType(String spanType, String normalizedTarget) {
+    if (normalizedTarget == 'text_link') {
+      return spanType == 'text_link' || spanType == 'link';
+    }
+    if (normalizedTarget == 'blockquote') {
+      return spanType == 'blockquote' || spanType == 'quote';
+    }
+    return spanType == normalizedTarget;
+  }
+
   /// Loads message content and its entities for editing in-place without markdown delimiters.
   void loadMessage(String content, [List<MessageEntity>? initialEntities]) {
     _spans.clear();
-    _activeFormat = null;
+    _activeFormats.clear();
 
     if (initialEntities != null && initialEntities.isNotEmpty) {
       value = TextEditingValue(
@@ -181,10 +200,8 @@ class RichTextEditingController extends TextEditingController {
 
     if (s >= e) return;
 
-    // Remove any overlapping link spans
-    _spans.removeWhere((span) =>
-        (span.type == 'text_link' || span.type == 'link') &&
-        (span.start < e && span.end > s));
+    // Remove or split any overlapping link spans
+    _removeTypeInRange(s, e, 'text_link');
 
     _spans.add(RichSpan(
       start: s,
@@ -214,9 +231,7 @@ class RichTextEditingController extends TextEditingController {
 
     if (s >= e) return;
 
-    _spans.removeWhere((span) =>
-        (span.type == 'text_link' || span.type == 'link') &&
-        (span.start < e && span.end > s));
+    _removeTypeInRange(s, e, 'text_link');
 
     _mergeSpans();
     notifyListeners();
@@ -225,7 +240,13 @@ class RichTextEditingController extends TextEditingController {
   /// Clears rich formatting on the current selection.
   void clearFormatting() {
     final sel = selection;
-    if (!sel.isValid || sel.isCollapsed) return;
+    if (!sel.isValid || sel.isCollapsed) {
+      if (_activeFormats.isNotEmpty) {
+        _activeFormats.clear();
+        notifyListeners();
+      }
+      return;
+    }
     final start = math.min(sel.start, sel.end);
     final end = math.max(sel.start, sel.end);
     for (int i = _spans.length - 1; i >= 0; i--) {
@@ -244,33 +265,108 @@ class RichTextEditingController extends TextEditingController {
     notifyListeners();
   }
 
-  /// Currently active format mode for newly typed characters (e.g. 'bold', 'spoiler', 'code').
-  String? get activeFormat => _activeFormat;
+  /// Currently active format mode for newly typed characters (returns most recently activated format, if any).
+  String? get activeFormat => _activeFormats.isEmpty ? null : _activeFormats.last;
 
   set activeFormat(String? format) {
-    if (_activeFormat != format) {
-      _activeFormat = format;
-      notifyListeners();
+    if (format == null) {
+      if (_activeFormats.isNotEmpty) {
+        _activeFormats.clear();
+        notifyListeners();
+      }
+    } else {
+      if (_activeFormats.length != 1 || !_activeFormats.contains(format)) {
+        _activeFormats
+          ..clear()
+          ..add(format);
+        notifyListeners();
+      }
+    }
+  }
+
+  /// Returns true if [format] is currently active for the selection or cursor.
+  bool isFormatActive(String format) {
+    final normalized = _normalizeType(format);
+    if (selection.isValid && !selection.isCollapsed) {
+      final start = math.min(selection.start, selection.end);
+      final end = math.max(selection.start, selection.end);
+      if (start < end) {
+        return _isRangeCoveredByType(start, end, normalized);
+      }
+    }
+    if (normalized == 'blockquote') {
+      return _activeFormats.contains('blockquote') || _activeFormats.contains('quote');
+    }
+    return _activeFormats.contains(format) || _activeFormats.contains(normalized);
+  }
+
+  bool _isRangeCoveredByType(int start, int end, String normalizedType) {
+    if (start >= end) return false;
+    final matching = _spans
+        .where((s) =>
+            _matchesType(s.type, normalizedType) && s.start < end && s.end > start)
+        .toList();
+    if (matching.isEmpty) return false;
+    matching.sort((a, b) => a.start.compareTo(b.start));
+    int coveredUntil = start;
+    for (final s in matching) {
+      if (s.start > coveredUntil) return false;
+      if (s.end > coveredUntil) coveredUntil = s.end;
+      if (coveredUntil >= end) return true;
+    }
+    return coveredUntil >= end;
+  }
+
+  void _removeTypeInRange(int start, int end, String normalizedType) {
+    for (int i = _spans.length - 1; i >= 0; i--) {
+      final span = _spans[i];
+      if (_matchesType(span.type, normalizedType) &&
+          span.start < end &&
+          span.end > start) {
+        _spans.removeAt(i);
+        if (span.start < start) {
+          _spans.add(span.copyWith(end: start));
+        }
+        if (span.end > end) {
+          _spans.add(span.copyWith(start: end));
+        }
+      }
     }
   }
 
   /// Returns true if the cursor should be displayed in italic (slanted) style.
-  /// This is true if [activeFormat] is 'italic', or if the collapsed selection
-  /// is positioned within an italic span.
+  /// This is true if 'italic' is active, or if the collapsed selection
+  /// is positioned strictly inside an italic span.
   bool get isCursorItalic {
-    if (_activeFormat == 'italic') return true;
+    if (_activeFormats.contains('italic')) {
+      return true;
+    }
     if (!selection.isValid || !selection.isCollapsed) return false;
     final offset = selection.baseOffset;
     if (offset < 0) return false;
-    return _spans.any((s) => s.type == 'italic' && s.start <= offset && s.end >= offset);
+    return _spans.any((s) => s.type == 'italic' && s.start < offset && s.end > offset);
   }
 
-  /// Toggles the active format mode when cursor is collapsed, or applies to selection.
+  /// Toggles an active format mode when cursor is collapsed (supports stacking multiple modes).
   void toggleActiveFormat(String format) {
-    if (_activeFormat == format) {
-      _activeFormat = null;
+    if (format == 'quote' || format == 'blockquote') {
+      final wasActive =
+          _activeFormats.remove('quote') | _activeFormats.remove('blockquote');
+      if (!wasActive) {
+        _activeFormats.remove('collapse');
+        _activeFormats.add(format);
+      }
+    } else if (format == 'collapse') {
+      final wasActive = _activeFormats.remove('collapse');
+      if (!wasActive) {
+        _activeFormats.remove('quote');
+        _activeFormats.remove('blockquote');
+        _activeFormats.add('collapse');
+      }
     } else {
-      _activeFormat = format;
+      if (!_activeFormats.remove(format)) {
+        _activeFormats.add(format);
+      }
     }
     notifyListeners();
   }
@@ -284,39 +380,41 @@ class RichTextEditingController extends TextEditingController {
       return;
     }
 
-    final start = math.min(sel.start, sel.end);
-    final end = math.max(sel.start, sel.end);
+    int start = math.min(sel.start, sel.end);
+    int end = math.max(sel.start, sel.end);
     if (start == end) return;
 
-    final normalizedType = (formatType == 'link')
-        ? 'text_link'
-        : (formatType == 'quote' ? 'blockquote' : formatType);
+    final normalizedType = _normalizeType(formatType);
     if (normalizedType == 'text_link' && url != null) {
       applyLinkToSelection(url, start: start, end: end);
       return;
     }
 
-    // Check if entire selection already has this format: toggle it off
-    final existingIndex = _spans.indexWhere(
-      (s) =>
-          (s.type == normalizedType ||
-              (normalizedType == 'text_link' && s.type == 'link')) &&
-          s.start <= start &&
-          s.end >= end,
-    );
+    // For blockquotes, trim leading/trailing newlines from the selection so
+    // following lines or paragraphs are not swallowed into the quote span.
+    if (normalizedType == 'blockquote' || normalizedType == 'collapse') {
+      while (start < end && (text[start] == '\n' || text[start] == '\r')) {
+        start++;
+      }
+      while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r')) {
+        end--;
+      }
+      if (start >= end) return;
+    }
 
-    if (existingIndex != -1) {
-      // Remove or split the span
-      final span = _spans[existingIndex];
-      _spans.removeAt(existingIndex);
-      if (span.start < start) {
-        _spans.add(span.copyWith(end: start));
-      }
-      if (span.end > end) {
-        _spans.add(span.copyWith(start: end));
-      }
+    // Check if entire selection already has this format: toggle it off across the range
+    if (_isRangeCoveredByType(start, end, normalizedType)) {
+      _removeTypeInRange(start, end, normalizedType);
+      _mergeSpans();
     } else {
-      // Add formatting span
+      // Regular blockquote and collapsible blockquote are mutually exclusive on the same range
+      if (normalizedType == 'blockquote') {
+        _removeTypeInRange(start, end, 'collapse');
+      } else if (normalizedType == 'collapse') {
+        _removeTypeInRange(start, end, 'blockquote');
+      }
+
+      // Add formatting span (combining/stacking with any other formats on the range)
       _spans.add(RichSpan(
         start: start,
         end: end,
@@ -358,13 +456,19 @@ class RichTextEditingController extends TextEditingController {
           .toList();
     }
 
-    // Also detect any raw URLs in text not covered by existing entities
+    // Also detect any raw URLs in text not covered by existing link/code entities
     for (final match in EntityParser.urlRegex.allMatches(effectiveText)) {
       final url = match.group(0)!;
       final start = match.start;
       final len = url.length;
       final bool covered = result.any((e) =>
-          e.offset <= start && (e.offset + e.length) >= (start + len));
+          (e.type == 'text_link' ||
+              e.type == 'link' ||
+              e.type == 'url' ||
+              e.type == 'code' ||
+              e.type == 'pre') &&
+          e.offset <= start &&
+          (e.offset + e.length) >= (start + len));
       if (!covered) {
         result.add(MessageEntity(
           type: 'url',
@@ -414,19 +518,26 @@ class RichTextEditingController extends TextEditingController {
       final span = _spans[i];
 
       if (span.end <= start) {
-        // Change occurred after span: unchanged
+        // Change occurred at or after span end: unchanged
+        // (If activeFormats contains this span's type, the inserted range will be added and merged below)
         continue;
       } else if (span.start >= oldEnd) {
         // Change occurred before span: shift
         span.start += delta;
         span.end += delta;
       } else {
-        // Change overlaps with span
+        // Change overlaps with span interior
         if (deletedCount > 0) {
           final delInSpan = (math.min(span.end, oldEnd) - math.max(span.start, start)).toInt();
+          if (start < span.start) {
+            span.start = start;
+          }
           span.end -= delInSpan;
         }
-        if (insertedCount > 0 && span.start <= start && span.end >= start) {
+        if (insertedCount > 0 && span.start < start && start < span.end) {
+          span.end += insertedCount;
+        } else if (insertedCount > 0 && span.start >= start) {
+          span.start += insertedCount;
           span.end += insertedCount;
         }
       }
@@ -436,26 +547,67 @@ class RichTextEditingController extends TextEditingController {
       }
     }
 
-    // If new text was typed and activeFormat is set, apply activeFormat to the inserted range
-    if (insertedCount > 0 && _activeFormat != null) {
-      _spans.add(RichSpan(
-        start: start,
-        end: start + insertedCount,
-        type: _activeFormat!,
-      ));
+    // If user typed a blank line (\n\n) while quote mode is active, exit quote mode automatically
+    final bool hasActiveQuote = _activeFormats.contains('quote') ||
+        _activeFormats.contains('blockquote') ||
+        _activeFormats.contains('collapse');
+    if (insertedCount > 0 && hasActiveQuote) {
+      final insertedStr = newText.substring(start, start + insertedCount);
+      final bool isDoubleNewline = insertedStr.contains('\n\n') ||
+          (insertedStr.startsWith('\n') && start > 0 && newText[start - 1] == '\n');
+      if (isDoubleNewline) {
+        _activeFormats.remove('quote');
+        _activeFormats.remove('blockquote');
+        _activeFormats.remove('collapse');
+      }
+    }
+
+    // If new text was typed and activeFormats is non-empty, apply all active formats to the inserted range
+    if (insertedCount > 0 && _activeFormats.isNotEmpty) {
+      for (final fmt in _activeFormats) {
+        _spans.add(RichSpan(
+          start: start,
+          end: start + insertedCount,
+          type: _normalizeType(fmt),
+        ));
+      }
       _mergeSpans();
     }
 
-    // Clamp spans within [0, newText.length]
+    final bool quoteStillActive = _activeFormats.contains('quote') ||
+        _activeFormats.contains('blockquote') ||
+        _activeFormats.contains('collapse');
+
+    // Clamp spans within [0, newText.length] and prevent quote spans from stretching across trailing newlines
     for (final span in _spans) {
       span.start = span.start.clamp(0, newText.length);
       span.end = span.end.clamp(span.start, newText.length);
+      if (span.type == 'blockquote' ||
+          span.type == 'quote' ||
+          span.type == 'collapse') {
+        while (span.start < span.end &&
+            (newText[span.start] == '\n' || newText[span.start] == '\r')) {
+          span.start++;
+        }
+        if (!quoteStillActive) {
+          while (span.end > span.start &&
+              (newText[span.end - 1] == '\n' || newText[span.end - 1] == '\r')) {
+            span.end--;
+          }
+        }
+      }
     }
     _spans.removeWhere((s) => s.start >= s.end);
   }
 
   void _mergeSpans() {
     _spans.sort((a, b) {
+      final typeA = _normalizeType(a.type);
+      final typeB = _normalizeType(b.type);
+      final typeCmp = typeA.compareTo(typeB);
+      if (typeCmp != 0) return typeCmp;
+      final urlCmp = (a.url ?? '').compareTo(b.url ?? '');
+      if (urlCmp != 0) return urlCmp;
       if (a.start != b.start) return a.start.compareTo(b.start);
       return a.end.compareTo(b.end);
     });
@@ -463,18 +615,25 @@ class RichTextEditingController extends TextEditingController {
     for (int i = 0; i < _spans.length - 1; i++) {
       final cur = _spans[i];
       final next = _spans[i + 1];
-      if (cur.type == next.type && cur.url == next.url && cur.end >= next.start) {
+      if (_normalizeType(cur.type) == _normalizeType(next.type) &&
+          cur.url == next.url &&
+          cur.end >= next.start) {
         cur.end = math.max(cur.end, next.end);
         _spans.removeAt(i + 1);
         i--;
       }
     }
+
+    _spans.sort((a, b) {
+      if (a.start != b.start) return a.start.compareTo(b.start);
+      return a.end.compareTo(b.end);
+    });
   }
 
   @override
   void clear() {
     _spans.clear();
-    _activeFormat = null;
+    _activeFormats.clear();
     _lastText = '';
     super.clear();
   }
@@ -515,10 +674,31 @@ class RichTextEditingController extends TextEditingController {
 
       TextStyle segStyle = style ?? const TextStyle(fontSize: 17.0);
 
-      // 1. Combine decorations
+      final hasLink = activeSpans.any((s) => s.type == 'text_link' || s.type == 'link');
+      final hasQuote = activeSpans.any((s) =>
+          s.type == 'quote' || s.type == 'collapse' || s.type == 'blockquote');
+      final hasSpoiler = activeSpans.any((s) => s.type == 'spoiler');
+
+      // 1. Base text color (Blockquote -> Link -> Spoiler)
+      if (hasQuote && !hasLink) {
+        segStyle = segStyle.copyWith(
+          color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C2530),
+        );
+      }
+      if (hasLink) {
+        segStyle = segStyle.copyWith(color: primaryColor);
+      }
+      if (hasSpoiler) {
+        segStyle = segStyle.copyWith(
+          backgroundColor: Colors.transparent,
+          color: isDark ? Colors.white38 : Colors.black38,
+        );
+      }
+
+      // 2. Combine decorations (after color is resolved so decorationColor matches)
       final hasStrike = activeSpans.any((s) => s.type == 'strikethrough');
-      final hasUnderline = activeSpans.any((s) =>
-          s.type == 'underline' || s.type == 'text_link' || s.type == 'link');
+      final hasUnderline =
+          activeSpans.any((s) => s.type == 'underline') || hasLink;
       if (hasStrike && hasUnderline) {
         segStyle = segStyle.copyWith(
           decoration: TextDecoration.combine(
@@ -527,7 +707,10 @@ class RichTextEditingController extends TextEditingController {
           decorationThickness: 1.5,
         );
       } else if (hasStrike) {
-        segStyle = segStyle.copyWith(decoration: TextDecoration.lineThrough);
+        segStyle = segStyle.copyWith(
+          decoration: TextDecoration.lineThrough,
+          decorationColor: segStyle.color,
+        );
       } else if (hasUnderline) {
         segStyle = segStyle.copyWith(
           decoration: TextDecoration.underline,
@@ -536,48 +719,19 @@ class RichTextEditingController extends TextEditingController {
         );
       }
 
-      // 2. Bold
+      // 3. Bold
       if (activeSpans.any((s) => s.type == 'bold')) {
         segStyle = segStyle.copyWith(fontWeight: FontWeight.bold);
       }
 
-      // 3. Italic
-      if (activeSpans.any((s) =>
-          s.type == 'italic' ||
-          s.type == 'quote' ||
-          s.type == 'collapse' ||
-          s.type == 'blockquote')) {
+      // 4. Italic (only when explicitly italic, not forced by quote)
+      if (activeSpans.any((s) => s.type == 'italic')) {
         segStyle = segStyle.copyWith(fontStyle: FontStyle.italic);
       }
 
-      // 4. Monospace
+      // 5. Monospace
       if (activeSpans.any((s) => s.type == 'code' || s.type == 'pre')) {
         segStyle = segStyle.copyWith(fontFamily: 'monospace');
-      }
-
-      // 5. Links
-      if (activeSpans.any((s) => s.type == 'text_link' || s.type == 'link')) {
-        segStyle = segStyle.copyWith(color: primaryColor);
-      }
-
-      // 6. Blockquote
-      if (activeSpans.any((s) =>
-          s.type == 'quote' ||
-          s.type == 'collapse' ||
-          s.type == 'blockquote')) {
-        segStyle = segStyle.copyWith(
-          color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1C2530),
-          backgroundColor:
-              isDark ? const Color(0x18FFFFFF) : const Color(0x12000000),
-        );
-      }
-
-      // 7. Spoiler text appearance
-      if (activeSpans.any((s) => s.type == 'spoiler')) {
-        segStyle = segStyle.copyWith(
-          backgroundColor: Colors.transparent,
-          color: isDark ? Colors.white38 : Colors.black38,
-        );
       }
 
       // Check for emojis

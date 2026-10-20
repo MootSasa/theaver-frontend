@@ -114,7 +114,7 @@ class EmojiUtils {
       children.add(TextSpan(text: text, style: style));
     }
 
-    return TextSpan(children: children);
+    return TextSpan(style: style, children: children);
   }
 }
 

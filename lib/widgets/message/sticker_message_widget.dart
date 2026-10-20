@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 
+// TODO(stickers): При реализации системы стикеров подключить StickerMessageWidget
+// в MessageBubble (для messageType == 'sticker') без фона бабла, использовать
+// MediaCacheManager для кэширования и отображения превью, а также добавить
+// поддержку анимированных стикеров (Lottie/TGS и WebM).
 class StickerMessageWidget extends StatelessWidget {
   final String imageUrl;
   final bool isSentByMe;

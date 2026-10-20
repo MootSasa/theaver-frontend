@@ -610,7 +610,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   void _onMessageEdited(WebSocketEvent event) {
     final messageId = event.data['message_id']?.toString();
     final newContent = event.data['content']?.toString();
-    if (messageId == null || newContent == null) return;
+    if (messageId == null) return;
 
     List<MessageEntity>? newEntities;
     if (event.data['entities'] != null) {
@@ -622,14 +622,31 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       } catch (_) {}
     }
 
+    Map<String, dynamic>? newMediaPayload;
+    if (event.data['media_payload'] is Map) {
+      newMediaPayload =
+          Map<String, dynamic>.from(event.data['media_payload'] as Map);
+    } else if (event.data['poll'] is Map) {
+      newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
+    }
+
+    final isPollEvent =
+        event.data['message_type'] == 'poll' || newMediaPayload != null;
+    if (newContent == null && newMediaPayload == null) return;
+
+    String? effectiveContent = newContent;
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
         if (index != -1) {
-          _messages[index] = _messages[index].copyWith(
-            content: newContent,
-            entities: newEntities ?? _messages[index].entities,
-            isEdited: true,
+          final current = _messages[index];
+          effectiveContent ??= current.content;
+          final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          _messages[index] = current.copyWith(
+            content: effectiveContent,
+            entities: newEntities ?? current.entities,
+            mediaPayload: newMediaPayload ?? current.mediaPayload,
+            isEdited: isPollMsg ? current.isEdited : true,
           );
           _updateFeedItems();
         }
@@ -639,10 +656,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     try {
       AppDatabase().updateMessageContent(
         messageId,
-        newContent,
+        effectiveContent ?? '',
         newEntities != null && newEntities.isNotEmpty
             ? jsonEncode(newEntities.map((e) => e.toJson()).toList())
             : null,
+        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
+        !isPollEvent,
       );
     } catch (_) {}
   }
@@ -1009,6 +1028,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   /// Start a reply to a message (full message reply)
   void _startReply(Message message) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _textController.clear();
+      }
       _replyToMessage = message;
       _isQuote = false;
       _quoteText = null;
@@ -1030,6 +1054,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   /// Start a quote reply (partial text)
   void _startQuote(Message message, String selectedText, int offset, int length) {
     setState(() {
+      if (_isEditing) {
+        _isEditing = false;
+        _editingMessageId = null;
+        _textController.clear();
+      }
       _replyToMessage = message;
       _isQuote = true;
       _quoteText = selectedText;
@@ -2172,6 +2201,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3287,6 +3317,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3462,6 +3493,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -4365,14 +4397,27 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
+    final bool isPoll = message.messageType == 'poll';
 
     MessageContextMenuService().show(
       context: context,
       message: message,
       messageKey: key,
       isMe: isMe,
+      currentUserId: _currentUserId,
+      canManagePoll: isMe,
+      onPollUpdated: (updatedPoll) {
+        if (!mounted) return;
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == message.id);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(mediaPayload: updatedPoll);
+            _updateFeedItems();
+          }
+        });
+      },
       onReply: () => _startReply(message),
-      onQuote: (isVideoNote || isVoiceNote) ? null : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
       onPin: () {
         // TODO: Pin message
         GlassToastService().show(
@@ -4385,7 +4430,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           ),
         );
       },
-      onEdit: (isVideoNote || isVoiceNote) ? null : () {
+      onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
         setState(() {
           _cancelReply();
           _textController.loadMessage(message.content, message.entities);
