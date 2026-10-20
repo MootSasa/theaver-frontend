@@ -4478,20 +4478,17 @@ class _TopMorphMenu extends StatelessWidget {
           color: Colors.transparent,
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 6.0),
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (int i = 0; i < items.length; i++)
-                    _MorphMenuRow(
-                      key: ValueKey(items[i].id),
-                      item: items[i],
-                      isDark: isDark,
-                      onTap: () => onItemTap(items[i].id),
-                    ),
-                ],
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (int i = 0; i < items.length; i++)
+                  _MorphMenuRow(
+                    key: ValueKey(items[i].id),
+                    item: items[i],
+                    isDark: isDark,
+                    onTap: () => onItemTap(items[i].id),
+                  ),
+              ],
             ),
           ),
         ),
