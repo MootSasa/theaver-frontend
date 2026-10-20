@@ -9,6 +9,7 @@ import argparse
 import http.client
 import json
 import os
+import socket
 import ssl
 import sys
 import time
@@ -17,17 +18,85 @@ import urllib.parse
 import urllib.request
 import uuid
 
-CHUNK_SIZE = 256 * 1024  # 256 KB chunks so socket timeout applies per block, not to the whole file
-CHUNK_TIMEOUT_SEC = 120  # Per-chunk socket write timeout
+CHUNK_SIZE = 256 * 1024  # 256 KB chunks
+CHUNK_TIMEOUT_SEC = 12  # Per-chunk socket write timeout
 RESPONSE_TIMEOUT_SEC = 600  # Timeout waiting for final server response after upload completes
-MAX_RETRIES = 4
+MIN_SPEED_BYTES_PER_SEC = 512 * 1024  # 512 KB/s minimum speed after warmup
+SPEED_WARMUP_SEC = 4.0  # Check speed after 4 seconds
+MAX_RETRIES = 12
+
+# Persistent HTTP/1.1 Keep-Alive connection and quarantined slow sockets
+# (kept open until script exit so Azure SNAT cannot reassign throttled source ports)
+_active_conn = None
+_active_host_port = None
+_quarantined_conns = []
 
 
-def _stream_multipart_once(url, file_path, fields, headers, chunk_size=CHUNK_SIZE):
+class ThrottledConnectionError(Exception):
+    pass
+
+
+def _get_or_create_conn(url):
+    global _active_conn, _active_host_port
     parsed = urllib.parse.urlsplit(url)
     is_https = parsed.scheme.lower() == "https"
     host = parsed.hostname
     port = parsed.port or (443 if is_https else 80)
+    key = (is_https, host, port)
+
+    if _active_conn is not None and _active_host_port == key and getattr(_active_conn, "sock", None) is not None:
+        return _active_conn, parsed, True
+
+    if is_https:
+        ctx = ssl.create_default_context()
+        conn = http.client.HTTPSConnection(host, port, timeout=CHUNK_TIMEOUT_SEC, context=ctx)
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=CHUNK_TIMEOUT_SEC)
+
+    conn.connect()
+    if conn.sock is not None:
+        try:
+            conn.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            conn.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 256 * 1024)
+        except Exception:
+            pass
+        conn.sock.settimeout(CHUNK_TIMEOUT_SEC)
+
+    _active_conn = conn
+    _active_host_port = key
+    return conn, parsed, False
+
+
+def _quarantine_active_conn():
+    """Keep slow socket open in quarantine list so SNAT allocates a fresh source port on next connect."""
+    global _active_conn
+    if _active_conn is not None:
+        _quarantined_conns.append(_active_conn)
+        _active_conn = None
+
+
+def _discard_active_conn():
+    global _active_conn
+    if _active_conn is not None:
+        try:
+            _active_conn.close()
+        except Exception:
+            pass
+        _active_conn = None
+
+
+def _cleanup_all_conns():
+    _discard_active_conn()
+    while _quarantined_conns:
+        c = _quarantined_conns.pop()
+        try:
+            c.close()
+        except Exception:
+            pass
+
+
+def _stream_multipart_once(url, file_path, fields, headers, chunk_size=CHUNK_SIZE):
+    conn, parsed, reused = _get_or_create_conn(url)
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
@@ -58,76 +127,86 @@ def _stream_multipart_once(url, file_path, fields, headers, chunk_size=CHUNK_SIZ
     req_headers = dict(headers)
     req_headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
     req_headers["Content-Length"] = str(total_length)
+    req_headers["Connection"] = "keep-alive"
     req_headers["X-File-Size"] = str(file_size)
     if "channel" in all_fields:
         req_headers["X-Channel"] = str(all_fields["channel"])
 
-    conn = None
+    local_port = None
     try:
-        if is_https:
-            ctx = ssl.create_default_context()
-            conn = http.client.HTTPSConnection(host, port, timeout=CHUNK_TIMEOUT_SEC, context=ctx)
-        else:
-            conn = http.client.HTTPConnection(host, port, timeout=CHUNK_TIMEOUT_SEC)
-
-        conn.connect()
         if conn.sock is not None:
-            conn.sock.settimeout(CHUNK_TIMEOUT_SEC)
+            local_port = conn.sock.getsockname()[1]
+    except Exception:
+        pass
 
-        conn.putrequest("POST", path)
-        for k, v in req_headers.items():
-            conn.putheader(k, v)
-        conn.endheaders()
+    if reused:
+        print(f"  ↳ Reusing fast Keep-Alive socket (local port {local_port})", flush=True)
+    else:
+        print(f"  ↳ Opened new socket (local port {local_port}, quarantined={len(_quarantined_conns)})", flush=True)
 
-        # 1. Send multipart headers prefix
-        conn.send(bytes(prefix))
+    if conn.sock is not None:
+        conn.sock.settimeout(CHUNK_TIMEOUT_SEC)
 
-        # 2. Stream file in 256 KB blocks so SSLSocket.sendall timeout applies per chunk
-        sent_bytes = 0
-        next_Milestone = 25
-        start_ts = time.monotonic()
-        with open(file_path, "rb") as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                if conn.sock is not None:
-                    conn.sock.settimeout(CHUNK_TIMEOUT_SEC)
-                conn.send(chunk)
-                sent_bytes += len(chunk)
-                if file_size > 0:
-                    pct = int((sent_bytes * 100) / file_size)
-                    if pct >= next_Milestone and next_Milestone <= 100:
-                        elapsed = max(0.1, time.monotonic() - start_ts)
-                        speed_mb = (sent_bytes / (1024 * 1024)) / elapsed
-                        print(
-                            f"  ↳ {file_name}: {pct}% ({sent_bytes // (1024 * 1024)}/{file_size // (1024 * 1024)} MB, {speed_mb:.2f} MB/s)",
-                            flush=True,
-                        )
-                        while next_Milestone <= pct:
-                            next_Milestone += 25
+    conn.putrequest("POST", path)
+    for k, v in req_headers.items():
+        conn.putheader(k, v)
+    conn.endheaders()
 
-        # 3. Send closing boundary suffix
-        conn.send(suffix)
+    # 1. Send multipart headers prefix
+    conn.send(bytes(prefix))
 
-        # 4. Wait for server response (MinIO finalize / web tar extraction)
-        if conn.sock is not None:
-            conn.sock.settimeout(RESPONSE_TIMEOUT_SEC)
+    # 2. Stream file in 256 KB blocks with per-chunk timeout and minimum speed guard
+    sent_bytes = 0
+    next_milestone = 25
+    start_ts = time.monotonic()
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            if conn.sock is not None:
+                conn.sock.settimeout(CHUNK_TIMEOUT_SEC)
+            conn.send(chunk)
+            sent_bytes += len(chunk)
 
-        resp = conn.getresponse()
-        raw_body = resp.read().decode("utf-8", errors="replace")
-        status = resp.status
-        try:
-            parsed_json = json.loads(raw_body)
-        except Exception:
-            parsed_json = {"error": f"HTTP {status}: {raw_body}"}
-        return parsed_json, status
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            elapsed = max(0.05, time.monotonic() - start_ts)
+            avg_speed = sent_bytes / elapsed
+
+            # Detect DPI/ECMP throttled route (< 512 KB/s after warmup) and quarantine socket immediately
+            if elapsed >= SPEED_WARMUP_SEC and avg_speed < MIN_SPEED_BYTES_PER_SEC:
+                raise ThrottledConnectionError(
+                    f"Throttled route detected ({avg_speed / 1024:.1f} KB/s after {elapsed:.1f}s on port {local_port})"
+                )
+
+            if file_size > 0:
+                pct = int((sent_bytes * 100) / file_size)
+                if pct >= next_milestone and next_milestone <= 100:
+                    speed_mb = (sent_bytes / (1024 * 1024)) / elapsed
+                    print(
+                        f"  ↳ {file_name}: {pct}% ({sent_bytes // (1024 * 1024)}/{file_size // (1024 * 1024)} MB, {speed_mb:.2f} MB/s)",
+                        flush=True,
+                    )
+                    while next_milestone <= pct:
+                        next_milestone += 25
+
+    # 3. Send closing boundary suffix
+    conn.send(suffix)
+
+    # 4. Wait for server response (MinIO finalize / web tar extraction)
+    if conn.sock is not None:
+        conn.sock.settimeout(RESPONSE_TIMEOUT_SEC)
+
+    resp = conn.getresponse()
+    raw_body = resp.read().decode("utf-8", errors="replace")
+    status = resp.status
+    if resp.will_close:
+        _discard_active_conn()
+
+    try:
+        parsed_json = json.loads(raw_body)
+    except Exception:
+        parsed_json = {"error": f"HTTP {status}: {raw_body}"}
+    return parsed_json, status
 
 
 def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
@@ -137,25 +216,31 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
 
     for attempt in range(1, max_retries + 1):
         try:
-            if attempt > 1:
-                backoff = min(30, 5 * (2 ** (attempt - 2)))
-                print(
-                    f"[Deploy] 🔄 Retry {attempt}/{max_retries} for {file_name} in {backoff}s...",
-                    flush=True,
-                )
-                time.sleep(backoff)
-
             res, status = _stream_multipart_once(url, file_path, fields, headers)
             if status == 200 and res.get("success"):
                 return res, status
 
+            _discard_active_conn()
             last_res, last_status = res, status
             print(
                 f"[Deploy] ⚠️ Attempt {attempt}/{max_retries} for {file_name} returned HTTP {status}: {res}",
                 file=sys.stderr,
                 flush=True,
             )
+            time.sleep(2)
+        except (ThrottledConnectionError, TimeoutError, socket.timeout) as e:
+            # Quarantine slow/timed-out socket so SNAT allocates a fresh source port immediately
+            _quarantine_active_conn()
+            last_res = {"error": str(e)}
+            last_status = 500
+            print(
+                f"[Deploy] ⚡ Attempt {attempt}/{max_retries} for {file_name}: {e} -> switching SNAT port...",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(0.5)
         except Exception as e:
+            _discard_active_conn()
             last_res = {"error": str(e)}
             last_status = 500
             print(
@@ -163,6 +248,7 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
                 file=sys.stderr,
                 flush=True,
             )
+            time.sleep(1.5)
 
     return last_res, last_status
 
@@ -172,27 +258,37 @@ def post_json(url, payload, headers, max_retries=MAX_RETRIES):
     req_headers = dict(headers)
     req_headers["Content-Type"] = "application/json"
     req_headers["Content-Length"] = str(len(body))
+    req_headers["Connection"] = "keep-alive"
 
     last_res = {"error": "Unknown error"}
     last_status = 500
 
     for attempt in range(1, max_retries + 1):
-        if attempt > 1:
-            time.sleep(3 * attempt)
-        req = urllib.request.Request(url, data=body, headers=req_headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = resp.read().decode("utf-8")
-                return json.loads(data), resp.status
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
-            last_res, last_status = {"error": f"HTTP {e.code}: {err_body}"}, e.code
-            if 400 <= e.code < 500:
-                break
+            conn, parsed, _ = _get_or_create_conn(url)
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+            if conn.sock is not None:
+                conn.sock.settimeout(30)
+            conn.putrequest("POST", path)
+            for k, v in req_headers.items():
+                conn.putheader(k, v)
+            conn.endheaders()
+            conn.send(body)
+            resp = conn.getresponse()
+            raw_body = resp.read().decode("utf-8", errors="replace")
+            status = resp.status
+            if resp.will_close:
+                _discard_active_conn()
+            return json.loads(raw_body), status
         except Exception as e:
+            _quarantine_active_conn()
             last_res, last_status = {"error": str(e)}, 500
+            time.sleep(0.5)
 
     return last_res, last_status
+
 
 
 def main():
@@ -258,54 +354,63 @@ def main():
     success_count = 0
     fail_count = 0
 
-    for file_path in sorted(files_to_deploy):
-        fname = os.path.basename(file_path)
-        fsize = os.path.getsize(file_path)
-        print(f"\n[Deploy] Processing {fname} ({fsize} bytes)...", flush=True)
+    # Deploy web bundle first (smallest and updates live web frontend immediately), then sort remaining files
+    ordered_files = sorted(
+        files_to_deploy,
+        key=lambda p: (0 if "-web." in os.path.basename(p).lower() else 1, os.path.basename(p).lower()),
+    )
 
-        # 1. Stream release binary to MinIO via API in 256 KB chunks
-        upload_endpoint = f"{api_url}/api/admin/upload-release"
-        fields = {"channel": args.channel}
+    try:
+        for file_path in ordered_files:
+            fname = os.path.basename(file_path)
+            fsize = os.path.getsize(file_path)
+            print(f"\n[Deploy] Processing {fname} ({fsize} bytes)...", flush=True)
 
-        upload_res, status = post_multipart(upload_endpoint, file_path, fields, headers)
-        if status != 200 or not upload_res.get("success"):
-            print(f"[Deploy] ❌ Failed to upload {fname}: {upload_res}", file=sys.stderr, flush=True)
-            fail_count += 1
-            continue
+            # 1. Stream release binary to MinIO via API in 256 KB chunks
+            upload_endpoint = f"{api_url}/api/admin/upload-release"
+            fields = {"channel": args.channel}
 
-        download_url = upload_res.get("download_url")
-        platform = upload_res.get("platform") or upload_res.get("detected_platform") or "android"
-        arch = upload_res.get("architecture") or upload_res.get("detected_architecture") or "universal"
-        sha256 = upload_res.get("sha256") or ""
-        size_bytes = upload_res.get("size_bytes") or upload_res.get("file_size_bytes") or fsize
+            upload_res, status = post_multipart(upload_endpoint, file_path, fields, headers)
+            if status != 200 or not upload_res.get("success"):
+                print(f"[Deploy] ❌ Failed to upload {fname}: {upload_res}", file=sys.stderr, flush=True)
+                fail_count += 1
+                continue
 
-        print(f"[Deploy] ✅ Uploaded successfully: {download_url}", flush=True)
-        print(f"[Deploy] Metadata: Platform={platform}, Arch={arch}, Channel={args.channel}, Size={size_bytes}", flush=True)
+            download_url = upload_res.get("download_url")
+            platform = upload_res.get("platform") or upload_res.get("detected_platform") or "android"
+            arch = upload_res.get("architecture") or upload_res.get("detected_architecture") or "universal"
+            sha256 = upload_res.get("sha256") or ""
+            size_bytes = upload_res.get("size_bytes") or upload_res.get("file_size_bytes") or fsize
 
-        # 2. Register release in DB
-        version_endpoint = f"{api_url}/api/admin/version"
-        version_payload = {
-            "platform": platform,
-            "architecture": arch,
-            "channel": args.channel,
-            "latest_version": args.version,
-            "latest_build": args.build_number,
-            "min_supported_build": 1,
-            "force_update": args.force_update,
-            "download_url": download_url,
-            "apk_size_bytes": size_bytes,
-            "sha256": sha256,
-            "release_notes": release_notes
-        }
+            print(f"[Deploy] ✅ Uploaded successfully: {download_url}", flush=True)
+            print(f"[Deploy] Metadata: Platform={platform}, Arch={arch}, Channel={args.channel}, Size={size_bytes}", flush=True)
 
-        ver_res, ver_status = post_json(version_endpoint, version_payload, headers)
-        if ver_status != 200 or not ver_res.get("success"):
-            print(f"[Deploy] ❌ Failed to register {platform}/{arch}/{args.channel} in database: {ver_res}", file=sys.stderr, flush=True)
-            fail_count += 1
-            continue
+            # 2. Register release in DB
+            version_endpoint = f"{api_url}/api/admin/version"
+            version_payload = {
+                "platform": platform,
+                "architecture": arch,
+                "channel": args.channel,
+                "latest_version": args.version,
+                "latest_build": args.build_number,
+                "min_supported_build": 1,
+                "force_update": args.force_update,
+                "download_url": download_url,
+                "apk_size_bytes": size_bytes,
+                "sha256": sha256,
+                "release_notes": release_notes
+            }
 
-        print(f"[Deploy] ✅ Registered in database successfully!", flush=True)
-        success_count += 1
+            ver_res, ver_status = post_json(version_endpoint, version_payload, headers)
+            if ver_status != 200 or not ver_res.get("success"):
+                print(f"[Deploy] ❌ Failed to register {platform}/{arch}/{args.channel} in database: {ver_res}", file=sys.stderr, flush=True)
+                fail_count += 1
+                continue
+
+            print(f"[Deploy] ✅ Registered in database successfully!", flush=True)
+            success_count += 1
+    finally:
+        _cleanup_all_conns()
 
     print(f"\n[Deploy] Deployment finished. Successful: {success_count}, Failed: {fail_count}", flush=True)
     if fail_count > 0 and args.strict:
@@ -314,4 +419,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

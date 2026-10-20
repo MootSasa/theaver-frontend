@@ -697,6 +697,18 @@ jobs:
             exit 1
           fi
 
+      - name: Create GitHub Release & Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: Theaver ${{ needs.prepare-release.outputs.tag_name }} (${{ needs.prepare-release.outputs.channel }})
+          body_path: release_notes.md
+          prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
+          draft: false
+          files: dist/**/*
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Deploy to Theaver API & MinIO Storage
         continue-on-error: true
         env:
@@ -718,14 +730,3 @@ jobs:
             --release-notes-file release_notes.md \
             $FORCE_FLAG
 
-      - name: Create GitHub Release & Upload Assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare-release.outputs.tag_name }}
-          target_commitish: ${{ github.sha }}
-          name: Theaver ${{ needs.prepare-release.outputs.tag_name }} (${{ needs.prepare-release.outputs.channel }})
-          body_path: release_notes.md
-          prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
-          draft: false
-          files: dist/**/*
-          token: ${{ secrets.GITHUB_TOKEN }}
