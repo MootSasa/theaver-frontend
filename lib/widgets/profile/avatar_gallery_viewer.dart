@@ -1,6 +1,10 @@
 import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart' hide FileService;
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'package:share_plus/share_plus.dart';
@@ -15,11 +19,11 @@ import '../../utils/haptic_utils.dart';
 /// Полноэкранный просмотрщик аватарок в стиле Telegram.
 ///
 /// Поддерживает:
-/// - Листание аватарок (PageView)
-/// - Масштабирование и приближение (pinch-to-zoom)
+/// - Листание аватарок (PageView, боковые стрелки < / >, клавиши ← / →)
+/// - Масштабирование и приближение (pinch-to-zoom и колёсико мыши)
 /// - Сохранение фото в галерею/загрузки
 /// - Поделиться фото
-/// - Свайп вверх/вниз для закрытия
+/// - Свайп вверх/вниз или клавиша Esc для закрытия
 /// - Индикатор страниц и действия (Удалить / Выбрать новое фото)
 class AvatarGalleryViewer extends StatefulWidget {
   final List<String> avatarUrls;
@@ -91,6 +95,9 @@ class AvatarGalleryViewer extends StatefulWidget {
 class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
   late int _currentIndex;
   late PageController _pageController;
+  final FocusNode _focusNode = FocusNode();
+  final Map<int, PhotoViewController> _photoControllers = {};
+  final Map<int, double> _baseScales = {};
   bool _isSaving = false;
   double _verticalDragOffset = 0.0;
 
@@ -103,8 +110,71 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
 
   int mathMax(int a, int b) => a > b ? a : b;
 
+  PhotoViewController _controllerForIndex(int index) {
+    return _photoControllers.putIfAbsent(index, () => PhotoViewController());
+  }
+
+  void _goToPrev() {
+    if (_currentIndex <= 0) return;
+    HapticUtils.selection();
+    _pageController.animateToPage(
+      _currentIndex - 1,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _goToNext() {
+    if (_currentIndex >= widget.avatarUrls.length - 1) return;
+    HapticUtils.selection();
+    _pageController.animateToPage(
+      _currentIndex + 1,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      Navigator.pop(context);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _goToPrev();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _goToNext();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) return;
+    final dy = event.scrollDelta.dy;
+    if (dy == 0.0) return;
+
+    final ctrl = _controllerForIndex(_currentIndex);
+    final currentScale = ctrl.scale;
+    if (currentScale == null || currentScale <= 0) return;
+
+    final baseScale = _baseScales.putIfAbsent(_currentIndex, () => currentScale);
+    final zoomFactor = dy < 0 ? 1.16 : (1.0 / 1.16);
+    final nextScale = (currentScale * zoomFactor).clamp(baseScale, baseScale * 4.0);
+    ctrl.scale = nextScale;
+    if ((nextScale - baseScale).abs() < 0.01) {
+      ctrl.position = Offset.zero;
+    }
+  }
+
   @override
   void dispose() {
+    for (final ctrl in _photoControllers.values) {
+      ctrl.dispose();
+    }
+    _focusNode.dispose();
     _pageController.dispose();
     super.dispose();
   }
@@ -347,84 +417,198 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
           ),
         ),
       ),
-      body: GestureDetector(
-        onVerticalDragUpdate: (details) {
-          setState(() {
-            _verticalDragOffset += details.delta.dy;
-          });
-        },
-        onVerticalDragEnd: (details) {
-          final velocity = details.primaryVelocity ?? 0.0;
-          if (_verticalDragOffset.abs() > 85.0 || velocity.abs() > 400.0) {
-            Navigator.pop(context);
-          } else {
-            setState(() {
-              _verticalDragOffset = 0.0;
-            });
-          }
-        },
-        child: Stack(
-          children: [
-            if (totalCount > 0)
-              Transform.translate(
-                offset: Offset(0, _verticalDragOffset),
-                child: PhotoViewGallery.builder(
-                  scrollPhysics: const BouncingScrollPhysics(),
-                  builder: (context, index) {
-                    final url = widget.avatarUrls[index];
-                    final provider = avatarImageProvider(url) ?? NetworkImage(url);
-                    final tag = widget.heroTagPrefix != null ? '${widget.heroTagPrefix}_$url' : 'avatar_hero_$url';
-                    return PhotoViewGalleryPageOptions(
-                      imageProvider: provider,
-                      filterQuality: FilterQuality.medium,
-                      initialScale: PhotoViewComputedScale.contained,
-                      minScale: PhotoViewComputedScale.contained,
-                      maxScale: PhotoViewComputedScale.covered * 3.5,
-                      heroAttributes: PhotoViewHeroAttributes(tag: tag),
-                    );
-                  },
-                  itemCount: totalCount,
-                  loadingBuilder: (context, event) => const Center(
-                    child: CircularProgressIndicator(color: Color(0xFF0088CC)),
+      body: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _handleKeyEvent,
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerSignal: _handlePointerSignal,
+          child: GestureDetector(
+            onVerticalDragUpdate: (details) {
+              setState(() {
+                _verticalDragOffset += details.delta.dy;
+              });
+            },
+            onVerticalDragEnd: (details) {
+              final velocity = details.primaryVelocity ?? 0.0;
+              if (_verticalDragOffset.abs() > 85.0 || velocity.abs() > 400.0) {
+                Navigator.pop(context);
+              } else {
+                setState(() {
+                  _verticalDragOffset = 0.0;
+                });
+              }
+            },
+            child: Stack(
+              children: [
+                if (totalCount > 0)
+                  Transform.translate(
+                    offset: Offset(0, _verticalDragOffset),
+                    child: PhotoViewGallery.builder(
+                      scrollPhysics: const BouncingScrollPhysics(),
+                      builder: (context, index) {
+                        final url = widget.avatarUrls[index];
+                        final provider = avatarImageProvider(url) ?? NetworkImage(url);
+                        final tag = widget.heroTagPrefix != null ? '${widget.heroTagPrefix}_$url' : 'avatar_hero_$url';
+                        return PhotoViewGalleryPageOptions(
+                          imageProvider: provider,
+                          controller: _controllerForIndex(index),
+                          filterQuality: FilterQuality.medium,
+                          initialScale: PhotoViewComputedScale.contained,
+                          minScale: PhotoViewComputedScale.contained,
+                          maxScale: PhotoViewComputedScale.covered * 4.0,
+                          heroAttributes: PhotoViewHeroAttributes(tag: tag),
+                        );
+                      },
+                      itemCount: totalCount,
+                      loadingBuilder: (context, event) => const Center(
+                        child: CircularProgressIndicator(color: Color(0xFF0088CC)),
+                      ),
+                      backgroundDecoration: const BoxDecoration(color: Colors.transparent),
+                      pageController: _pageController,
+                      onPageChanged: (index) {
+                        setState(() {
+                          _currentIndex = index;
+                        });
+                        widget.onPageChanged?.call(index);
+                      },
+                    ),
                   ),
-                  backgroundDecoration: const BoxDecoration(color: Colors.transparent),
-                  pageController: _pageController,
-                  onPageChanged: (index) {
-                    setState(() {
-                      _currentIndex = index;
-                    });
-                    widget.onPageChanged?.call(index);
-                  },
-                ),
-              ),
 
-            // Точки-индикаторы снизу (если аватарок больше 1)
-            if (totalCount > 1)
-              Positioned(
-                bottom: 30,
-                left: 0,
-                right: 0,
-                child: Opacity(
-                  opacity: uiOpacity,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(totalCount, (index) {
-                      return Container(
-                        width: 7,
-                        height: 7,
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _currentIndex == index
-                              ? Colors.white
-                              : Colors.white.withValues(alpha: 0.35),
+                // Боковые кнопки-стрелки «<» и «>» для навигации мышью
+                if (totalCount > 1 && _currentIndex > 0)
+                  Positioned(
+                    left: 16,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: Opacity(
+                        opacity: uiOpacity,
+                        child: _GalleryNavArrowButton(
+                          isLeft: true,
+                          onTap: _goToPrev,
                         ),
-                      );
-                    }),
+                      ),
+                    ),
                   ),
+                if (totalCount > 1 && _currentIndex < totalCount - 1)
+                  Positioned(
+                    right: 16,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: Opacity(
+                        opacity: uiOpacity,
+                        child: _GalleryNavArrowButton(
+                          isLeft: false,
+                          onTap: _goToNext,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Точки-индикаторы снизу (если аватарок больше 1)
+                if (totalCount > 1)
+                  Positioned(
+                    bottom: 30,
+                    left: 0,
+                    right: 0,
+                    child: Opacity(
+                      opacity: uiOpacity,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(totalCount, (index) {
+                          return GestureDetector(
+                            onTap: () {
+                              if (_currentIndex != index) {
+                                HapticUtils.selection();
+                                _pageController.animateToPage(
+                                  index,
+                                  duration: const Duration(milliseconds: 240),
+                                  curve: Curves.easeOutCubic,
+                                );
+                              }
+                            },
+                            child: Container(
+                              width: 7,
+                              height: 7,
+                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: _currentIndex == index
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.35),
+                              ),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GalleryNavArrowButton extends StatefulWidget {
+  final bool isLeft;
+  final VoidCallback onTap;
+
+  const _GalleryNavArrowButton({
+    required this.isLeft,
+    required this.onTap,
+  });
+
+  @override
+  State<_GalleryNavArrowButton> createState() => _GalleryNavArrowButtonState();
+}
+
+class _GalleryNavArrowButtonState extends State<_GalleryNavArrowButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: ClipOval(
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: _hovered ? 0.62 : 0.42),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: _hovered ? 0.28 : 0.14),
+                  width: 0.5,
                 ),
               ),
-          ],
+              child: widget.isLeft
+                  ? const iconoir.NavArrowLeft(
+                      width: 24,
+                      height: 24,
+                      color: Colors.white,
+                    )
+                  : const iconoir.NavArrowRight(
+                      width: 24,
+                      height: 24,
+                      color: Colors.white,
+                    ),
+            ),
+          ),
         ),
       ),
     );

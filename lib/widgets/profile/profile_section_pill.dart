@@ -331,15 +331,12 @@ class ProfileSectionPillState extends State<ProfileSectionPill>
                         opacity: menuOpacity,
                         child: Transform.translate(
                           offset: Offset(0, -10.0 * (1.0 - progress)),
-                          child: SingleChildScrollView(
-                            physics: const NeverScrollableScrollPhysics(),
-                            child: _SectionMorphMenuList(
-                              width: _menuWidth,
-                              sections: widget.sections,
-                              selectedIndex: safeIndex,
-                              isDark: isDark,
-                              onSelectSection: _selectItem,
-                            ),
+                          child: _SectionMorphMenuList(
+                            width: _menuWidth,
+                            sections: widget.sections,
+                            selectedIndex: safeIndex,
+                            isDark: isDark,
+                            onSelectSection: _selectItem,
                           ),
                         ),
                       ),
@@ -519,21 +516,18 @@ class _SectionMorphMenuList extends StatelessWidget {
           color: Colors.transparent,
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 6.0),
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (int i = 0; i < sections.length; i++)
-                    _SectionMorphMenuRow(
-                      key: ValueKey(sections[i].type.name),
-                      item: sections[i],
-                      isSelected: i == selectedIndex,
-                      isDark: isDark,
-                      onTap: () => onSelectSection(i),
-                    ),
-                ],
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (int i = 0; i < sections.length; i++)
+                  _SectionMorphMenuRow(
+                    key: ValueKey(sections[i].type.name),
+                    item: sections[i],
+                    isSelected: i == selectedIndex,
+                    isDark: isDark,
+                    onTap: () => onSelectSection(i),
+                  ),
+              ],
             ),
           ),
         ),

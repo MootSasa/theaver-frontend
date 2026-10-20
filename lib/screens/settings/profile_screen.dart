@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
@@ -250,6 +251,12 @@ class ProfileScreenState extends State<ProfileScreen>
   late ScrollController _scrollController;
   late PageController _avatarPageController;
   int _currentAvatarIndex = 0;
+
+  final FocusNode _keyboardFocusNode = FocusNode();
+  Timer? _wheelSnapTimer;
+  double _lastWheelDy = 0.0;
+  double _horizontalWheelAccum = 0.0;
+  DateTime? _lastHorizontalSwitchTime;
 
   bool get _canEditGroupOrChannel =>
       (_isGroup || _isChannel) && (_myRole == 'owner' || _myRole == 'admin');
@@ -501,6 +508,8 @@ class ProfileScreenState extends State<ProfileScreen>
 
   @override
   void dispose() {
+    _wheelSnapTimer?.cancel();
+    _keyboardFocusNode.dispose();
     if (_isSelf) {
       AvatarSyncService().removeListener(_onAvatarSyncChanged);
     }
@@ -2479,7 +2488,329 @@ class ProfileScreenState extends State<ProfileScreen>
     });
   }
 
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) return;
+    if (_isAnyMenuOpen) {
+      _closeAllMenus();
+      return;
+    }
+
+    final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+    final dx = isShiftPressed && event.scrollDelta.dx == 0.0
+        ? event.scrollDelta.dy
+        : event.scrollDelta.dx;
+    final dy = isShiftPressed && event.scrollDelta.dx == 0.0
+        ? 0.0
+        : event.scrollDelta.dy;
+
+    if (dx.abs() > dy.abs() && dx.abs() > 0.5) {
+      _handleHorizontalWheelDelta(dx);
+      return;
+    }
+
+    if (dy == 0.0) return;
+    _scrollByMouseDelta(dy);
+  }
+
+  void _handlePointerPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    if (_isAnyMenuOpen) {
+      _closeAllMenus();
+      return;
+    }
+    final dx = -event.panDelta.dx;
+    final dy = -event.panDelta.dy;
+    if (dx.abs() > dy.abs() * 1.3 && dx.abs() > 1.0) {
+      _handleHorizontalWheelDelta(dx);
+      return;
+    }
+    if (dy != 0.0) {
+      _scrollByMouseDelta(dy);
+    }
+  }
+
+  void _scheduleWheelSnap() {
+    _wheelSnapTimer?.cancel();
+    _wheelSnapTimer =
+        Timer(const Duration(milliseconds: 200), _snapHeaderAfterWheel);
+  }
+
+  void _scrollByMouseDelta(double wheelDy) {
+    if (wheelDy == 0.0) return;
+    _wheelSnapTimer?.cancel();
+    _lastWheelDy = wheelDy;
+
+    final currentScroll =
+        _scrollController.hasClients ? _scrollController.offset : 0.0;
+
+    // 1. Прокрутка колёсика ВВЕРХ (wheelDy < 0, эквивалент тяги пальцем вниз dy > 0):
+    // - сначала возвращаем список к 0, если он прокручен вниз;
+    // - в верхней точке (scrollOffset == 0) разворачиваем аватарку из круга в большой квадрат (0.0 -> 1.0).
+    if (wheelDy < 0) {
+      double remainingUp = -wheelDy;
+
+      if (!_isAvatarExpanded && currentScroll > 0.0) {
+        final nextScroll = math.max(0.0, currentScroll - remainingUp);
+        final consumed = currentScroll - nextScroll;
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(nextScroll);
+        }
+        remainingUp -= consumed;
+        if (remainingUp <= 0.01) {
+          _scheduleWheelSnap();
+          return;
+        }
+      }
+
+      if (_isAvatarExpanded) {
+        if (_rawCollapseDrag > 0.0) {
+          if (_collapseTensionController.isAnimating) {
+            _collapseTensionController.stop();
+          }
+          _rawCollapseDrag =
+              (_rawCollapseDrag - remainingUp).clamp(0.0, _collapseThreshold);
+          setState(() {
+            _collapseVisualShift =
+                _computeCollapseVisualShift(_rawCollapseDrag);
+          });
+        }
+        _scheduleWheelSnap();
+        return;
+      }
+
+      if (_expandController.isAnimating) {
+        _scheduleWheelSnap();
+        return;
+      }
+
+      _rawExpandDrag += remainingUp;
+      if (_rawExpandDrag >= _expandThreshold) {
+        _autoExpandedInCurrentGesture = true;
+        _animateToExpand(1.0, velocity: 540.0);
+        _scheduleWheelSnap();
+        return;
+      }
+
+      final u = (_rawExpandDrag / _expandThreshold).clamp(0.0, 1.0);
+      final previewFactor = (_expandPreviewBaseFactor +
+              (_collapseCircleHoldFactor - _expandPreviewBaseFactor) *
+                  0.58 *
+                  (1.0 - math.pow(1.0 - u, 2.0)))
+          .clamp(0.0, _collapseCircleHoldFactor);
+      setState(() {
+        _expandFactor = previewFactor;
+        _expandController.value = previewFactor;
+      });
+      _scheduleWheelSnap();
+      return;
+    }
+
+    // 2. Прокрутка колёсика ВНИЗ (wheelDy > 0, эквивалент свайпа пальцем вверх dy < 0):
+    // - если аватарка развёрнута в большой квадрат (_isAvatarExpanded), накапливаем натяжение
+    //   и сворачиваем её обратно в круг (1.0 -> 0.0);
+    // - когда аватарка в круге, прокручиваем основной контент профиля вниз.
+    final downDy = wheelDy;
+
+    if (_isAvatarExpanded) {
+      if (_collapseTensionController.isAnimating) {
+        _collapseTensionController.stop();
+      }
+      if (_expandController.isAnimating) {
+        _expandController.stop();
+        _expandFactor = 1.0;
+        _expandController.value = 1.0;
+      }
+
+      _rawCollapseDrag += downDy;
+      final nextShift = _computeCollapseVisualShift(_rawCollapseDrag);
+
+      if (_rawCollapseDrag >= _collapseThreshold) {
+        _collapseVisualShift = nextShift;
+        _triggerAutoCollapse(
+          velocity: -680.0,
+          holdAtCircle: false,
+        );
+        _scheduleWheelSnap();
+        return;
+      }
+
+      setState(() {
+        _expandFactor = 1.0;
+        _expandController.value = 1.0;
+        _collapseVisualShift = nextShift;
+      });
+      _scheduleWheelSnap();
+      return;
+    }
+
+    if (_rawExpandDrag > 0.0 && !_expandController.isAnimating) {
+      _rawExpandDrag = (_rawExpandDrag - downDy).clamp(0.0, _expandThreshold);
+      final u = (_rawExpandDrag / _expandThreshold).clamp(0.0, 1.0);
+      final previewFactor = (_expandPreviewBaseFactor +
+              (_collapseCircleHoldFactor - _expandPreviewBaseFactor) *
+                  0.58 *
+                  (1.0 - math.pow(1.0 - u, 2.0)))
+          .clamp(0.0, _collapseCircleHoldFactor);
+      setState(() {
+        _expandFactor = previewFactor;
+        _expandController.value = previewFactor;
+      });
+      if (_rawExpandDrag > 0.0) {
+        _scheduleWheelSnap();
+        return;
+      }
+    }
+
+    // Пока квадратная аватарка заканчивает пружинное сворачивание в круг,
+    // ждём завершения перехода, чтобы не было скачка шапки.
+    if (_expandController.isAnimating && _expandFactor > 0.05) {
+      _scheduleWheelSnap();
+      return;
+    }
+    if (_expandFactor > 0.0) {
+      _expandController.stop();
+      setState(() {
+        _expandFactor = 0.0;
+        _expandController.value = 0.0;
+        _collapseSnapStartShift = 0.0;
+        _expandPreviewBaseFactor = 0.0;
+        _currentAvatarIndex = 0;
+      });
+    }
+
+    if (_scrollController.hasClients) {
+      final maxScroll = _scrollController.position.maxScrollExtent;
+      final target = (currentScroll + downDy).clamp(0.0, maxScroll);
+      if ((target - currentScroll).abs() > 0.01) {
+        _scrollController.jumpTo(target);
+      }
+    }
+
+    _scheduleWheelSnap();
+  }
+
+  void _snapHeaderAfterWheel() {
+    if (!mounted || _isPointerDown) return;
+    _autoExpandedInCurrentGesture = false;
+
+    if (_isAvatarExpanded) {
+      if (_rawCollapseDrag > 0.0) {
+        _rawCollapseDrag = 0.0;
+        _collapseTensionReturnStart = _collapseVisualShift;
+        _collapseTensionController.forward(from: 0.0);
+        return;
+      }
+      if (_expandFactor < 0.999 && !_expandController.isAnimating) {
+        _animateToExpand(1.0);
+      }
+      return;
+    }
+
+    if (_rawExpandDrag > 0.0 && !_expandController.isAnimating) {
+      _animateToExpand(0.0);
+      return;
+    }
+
+    if (_expandFactor > 0.001 && !_expandController.isAnimating) {
+      _finishCollapseToZero();
+      return;
+    }
+
+    if (!_scrollController.hasClients) return;
+    final currentOffset = _scrollController.offset;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final snapThreshold = math.min(_headerCollapseSnapExtent, maxScroll);
+
+    if (snapThreshold > 1.0 &&
+        currentOffset > 0.5 &&
+        currentOffset < snapThreshold - 0.5) {
+      final double target;
+      if (_lastWheelDy > 20.0 && currentOffset >= snapThreshold * 0.22) {
+        target = snapThreshold;
+      } else if (_lastWheelDy < -20.0 &&
+          currentOffset <= snapThreshold * 0.78) {
+        target = 0.0;
+      } else {
+        target = currentOffset >= snapThreshold * 0.45 ? snapThreshold : 0.0;
+      }
+      if ((target - currentOffset).abs() > 0.5) {
+        final durationMs =
+            (200 + (target - currentOffset).abs() * 0.40).clamp(200.0, 420.0);
+        _scrollController.animateTo(
+          target,
+          duration: Duration(milliseconds: durationMs.round()),
+          curve: Curves.decelerate,
+        );
+      }
+    }
+  }
+
+  void _handleHorizontalWheelDelta(double dx) {
+    final now = DateTime.now();
+    if (_lastHorizontalSwitchTime != null &&
+        now.difference(_lastHorizontalSwitchTime!).inMilliseconds < 280) {
+      return;
+    }
+    if ((_horizontalWheelAccum > 0 && dx < 0) ||
+        (_horizontalWheelAccum < 0 && dx > 0)) {
+      _horizontalWheelAccum = 0.0;
+    }
+    _horizontalWheelAccum += dx;
+    if (_horizontalWheelAccum.abs() >= 36.0) {
+      final sections = _buildSections(context.l10n);
+      final safeIdx = _selectedSectionIndex.clamp(
+          0, math.max<int>(0, sections.length - 1));
+      if (_horizontalWheelAccum > 0 && safeIdx < sections.length - 1) {
+        _lastHorizontalSwitchTime = now;
+        _horizontalWheelAccum = 0.0;
+        HapticUtils.selection();
+        _selectSection(safeIdx + 1);
+      } else if (_horizontalWheelAccum < 0 && safeIdx > 0) {
+        _lastHorizontalSwitchTime = now;
+        _horizontalWheelAccum = 0.0;
+        HapticUtils.selection();
+        _selectSection(safeIdx - 1);
+      }
+    }
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (ModalRoute.of(context)?.isCurrent != true) {
+      return KeyEventResult.ignored;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      if (_isAnyMenuOpen) {
+        _closeAllMenus();
+      } else {
+        Navigator.maybePop(context);
+      }
+      return KeyEventResult.handled;
+    }
+
+    final sections = _buildSections(context.l10n);
+    final safeIdx =
+        _selectedSectionIndex.clamp(0, math.max<int>(0, sections.length - 1));
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      if (safeIdx > 0) {
+        HapticUtils.selection();
+        _selectSection(safeIdx - 1);
+        return KeyEventResult.handled;
+      }
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      if (safeIdx < sections.length - 1) {
+        HapticUtils.selection();
+        _selectSection(safeIdx + 1);
+        return KeyEventResult.handled;
+      }
+    }
+
+    return KeyEventResult.ignored;
+  }
+
   void _handleVerticalDragStart(DragStartDetails details) {
+    _wheelSnapTimer?.cancel();
     if (_isAnyMenuOpen) {
       _ignoreDragForMenuDismiss = true;
       _closeAllMenus();
@@ -3190,12 +3521,20 @@ class ProfileScreenState extends State<ProfileScreen>
           body: _isLoading
               ? const Center(
                   child: CircularProgressIndicator(color: Color(0xFF0088CC)))
-              : GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onVerticalDragStart: _handleVerticalDragStart,
-                  onVerticalDragUpdate: _handleVerticalDragUpdate,
-                  onVerticalDragEnd: _handleVerticalDragEnd,
-                  child: Stack(
+              : Focus(
+                  focusNode: _keyboardFocusNode,
+                  autofocus: true,
+                  onKeyEvent: _handleKeyEvent,
+                  child: Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerSignal: _handlePointerSignal,
+                    onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onVerticalDragStart: _handleVerticalDragStart,
+                      onVerticalDragUpdate: _handleVerticalDragUpdate,
+                      onVerticalDragEnd: _handleVerticalDragEnd,
+                      child: Stack(
                     key: _profileStackKey,
                     children: [
                       // 1. Основной адаптивный фон экрана
@@ -3675,6 +4014,8 @@ class ProfileScreenState extends State<ProfileScreen>
                     ],
                   ),
                 ),
+              ),
+            ),
         ),
       ),
     );
@@ -4137,20 +4478,17 @@ class _TopMorphMenu extends StatelessWidget {
           color: Colors.transparent,
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 6.0),
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (int i = 0; i < items.length; i++)
-                    _MorphMenuRow(
-                      key: ValueKey(items[i].id),
-                      item: items[i],
-                      isDark: isDark,
-                      onTap: () => onItemTap(items[i].id),
-                    ),
-                ],
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (int i = 0; i < items.length; i++)
+                  _MorphMenuRow(
+                    key: ValueKey(items[i].id),
+                    item: items[i],
+                    isDark: isDark,
+                    onTap: () => onItemTap(items[i].id),
+                  ),
+              ],
             ),
           ),
         ),
