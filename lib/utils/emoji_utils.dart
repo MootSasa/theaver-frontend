@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show SynchronousFuture, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
@@ -11,11 +11,6 @@ class EmojiUtils {
 
   static final ValueNotifier<bool> isFontLoading = ValueNotifier(false);
   static final ValueNotifier<bool> isFontLoaded = ValueNotifier(false);
-
-  /// In-memory cache of loaded animated emoji Lottie compositions.
-  static final Map<String, LottieComposition> _animatedEmojiCache = {};
-  static final Set<String> _missingAnimatedEmojis = {};
-  static final Map<String, Future<LottieComposition?>> _loadingAnimatedEmojis = {};
 
   /// Tracks message keys that have already auto-played so rebuilding within
   /// the 3-second freshness window does not re-trigger autoPlay repeatedly.
@@ -127,44 +122,9 @@ class EmojiUtils {
   /// Returns true if [text] contains at least one emoji and no non-emoji text.
   static bool isEmojiOnly(String text) => countEmojiOnly(text) > 0;
 
-  /// Loads and caches the animated emoji [LottieComposition] from bundled assets,
-  /// trying all codepoint candidates (with and without `-fe0f`).
+  /// Loads and caches the animated emoji [LottieComposition] from local cache or server.
   static Future<LottieComposition?> loadAnimatedEmojiComposition(String emoji) {
-    final candidates = codepointCandidates(emoji);
-    if (candidates.isEmpty) return SynchronousFuture<LottieComposition?>(null);
-
-    final primaryKey = candidates.first;
-    final cached = _animatedEmojiCache[primaryKey];
-    if (cached != null) {
-      return SynchronousFuture<LottieComposition?>(cached);
-    }
-    if (_missingAnimatedEmojis.contains(primaryKey)) {
-      return SynchronousFuture<LottieComposition?>(null);
-    }
-
-    return _loadingAnimatedEmojis.putIfAbsent(primaryKey, () async {
-      try {
-        for (final candidate in candidates) {
-          if (_animatedEmojiCache.containsKey(candidate)) {
-            final comp = _animatedEmojiCache[candidate]!;
-            _animatedEmojiCache[primaryKey] = comp;
-            return comp;
-          }
-          try {
-            final comp = await AssetLottie('assets/animated_emojis/$candidate.json').load();
-            _animatedEmojiCache[candidate] = comp;
-            _animatedEmojiCache[primaryKey] = comp;
-            return comp;
-          } catch (_) {
-            // Try next candidate
-          }
-        }
-        _missingAnimatedEmojis.add(primaryKey);
-        return null;
-      } finally {
-        _loadingAnimatedEmojis.remove(primaryKey);
-      }
-    });
+    return EmojiEffectCacheService.instance.getAnimatedEmojiComposition(emoji);
   }
 
   /// Loads and registers the Apple Emoji font from assets.
@@ -204,11 +164,9 @@ class EmojiUtils {
     return ['❤️', '👍', '😱', '😂', '😢', '🔥', '👏'];
   }
 
-  /// Returns the primary asset path for a Lottie animated emoji.
+  /// Returns the server codepoint for a vector Lottie animated emoji if it exists.
   static String? getAnimatedEmojiPath(String emoji) {
-    final codepoint = emojiToCodepoint(emoji);
-    if (codepoint.isEmpty) return null;
-    return 'assets/animated_emojis/$codepoint.json';
+    return EmojiEffectCacheService.instance.resolveAnimatedEmojiCodepoint(emoji);
   }
 
   /// Returns the server codepoint for a full-screen Lottie effect if it exists.
@@ -280,7 +238,8 @@ class EmojiUtils {
   }
 }
 
-/// A widget that displays a Lottie animated emoji with interactive tap & auto-play effects.
+/// A widget that displays a Lottie animated emoji with interactive tap & auto-play effects,
+/// showing a Telegram-style silhouette + moving shimmer while downloading from the server.
 class LottieEmoji extends StatefulWidget {
   final String? assetPath;
   final String emoji;
@@ -313,14 +272,16 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   late final AnimationController _controller;
   final LayerLink _layerLink = LayerLink();
   LottieComposition? _composition;
+  bool _isLoadingAnimated = false;
   bool _hasTriggeredAutoPlay = false;
+  bool _pendingTapPlay = false;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this);
     EmojiEffectCacheService.instance.prefetchEffect(widget.emoji);
-    _loadComposition();
+    _initOrLoadComposition();
   }
 
   @override
@@ -328,23 +289,60 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
     super.didUpdateWidget(oldWidget);
     if (oldWidget.emoji.trim() != widget.emoji.trim()) {
       _composition = null;
+      _isLoadingAnimated = false;
+      _pendingTapPlay = false;
       EmojiEffectCacheService.instance.prefetchEffect(widget.emoji);
-      _loadComposition();
+      _initOrLoadComposition();
     }
   }
 
-  Future<void> _loadComposition() async {
+  void _initOrLoadComposition() {
+    final cacheService = EmojiEffectCacheService.instance;
+    if (!cacheService.hasAnimatedEmoji(widget.emoji)) {
+      _isLoadingAnimated = false;
+      if (widget.autoPlay) {
+        _checkAutoPlay();
+      }
+      return;
+    }
+
+    final syncComp = cacheService.getCachedAnimatedEmojiSync(widget.emoji);
+    if (syncComp != null) {
+      _composition = syncComp;
+      _controller.duration = syncComp.duration;
+      _isLoadingAnimated = false;
+      _checkAutoPlay();
+      return;
+    }
+
+    _isLoadingAnimated = true;
+    _loadCompositionAsync();
+  }
+
+  Future<void> _loadCompositionAsync() async {
+    final targetEmoji = widget.emoji.trim();
     final comp = await EmojiUtils.loadAnimatedEmojiComposition(widget.emoji);
-    if (!mounted) return;
+    if (!mounted || widget.emoji.trim() != targetEmoji) return;
+
     if (comp != null) {
       _controller.duration = comp.duration;
       setState(() {
         _composition = comp;
+        _isLoadingAnimated = false;
       });
-      _checkAutoPlay();
-    } else if (widget.autoPlay) {
-      // Even if there is no animated emoji asset, trigger effect if one exists
-      _checkAutoPlay();
+      if (_pendingTapPlay) {
+        _pendingTapPlay = false;
+        _playAnimation();
+      } else {
+        _checkAutoPlay();
+      }
+    } else {
+      setState(() {
+        _isLoadingAnimated = false;
+      });
+      if (widget.autoPlay) {
+        _checkAutoPlay();
+      }
     }
   }
 
@@ -394,36 +392,140 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   Widget build(BuildContext context) {
     final comp = _composition;
     final double staticSize = widget.width / 1.8;
+    final bool useFullBox = comp != null || _isLoadingAnimated;
 
     return CompositedTransformTarget(
       link: _layerLink,
       child: SizedBox(
-        width: comp != null ? widget.width : staticSize + 12.0,
-        height: comp != null ? widget.height : staticSize + 12.0,
+        width: useFullBox ? widget.width : staticSize + 12.0,
+        height: useFullBox ? widget.height : staticSize + 12.0,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
             widget.onTap?.call();
-            _playAnimation();
+            if (_isLoadingAnimated && comp == null) {
+              _pendingTapPlay = true;
+              _triggerEffect();
+            } else {
+              _playAnimation();
+            }
           },
           child: Center(
-            child: comp != null
-                ? Lottie(
-                    composition: comp,
-                    controller: _controller,
-                    width: widget.width,
-                    height: widget.height,
-                    fit: BoxFit.contain,
-                    repeat: false,
-                    addRepaintBoundary: true,
-                  )
-                : EmojiUtils.appleEmoji(
-                    widget.emoji,
-                    size: staticSize,
-                    fallbackStyle: widget.style,
-                  ),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: comp != null
+                  ? Lottie(
+                      key: const ValueKey('lottie_loaded'),
+                      composition: comp,
+                      controller: _controller,
+                      width: widget.width,
+                      height: widget.height,
+                      fit: BoxFit.contain,
+                      repeat: false,
+                      addRepaintBoundary: true,
+                    )
+                  : _isLoadingAnimated
+                      ? _EmojiSilhouetteShimmer(
+                          key: const ValueKey('lottie_shimmer'),
+                          emoji: widget.emoji,
+                          size: widget.width * 0.72,
+                          fallbackStyle: widget.style,
+                        )
+                      : EmojiUtils.appleEmoji(
+                          widget.emoji,
+                          size: staticSize,
+                          fallbackStyle: widget.style,
+                        ),
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Renders the exact silhouette of [emoji] with a smooth moving diagonal shimmer/glare
+/// while the vector Lottie emoji is being downloaded from the server (Telegram-style).
+class _EmojiSilhouetteShimmer extends StatefulWidget {
+  final String emoji;
+  final double size;
+  final TextStyle? fallbackStyle;
+
+  const _EmojiSilhouetteShimmer({
+    Key? key,
+    required this.emoji,
+    required this.size,
+    this.fallbackStyle,
+  }) : super(key: key);
+
+  @override
+  State<_EmojiSilhouetteShimmer> createState() => _EmojiSilhouetteShimmerState();
+}
+
+class _EmojiSilhouetteShimmerState extends State<_EmojiSilhouetteShimmer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shimmerController;
+
+  @override
+  void initState() {
+    super.initState();
+    _shimmerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1250),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _shimmerController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color baseColor = isDark
+        ? Colors.white.withValues(alpha: 0.14)
+        : const Color(0xFF758296).withValues(alpha: 0.20);
+    final Color midColor = isDark
+        ? Colors.white.withValues(alpha: 0.25)
+        : const Color(0xFF8C9BB0).withValues(alpha: 0.32);
+    final Color highlightColor = isDark
+        ? Colors.white.withValues(alpha: 0.44)
+        : const Color(0xFFB4C2D6).withValues(alpha: 0.48);
+
+    final Widget glyph = EmojiUtils.appleEmoji(
+      widget.emoji,
+      size: widget.size,
+      fallbackStyle: widget.fallbackStyle,
+    );
+
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _shimmerController,
+        child: glyph,
+        builder: (context, child) {
+          final double t = _shimmerController.value;
+          final double slide = -2.2 + 4.4 * t;
+          return ShaderMask(
+            blendMode: BlendMode.srcIn,
+            shaderCallback: (Rect bounds) {
+              return LinearGradient(
+                begin: Alignment(slide - 0.9, -0.5),
+                end: Alignment(slide + 0.9, 0.5),
+                colors: [
+                  baseColor,
+                  midColor,
+                  highlightColor,
+                  midColor,
+                  baseColor,
+                ],
+                stops: const [0.0, 0.35, 0.5, 0.65, 1.0],
+              ).createShader(bounds);
+            },
+            child: child,
+          );
+        },
       ),
     );
   }

@@ -98,7 +98,7 @@ class CacheService {
 
   /// Categorize file by its extension or path
   static String categorizeFile(String filePath) {
-    if (filePath.contains('emoji_effects')) return 'other';
+    if (filePath.contains('emoji_effects') || filePath.contains('animated_emojis')) return 'other';
     final ext = p.extension(filePath).toLowerCase();
     if (_photoExtensions.contains(ext)) return 'photos';
     if (_videoExtensions.contains(ext)) return 'videos';
