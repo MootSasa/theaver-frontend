@@ -144,8 +144,50 @@ jobs:
             sed -i 's/-XX:MaxMetaspaceSize=4G/-XX:MaxMetaspaceSize=1024m/g' android/gradle.properties
           fi
 
-      - name: Accept Android SDK licenses
-        run: yes | flutter doctor --android-licenses || true
+      - name: Cache Android SDK CMake & NDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/cmake/3.22.1
+            /usr/local/lib/android/sdk/ndk/25.1.8937393
+          key: android-sdk-cmake-3.22.1-ndk-25.1.8937393
+
+      - name: Setup Android SDK Components (CMake & NDK)
+        run: |
+          SDK_DIR="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKM="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          echo "Accepting Android SDK licenses..."
+          yes | flutter doctor --android-licenses || true
+          yes | "$SDKM" --licenses || true
+          
+          echo "Ensuring CMake 3.22.1 is installed..."
+          if [ ! -x "$SDK_DIR/cmake/3.22.1/bin/cmake" ]; then
+            for i in 1 2 3; do
+              echo "Installing cmake;3.22.1 (attempt $i)..."
+              yes | "$SDKM" --install "cmake;3.22.1" && break || {
+                echo "CMake install attempt $i failed, retrying in 5s..."
+                sleep 5
+              }
+            done
+          fi
+          
+          echo "Ensuring NDK 25.1.8937393 is installed..."
+          if [ ! -d "$SDK_DIR/ndk/25.1.8937393" ]; then
+            for i in 1 2 3; do
+              echo "Installing ndk;25.1.8937393 (attempt $i)..."
+              yes | "$SDKM" --install "ndk;25.1.8937393" && break || {
+                echo "NDK 25.1.8937393 install attempt $i failed, retrying in 5s..."
+                sleep 5
+              }
+            done
+          fi
+          
+          if [ -x "$SDK_DIR/cmake/3.22.1/bin/cmake" ]; then
+            echo "✅ Android CMake 3.22.1 ready: $($SDK_DIR/cmake/3.22.1/bin/cmake --version | head -n 1)"
+          else
+            echo "❌ Failed to setup CMake 3.22.1"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: flutter pub get
