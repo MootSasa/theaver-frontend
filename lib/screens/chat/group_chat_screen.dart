@@ -2936,7 +2936,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   Widget _buildMessageItem(Message message, int index) {
     final bool isMe = message.senderId == _currentUserId;
-    final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+    final GlobalKey key;
+    if (message.localId != null && _messageKeys.containsKey(message.localId!)) {
+      key = _messageKeys[message.localId!]!;
+      _messageKeys[message.id] = key;
+    } else {
+      key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+      if (message.localId != null) {
+        _messageKeys[message.localId!] = key;
+      }
+    }
     final isHighlighted = _highlightMessageId == message.id;
 
     Widget messageWidget = MessageBubble(
@@ -2982,6 +2991,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     messageWidget = GestureDetector(
       onTap: () {
         _showContextMenu(message, isMe, key);
+      },
+      onLongPress: () {
+        _showContextMenu(message, isMe, key, forceOpen: true);
       },
       behavior: HitTestBehavior.opaque,
       child: Container(
@@ -3666,8 +3678,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (_) {}
   }
 
-  void _showContextMenu(Message message, bool isMe, GlobalKey key) {
-    if (message.messageType == 'text' && _isSingleEmoji(message.content)) {
+  void _showContextMenu(Message message, bool isMe, GlobalKey key, {bool forceOpen = false}) {
+    if (!forceOpen && message.messageType == 'text' && _isSingleEmoji(message.content)) {
       if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
         return;
       }
@@ -3804,20 +3816,5 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   /// Helper to check if string is exactly one emoji
-  bool _isSingleEmoji(String text) {
-    if (text.isEmpty) return false;
-    final trimmed = text.trim();
-    final chars = trimmed.characters;
-    if (chars.length != 1) return false;
-
-    final rune = chars.first.runes.first;
-    // Common emoji ranges
-    return (rune >= 0x1F300 && rune <= 0x1FAFF) ||
-        (rune >= 0x1F600 && rune <= 0x1F64F) ||
-        (rune >= 0x1F680 && rune <= 0x1F6FF) ||
-        (rune >= 0x2600 && rune <= 0x26FF) ||
-        (rune >= 0x2700 && rune <= 0x27BF) ||
-        (rune >= 0xFE00 && rune <= 0xFE0F) ||
-        (rune >= 0x1F900 && rune <= 0x1F9FF);
-  }
+  bool _isSingleEmoji(String text) => EmojiUtils.isSingleEmoji(text);
 }

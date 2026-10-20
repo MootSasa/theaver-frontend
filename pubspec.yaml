@@ -113,7 +113,6 @@ flutter:
     - assets/fonts/AppleColorEmoji.woff2
     - assets/fonts/AppleColorEmoji.ttf
     - assets/animated_emojis/
-    - assets/emoji_effects/
     - assets/animations/
     - assets/wallpapers/christmas/
     - assets/wallpapers/flowers/

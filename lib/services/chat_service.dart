@@ -592,8 +592,14 @@ class Message {
       createdAt: json['created_at']?.toString() ?? '',
       senderName: json['sender_name']?.toString() ?? 'Unknown',
       senderAvatarUrl: json['sender_avatar_url']?.toString(),
-      fileUrl: json['file_url']?.toString(),
-      fileName: json['file_name']?.toString(),
+      fileUrl: () {
+        final raw = json['file_url']?.toString().trim();
+        return (raw != null && raw.isNotEmpty) ? raw : null;
+      }(),
+      fileName: () {
+        final raw = json['file_name']?.toString().trim();
+        return (raw != null && raw.isNotEmpty) ? raw : null;
+      }(),
       replyToMessageId: json['reply_to_message_id']?.toString(),
       isRead: json['is_read'] ?? false,
       readAt: json['read_at']?.toString(),
@@ -773,8 +779,12 @@ class Message {
       createdAt: model.createdAt,
       senderName: model.senderName ?? '',
       senderAvatarUrl: model.senderAvatarUrl,
-      fileUrl: model.fileUrl,
-      fileName: model.fileName,
+      fileUrl: (model.fileUrl != null && model.fileUrl!.trim().isNotEmpty)
+          ? model.fileUrl!.trim()
+          : null,
+      fileName: (model.fileName != null && model.fileName!.trim().isNotEmpty)
+          ? model.fileName!.trim()
+          : null,
       replyToMessageId: model.replyToMessageId,
       isRead: model.isRead,
       isQuote: model.isQuote,
