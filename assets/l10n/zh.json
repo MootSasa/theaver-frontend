@@ -944,5 +944,10 @@
   "profile_save_to_gallery": "保存到相册",
   "profile_choose_new_photo": "选择新照片",
   "chat_saved_messages": "收藏夹",
-  "chat_saved": "收藏夹"
+  "chat_saved": "收藏夹",
+  "message_unsupported_text": "您当前的 Theaver 版本不支持此消息。\n请更新到最新版本。",
+  "message_unsupported_update_btn": "更新 Theaver",
+  "message_unsupported_preview": "不支持的消息",
+  "app_up_to_date": "您已使用最新版本的 Theaver",
+  "check_updates_error": "检查更新失败"
 }

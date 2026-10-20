@@ -391,6 +391,13 @@ class MessageReplyInfo extends StatelessWidget {
         accentColor: accentColor,
         isDark: isDark,
       );
+    } else if (replyInfo != null && replyInfo!.isUnsupported) {
+      final unsupportedLabel =
+          context.l10n.translate('message_unsupported_preview');
+      previewSpan = EmojiUtils.buildEmojiTextSpan(
+        unsupportedLabel,
+        style: basePreviewStyle,
+      );
     } else if (replyInfo != null && replyInfo!.messageType != 'text') {
       // Show media type indicator with optional caption
       final caption = replyInfo!.content.trim();

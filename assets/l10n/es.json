@@ -944,5 +944,10 @@
   "profile_save_to_gallery": "Guardar en la galería",
   "profile_choose_new_photo": "Elegir nueva foto",
   "chat_saved_messages": "Mensajes guardados",
-  "chat_saved": "Mensajes guardados"
+  "chat_saved": "Mensajes guardados",
+  "message_unsupported_text": "Este mensaje no es compatible con tu versión de Theaver.\nPor favor, actualiza a la última versión.",
+  "message_unsupported_update_btn": "Actualizar Theaver",
+  "message_unsupported_preview": "Mensaje no compatible",
+  "app_up_to_date": "Tienes la última versión de Theaver",
+  "check_updates_error": "Error al buscar actualizaciones"
 }

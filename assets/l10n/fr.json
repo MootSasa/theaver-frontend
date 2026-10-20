@@ -944,5 +944,10 @@
   "profile_save_to_gallery": "Enregistrer dans la galerie",
   "profile_choose_new_photo": "Choisir une nouvelle photo",
   "chat_saved_messages": "Messages enregistrés",
-  "chat_saved": "Messages enregistrés"
+  "chat_saved": "Messages enregistrés",
+  "message_unsupported_text": "Ce message n'est pas pris en charge par votre version de Theaver.\nVeuillez mettre à jour vers la dernière version.",
+  "message_unsupported_update_btn": "Mettre à jour Theaver",
+  "message_unsupported_preview": "Message non pris en charge",
+  "app_up_to_date": "Vous disposez de la dernière version de Theaver",
+  "check_updates_error": "Échec de la recherche de mises à jour"
 }

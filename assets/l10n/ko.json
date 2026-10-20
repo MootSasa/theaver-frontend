@@ -944,5 +944,10 @@
   "profile_save_to_gallery": "갤러리에 저장",
   "profile_choose_new_photo": "새 사진 선택",
   "chat_saved_messages": "저장한 메시지",
-  "chat_saved": "저장한 메시지"
+  "chat_saved": "저장한 메시지",
+  "message_unsupported_text": "현재 Theaver 버전에서는 이 메시지를 지원하지 않습니다.\n최신 버전으로 업데이트해 주세요.",
+  "message_unsupported_update_btn": "Theaver 업데이트",
+  "message_unsupported_preview": "지원되지 않는 메시지",
+  "app_up_to_date": "최신 버전의 Theaver를 사용 중입니다",
+  "check_updates_error": "업데이트 확인 실패"
 }
