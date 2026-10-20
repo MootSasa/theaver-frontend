@@ -86,7 +86,6 @@ class _CollapsibleBlockquoteWidgetState
 
     final quoteTextStyle = TextStyle(
       fontSize: 14,
-      fontStyle: FontStyle.italic,
       color: widget.isDark
           ? const Color(0xFFE2E8F0)
           : const Color(0xFF1C2530),

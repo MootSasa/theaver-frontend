@@ -19,6 +19,7 @@ import 'package:theaver/widgets/message/spoiler_text_widget.dart';
 import 'package:theaver/widgets/message/text_message_widget.dart';
 import 'package:theaver/widgets/profile/reply_strip_painter.dart';
 import 'package:theaver/widgets/chat/floating_video_note_overlay.dart';
+import 'package:theaver/widgets/chat/message_reply_info.dart';
 
 class _TestAppLocalizations extends AppLocalizations {
   _TestAppLocalizations(super.locale);
@@ -754,6 +755,78 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byType(CollapsibleBlockquoteWidget), findsOneWidget);
       expect(find.byType(SpoilerTextWidget), findsOneWidget);
+    });
+
+    test('MessageReplyInfo.buildFormattedPreviewSpan preserves original entities and does not force italic on quotes', () {
+      const baseStyle = TextStyle(fontSize: 13, fontStyle: FontStyle.normal, color: Colors.black);
+      const rawContent = 'Жирный и курсив и обычный текст';
+      const entities = [
+        MessageEntity(type: 'bold', offset: 0, length: 6), // "Жирный"
+        MessageEntity(type: 'italic', offset: 9, length: 6), // "курсив"
+      ];
+
+      final span = MessageReplyInfo.buildFormattedPreviewSpan(
+        rawText: rawContent,
+        entities: entities,
+        isQuote: true,
+        quoteText: 'Жирный и курсив и обычный',
+        quoteOffset: 0,
+        quoteLength: 25,
+        baseStyle: baseStyle,
+        accentColor: Colors.blue,
+        isDark: false,
+      );
+
+      final children = span.children!.whereType<TextSpan>().toList();
+      expect(children.length, greaterThanOrEqualTo(3));
+
+      // First segment "Жирный" is bold, NOT italic
+      expect(children[0].toPlainText(), equals('Жирный'));
+      expect(children[0].style?.fontWeight, equals(FontWeight.bold));
+      expect(children[0].style?.fontStyle, isNot(equals(FontStyle.italic)));
+
+      // Second segment " и " is neither bold nor italic (even though isQuote: true)
+      expect(children[1].toPlainText(), equals(' и '));
+      expect(children[1].style?.fontStyle, isNot(equals(FontStyle.italic)));
+
+      // Third segment "курсив" IS italic because of the entity
+      expect(children[2].toPlainText(), equals('курсив'));
+      expect(children[2].style?.fontStyle, equals(FontStyle.italic));
+    });
+
+    testWidgets('Quote on bullet lines in the middle of a message does not stretch to subsequent lines', (WidgetTester tester) async {
+      const content = 'Настраиваем Windows без страха убить систему: нашли универсальный PowerShell-модуль с 150+ полезными командами для Windows 10 и 11.\n\n'
+          'В отличие от всякого мутного софта, скрипт использует официальные методы Microsoft, а твики можно откатить и вернуть настройки к исходному состоянию:\n'
+          '• Убирает хлам:\u00A0деинсталляция предустановленного мусора, OneDrive и шпионских приложений;\n'
+          '•  Отключает надоедливую рекламу, «рекомендации» и слежку за вашими действиями;\n'
+          '• Настраивает Проводник, меню, приватность и безопасность;\n'
+          '• Не вмешивается в системные файлы сомнительными хаками;\n'
+          '• Для каждой настройки предусмотрен откат к стандартным параметрам.\n\n'
+          'Ваш личный мастер — здесь.\n\n'
+          '🎮КиберТопор — Подписаться (https://t.me/+6fyKjmOWmW5lYzMy)';
+      const entities = [
+        MessageEntity(type: 'blockquote', offset: 283, length: 353, collapsed: false),
+        MessageEntity(type: 'text_link', offset: 658, length: 5, url: 'https://github.com/farag2/Sophia-Script-for-Windows'),
+        MessageEntity(type: 'url', offset: 694, length: 31, url: 'https://t.me/+6fyKjmOWmW5lYzMy)'),
+      ];
+
+      await tester.pumpWidget(
+        createTestApp(
+          const TextMessageWidget(
+            text: content,
+            entities: entities,
+            isMe: true,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final quoteWidget = tester.widget<CollapsibleBlockquoteWidget>(
+        find.byType(CollapsibleBlockquoteWidget),
+      );
+      expect(quoteWidget.text.contains('Ваш личный мастер'), isFalse);
+      expect(quoteWidget.text.contains('КиберТопор'), isFalse);
+      expect(quoteWidget.text.endsWith('параметрам.'), isTrue);
     });
   });
 }

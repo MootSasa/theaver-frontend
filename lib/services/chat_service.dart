@@ -146,6 +146,7 @@ class ReplyInfo {
   final String? chatId; // The chat ID where the original message resides
   final String? nameColorPresetId;
   final String? replyStripStyle;
+  final List<MessageEntity> entities;
 
   const ReplyInfo({
     required this.messageId,
@@ -156,7 +157,28 @@ class ReplyInfo {
     this.chatId,
     this.nameColorPresetId,
     this.replyStripStyle,
+    this.entities = const [],
   });
+
+  static List<MessageEntity> _parseEntities(dynamic raw) {
+    if (raw is List) {
+      return raw
+          .whereType<Map>()
+          .map((e) => MessageEntity.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } else if (raw is String && raw.isNotEmpty && raw != 'null') {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          return decoded
+              .whereType<Map>()
+              .map((e) => MessageEntity.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+        }
+      } catch (_) {}
+    }
+    return const <MessageEntity>[];
+  }
 
   factory ReplyInfo.fromJson(Map<String, dynamic> json) {
     return ReplyInfo(
@@ -170,6 +192,7 @@ class ReplyInfo {
           json['reply_to_sender_name_color_id']?.toString(),
       replyStripStyle: json['reply_strip_style']?.toString() ??
           json['reply_to_sender_strip_style']?.toString(),
+      entities: _parseEntities(json['entities'] ?? json['reply_to_entities']),
     );
   }
 
@@ -182,6 +205,8 @@ class ReplyInfo {
         if (chatId != null) 'chat_id': chatId,
         if (nameColorPresetId != null) 'name_color_preset_id': nameColorPresetId,
         if (replyStripStyle != null) 'reply_strip_style': replyStripStyle,
+        if (entities.isNotEmpty)
+          'entities': entities.map((e) => e.toJson()).toList(),
       };
 
   ReplyInfo copyWith({
@@ -193,6 +218,7 @@ class ReplyInfo {
     String? chatId,
     String? nameColorPresetId,
     String? replyStripStyle,
+    List<MessageEntity>? entities,
   }) {
     return ReplyInfo(
       messageId: messageId ?? this.messageId,
@@ -203,6 +229,7 @@ class ReplyInfo {
       chatId: chatId ?? this.chatId,
       nameColorPresetId: nameColorPresetId ?? this.nameColorPresetId,
       replyStripStyle: replyStripStyle ?? this.replyStripStyle,
+      entities: entities ?? this.entities,
     );
   }
 }
@@ -448,6 +475,7 @@ class Message {
             json['reply_to_name_color_preset_id']?.toString(),
         replyStripStyle: json['reply_to_sender_strip_style']?.toString() ??
             json['reply_to_strip_style']?.toString(),
+        entities: ReplyInfo._parseEntities(json['reply_to_entities']),
       );
     }
 

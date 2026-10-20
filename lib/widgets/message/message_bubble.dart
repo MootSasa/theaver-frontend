@@ -953,6 +953,8 @@ class MessageBubble extends StatelessWidget {
         replyInfo: message.replyInfo,
         isQuote: message.isQuote,
         quoteText: message.quoteText,
+        quoteOffset: message.quoteOffset,
+        quoteLength: message.quoteLength,
         isMe: isMe,
         currentUserId: currentUserId,
         onTap: () => onReplyTap?.call(

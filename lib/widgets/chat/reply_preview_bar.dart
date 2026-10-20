@@ -9,8 +9,8 @@ import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
-import '../../utils/entity_parser.dart';
 import '../profile/reply_strip_painter.dart';
+import 'message_reply_info.dart';
 
 /// A floating bubble shown above the message input field when the user
 /// is composing a reply or quote.
@@ -18,6 +18,8 @@ class ReplyPreviewBar extends StatelessWidget {
   final Message replyToMessage;
   final bool isQuote;
   final String? quoteText;
+  final int? quoteOffset;
+  final int? quoteLength;
   final VoidCallback onClose;
   final VoidCallback? onTap;
   final bool enabled;
@@ -29,28 +31,14 @@ class ReplyPreviewBar extends StatelessWidget {
     required this.replyToMessage,
     this.isQuote = false,
     this.quoteText,
+    this.quoteOffset,
+    this.quoteLength,
     required this.onClose,
     this.onTap,
     this.enabled = false,
     this.isLite = false,
     this.currentUserId,
   }) : super(key: key);
-
-  /// Truncate text for preview with ...
-  String _truncate(String text, {int maxLen = 60}) {
-    final parsedClean = EntityParser.parseMarkdown(text).cleanText;
-    final clean = parsedClean
-        .replaceAll(RegExp(r'```[a-zA-Z0-9+#]*'), '')
-        .replaceAll('```', '')
-        .replaceAll(RegExp(r'(?:^|\n)\s*(?:\*\*)?>\s?'), ' ')
-        .replaceAll(RegExp(r'\|\|'), '')
-        .replaceAll(RegExp(r'`'), '')
-        .replaceAll(RegExp(r'[*_~]'), '')
-        .replaceAll(RegExp(r'\s*\n+\s*'), ' ')
-        .trim();
-    if (clean.length <= maxLen) return clean;
-    return '${clean.substring(0, maxLen)}...';
-  }
 
   /// Get icon for message type
   Widget _buildMessageTypeIcon(String messageType, Color color, double size) {
@@ -160,35 +148,76 @@ class ReplyPreviewBar extends StatelessWidget {
 
     final accentColor = authorPreset.primaryColor;
 
-    // Determine preview text
-    String previewText;
-    if (isQuote && quoteText != null && quoteText!.isNotEmpty) {
-      previewText = _truncate(quoteText!);
-    } else if (replyToMessage.messageType != 'text') {
+    final isDark = theme.brightness == Brightness.dark;
+    final basePreviewStyle = TextStyle(
+      fontSize: 13,
+      fontStyle: FontStyle.normal,
+      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+    );
+
+    // Determine preview span with original message formatting
+    final InlineSpan previewSpan;
+    if (!isQuote && replyToMessage.messageType != 'text') {
       final caption = replyToMessage.content.trim();
       final hasCaption = caption.isNotEmpty && caption != replyToMessage.messageType;
+      String? mediaLabel;
       switch (replyToMessage.messageType) {
         case 'image':
         case 'photo':
-          previewText = hasCaption ? 'Фото: ${_truncate(caption)}' : 'Фото';
+          mediaLabel = 'Фото';
           break;
         case 'video':
-          previewText = hasCaption ? 'Видео: ${_truncate(caption)}' : 'Видео';
+          mediaLabel = 'Видео';
           break;
         case 'audio':
-          previewText = hasCaption ? 'Голосовое сообщение: ${_truncate(caption)}' : 'Голосовое сообщение';
+          mediaLabel = 'Голосовое сообщение';
           break;
         case 'file':
-          previewText = hasCaption ? 'Файл: ${_truncate(caption)}' : 'Файл';
+          mediaLabel = 'Файл';
           break;
         case 'sticker':
-          previewText = 'Стикер';
+          mediaLabel = 'Стикер';
           break;
-        default:
-          previewText = _truncate(replyToMessage.content);
+      }
+      if (mediaLabel != null) {
+        if (hasCaption && replyToMessage.messageType != 'sticker') {
+          previewSpan = TextSpan(
+            style: basePreviewStyle,
+            children: [
+              TextSpan(text: '$mediaLabel: '),
+              MessageReplyInfo.buildFormattedPreviewSpan(
+                rawText: replyToMessage.content,
+                entities: replyToMessage.entities,
+                baseStyle: basePreviewStyle,
+                accentColor: accentColor,
+                isDark: isDark,
+              ),
+            ],
+          );
+        } else {
+          previewSpan = EmojiUtils.buildEmojiTextSpan(mediaLabel, style: basePreviewStyle);
+        }
+      } else {
+        previewSpan = MessageReplyInfo.buildFormattedPreviewSpan(
+          rawText: replyToMessage.content,
+          entities: replyToMessage.entities,
+          baseStyle: basePreviewStyle,
+          accentColor: accentColor,
+          isDark: isDark,
+        );
       }
     } else {
-      previewText = _truncate(replyToMessage.content);
+      previewSpan = MessageReplyInfo.buildFormattedPreviewSpan(
+        rawText: replyToMessage.content,
+        entities: replyToMessage.entities,
+        isQuote: isQuote,
+        quoteText: quoteText,
+        quoteOffset: quoteOffset ?? 0,
+        quoteLength: quoteLength ?? 0,
+        baseStyle: basePreviewStyle,
+        accentColor: accentColor,
+        isDark: isDark,
+      );
     }
 
     return Padding(
@@ -272,14 +301,7 @@ class ReplyPreviewBar extends StatelessWidget {
                               ),
                             Flexible(
                               child: RichText(
-                                text: EmojiUtils.buildEmojiTextSpan(
-                                  previewText,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontStyle: isQuote ? FontStyle.italic : FontStyle.normal,
-                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                                  ),
-                                ),
+                                text: previewSpan,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),

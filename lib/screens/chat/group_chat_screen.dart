@@ -1551,6 +1551,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3263,6 +3264,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3425,6 +3427,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),

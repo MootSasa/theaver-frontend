@@ -630,5 +630,32 @@ void main() {
       expect(italicEntity.offset, equals(0));
       expect(italicEntity.length, equals(13)); // Full "секрет курсив" is merged italic!
     });
+
+    test('RichTextEditingController blockquote is not italic by default and exits on double newline', () {
+      final ctrl = RichTextEditingController(text: 'Первая строка\nВторая строка\nТретья строка');
+      // Select only "Вторая строка\n" (including trailing newline)
+      ctrl.selection = const TextSelection(baseOffset: 14, extentOffset: 28);
+      ctrl.applyFormat('blockquote');
+
+      expect(ctrl.isCursorItalic, isFalse);
+      final bq = ctrl.entities.firstWhere((e) => e.type == 'blockquote');
+      // Trailing '\n' should be trimmed so "Третья строка" is not absorbed
+      expect(bq.offset, equals(14));
+      expect(bq.length, equals(13)); // "Вторая строка" without trailing \n
+
+      final md = EntityParser.toMarkdown(ctrl.cleanText, ctrl.entities);
+      expect(md, equals('Первая строка\n> Вторая строка\nТретья строка'));
+    });
+
+    test('EntityParser.toMarkdown trims trailing newlines and blank lines from blockquote so subsequent lines are not quoted', () {
+      const text = 'До\n• Пункт 1\n• Пункт 2\n   \nПосле цитаты';
+      // Even if a stored entity includes trailing newline + spaces up to "После цитаты"
+      const entities = [
+        MessageEntity(type: 'blockquote', offset: 3, length: 24, collapsed: false),
+      ];
+      final md = EntityParser.toMarkdown(text, entities);
+      expect(md, equals('До\n> • Пункт 1\n> • Пункт 2\n   \nПосле цитаты'));
+      expect(md.contains('> После цитаты'), isFalse);
+    });
   });
 }

@@ -2182,6 +2182,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3297,6 +3298,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),
@@ -3472,6 +3474,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               senderName: replyTo.senderName,
               content: replyTo.content,
               messageType: replyTo.messageType,
+              entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
                   : (replyTo.senderNameColorId ?? 'name_red'),

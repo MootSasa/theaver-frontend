@@ -272,7 +272,6 @@ class BlockquoteElementBuilder extends MarkdownElementBuilder {
 
     final quoteTextStyle = TextStyle(
       fontSize: 14,
-      fontStyle: FontStyle.italic,
       color: isDark
           ? const Color(0xFFE2E8F0)
           : const Color(0xFF1C2530),
@@ -861,7 +860,7 @@ class TextMessageWidget extends StatelessWidget {
             entities!.map((e) => Object.hash(e.type, e.offset, e.length, e.url, e.language, e.collapsed)),
           )
         : 0;
-    final int cacheKey = Object.hash(text, entitiesHash);
+    final int cacheKey = Object.hash(2, text, entitiesHash);
     String? formattedData = _formattedDataCache[cacheKey];
     if (formattedData == null) {
       final String markdownData;

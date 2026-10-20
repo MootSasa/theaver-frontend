@@ -335,13 +335,10 @@ class RichTextEditingController extends TextEditingController {
   }
 
   /// Returns true if the cursor should be displayed in italic (slanted) style.
-  /// This is true if 'italic' (or quote) is active, or if the collapsed selection
+  /// This is true if 'italic' is active, or if the collapsed selection
   /// is positioned strictly inside an italic span.
   bool get isCursorItalic {
-    if (_activeFormats.contains('italic') ||
-        _activeFormats.contains('quote') ||
-        _activeFormats.contains('blockquote') ||
-        _activeFormats.contains('collapse')) {
+    if (_activeFormats.contains('italic')) {
       return true;
     }
     if (!selection.isValid || !selection.isCollapsed) return false;
@@ -383,14 +380,26 @@ class RichTextEditingController extends TextEditingController {
       return;
     }
 
-    final start = math.min(sel.start, sel.end);
-    final end = math.max(sel.start, sel.end);
+    int start = math.min(sel.start, sel.end);
+    int end = math.max(sel.start, sel.end);
     if (start == end) return;
 
     final normalizedType = _normalizeType(formatType);
     if (normalizedType == 'text_link' && url != null) {
       applyLinkToSelection(url, start: start, end: end);
       return;
+    }
+
+    // For blockquotes, trim leading/trailing newlines from the selection so
+    // following lines or paragraphs are not swallowed into the quote span.
+    if (normalizedType == 'blockquote' || normalizedType == 'collapse') {
+      while (start < end && (text[start] == '\n' || text[start] == '\r')) {
+        start++;
+      }
+      while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r')) {
+        end--;
+      }
+      if (start >= end) return;
     }
 
     // Check if entire selection already has this format: toggle it off across the range
@@ -538,6 +547,21 @@ class RichTextEditingController extends TextEditingController {
       }
     }
 
+    // If user typed a blank line (\n\n) while quote mode is active, exit quote mode automatically
+    final bool hasActiveQuote = _activeFormats.contains('quote') ||
+        _activeFormats.contains('blockquote') ||
+        _activeFormats.contains('collapse');
+    if (insertedCount > 0 && hasActiveQuote) {
+      final insertedStr = newText.substring(start, start + insertedCount);
+      final bool isDoubleNewline = insertedStr.contains('\n\n') ||
+          (insertedStr.startsWith('\n') && start > 0 && newText[start - 1] == '\n');
+      if (isDoubleNewline) {
+        _activeFormats.remove('quote');
+        _activeFormats.remove('blockquote');
+        _activeFormats.remove('collapse');
+      }
+    }
+
     // If new text was typed and activeFormats is non-empty, apply all active formats to the inserted range
     if (insertedCount > 0 && _activeFormats.isNotEmpty) {
       for (final fmt in _activeFormats) {
@@ -550,10 +574,28 @@ class RichTextEditingController extends TextEditingController {
       _mergeSpans();
     }
 
-    // Clamp spans within [0, newText.length]
+    final bool quoteStillActive = _activeFormats.contains('quote') ||
+        _activeFormats.contains('blockquote') ||
+        _activeFormats.contains('collapse');
+
+    // Clamp spans within [0, newText.length] and prevent quote spans from stretching across trailing newlines
     for (final span in _spans) {
       span.start = span.start.clamp(0, newText.length);
       span.end = span.end.clamp(span.start, newText.length);
+      if (span.type == 'blockquote' ||
+          span.type == 'quote' ||
+          span.type == 'collapse') {
+        while (span.start < span.end &&
+            (newText[span.start] == '\n' || newText[span.start] == '\r')) {
+          span.start++;
+        }
+        if (!quoteStillActive) {
+          while (span.end > span.start &&
+              (newText[span.end - 1] == '\n' || newText[span.end - 1] == '\r')) {
+            span.end--;
+          }
+        }
+      }
     }
     _spans.removeWhere((s) => s.start >= s.end);
   }
@@ -682,8 +724,8 @@ class RichTextEditingController extends TextEditingController {
         segStyle = segStyle.copyWith(fontWeight: FontWeight.bold);
       }
 
-      // 4. Italic
-      if (activeSpans.any((s) => s.type == 'italic') || hasQuote) {
+      // 4. Italic (only when explicitly italic, not forced by quote)
+      if (activeSpans.any((s) => s.type == 'italic')) {
         segStyle = segStyle.copyWith(fontStyle: FontStyle.italic);
       }
 

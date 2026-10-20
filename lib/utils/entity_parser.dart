@@ -731,16 +731,33 @@ class EntityParser {
       if (start >= end) continue;
 
       if (_isBlockType(e.type)) {
+        final isQuote = _isQuoteType(e.type);
         // Trim leading/trailing newlines so block delimiters align with line content
-        while (start < end && cleanText[start] == '\n') {
+        while (start < end &&
+            (cleanText[start] == '\n' || cleanText[start] == '\r')) {
           start++;
         }
-        while (end > start && cleanText[end - 1] == '\n') {
+        while (end > start &&
+            (cleanText[end - 1] == '\n' ||
+                cleanText[end - 1] == '\r' ||
+                (isQuote &&
+                    (cleanText[end - 1] == ' ' || cleanText[end - 1] == '\t') &&
+                    cleanText.substring(start, end).trimRight().length <
+                        end - start &&
+                    cleanText
+                        .substring(start, end)
+                        .split('\n')
+                        .last
+                        .trim()
+                        .isEmpty))) {
+          end--;
+        }
+        while (end > start &&
+            (cleanText[end - 1] == '\n' || cleanText[end - 1] == '\r')) {
           end--;
         }
         if (start >= end) continue;
 
-        final isQuote = _isQuoteType(e.type);
         final isCollapsed = e.collapsed == true ||
             e.type == 'collapse' ||
             e.type == 'expandable_blockquote';

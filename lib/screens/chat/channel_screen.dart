@@ -883,6 +883,7 @@ class _ChannelScreenState extends State<ChannelScreen>
             senderName: replyTo.senderName,
             content: replyTo.content,
             messageType: replyTo.messageType,
+            entities: replyTo.entities,
             nameColorPresetId: isReplyToMe
                 ? profileTheme.currentNameColorPreset.id
                 : (replyTo.senderNameColorId ?? 'name_red'),
@@ -1462,6 +1463,15 @@ class _ChannelScreenState extends State<ChannelScreen>
                     replyInfo: message.replyInfo,
                     isQuote: message.isQuote,
                     quoteText: message.quoteText,
+                    quoteOffset: message.quoteOffset,
+                    quoteLength: message.quoteLength,
+                    entitiesOverride: message.replyToMessageId != null
+                        ? (_messages
+                                .where((m) => m.id == message.replyToMessageId)
+                                .map((m) => m.entities)
+                                .firstOrNull ??
+                            const [])
+                        : const [],
                     isMe: false, // In channels, usually incoming style
                     onTap: () => _handleReplyTap(message.replyToMessageId!,
                         message.replyInfo?.chatId,
