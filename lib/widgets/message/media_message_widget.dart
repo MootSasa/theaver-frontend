@@ -1,12 +1,14 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../config/app_config.dart';
+import '../../services/media_cache_manager.dart';
 import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
 
 /// Widget for displaying photo and video message previews with blurred
 /// preview placeholder, managed progressive download, and size pill.
-class MediaMessageWidget extends StatelessWidget {
+class MediaMessageWidget extends StatefulWidget {
   final String mediaType; // 'photo' or 'video'
   final String url; // URL to the media file
   final String? thumbnailUrl; // Optional thumbnail URL for videos
@@ -28,6 +30,40 @@ class MediaMessageWidget extends StatelessWidget {
     this.onTap,
   }) : super(key: key);
 
+  @override
+  State<MediaMessageWidget> createState() => _MediaMessageWidgetState();
+}
+
+class _MediaMessageWidgetState extends State<MediaMessageWidget> {
+  final GlobalKey<MediaDownloadButtonState> _downloadButtonKey =
+      GlobalKey<MediaDownloadButtonState>();
+  File? _cachedFile;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkCache();
+  }
+
+  @override
+  void didUpdateWidget(covariant MediaMessageWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _cachedFile = null;
+      _checkCache();
+    }
+  }
+
+  Future<void> _checkCache() async {
+    final resolvedUrl = AppConfig.resolveMediaUrl(widget.url) ?? widget.url;
+    if (resolvedUrl.isNotEmpty) {
+      final f = await MediaCacheManager.instance.getCachedFile(resolvedUrl);
+      if (mounted && f != null) {
+        setState(() => _cachedFile = f);
+      }
+    }
+  }
+
   String _formatDuration(int seconds) {
     final m = seconds ~/ 60;
     final s = seconds % 60;
@@ -36,14 +72,21 @@ class MediaMessageWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isCached = _cachedFile != null;
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        if (!isCached) {
+          _downloadButtonKey.currentState?.handleTap();
+          return;
+        }
+        widget.onTap?.call();
+      },
       child: _buildMediaPreview(),
     );
   }
 
   Widget _buildMediaPreview() {
-    switch (mediaType) {
+    switch (widget.mediaType) {
       case 'photo':
         return _buildImagePreview();
       case 'video':
@@ -54,8 +97,13 @@ class MediaMessageWidget extends StatelessWidget {
   }
 
   Widget _buildImagePreview() {
-    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-    final ratio = aspectRatio ?? 1.33;
+    final resolvedUrl = AppConfig.resolveMediaUrl(widget.url) ?? widget.url;
+    final ratio = widget.aspectRatio ?? 1.33;
+    final isCached = _cachedFile != null;
+    final autoDownload = MediaCacheManager.instance.shouldAutoDownload(
+      messageType: 'image',
+      fileSize: widget.fileSize,
+    );
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(10.0),
@@ -66,43 +114,27 @@ class MediaMessageWidget extends StatelessWidget {
           children: [
             // 1. Blurred preview placeholder
             BlurredMediaPlaceholder(
-              thumbBase64: thumbBase64,
+              thumbBase64: widget.thumbBase64,
               aspectRatio: ratio,
             ),
 
-            // 2. Full network image
-            if (resolvedUrl.isNotEmpty)
-              Image.network(
-                resolvedUrl,
-                cacheWidth: 800,
+            // 2. Full local image ONLY after cached
+            if (_cachedFile != null)
+              Image.file(
+                _cachedFile!,
                 fit: BoxFit.cover,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return BlurredMediaPlaceholder(
-                    thumbBase64: thumbBase64,
-                    aspectRatio: ratio,
-                  );
-                },
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    color: Colors.grey[800],
-                    child: const Center(
-                      child: iconoir.MediaImage(
-                        width: 40,
-                        height: 40,
-                        color: Colors.white60,
-                      ),
-                    ),
-                  );
-                },
+                gaplessPlayback: true,
               ),
 
             // 3. Download button with size pill if needed
-            if (resolvedUrl.isNotEmpty)
+            if (resolvedUrl.isNotEmpty && !isCached)
               MediaDownloadButton(
+                key: _downloadButtonKey,
                 url: resolvedUrl,
-                fileSize: fileSize,
+                fileSize: widget.fileSize,
                 isVideo: false,
+                autoDownload: autoDownload,
+                onDownloaded: _checkCache,
               ),
           ],
         ),
@@ -111,9 +143,16 @@ class MediaMessageWidget extends StatelessWidget {
   }
 
   Widget _buildVideoPreview() {
-    final String targetUrl = thumbnailUrl ?? url;
-    final resolvedUrl = AppConfig.resolveMediaUrl(targetUrl) ?? targetUrl;
-    final ratio = aspectRatio ?? 1.33;
+    final resolvedUrl = AppConfig.resolveMediaUrl(widget.url) ?? widget.url;
+    final resolvedThumbUrl = widget.thumbnailUrl != null && widget.thumbnailUrl!.isNotEmpty
+        ? (AppConfig.resolveMediaUrl(widget.thumbnailUrl!) ?? widget.thumbnailUrl!)
+        : null;
+    final ratio = widget.aspectRatio ?? 1.33;
+    final isCached = _cachedFile != null;
+    final autoDownload = MediaCacheManager.instance.shouldAutoDownload(
+      messageType: 'video',
+      fileSize: widget.fileSize,
+    );
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(10.0),
@@ -124,48 +163,33 @@ class MediaMessageWidget extends StatelessWidget {
           children: [
             // 1. Blurred preview placeholder
             BlurredMediaPlaceholder(
-              thumbBase64: thumbBase64,
+              thumbBase64: widget.thumbBase64,
               aspectRatio: ratio,
             ),
 
-            // 2. Video thumbnail
-            if (resolvedUrl.isNotEmpty)
+            // 2. Video thumbnail ONLY after video is cached
+            if (isCached && resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
               Image.network(
-                resolvedUrl,
+                resolvedThumbUrl,
                 cacheWidth: 800,
                 fit: BoxFit.cover,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return BlurredMediaPlaceholder(
-                    thumbBase64: thumbBase64,
-                    aspectRatio: ratio,
-                  );
-                },
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    color: Colors.grey[800],
-                    child: const Center(
-                      child: iconoir.MediaVideo(
-                        width: 40,
-                        height: 40,
-                        color: Colors.white60,
-                      ),
-                    ),
-                  );
-                },
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
               ),
 
             // 3. Download button with size pill & play button
             if (resolvedUrl.isNotEmpty)
               MediaDownloadButton(
+                key: _downloadButtonKey,
                 url: resolvedUrl,
-                fileSize: fileSize,
+                fileSize: widget.fileSize,
                 isVideo: true,
-                onPlayVideo: onTap,
+                autoDownload: autoDownload,
+                onDownloaded: _checkCache,
+                onPlayVideo: widget.onTap,
               ),
 
             // 4. Video duration pill in top-left
-            if (duration != null && duration! > 0)
+            if (widget.duration != null && widget.duration! > 0)
               Positioned(
                 top: 8,
                 left: 8,
@@ -188,7 +212,7 @@ class MediaMessageWidget extends StatelessWidget {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        _formatDuration(duration!),
+                        _formatDuration(widget.duration!),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 10,

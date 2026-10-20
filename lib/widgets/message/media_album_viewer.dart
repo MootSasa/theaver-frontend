@@ -1,12 +1,15 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:video_player/video_player.dart';
 import '../../config/app_config.dart';
 import '../../models/media_album.dart';
+import '../../services/media_cache_manager.dart';
 import 'blurred_media_placeholder.dart';
+import 'media_download_button.dart';
 
 /// Fullscreen multi-media viewer for albums with swipe navigation,
-/// video streaming playback, and bottom thumbnail strip.
+/// cached playback, and bottom thumbnail strip.
 class MediaAlbumViewer extends StatefulWidget {
   final MediaAlbum album;
   final int initialIndex;
@@ -25,30 +28,57 @@ class _MediaAlbumViewerState extends State<MediaAlbumViewer> {
   late PageController _pageController;
   late int _currentIndex;
   final Map<int, VideoPlayerController> _videoControllers = {};
+  final Map<int, File> _cachedFiles = {};
 
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex.clamp(0, widget.album.items.length - 1);
     _pageController = PageController(initialPage: _currentIndex);
-    _initVideoIfNeeded(_currentIndex);
+    _loadAllCacheStates();
+  }
+
+  Future<void> _loadAllCacheStates() async {
+    for (int i = 0; i < widget.album.items.length; i++) {
+      await _checkItemCache(i, autoPlayIfCurrent: i == _currentIndex);
+    }
+  }
+
+  Future<void> _checkItemCache(int index, {bool autoPlayIfCurrent = true}) async {
+    if (index < 0 || index >= widget.album.items.length) return;
+    final item = widget.album.items[index];
+    final rawUrl = item.fileUrl ?? '';
+    final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+    if (resolvedUrl.isEmpty) return;
+
+    final file = await MediaCacheManager.instance.getCachedFile(resolvedUrl);
+    if (!mounted) return;
+    if (file != null) {
+      setState(() {
+        _cachedFiles[index] = file;
+      });
+      if (item.isVideo && autoPlayIfCurrent && index == _currentIndex) {
+        _initVideoIfNeeded(index);
+      }
+    }
   }
 
   void _initVideoIfNeeded(int index) {
     if (index < 0 || index >= widget.album.items.length) return;
     final item = widget.album.items[index];
-    if (item.isVideo && !_videoControllers.containsKey(index)) {
-      final rawUrl = item.fileUrl ?? '';
-      final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(resolvedUrl),
+    final cachedFile = _cachedFiles[index];
+    if (item.isVideo && cachedFile != null && !_videoControllers.containsKey(index)) {
+      final controller = VideoPlayerController.file(
+        cachedFile,
         videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
       );
       _videoControllers[index] = controller;
       controller.initialize().then((_) {
         if (mounted) {
           setState(() {});
-          controller.play();
+          if (_currentIndex == index) {
+            controller.play();
+          }
         }
       });
     }
@@ -65,7 +95,15 @@ class _MediaAlbumViewerState extends State<MediaAlbumViewer> {
       _currentIndex = index;
     });
 
-    _initVideoIfNeeded(index);
+    if (_cachedFiles.containsKey(index)) {
+      _initVideoIfNeeded(index);
+      final currentCtrl = _videoControllers[index];
+      if (currentCtrl != null && currentCtrl.value.isInitialized && !currentCtrl.value.isPlaying) {
+        currentCtrl.play();
+      }
+    } else {
+      _checkItemCache(index, autoPlayIfCurrent: true);
+    }
   }
 
   @override
@@ -96,7 +134,7 @@ class _MediaAlbumViewerState extends State<MediaAlbumViewer> {
               if (item.isVideo) {
                 return _buildVideoItem(item, index);
               } else {
-                return _buildPhotoItem(item);
+                return _buildPhotoItem(item, index);
               }
             },
           ),
@@ -194,9 +232,11 @@ class _MediaAlbumViewerState extends State<MediaAlbumViewer> {
                         itemBuilder: (context, index) {
                           final item = items[index];
                           final isSelected = index == _currentIndex;
-                          final rawUrl = item.fileUrl ?? '';
-                          final resolvedUrl =
-                              AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+                          final cachedFile = _cachedFiles[index];
+                          final rawThumb = item.thumbUrl ?? '';
+                          final resolvedThumb = rawThumb.isNotEmpty
+                              ? (AppConfig.resolveMediaUrl(rawThumb) ?? rawThumb)
+                              : null;
 
                           return GestureDetector(
                             onTap: () {
@@ -227,9 +267,18 @@ class _MediaAlbumViewerState extends State<MediaAlbumViewer> {
                                     BlurredMediaPlaceholder(
                                       thumbBase64: item.thumbBase64,
                                     ),
-                                    if (resolvedUrl.isNotEmpty)
+                                    if (!item.isVideo && cachedFile != null)
+                                      Image.file(
+                                        cachedFile,
+                                        fit: BoxFit.cover,
+                                        gaplessPlayback: true,
+                                      )
+                                    else if (item.isVideo &&
+                                        cachedFile != null &&
+                                        resolvedThumb != null &&
+                                        resolvedThumb.isNotEmpty)
                                       Image.network(
-                                        resolvedUrl,
+                                        resolvedThumb,
                                         fit: BoxFit.cover,
                                         errorBuilder: (_, __, ___) =>
                                             const SizedBox.shrink(),
@@ -260,42 +309,85 @@ class _MediaAlbumViewerState extends State<MediaAlbumViewer> {
     );
   }
 
-  Widget _buildPhotoItem(MediaAlbumItem item) {
+  Widget _buildPhotoItem(MediaAlbumItem item, int index) {
     final rawUrl = item.fileUrl ?? '';
     final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+    final cachedFile = _cachedFiles[index];
+
+    if (cachedFile == null) {
+      return Center(
+        child: AspectRatio(
+          aspectRatio: item.aspectRatio,
+          child: Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.center,
+            children: [
+              BlurredMediaPlaceholder(
+                thumbBase64: item.thumbBase64,
+                aspectRatio: item.aspectRatio,
+                fit: BoxFit.contain,
+              ),
+              if (resolvedUrl.isNotEmpty)
+                MediaDownloadButton(
+                  url: resolvedUrl,
+                  fileSize: item.fileSize,
+                  isVideo: false,
+                  onDownloaded: () => _checkItemCache(index),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return InteractiveViewer(
       minScale: 0.8,
       maxScale: 3.5,
       child: Center(
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            BlurredMediaPlaceholder(
-              thumbBase64: item.thumbBase64,
-              aspectRatio: item.aspectRatio,
-            ),
-            if (resolvedUrl.isNotEmpty)
-              Image.network(
-                resolvedUrl,
-                fit: BoxFit.contain,
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return BlurredMediaPlaceholder(
-                    thumbBase64: item.thumbBase64,
-                    aspectRatio: item.aspectRatio,
-                  );
-                },
-              ),
-          ],
+        child: Image.file(
+          cachedFile,
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
         ),
       ),
     );
   }
 
   Widget _buildVideoItem(MediaAlbumItem item, int index) {
+    final rawUrl = item.fileUrl ?? '';
+    final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+    final cachedFile = _cachedFiles[index];
+
+    if (cachedFile == null) {
+      return Center(
+        child: AspectRatio(
+          aspectRatio: item.aspectRatio,
+          child: Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.center,
+            children: [
+              BlurredMediaPlaceholder(
+                thumbBase64: item.thumbBase64,
+                aspectRatio: item.aspectRatio,
+                fit: BoxFit.contain,
+              ),
+              if (resolvedUrl.isNotEmpty)
+                MediaDownloadButton(
+                  url: resolvedUrl,
+                  fileSize: item.fileSize,
+                  isVideo: true,
+                  onDownloaded: () => _checkItemCache(index, autoPlayIfCurrent: true),
+                  onPlayVideo: () => _initVideoIfNeeded(index),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final controller = _videoControllers[index];
     if (controller == null || !controller.value.isInitialized) {
+      _initVideoIfNeeded(index);
       final rawThumb = item.thumbUrl ?? '';
       final resolvedThumb = rawThumb.isNotEmpty
           ? (AppConfig.resolveMediaUrl(rawThumb) ?? rawThumb)

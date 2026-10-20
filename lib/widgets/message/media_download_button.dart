@@ -11,6 +11,7 @@ class MediaDownloadButton extends StatefulWidget {
   final String url;
   final int? fileSize;
   final bool isVideo;
+  final bool autoDownload;
   final VoidCallback? onDownloaded;
   final VoidCallback? onPlayVideo;
 
@@ -19,15 +20,16 @@ class MediaDownloadButton extends StatefulWidget {
     required this.url,
     this.fileSize,
     this.isVideo = false,
+    this.autoDownload = false,
     this.onDownloaded,
     this.onPlayVideo,
   }) : super(key: key);
 
   @override
-  State<MediaDownloadButton> createState() => _MediaDownloadButtonState();
+  State<MediaDownloadButton> createState() => MediaDownloadButtonState();
 }
 
-class _MediaDownloadButtonState extends State<MediaDownloadButton> {
+class MediaDownloadButtonState extends State<MediaDownloadButton> {
   bool _isDownloaded = false;
   bool _isDownloading = false;
   double _progress = 0.0;
@@ -88,7 +90,8 @@ class _MediaDownloadButtonState extends State<MediaDownloadButton> {
   @override
   void didUpdateWidget(covariant MediaDownloadButton oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.url != widget.url) {
+    if (oldWidget.url != widget.url ||
+        oldWidget.autoDownload != widget.autoDownload) {
       _checkStatus();
     }
   }
@@ -137,6 +140,11 @@ class _MediaDownloadButtonState extends State<MediaDownloadButton> {
       _setRiveAnimation('idle_cross');
     } else {
       _setRiveAnimation('idle_download');
+      if (widget.autoDownload &&
+          partial == null &&
+          !MediaCacheManager.instance.wasCancelledByUser(widget.url)) {
+        _startDownload();
+      }
     }
   }
 
@@ -171,7 +179,18 @@ class _MediaDownloadButtonState extends State<MediaDownloadButton> {
     super.dispose();
   }
 
+  void handleTap() {
+    if (_isDownloading) {
+      _cancelDownload();
+    } else if (_isDownloaded && widget.isVideo) {
+      widget.onPlayVideo?.call();
+    } else if (!_isDownloaded) {
+      _startDownload();
+    }
+  }
+
   Future<void> _startDownload() async {
+    if (_isDownloading) return;
     setState(() {
       _isDownloading = true;
       if (_progress <= 0.0) _progress = 0.01;
@@ -216,7 +235,7 @@ class _MediaDownloadButtonState extends State<MediaDownloadButton> {
   }
 
   void _cancelDownload() {
-    MediaCacheManager.instance.cancelDownload(widget.url);
+    MediaCacheManager.instance.cancelDownload(widget.url, byUser: true);
     if (mounted) {
       setState(() {
         _isDownloading = false;
@@ -281,15 +300,7 @@ class _MediaDownloadButtonState extends State<MediaDownloadButton> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () {
-            if (_isDownloading) {
-              _cancelDownload();
-            } else if (_isDownloaded && widget.isVideo) {
-              widget.onPlayVideo?.call();
-            } else {
-              _startDownload();
-            }
-          },
+          onTap: handleTap,
           borderRadius: BorderRadius.circular(30),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),

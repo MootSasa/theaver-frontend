@@ -49,6 +49,7 @@ class MediaCacheManager {
   final Map<String, ValueNotifier<double>> _progressNotifiers = {};
   final Map<String, ValueNotifier<DownloadByteProgress>> _byteProgressNotifiers = {};
   final Map<String, String> _localPathCache = {};
+  final Set<String> _userCancelledUrls = {};
 
   /// Formats byte count into human-readable string (e.g. 14.2 MB)
   static String formatBytes(int bytes, [int decimals = 1]) {
@@ -77,14 +78,29 @@ class MediaCacheManager {
   }
 
   bool isDownloading(String url) {
-    return _cancelTokens.containsKey(url);
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    return _cancelTokens.containsKey(url) || _cancelTokens.containsKey(resolvedUrl);
+  }
+
+  bool wasCancelledByUser(String url) {
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    return _userCancelledUrls.contains(url) || _userCancelledUrls.contains(resolvedUrl);
   }
 
   /// Cancel or pause an ongoing download without deleting the partial file or resetting progress
-  void cancelDownload(String url) {
+  void cancelDownload(String url, {bool byUser = true}) {
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    if (byUser) {
+      _userCancelledUrls.add(url);
+      _userCancelledUrls.add(resolvedUrl);
+    }
     final token = _cancelTokens.remove(url);
     if (token != null && !token.isCancelled) {
       token.cancel('User cancelled');
+    }
+    final resolvedToken = _cancelTokens.remove(resolvedUrl);
+    if (resolvedToken != null && !resolvedToken.isCancelled) {
+      resolvedToken.cancel('User cancelled');
     }
     // Note: Do NOT reset notifiers to 0 so the paused progress state remains displayed
   }
@@ -113,6 +129,20 @@ class MediaCacheManager {
   /// Checks if the file is cached locally on disk and exists
   Future<File?> getCachedFile(String url) async {
     if (kIsWeb || url.isEmpty) return null;
+
+    // Support direct local file paths (e.g., pending outgoing media before upload completes)
+    final uri = Uri.tryParse(url);
+    final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+    if (!isNetwork && !url.startsWith('/api/') && !url.startsWith('/uploads/')) {
+      try {
+        final filePath = url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
+        final directFile = File(filePath);
+        if (await directFile.exists() && await directFile.length() > 0) {
+          return directFile;
+        }
+      } catch (_) {}
+    }
+
     final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
     final cachedPath = _localPathCache[url] ?? _localPathCache[resolvedUrl];
     if (cachedPath != null) {
@@ -221,6 +251,7 @@ class MediaCacheManager {
     _localPathCache.clear();
     _progressNotifiers.clear();
     _byteProgressNotifiers.clear();
+    _userCancelledUrls.clear();
   }
 
   /// Clears all downloaded media files from disk (both cache and legacy directories)
@@ -387,20 +418,31 @@ class MediaCacheManager {
     int received,
     int total,
     void Function(double fraction)? onProgress,
-    void Function(DownloadByteProgress progress)? onByteProgress,
-  ) {
-    final fraction = total > 0 ? (received / total).clamp(0.0, 1.0) : 0.0;
+    void Function(DownloadByteProgress progress)? onByteProgress, {
+    bool isFinalized = false,
+  }) {
+    final double fraction = isFinalized
+        ? 1.0
+        : (total > 0 ? (received / total).clamp(0.0, 0.99) : 0.0);
     final prog = DownloadByteProgress(
       receivedBytes: received,
       totalBytes: total,
       fraction: fraction,
     );
 
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+
     final pNotifier = _progressNotifiers[url];
     if (pNotifier != null) pNotifier.value = fraction;
+    if (resolvedUrl != url) {
+      _progressNotifiers[resolvedUrl]?.value = fraction;
+    }
 
     final bNotifier = _byteProgressNotifiers[url];
     if (bNotifier != null) bNotifier.value = prog;
+    if (resolvedUrl != url) {
+      _byteProgressNotifiers[resolvedUrl]?.value = prog;
+    }
 
     onProgress?.call(fraction);
     onByteProgress?.call(prog);
@@ -428,13 +470,18 @@ class MediaCacheManager {
   }) async {
     if (kIsWeb || url.isEmpty) return null;
 
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    _userCancelledUrls.remove(url);
+    _userCancelledUrls.remove(resolvedUrl);
+
     final existing = await getCachedFile(url);
     if (existing != null) {
-      _emitProgress(url, await existing.length(), await existing.length(), onProgress, onByteProgress);
+      final len = await existing.length();
+      _emitProgress(url, len, len, onProgress, onByteProgress, isFinalized: true);
       return existing;
     }
 
-    if (_cancelTokens.containsKey(url)) {
+    if (_cancelTokens.containsKey(url) || _cancelTokens.containsKey(resolvedUrl)) {
       // Already downloading
       return null;
     }
@@ -455,7 +502,6 @@ class MediaCacheManager {
         existingBytes = await tempFile.length();
       }
 
-      final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
       final parsedUri = Uri.tryParse(resolvedUrl);
 
       // S3/MinIO storage buckets and direct file downloads reject Bearer tokens with HTTP 400 Bad Request.
@@ -574,7 +620,10 @@ class MediaCacheManager {
           }
           final finalFile = await tempFile.rename(targetPath);
           _localPathCache[url] = targetPath;
-          _emitProgress(url, actualLength, actualLength, onProgress, onByteProgress);
+          _localPathCache[resolvedUrl] = targetPath;
+          _cancelTokens.remove(url);
+          _cancelTokens.remove(resolvedUrl);
+          _emitProgress(url, actualLength, actualLength, onProgress, onByteProgress, isFinalized: true);
           _triggerDebouncedCacheCleanup();
           return finalFile;
         } else if (actualLength == 0) {

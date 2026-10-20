@@ -207,6 +207,7 @@ class MediaAlbumWidget extends StatelessWidget {
     int index,
   ) {
     return _AlbumTileWidget(
+      key: ValueKey('album_tile_${item.id}_${item.fileUrl}'),
       item: item,
       pos: pos,
       index: index,
@@ -262,6 +263,8 @@ class _AlbumTileWidget extends StatefulWidget {
 }
 
 class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
+  final GlobalKey<MediaDownloadButtonState> _downloadButtonKey =
+      GlobalKey<MediaDownloadButtonState>();
   File? _cachedFile;
   Uint8List? _cachedFirstFrame;
 
@@ -269,6 +272,16 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
   void initState() {
     super.initState();
     _checkCache();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AlbumTileWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.fileUrl != widget.item.fileUrl) {
+      _cachedFile = null;
+      _cachedFirstFrame = null;
+      _checkCache();
+    }
   }
 
   Future<void> _checkCache() async {
@@ -311,6 +324,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final pos = widget.pos;
+    final isCached = _cachedFile != null;
     final rawUrl = item.fileUrl ?? '';
     final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
     final rawThumbUrl = item.thumbUrl ?? '';
@@ -332,22 +346,29 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
         child: Container(
           color: const Color(0xFF181818),
           child: GestureDetector(
-            onTap: widget.onTap,
+            onTap: () {
+              if (!isCached) {
+                _downloadButtonKey.currentState?.handleTap();
+                return;
+              }
+              widget.onTap();
+            },
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // 1. Blurred placeholder
+                // 1. Blurred placeholder (always shown until media is downloaded)
                 BlurredMediaPlaceholder(
                   thumbBase64: item.thumbBase64,
                   aspectRatio: item.aspectRatio,
                 ),
 
-                // 2. Real first frame for video (replaces blurred preview when loaded)
-                if (item.isVideo) ...[
+                // 2. Real first frame for video ONLY after video is cached locally
+                if (item.isVideo && isCached) ...[
                   if (_cachedFirstFrame != null)
                     Image.memory(
                       _cachedFirstFrame!,
                       fit: BoxFit.cover,
+                      gaplessPlayback: true,
                     )
                   else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
                     Image.network(
@@ -362,32 +383,22 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
                     ),
                 ],
 
-                // 3. Display image if cached or auto-download allowed (for photos)
-                if (!item.isVideo) ...[
-                  if (_cachedFile != null)
-                    Image.file(
-                      _cachedFile!,
-                      fit: BoxFit.cover,
-                    )
-                  else if (resolvedUrl.isNotEmpty && autoDownload)
-                    Image.network(
-                      resolvedUrl,
-                      fit: BoxFit.cover,
-                      cacheWidth: 600,
-                      loadingBuilder: (context, child, progress) {
-                        if (progress == null) return child;
-                        return const SizedBox.shrink();
-                      },
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                    ),
-                ],
+                // 3. Display photo ONLY after file is cached locally on disk
+                if (!item.isVideo && _cachedFile != null)
+                  Image.file(
+                    _cachedFile!,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
 
                 // 4. Download button / progress / size pill
-                if (resolvedUrl.isNotEmpty)
+                if (resolvedUrl.isNotEmpty && (!isCached || item.isVideo))
                   MediaDownloadButton(
+                    key: _downloadButtonKey,
                     url: resolvedUrl,
                     fileSize: item.fileSize,
                     isVideo: item.isVideo,
+                    autoDownload: autoDownload,
                     onDownloaded: _checkCache,
                     onPlayVideo: widget.onTap,
                   ),

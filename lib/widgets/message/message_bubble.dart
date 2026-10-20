@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -1056,14 +1055,25 @@ class MessageBubble extends StatelessWidget {
 
     Widget? mediaContentWidget;
     if (hasMedia) {
-      final double mediaWidth = math.min(maxBubbleWidth, 340.0);
-      final Widget mediaWidget = _buildMediaWidget(context, mediaWidth, resolvedFileUrl);
+      final double maxMediaWidth = math.min(maxBubbleWidth, 340.0);
+      final Size singleMediaSize = (_isImage || _isVideo)
+          ? _computeSingleMediaSize(maxMediaWidth)
+          : Size(maxMediaWidth, 220.0);
+      final double mediaWidth = (_isImage || _isVideo)
+          ? singleMediaSize.width
+          : maxMediaWidth;
+      final Widget mediaWidget = _buildMediaWidget(
+        context,
+        mediaWidth,
+        resolvedFileUrl,
+        mediaHeight: singleMediaSize.height,
+      );
 
       Widget innerContent;
       if (_isRoundVideo || _isVoice) {
         innerContent = mediaWidget;
       } else if (hasCaption) {
-        final Widget captionWidget = TextMessageWidget(
+        Widget captionWidget = TextMessageWidget(
           text: message.content,
           style: textStyle,
           isMe: isMe,
@@ -1071,6 +1081,12 @@ class MessageBubble extends StatelessWidget {
           nameColorPreset: effectivePreset,
           replyStripStyle: effectiveStripStyle,
         );
+        if (_isImage || _isVideo) {
+          captionWidget = ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: mediaWidth),
+            child: captionWidget,
+          );
+        }
 
         final bool invertMedia = message.invertMedia;
         innerContent = Column(
@@ -1257,11 +1273,32 @@ class MessageBubble extends StatelessWidget {
     return result;
   }
 
+  Size _computeSingleMediaSize(double maxAllowedWidth) {
+    final w = message.mediaWidth ?? 0;
+    final h = message.mediaHeight ?? 0;
+    if (w > 0 && h > 0) {
+      final double aspect = (w / h).clamp(0.45, 2.5).toDouble();
+      if (aspect >= 1.0) {
+        final double width = maxAllowedWidth;
+        final double height = (width / aspect).clamp(120.0, 340.0).toDouble();
+        return Size(width, height);
+      } else {
+        final double height = math.min(360.0, maxAllowedWidth / aspect);
+        final double width = (height * aspect)
+            .clamp(math.min(200.0, maxAllowedWidth), maxAllowedWidth)
+            .toDouble();
+        return Size(width, height);
+      }
+    }
+    return Size(maxAllowedWidth, 220.0);
+  }
+
   Widget _buildMediaWidget(
     BuildContext context,
     double maxWidth,
-    String resolvedUrl,
-  ) {
+    String resolvedUrl, {
+    double mediaHeight = 220.0,
+  }) {
     if (_isRoundVideo) {
       final double circleSize = math.min(240.0, MediaQuery.of(context).size.width * 0.68);
       return VideoMessageWidget(
@@ -1318,11 +1355,13 @@ class MessageBubble extends StatelessWidget {
       );
 
       return _SingleMediaBubbleWidget(
+        key: ValueKey('single_img_${message.id}_$resolvedUrl'),
         url: resolvedUrl,
         thumbBase64: thumbBase64,
         fileSize: message.mediaFileSize,
         isVideo: false,
         maxWidth: maxWidth,
+        height: mediaHeight,
         autoDownload: autoDownload,
         heroTag: heroTag,
         onTap: ([localPath]) {
@@ -1343,6 +1382,7 @@ class MessageBubble extends StatelessWidget {
       );
 
       return _SingleMediaBubbleWidget(
+        key: ValueKey('single_vid_${message.id}_$resolvedUrl'),
         url: resolvedUrl,
         thumbBase64: message.thumbBase64,
         thumbUrl: message.thumbUrl,
@@ -1350,6 +1390,7 @@ class MessageBubble extends StatelessWidget {
         duration: message.mediaDuration ?? message.duration,
         isVideo: true,
         maxWidth: maxWidth,
+        height: mediaHeight,
         autoDownload: autoDownload,
         heroTag: 'msg_video_${message.id}_$resolvedUrl',
         onTap: ([localPath]) {
@@ -1487,6 +1528,7 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
   final int? duration;
   final bool isVideo;
   final double maxWidth;
+  final double height;
   final bool autoDownload;
   final String heroTag;
   final void Function([String? localPath]) onTap;
@@ -1500,6 +1542,7 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
     this.duration,
     required this.isVideo,
     required this.maxWidth,
+    this.height = 220.0,
     required this.autoDownload,
     required this.heroTag,
     required this.onTap,
@@ -1511,6 +1554,8 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
 }
 
 class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
+  final GlobalKey<MediaDownloadButtonState> _downloadButtonKey =
+      GlobalKey<MediaDownloadButtonState>();
   File? _cachedFile;
   Uint8List? _cachedFirstFrame;
   bool _isPlayingInline = false;
@@ -1519,6 +1564,17 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
   void initState() {
     super.initState();
     _checkCache();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SingleMediaBubbleWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _cachedFile = null;
+      _cachedFirstFrame = null;
+      _isPlayingInline = false;
+      _checkCache();
+    }
   }
 
   Future<void> _checkCache() async {
@@ -1565,18 +1621,17 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final double effectiveRadius = math.max(4.0, (themeExt?.bubbleRadius ?? 16.0) - 2.0);
 
-    // If video is cached or auto-download allowed, and user tapped play inline:
-    if (widget.isVideo &&
-        (_isPlayingInline || (isCached && widget.autoDownload))) {
+    // If video is cached and user tapped play inline:
+    if (widget.isVideo && isCached && _isPlayingInline) {
       return ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: widget.maxWidth,
-          maxHeight: 280,
+          maxHeight: math.max(widget.height, 240.0),
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(effectiveRadius),
           child: InlineVideoPlayer(
-            url: _cachedFile != null ? _cachedFile!.path : widget.url,
+            url: _cachedFile!.path,
           ),
         ),
       );
@@ -1584,119 +1639,86 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
 
     return GestureDetector(
       onTap: () {
+        if (!isCached) {
+          // While not downloaded, tapping anywhere on the bubble starts/cancels download
+          _downloadButtonKey.currentState?.handleTap();
+          return;
+        }
         if (!widget.isVideo) {
           widget.onTap(_cachedFile?.path);
         } else {
-          if (isCached) {
-            setState(() => _isPlayingInline = true);
-          } else {
-            widget.onTap();
-          }
+          setState(() => _isPlayingInline = true);
         }
       },
       child: ClipRRect(
         borderRadius: BorderRadius.circular(effectiveRadius),
         child: Container(
           width: widget.maxWidth,
-          height: 220,
+          height: widget.height,
           color: const Color(0xFF181818),
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // 1. Blurred preview placeholder
+              // 1. Blurred preview placeholder (always shown until media is downloaded)
               BlurredMediaPlaceholder(
                 thumbBase64: widget.thumbBase64,
                 fit: BoxFit.cover,
               ),
 
-              // 2. Real first frame for video:
-              // If video is already cached, show clear first frame.
-              // If not cached, apply blur filter over the thumbnail so it stays blurred with download icon!
-              if (widget.isVideo) ...[
+              // 2. Real first frame for video ONLY after the video file is cached
+              if (widget.isVideo && isCached) ...[
                 if (_cachedFirstFrame != null)
                   Image.memory(
                     _cachedFirstFrame!,
                     width: widget.maxWidth,
+                    height: widget.height,
                     fit: BoxFit.cover,
+                    gaplessPlayback: true,
                   )
                 else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
-                  isCached
-                      ? Image.network(
-                          resolvedThumbUrl,
-                          width: widget.maxWidth,
-                          fit: BoxFit.cover,
-                          loadingBuilder: (context, child, loadingProgress) {
-                            if (loadingProgress == null) return child;
-                            return const SizedBox.shrink();
-                          },
-                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                        )
-                      : RepaintBoundary(
-                          child: ImageFiltered(
-                            imageFilter: ui.ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                            child: Transform.scale(
-                              scale: 1.15,
-                              child: Image.network(
-                                resolvedThumbUrl,
-                                width: widget.maxWidth,
-                                cacheWidth: (widget.maxWidth *
-                                        MediaQuery.devicePixelRatioOf(context))
-                                    .round(),
-                                fit: BoxFit.cover,
-                                loadingBuilder: (context, child, loadingProgress) {
-                                  if (loadingProgress == null) return child;
-                                  return const SizedBox.shrink();
-                                },
-                                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                              ),
-                            ),
-                          ),
-                        ),
-              ],
-
-              // 3. Full image (if photo and (cached or auto-download enabled))
-              if (!widget.isVideo) ...[
-                if (_cachedFile != null)
-                  Hero(
-                    tag: widget.heroTag,
-                    child: Image.file(
-                      _cachedFile!,
-                      width: widget.maxWidth,
-                      fit: BoxFit.cover,
-                    ),
-                  )
-                else if (widget.url.isNotEmpty && widget.autoDownload)
-                  Hero(
-                    tag: widget.heroTag,
-                    child: Image.network(
-                      widget.url,
-                      width: widget.maxWidth,
-                      cacheWidth: (widget.maxWidth *
-                              MediaQuery.devicePixelRatioOf(context))
-                          .round(),
-                      fit: BoxFit.cover,
-                      loadingBuilder: (context, child, loadingProgress) {
-                        if (loadingProgress == null) return child;
-                        return const SizedBox.shrink();
-                      },
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                    ),
+                  Image.network(
+                    resolvedThumbUrl,
+                    width: widget.maxWidth,
+                    height: widget.height,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return const SizedBox.shrink();
+                    },
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                   ),
               ],
 
-              // 3. Download button / progress / size pill overlay
+              // 3. Full image ONLY after the photo file is cached on disk
+              if (!widget.isVideo && _cachedFile != null)
+                Hero(
+                  tag: widget.heroTag,
+                  child: Image.file(
+                    _cachedFile!,
+                    width: widget.maxWidth,
+                    height: widget.height,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                ),
+
+              // 4. Download button / progress / size pill overlay
               if (widget.url.isNotEmpty && (!isCached || widget.isVideo))
                 MediaDownloadButton(
+                  key: _downloadButtonKey,
                   url: widget.url,
                   fileSize: widget.fileSize,
                   isVideo: widget.isVideo,
+                  autoDownload: widget.autoDownload,
                   onDownloaded: _checkCache,
                   onPlayVideo: () {
-                    setState(() => _isPlayingInline = true);
+                    if (_cachedFile != null) {
+                      setState(() => _isPlayingInline = true);
+                    }
                   },
                 ),
 
-              // 4. Video duration badge
+              // 5. Video duration badge
               if (widget.isVideo &&
                   widget.duration != null &&
                   widget.duration! > 0)

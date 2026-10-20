@@ -56,11 +56,22 @@ class SettingsService {
     }
 
     // Загрузка настроек хранилища
+    const storageV2Key = 'storage_settings_v2_manual_default';
+    final migratedToManualDefault = _prefs.getBool(storageV2Key) ?? false;
     final storageJson = _prefs.getString(_storageSettingsKey);
-    if (storageJson != null) {
+    if (storageJson != null && migratedToManualDefault) {
       _cachedStorageSettings = StorageSettings.fromJson(jsonDecode(storageJson));
     } else {
       _cachedStorageSettings = StorageSettings.defaults();
+      if (!migratedToManualDefault) {
+        await _prefs.setBool(storageV2Key, true);
+        if (storageJson != null) {
+          await _prefs.setString(
+            _storageSettingsKey,
+            jsonEncode(_cachedStorageSettings!.toJson()),
+          );
+        }
+      }
     }
 
     // Загрузка настроек энергосбережения
@@ -495,9 +506,9 @@ class StorageSettings {
 
   factory StorageSettings.defaults() {
     return StorageSettings(
-      autoDownloadPhotosOnWifi: true,
+      autoDownloadPhotosOnWifi: false,
       autoDownloadVideosOnWifi: false,
-      autoDownloadFilesOnWifi: true,
+      autoDownloadFilesOnWifi: false,
       autoDownloadAudioOnWifi: false,
       autoDownloadPhotosOnCellular: false,
       autoDownloadVideosOnCellular: false,
@@ -530,9 +541,9 @@ class StorageSettings {
   
     factory StorageSettings.fromJson(Map<String, dynamic> json) {
       return StorageSettings(
-        autoDownloadPhotosOnWifi: json['autoDownloadPhotosOnWifi'] ?? true,
+        autoDownloadPhotosOnWifi: json['autoDownloadPhotosOnWifi'] ?? false,
         autoDownloadVideosOnWifi: json['autoDownloadVideosOnWifi'] ?? false,
-        autoDownloadFilesOnWifi: json['autoDownloadFilesOnWifi'] ?? true,
+        autoDownloadFilesOnWifi: json['autoDownloadFilesOnWifi'] ?? false,
         autoDownloadAudioOnWifi: json['autoDownloadAudioOnWifi'] ?? false,
         autoDownloadPhotosOnCellular: json['autoDownloadPhotosOnCellular'] ?? false,
         autoDownloadVideosOnCellular: json['autoDownloadVideosOnCellular'] ?? false,

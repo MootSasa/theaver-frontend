@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -11,9 +10,11 @@ import 'package:path/path.dart' as p;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
+import '../../config/app_config.dart';
 import '../../services/media_cache_manager.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
+import 'blurred_media_placeholder.dart';
 import 'message_status_widget.dart';
 
 /// Static LRU pool for caching active video note controllers to avoid re-initialization
@@ -304,10 +305,11 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     }
 
     // Check auto-download policy
-    final autoDownload = widget.isMe || MediaCacheManager.instance.shouldAutoDownload(
-      messageType: 'video',
-      fileSize: widget.fileSize,
-    );
+    final autoDownload = !MediaCacheManager.instance.wasCancelledByUser(url) &&
+        MediaCacheManager.instance.shouldAutoDownload(
+          messageType: 'video',
+          fileSize: widget.fileSize,
+        );
 
     if (autoDownload) {
       _startDownload(currentSession);
@@ -1048,55 +1050,50 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   }
 
   Widget _buildPlaceholder(double diameter) {
-    Widget? baseImage;
-    if (widget.thumbBase64 != null && widget.thumbBase64!.isNotEmpty) {
-      try {
-        final bytes = base64Decode(widget.thumbBase64!);
-        baseImage = Image.memory(
-          bytes,
-          fit: BoxFit.cover,
-          width: diameter,
-          height: diameter,
-        );
-      } catch (_) {}
-    } else if (widget.thumbUrl != null && widget.thumbUrl!.isNotEmpty) {
-      baseImage = CachedNetworkImage(
-        imageUrl: widget.thumbUrl!,
-        fit: BoxFit.cover,
-        width: diameter,
-        height: diameter,
-      );
-    }
+    final resolvedThumbUrl = widget.thumbUrl != null && widget.thumbUrl!.isNotEmpty
+        ? (AppConfig.resolveMediaUrl(widget.thumbUrl!) ?? widget.thumbUrl!)
+        : null;
 
     return Stack(
       alignment: Alignment.center,
       children: [
-        if (baseImage != null)
-          ClipOval(
-            child: ImageFiltered(
-              imageFilter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-              child: Transform.scale(
-                scale: 1.15,
-                child: SizedBox(
-                  width: diameter,
-                  height: diameter,
-                  child: baseImage,
-                ),
-              ),
-            ),
-          )
-        else
-          Container(
+        ClipOval(
+          child: SizedBox(
             width: diameter,
             height: diameter,
-            color: const Color(0xFF1C1C1E),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                BlurredMediaPlaceholder(
+                  thumbBase64: widget.thumbBase64,
+                  fit: BoxFit.cover,
+                ),
+                if (_isCached &&
+                    (widget.thumbBase64 == null || widget.thumbBase64!.isEmpty) &&
+                    resolvedThumbUrl != null &&
+                    resolvedThumbUrl.isNotEmpty)
+                  ImageFiltered(
+                    imageFilter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                    child: Transform.scale(
+                      scale: 1.15,
+                      child: CachedNetworkImage(
+                        imageUrl: resolvedThumbUrl,
+                        fit: BoxFit.cover,
+                        width: diameter,
+                        height: diameter,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
+        ),
 
         // Dark dimming overlay
         Container(
           width: diameter,
           height: diameter,
-          color: Colors.black.withValues(alpha: 0.35),
+          color: Colors.black.withValues(alpha: 0.25),
         ),
 
         // Center Action Button (Download / Progress / Initializing)
