@@ -96,6 +96,51 @@ class CodeElementBuilder extends MarkdownElementBuilder {
   }
 }
 
+/// Custom block syntax for multi-line or single-line display LaTeX blocks: $$...$$ or \[...\]
+class MathBlockSyntax extends md.BlockSyntax {
+  static final RegExp _openDollarPattern = RegExp(r'^[ ]{0,3}\$\$(.*)$');
+  static final RegExp _openBracketPattern = RegExp(r'^[ ]{0,3}\\\[(.*)$');
+
+  @override
+  RegExp get pattern => RegExp(r'^[ ]{0,3}(?:\$\$|\\\[)');
+
+  const MathBlockSyntax();
+
+  @override
+  md.Node parse(md.BlockParser parser) {
+    final firstLine = parser.current.content;
+    final bool isBracket = firstLine.trimLeft().startsWith(r'\[');
+    final String closeToken = isBracket ? r'\]' : r'$$';
+    final RegExp openPattern = isBracket ? _openBracketPattern : _openDollarPattern;
+
+    final match = openPattern.firstMatch(firstLine);
+    final firstRest = match?.group(1) ?? '';
+
+    // Check if closing token is on the same line
+    final closeIdx = firstRest.indexOf(closeToken);
+    if (closeIdx != -1 && firstRest.substring(closeIdx + closeToken.length).trim().isEmpty) {
+      parser.advance();
+      final element = md.Element('p', [md.Element.text('latex', firstLine.trim())]);
+      return element;
+    }
+
+    final lines = <String>[firstLine];
+    parser.advance();
+
+    while (!parser.isDone) {
+      final line = parser.current.content;
+      lines.add(line);
+      parser.advance();
+      if (line.contains(closeToken)) {
+        break;
+      }
+    }
+
+    final fullMath = lines.join('\n').trim();
+    return md.Element('p', [md.Element.text('latex', fullMath)]);
+  }
+}
+
 /// Custom block syntax for collapsible blockquotes: lines starting with **>
 class CollapsibleBlockquoteBlockSyntax extends md.BlockSyntax {
   static final RegExp _pattern = RegExp(r'^[ ]{0,3}\*\*>[ ]?(.*)$');
@@ -132,11 +177,60 @@ class CollapsibleBlockquoteBlockSyntax extends md.BlockSyntax {
   @override
   md.Node parse(md.BlockParser parser) {
     final childLines = parseChildLines(parser);
+    final rawMarkdown = childLines.map((l) => l.content).join('\n');
     final children = md.BlockParser(childLines, parser.document).parseLines(
       parentSyntax: this,
     );
     final element = md.Element('blockquote', children);
     element.attributes['collapsed'] = 'true';
+    element.attributes['raw_markdown'] = rawMarkdown;
+    return element;
+  }
+}
+
+/// Custom strict block syntax for standard blockquotes: lines starting with > (without lazy continuation)
+class StrictBlockquoteBlockSyntax extends md.BlockSyntax {
+  static final RegExp _pattern = RegExp(r'^[ ]{0,3}>[ ]?(.*)$');
+
+  @override
+  RegExp get pattern => _pattern;
+
+  const StrictBlockquoteBlockSyntax();
+
+  @override
+  List<md.Line> parseChildLines(md.BlockParser parser) {
+    final childLines = <md.Line>[];
+
+    while (!parser.isDone) {
+      final currentLine = parser.current;
+      final match = pattern.firstMatch(currentLine.content);
+      if (match != null) {
+        final markerStart = currentLine.content.indexOf('>');
+        int markerEnd = markerStart + 1;
+        if (currentLine.content.length > markerEnd &&
+            (currentLine.content[markerEnd] == ' ' || currentLine.content[markerEnd] == '\t')) {
+          markerEnd++;
+        }
+        childLines.add(md.Line(currentLine.content.substring(markerEnd)));
+        parser.advance();
+        continue;
+      }
+      break;
+    }
+
+    return childLines;
+  }
+
+  @override
+  md.Node parse(md.BlockParser parser) {
+    final childLines = parseChildLines(parser);
+    final rawMarkdown = childLines.map((l) => l.content).join('\n');
+    final children = md.BlockParser(childLines, parser.document).parseLines(
+      parentSyntax: this,
+    );
+    final element = md.Element('blockquote', children);
+    element.attributes['collapsed'] = 'false';
+    element.attributes['raw_markdown'] = rawMarkdown;
     return element;
   }
 }
@@ -157,6 +251,8 @@ class BlockquoteElementBuilder extends MarkdownElementBuilder {
     this.stripStyle,
   });
 
+  static final RegExp _richIndicator = RegExp(r'[*_~`\[$<|]|https?:\/\/|www\.');
+
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
     final rawText = element.textContent.trim();
@@ -169,6 +265,89 @@ class BlockquoteElementBuilder extends MarkdownElementBuilder {
     final text = rawText
         .replaceFirst(RegExp(r'^(?:collapse:|\*\*>\s?)\s*'), '');
 
+    final rawMarkdown = (element.attributes['raw_markdown'] ?? text)
+        .trim()
+        .replaceFirst(RegExp(r'^(?:collapse:|\*\*>\s?)\s*'), '');
+
+    final quoteTextStyle = TextStyle(
+      fontSize: 14,
+      fontStyle: FontStyle.italic,
+      color: isDark
+          ? const Color(0xFFE2E8F0)
+          : const Color(0xFF1C2530),
+      height: 1.35,
+    );
+
+    Widget? formattedChild;
+    if (_richIndicator.hasMatch(rawMarkdown) || EmojiUtils.emojiRegex.hasMatch(rawMarkdown)) {
+      final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+      final linkColor = isMe
+          ? (themeExt?.palette.chatBubbleOutgoingLink ??
+              (isDark ? const Color(0xFF7BE5DA) : const Color(0xFF007AFF)))
+          : (themeExt?.palette.chatBubbleIncomingLink ??
+              (isDark ? const Color(0xFF7BE5DA) : Theme.of(context).colorScheme.primary));
+
+      formattedChild = MarkdownBody(
+        data: rawMarkdown,
+        selectable: false,
+        shrinkWrap: true,
+        softLineBreak: true,
+        extensionSet: md.ExtensionSet(
+          const [MathBlockSyntax()],
+          [
+            md.CodeSyntax(),
+            MathInlineSyntax(),
+            SpoilerInlineSyntax(),
+            UnderlineInlineSyntax(),
+            CheckboxInlineSyntax(),
+            EmojiInlineSyntax(),
+            ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+          ],
+        ),
+        styleSheet: MarkdownStyleSheet(
+          p: quoteTextStyle,
+          pPadding: EdgeInsets.zero,
+          blockSpacing: 4.0,
+          strong: quoteTextStyle.copyWith(fontWeight: FontWeight.bold),
+          em: quoteTextStyle.copyWith(fontStyle: FontStyle.italic),
+          del: quoteTextStyle.copyWith(decoration: TextDecoration.lineThrough),
+          a: quoteTextStyle.copyWith(
+            color: linkColor,
+            decoration: TextDecoration.underline,
+            decorationColor: linkColor,
+          ),
+          code: quoteTextStyle.copyWith(
+            fontFamily: 'monospace',
+            fontStyle: FontStyle.normal,
+            backgroundColor: Colors.transparent,
+          ),
+        ),
+        builders: {
+          'code': CodeElementBuilder(
+            context,
+            isDark,
+            isMe,
+            preset: preset,
+            stripStyle: stripStyle,
+          ),
+          'latex': MathElementBuilder(quoteTextStyle),
+          'checkbox': CheckboxElementBuilder(),
+          'emoji': EmojiElementBuilder(fontSize: 14),
+          'spoiler': SpoilerElementBuilder(quoteTextStyle),
+          'underline': UnderlineElementBuilder(quoteTextStyle),
+        },
+        onTapLink: (label, href, title) async {
+          if (href != null && href.trim().isNotEmpty) {
+            final normalized = EntityParser.normalizeUrl(href.trim());
+            final uri = Uri.tryParse(normalized);
+            if (uri != null && await canLaunchUrl(uri)) {
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
+            }
+          }
+        },
+      );
+    }
+
     return CollapsibleBlockquoteWidget(
       text: text,
       isCollapsible: isCollapsible,
@@ -177,40 +356,95 @@ class BlockquoteElementBuilder extends MarkdownElementBuilder {
       isMe: isMe,
       preset: preset,
       stripStyle: stripStyle,
+      child: formattedChild,
     );
   }
 }
 
 /// Builder for LaTeX formulas using [Math].
 class MathElementBuilder extends MarkdownElementBuilder {
+  final TextStyle? baseStyle;
+
+  MathElementBuilder([this.baseStyle]);
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final effectiveStyle = parentStyle ?? preferredStyle ?? baseStyle ?? DefaultTextStyle.of(context).style;
+    return _buildMath(element, effectiveStyle);
+  }
+
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
-    final text = element.textContent;
+    final effectiveStyle = preferredStyle ?? baseStyle ?? const TextStyle(fontSize: _kMessageFontSize);
+    return _buildMath(element, effectiveStyle);
+  }
+
+  Widget? _buildMath(md.Element element, TextStyle effectiveStyle) {
+    final text = element.textContent.trim();
     if (text.isEmpty) return null;
 
-    bool isDisplayMode = text.startsWith(r'$$') && text.endsWith(r'$$');
-    final math = isDisplayMode
-        ? text.substring(2, text.length - 2).trim()
-        : text.substring(1, text.length - 1).trim();
+    final bool isDoubleDollar = text.startsWith(r'$$') && text.endsWith(r'$$') && text.length >= 4;
+    final bool isBracketDisplay = text.startsWith(r'\[') && text.endsWith(r'\]') && text.length >= 4;
+    final bool isParenInline = text.startsWith(r'\(') && text.endsWith(r'\)') && text.length >= 4;
+    final bool isDisplayMode = isDoubleDollar || isBracketDisplay;
 
-    return Math.tex(
-      math,
-      mathStyle: isDisplayMode ? MathStyle.display : MathStyle.text,
-      textStyle: preferredStyle?.copyWith(
-        color: Colors.teal,
-        fontStyle: FontStyle.italic,
-      ),
-      onErrorFallback: (err) => Text(
-        text,
-        style: const TextStyle(color: Colors.red),
+    final String math;
+    if (isDoubleDollar || isBracketDisplay || isParenInline) {
+      math = text.substring(2, text.length - 2).trim();
+    } else if (text.startsWith(r'$') && text.endsWith(r'$') && text.length >= 2) {
+      math = text.substring(1, text.length - 1).trim();
+    } else {
+      math = text;
+    }
+
+    if (math.isEmpty) return Text(text, style: effectiveStyle);
+
+    final mathTextStyle = effectiveStyle.copyWith(
+      fontStyle: FontStyle.normal,
+    );
+
+    final Widget mathWidget = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Math.tex(
+        math,
+        mathStyle: isDisplayMode ? MathStyle.display : MathStyle.text,
+        textStyle: mathTextStyle,
+        onErrorFallback: (err) => Text(
+          text,
+          style: effectiveStyle.copyWith(
+            color: Colors.redAccent,
+            fontFamily: 'monospace',
+          ),
+        ),
       ),
     );
+
+    if (isDisplayMode) {
+      return MetaData(
+        metaData: 'block_element',
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4.0),
+          child: mathWidget,
+        ),
+      );
+    }
+
+    return mathWidget;
   }
 }
 
-/// Custom syntax for LaTeX formulas: $...$ and $$...$$
+/// Custom syntax for LaTeX formulas: $$...$$, \[...\], \(...\), and $...$
 class MathInlineSyntax extends md.InlineSyntax {
-  MathInlineSyntax() : super(r'(\$\$[\s\S]*?\$\$)|(\$[\s\S]*?\$)');
+  MathInlineSyntax()
+      : super(
+          r'(\$\$[\s\S]+?\$\$)|(\\\[[\s\S]+?\\\])|(\\\([\s\S]+?\\\))|((?<!\\|\$)\$(?!\$|\s)(?:\\.|[^\\\n\$])+?(?<!\s|\\)\$(?!\$|\d))',
+        );
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
@@ -306,14 +540,14 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
 
   SpoilerElementBuilder(this.preferredStyle);
 
-  static final RegExp _markdownIndicator = RegExp(r'[*_~`\[]');
+  static final RegExp _markdownIndicator = RegExp(r'[*_~`\[$<]');
 
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
     final effectiveStyle = preferredStyle ?? this.preferredStyle;
     final content = element.textContent;
 
-    if (_markdownIndicator.hasMatch(content)) {
+    if (_markdownIndicator.hasMatch(content) || EmojiUtils.emojiRegex.hasMatch(content)) {
       return SpoilerTextWidget(
         textStyle: effectiveStyle,
         child: MarkdownBody(
@@ -324,6 +558,8 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
           extensionSet: md.ExtensionSet(
             [],
             [
+              md.CodeSyntax(),
+              MathInlineSyntax(),
               UnderlineInlineSyntax(),
               EmojiInlineSyntax(),
               ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
@@ -341,6 +577,7 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
             ),
           ),
           builders: {
+            'latex': MathElementBuilder(effectiveStyle),
             'underline': UnderlineElementBuilder(effectiveStyle),
             'emoji': EmojiElementBuilder(fontSize: effectiveStyle?.fontSize ?? _kMessageFontSize),
           },
@@ -355,13 +592,15 @@ class SpoilerElementBuilder extends MarkdownElementBuilder {
   }
 }
 
-/// Custom syntax for underline: __...__ or --...-- or <u>...</u>
+/// Custom syntax for underline: __...__ or <u>...</u>
 class UnderlineInlineSyntax extends md.InlineSyntax {
-  UnderlineInlineSyntax() : super(r'(?:__|\-\-|<u>)([\s\S]+?)(?:__|\-\-|</u>)');
+  UnderlineInlineSyntax()
+      : super(r'(?:(?<!\w)__(?!\s)([^_\n]+?)(?<!\s)__(?!\w)|<u>([\s\S]+?)<\/u>)');
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
-    final element = md.Element.text('underline', match.group(1)!);
+    final content = match.group(1) ?? match.group(2) ?? '';
+    final element = md.Element.text('underline', content);
     parser.addNode(element);
     return true;
   }
@@ -373,7 +612,7 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
 
   UnderlineElementBuilder([this.baseStyle]);
 
-  static final RegExp _markdownIndicator = RegExp(r'[*_~`\[]');
+  static final RegExp _markdownIndicator = RegExp(r'[*_~`\[$<]');
 
   @override
   Widget? visitElementAfterWithContext(
@@ -394,7 +633,7 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
     );
 
     final content = element.textContent;
-    if (_markdownIndicator.hasMatch(content)) {
+    if (_markdownIndicator.hasMatch(content) || EmojiUtils.emojiRegex.hasMatch(content)) {
       return MarkdownBody(
         data: content,
         selectable: false,
@@ -403,6 +642,8 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
         extensionSet: md.ExtensionSet(
           [],
           [
+            md.CodeSyntax(),
+            MathInlineSyntax(),
             UnderlineInlineSyntax(),
             EmojiInlineSyntax(),
             ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
@@ -425,6 +666,7 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
           ),
         ),
         builders: {
+          'latex': MathElementBuilder(underlineStyle),
           'emoji': EmojiElementBuilder(fontSize: underlineStyle.fontSize ?? _kMessageFontSize),
         },
       );
@@ -450,12 +692,22 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
     );
 
     final content = element.textContent;
-    if (_markdownIndicator.hasMatch(content)) {
+    if (_markdownIndicator.hasMatch(content) || EmojiUtils.emojiRegex.hasMatch(content)) {
       return MarkdownBody(
         data: content,
         selectable: false,
         shrinkWrap: true,
         softLineBreak: true,
+        extensionSet: md.ExtensionSet(
+          [],
+          [
+            md.CodeSyntax(),
+            MathInlineSyntax(),
+            UnderlineInlineSyntax(),
+            EmojiInlineSyntax(),
+            ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+          ],
+        ),
         styleSheet: MarkdownStyleSheet(
           p: underlineStyle,
           pPadding: EdgeInsets.zero,
@@ -468,6 +720,10 @@ class UnderlineElementBuilder extends MarkdownElementBuilder {
             ]),
           ),
         ),
+        builders: {
+          'latex': MathElementBuilder(underlineStyle),
+          'emoji': EmojiElementBuilder(fontSize: underlineStyle.fontSize ?? _kMessageFontSize),
+        },
       );
     }
 
@@ -501,13 +757,15 @@ class TextMessageWidget extends StatelessWidget {
 
   /// Preserves consecutive spaces and multiple enters inside message text,
   /// while trimming only spaces and enters at the very end.
-  /// Content inside code blocks is left untouched.
+  /// Content inside code blocks and LaTeX formulas is left untouched.
   static String preserveWhitespace(String text) {
     final trimmed = text.trimRight();
     if (trimmed.isEmpty) return '';
 
-    // Split by code blocks: ```...``` or `...`
-    final pattern = RegExp(r'(```[\s\S]*?```|`[^`\n]*?`)');
+    // Split by code blocks (```...```, `...`) and LaTeX formulas ($$...$$, \[...\], \(...\), $...$)
+    final pattern = RegExp(
+      r'(```[\s\S]*?```|`[^`\n]*?`|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|(?<!\\|\$)\$(?!\$|\s)(?:\\.|[^\\\n\$])+?(?<!\s|\\)\$(?!\$|\d))',
+    );
     final buffer = StringBuffer();
     int lastIndex = 0;
 
@@ -539,8 +797,9 @@ class TextMessageWidget extends StatelessWidget {
 
     // 2. Multiple newlines (>= 2):
     // With blockSpacing: 0, consecutive newlines would otherwise collapse without empty lines.
-    // Inserting '\u00A0' on empty lines ensures exact visual blank line count.
-    result = result.replaceAllMapped(RegExp(r'\n{2,}'), (match) {
+    // Inserting '\u00A0' on empty lines ensures exact visual blank line count,
+    // except directly before a Markdown table row starting with '|'.
+    result = result.replaceAllMapped(RegExp(r'\n{2,}(?!\s*\|)'), (match) {
       final count = match.group(0)!.length;
       final sb = StringBuffer();
       for (int i = 0; i < count - 1; i++) {
@@ -557,15 +816,18 @@ class TextMessageWidget extends StatelessWidget {
   static final Map<int, String> _formattedDataCache = {};
   static final md.ExtensionSet _kExtensionSet = md.ExtensionSet(
     [
+      const MathBlockSyntax(),
       const CollapsibleBlockquoteBlockSyntax(),
+      const StrictBlockquoteBlockSyntax(),
       ...md.ExtensionSet.gitHubFlavored.blockSyntaxes,
     ],
     [
-      UnderlineInlineSyntax(),
+      md.CodeSyntax(),
       MathInlineSyntax(),
+      SpoilerInlineSyntax(),
+      UnderlineInlineSyntax(),
       CheckboxInlineSyntax(),
       EmojiInlineSyntax(),
-      SpoilerInlineSyntax(),
       ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
     ],
   );
@@ -590,7 +852,12 @@ class TextMessageWidget extends StatelessWidget {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final int cacheKey = Object.hash(text, entities?.length ?? 0);
+    final int entitiesHash = hasEntities
+        ? Object.hashAll(
+            entities!.map((e) => Object.hash(e.type, e.offset, e.length, e.url, e.language, e.collapsed)),
+          )
+        : 0;
+    final int cacheKey = Object.hash(text, entitiesHash);
     String? formattedData = _formattedDataCache[cacheKey];
     if (formattedData == null) {
       final String markdownData;
@@ -601,7 +868,13 @@ class TextMessageWidget extends StatelessWidget {
           final start = match.start;
           final len = url.length;
           final covered = effectiveEntities.any((e) =>
-              e.offset <= start && (e.offset + e.length) >= (start + len));
+              (e.type == 'text_link' ||
+                  e.type == 'link' ||
+                  e.type == 'url' ||
+                  e.type == 'pre' ||
+                  e.type == 'code') &&
+              e.offset <= start &&
+              (e.offset + e.length) >= (start + len));
           if (!covered) {
             effectiveEntities.add(MessageEntity(
               type: 'url',
@@ -629,6 +902,8 @@ class TextMessageWidget extends StatelessWidget {
         : (themeExt?.palette.chatBubbleIncomingLink ??
             (isDark ? const Color(0xFF7BE5DA) : Theme.of(context).colorScheme.primary));
 
+    final baseFontSize = style?.fontSize ?? _kMessageFontSize;
+
     return MarkdownBody(
       data: formattedData,
       selectable: false,
@@ -639,18 +914,30 @@ class TextMessageWidget extends StatelessWidget {
         p: effectiveStyle,
         pPadding: EdgeInsets.zero,
         blockSpacing: 0,
+        strong: effectiveStyle?.copyWith(fontWeight: FontWeight.bold),
+        em: effectiveStyle?.copyWith(fontStyle: FontStyle.italic),
+        del: effectiveStyle?.copyWith(decoration: TextDecoration.lineThrough),
+        h1: effectiveStyle?.copyWith(fontSize: baseFontSize * 1.35, fontWeight: FontWeight.bold),
+        h2: effectiveStyle?.copyWith(fontSize: baseFontSize * 1.25, fontWeight: FontWeight.bold),
+        h3: effectiveStyle?.copyWith(fontSize: baseFontSize * 1.15, fontWeight: FontWeight.bold),
+        h4: effectiveStyle?.copyWith(fontSize: baseFontSize * 1.08, fontWeight: FontWeight.w600),
+        h5: effectiveStyle?.copyWith(fontSize: baseFontSize, fontWeight: FontWeight.w600),
+        h6: effectiveStyle?.copyWith(fontSize: baseFontSize * 0.95, fontWeight: FontWeight.w600),
+        listBullet: effectiveStyle,
         listBulletPadding: const EdgeInsets.only(right: 4),
+        tableHead: effectiveStyle?.copyWith(fontWeight: FontWeight.bold),
+        tableBody: effectiveStyle,
         a: (style ?? Theme.of(context).textTheme.bodyMedium)?.copyWith(
           color: linkColor,
           decoration: TextDecoration.underline,
           decorationColor: linkColor,
           decorationThickness: 1.3,
-          fontSize: style?.fontSize ?? _kMessageFontSize,
+          fontSize: baseFontSize,
           height: 1.4,
         ),
         code: TextStyle(
           fontFamily: 'monospace',
-          fontSize: (style?.fontSize ?? _kMessageFontSize) * 0.95,
+          fontSize: baseFontSize * 0.95,
           height: 1.4,
           color: (style ?? Theme.of(context).textTheme.bodyMedium)?.color,
           backgroundColor: Colors.transparent,
@@ -679,11 +966,11 @@ class TextMessageWidget extends StatelessWidget {
           preset: nameColorPreset,
           stripStyle: replyStripStyle,
         ),
-        'latex': MathElementBuilder(),
+        'latex': MathElementBuilder(effectiveStyle),
         'checkbox': CheckboxElementBuilder(),
-        'emoji': EmojiElementBuilder(fontSize: style?.fontSize ?? _kMessageFontSize),
-        'spoiler': SpoilerElementBuilder(style),
-        'underline': UnderlineElementBuilder(style),
+        'emoji': EmojiElementBuilder(fontSize: baseFontSize),
+        'spoiler': SpoilerElementBuilder(effectiveStyle),
+        'underline': UnderlineElementBuilder(effectiveStyle),
       },
       onTapLink: (text, href, title) async {
         if (href != null && href.trim().isNotEmpty) {

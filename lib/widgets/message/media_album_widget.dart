@@ -11,6 +11,7 @@ import 'blurred_media_placeholder.dart';
 import 'media_album_layout.dart';
 import 'media_album_viewer.dart';
 import 'media_download_button.dart';
+import 'text_message_widget.dart';
 
 /// Widget rendering a Telegram-style collage bubble for 2–10 media items.
 class MediaAlbumWidget extends StatelessWidget {
@@ -152,8 +153,10 @@ class MediaAlbumWidget extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    album.caption!,
+                  TextMessageWidget(
+                    text: album.caption!,
+                    entities: album.entities,
+                    isMe: isMe,
                     style: TextStyle(
                       color: onBubbleColor,
                       fontSize: 15,

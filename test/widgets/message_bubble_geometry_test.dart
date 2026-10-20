@@ -13,6 +13,7 @@ import 'package:theaver/widgets/profile/reply_strip_painter.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:theaver/widgets/message/message_bubble.dart';
 import 'package:theaver/widgets/message/message_status_widget.dart';
+import 'package:theaver/widgets/message/text_message_widget.dart';
 
 class _TestAppLocalizations extends AppLocalizations {
   final Map<String, String> translations;
@@ -564,6 +565,37 @@ void main() {
       final bubbleSize = tester.getSize(bubbleLayout);
       // Because hasBlockElement is true, metadata must be placed on a separate row below content
       expect(bubbleSize.height, greaterThan(contentSize.height));
+    });
+
+    testWidgets('MessageBubbleLayout does not overlap metadata with inline LaTeX formula',
+        (WidgetTester tester) async {
+      const latexMessage = r'Формула: $x_1 + y_2 = z_3$';
+      await tester.pumpWidget(
+        buildTestApp(
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: const MessageBubbleLayout(
+              content: TextMessageWidget(
+                text: latexMessage,
+                style: TextStyle(fontSize: 16),
+              ),
+              metadata: Text('12:34'),
+              text: latexMessage,
+              textStyle: TextStyle(fontSize: 16),
+              metadataWidth: 38.0,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final contentRect = tester.getRect(find.byType(TextMessageWidget));
+      final metaRect = tester.getRect(find.text('12:34'));
+
+      // Metadata must start to the right of the formula content, never overlapping it
+      expect(metaRect.left, greaterThanOrEqualTo(contentRect.right));
+      expect(contentRect.overlaps(metaRect), isFalse);
+      expect(tester.takeException(), isNull);
     });
   });
 }

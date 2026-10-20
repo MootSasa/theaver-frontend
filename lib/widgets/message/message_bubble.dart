@@ -292,11 +292,30 @@ class RenderBubbleLayout extends RenderBox
       return false;
     }
 
+    bool containsBlockElement(RenderObject obj) {
+      bool found = false;
+      void check(RenderObject node) {
+        if (found) return;
+        if (node is RenderMetaData && node.metaData == 'block_element') {
+          found = true;
+          return;
+        }
+        node.visitChildren(check);
+      }
+      obj.visitChildren(check);
+      return found;
+    }
+
     void visitor(RenderObject child) {
+      if (child is RenderMetaData && child.metaData == 'block_element') {
+        lastParagraphIsBlock = true;
+        lastParagraph = null;
+        return;
+      }
       if (child is RenderParagraph) {
         final text = child.text.toPlainText();
         if (text.trim().isNotEmpty) {
-          if (isInsideBlock(child)) {
+          if (isInsideBlock(child) || containsBlockElement(child)) {
             lastParagraphIsBlock = true;
             lastParagraph = null;
           } else {
@@ -306,6 +325,9 @@ class RenderBubbleLayout extends RenderBox
             paragraphCount++;
           }
         }
+        // Do not descend into WidgetSpan children (e.g. Math.tex, Spoiler, Emoji),
+        // because they are represented as \uFFFC placeholders in this RenderParagraph.
+        return;
       }
       child.visitChildren(visitor);
     }
@@ -363,7 +385,7 @@ class RenderBubbleLayout extends RenderBox
       );
       if (firstBoxes.isNotEmpty) {
         final firstBox = firstBoxes.first;
-        if ((lastBox.top - firstBox.top).abs() < 2.0) {
+        if (lastBox.top < firstBox.bottom - 2.0) {
           isSingleLine = true;
         }
       } else {
@@ -813,6 +835,7 @@ class MessageBubble extends StatelessWidget {
     final bool endsWithBlock =
         trimmedContent.endsWith('```') ||
         trimmedContent.endsWith(r'$$') ||
+        trimmedContent.endsWith(r'\]') ||
         contentEndsWithQuote ||
         entityEndsWithQuote ||
         entityEndsWithPre ||

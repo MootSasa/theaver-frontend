@@ -153,6 +153,12 @@ class _CollapsibleBlockquoteWidgetState
 
                 final bool isExpanded = progress > 0.5;
 
+                final Widget quoteBody = widget.child ??
+                    Text(
+                      widget.text,
+                      style: quoteTextStyle,
+                    );
+
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -171,61 +177,81 @@ class _CollapsibleBlockquoteWidgetState
                               height: 14,
                             ),
                           ),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                height: currentTextHeight,
-                                child: ReplyStripWidget(
-                                  preset: effectivePreset,
-                                  style: effectiveStripStyle,
-                                  width: 3.5,
-                                  borderRadius: 2,
-                                ),
+                          if (!showToggle)
+                            IntrinsicHeight(
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  ReplyStripWidget(
+                                    preset: effectivePreset,
+                                    style: effectiveStripStyle,
+                                    width: 3.5,
+                                    borderRadius: 2,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(right: 14.0),
+                                      child: quoteBody,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.only(right: 14.0),
-                                  child: SizedBox(
-                                    height: currentTextHeight,
-                                    child: ClipRect(
-                                      child: (showToggle && progress < 1.0)
-                                          ? ShaderMask(
-                                              shaderCallback: (Rect bounds) {
-                                                const double fadeHeight = 20.0;
-                                                final double fadeRatio = (bounds.height > fadeHeight)
-                                                    ? (bounds.height - fadeHeight) / bounds.height
-                                                    : 0.0;
-                                                return LinearGradient(
-                                                  begin: Alignment.topCenter,
-                                                  end: Alignment.bottomCenter,
-                                                  stops: [0.0, fadeRatio, 1.0],
-                                                  colors: const [
-                                                    Colors.white,
-                                                    Colors.white,
-                                                    Colors.transparent,
-                                                  ],
-                                                ).createShader(bounds);
-                                              },
-                                              blendMode: BlendMode.dstIn,
-                                              child: widget.child ??
-                                                  Text(
-                                                    widget.text,
-                                                    style: quoteTextStyle,
-                                                  ),
-                                            )
-                                          : widget.child ??
-                                              Text(
-                                                widget.text,
-                                                style: quoteTextStyle,
+                            )
+                          else
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  height: currentTextHeight,
+                                  child: ReplyStripWidget(
+                                    preset: effectivePreset,
+                                    style: effectiveStripStyle,
+                                    width: 3.5,
+                                    borderRadius: 2,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(right: 14.0),
+                                    child: SizedBox(
+                                      height: currentTextHeight,
+                                      child: ClipRect(
+                                        child: (progress < 1.0)
+                                            ? ShaderMask(
+                                                shaderCallback: (Rect bounds) {
+                                                  const double fadeHeight = 20.0;
+                                                  final double fadeRatio = (bounds.height > fadeHeight)
+                                                      ? (bounds.height - fadeHeight) / bounds.height
+                                                      : 0.0;
+                                                  return LinearGradient(
+                                                    begin: Alignment.topCenter,
+                                                    end: Alignment.bottomCenter,
+                                                    stops: [0.0, fadeRatio, 1.0],
+                                                    colors: const [
+                                                      Colors.white,
+                                                      Colors.white,
+                                                      Colors.transparent,
+                                                    ],
+                                                  ).createShader(bounds);
+                                                },
+                                                blendMode: BlendMode.dstIn,
+                                                child: SingleChildScrollView(
+                                                  physics: const NeverScrollableScrollPhysics(),
+                                                  child: quoteBody,
+                                                ),
+                                              )
+                                            : SingleChildScrollView(
+                                                physics: const NeverScrollableScrollPhysics(),
+                                                child: quoteBody,
                                               ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
+                              ],
+                            ),
                         ],
                       ),
                     ),

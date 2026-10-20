@@ -114,6 +114,83 @@ class EntityParser {
     return urls;
   }
 
+  static final RegExp _latexRegex = RegExp(
+    r'\$\$[\s\S]+?\$\$|(?<!\\|\$)\$(?!\$|\s)(?:\\.|[^\\\n\$])+?(?<!\s|\\)\$(?!\$|\d)|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)',
+  );
+
+  static bool _overlapsEntityTypes(
+    int start,
+    int end,
+    List<_RawEntity> entities,
+    Set<String> types,
+  ) {
+    for (final e in entities) {
+      if (types.contains(e.type)) {
+        final eEnd = e.offset + e.length;
+        if (start < eEnd && end > e.offset) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Returns the end offset of a protected span ('pre', 'code', or LaTeX) if the
+  /// candidate delimiter match is blocked by it, or -1 if the match is allowed.
+  static int _getBlockingProtectedEnd({
+    required int prefixStart,
+    required int prefixLen,
+    required int suffixStart,
+    required int suffixLen,
+    required List<_RawEntity> entities,
+    required String text,
+    bool checkLatex = true,
+  }) {
+    final int matchEnd = suffixStart + suffixLen;
+    // Never match anything overlapping a fenced code block ('pre')
+    for (final e in entities) {
+      if (e.type == 'pre') {
+        final eEnd = e.offset + e.length;
+        if (prefixStart < eEnd && matchEnd > e.offset) {
+          return eEnd;
+        }
+      }
+    }
+
+    final int openStart = prefixStart;
+    final int openEnd = prefixStart + (prefixLen > 0 ? prefixLen : (matchEnd - prefixStart));
+    final int closeStart = suffixLen > 0 ? suffixStart : prefixStart;
+    final int closeEnd = matchEnd;
+
+    // Never allow opening or closing delimiters to fall inside an inline 'code' entity
+    for (final e in entities) {
+      if (e.type == 'code') {
+        final eEnd = e.offset + e.length;
+        final openInside = openStart < eEnd && openEnd > e.offset;
+        final closeInside = closeStart < eEnd && closeEnd > e.offset;
+        if (openInside || closeInside) {
+          return eEnd;
+        }
+      }
+    }
+
+    if (checkLatex) {
+      for (final m in _latexRegex.allMatches(text)) {
+        // Ignore LaTeX matches that are themselves inside a 'pre' or 'code' entity
+        if (_overlapsEntityTypes(m.start, m.end, entities, const {'pre', 'code'})) {
+          continue;
+        }
+        final openInside = openStart < m.end && openEnd > m.start;
+        final closeInside = closeStart < m.end && closeEnd > m.start;
+        if (openInside || closeInside) {
+          return m.end;
+        }
+      }
+    }
+
+    return -1;
+  }
+
   /// Parses markdown tokens in [rawText] into clean plain text and a list of [MessageEntity].
   static ParsedMessage parseMarkdown(String rawText) {
     if (rawText.isEmpty) {
@@ -168,7 +245,16 @@ class EntityParser {
     // 2. Collapsible blockquote: lines starting with **>
     final collapsibleQuoteRegex = RegExp(r'(?:^|\n)\*\*>\s?([^\n]+(?:\n\*\*>\s?[^\n]+)*)');
     while (true) {
-      final match = collapsibleQuoteRegex.firstMatch(currentText);
+      RegExpMatch? match;
+      for (final m in collapsibleQuoteRegex.allMatches(currentText)) {
+        final leadingNewline = m.group(0)!.startsWith('\n') ? 1 : 0;
+        final s = m.start + leadingNewline;
+        final e = m.start + m.group(0)!.length;
+        if (!_overlapsEntityTypes(s, e, entities, const {'pre', 'blockquote'})) {
+          match = m;
+          break;
+        }
+      }
       if (match == null) break;
 
       final fullMatch = match.group(0)!;
@@ -203,7 +289,16 @@ class EntityParser {
     // 3. Regular blockquote: lines starting with >
     final blockquoteRegex = RegExp(r'(?:^|\n)>\s?([^\n]+(?:\n>\s?[^\n]+)*)');
     while (true) {
-      final match = blockquoteRegex.firstMatch(currentText);
+      RegExpMatch? match;
+      for (final m in blockquoteRegex.allMatches(currentText)) {
+        final leadingNewline = m.group(0)!.startsWith('\n') ? 1 : 0;
+        final s = m.start + leadingNewline;
+        final e = m.start + m.group(0)!.length;
+        if (!_overlapsEntityTypes(s, e, entities, const {'pre', 'blockquote'})) {
+          match = m;
+          break;
+        }
+      }
       if (match == null) break;
 
       final fullMatch = match.group(0)!;
@@ -235,10 +330,44 @@ class EntityParser {
       ));
     }
 
-    // 4. Links: [label](url)
+    // 4. Inline code: `text` (parsed early so its contents are protected from other inline rules)
+    _parseInlineDelimiter(
+      pattern: RegExp(r'`([^`\n]+?)`'),
+      type: 'code',
+      textRef: () => currentText,
+      onReplace: (newText) => currentText = newText,
+      entities: entities,
+    );
+
+    // 5. Links: [label](url)
     final linkRegex = RegExp(r'\[([^\]]+)\]\(([^\s\)]+)\)');
     while (true) {
-      final match = linkRegex.firstMatch(currentText);
+      RegExpMatch? match;
+      int searchPos = 0;
+      while (searchPos < currentText.length) {
+        final m = linkRegex.allMatches(currentText, searchPos).firstOrNull;
+        if (m == null) break;
+
+        final fullMatch = m.group(0)!;
+        final label = m.group(1)!;
+        final prefixStart = m.start;
+        const prefixLen = 1;
+        final suffixStart = prefixStart + prefixLen + label.length;
+        final suffixLen = fullMatch.length - prefixLen - label.length;
+        final blockingEnd = _getBlockingProtectedEnd(
+          prefixStart: prefixStart,
+          prefixLen: prefixLen,
+          suffixStart: suffixStart,
+          suffixLen: suffixLen,
+          entities: entities,
+          text: currentText,
+        );
+        if (blockingEnd == -1) {
+          match = m;
+          break;
+        }
+        searchPos = blockingEnd > searchPos ? blockingEnd : m.start + 1;
+      }
       if (match == null) break;
 
       final fullMatch = match.group(0)!;
@@ -269,7 +398,7 @@ class EntityParser {
       ));
     }
 
-    // 5. Spoilers: ||text||
+    // 6. Spoilers: ||text||
     _parseInlineDelimiter(
       pattern: RegExp(r'\|\|((?:[^|\n]|\|(?!\|))+?)\|\|'),
       type: 'spoiler',
@@ -278,7 +407,7 @@ class EntityParser {
       entities: entities,
     );
 
-    // 6. Bold: **text**
+    // 7. Bold: **text**
     _parseInlineDelimiter(
       pattern: RegExp(r'\*\*([^\*\n]+?)\*\*'),
       type: 'bold',
@@ -287,7 +416,7 @@ class EntityParser {
       entities: entities,
     );
 
-    // 7. Strikethrough: ~~text~~
+    // 8. Strikethrough: ~~text~~
     _parseInlineDelimiter(
       pattern: RegExp(r'~~([^~\n]+?)~~'),
       type: 'strikethrough',
@@ -296,19 +425,10 @@ class EntityParser {
       entities: entities,
     );
 
-    // 8. Underline: __text__ or --text-- or <u>text</u>
+    // 9. Underline: __text__ or <u>text</u>
     _parseInlineDelimiter(
-      pattern: RegExp(r'__([^_]+?)__|--([^\-]+?)--|<u>([\s\S]+?)<\/u>'),
+      pattern: RegExp(r'(?<!\w)__(?!\s)([^_\n]+?)(?<!\s)__(?!\w)|<u>([\s\S]+?)<\/u>'),
       type: 'underline',
-      textRef: () => currentText,
-      onReplace: (newText) => currentText = newText,
-      entities: entities,
-    );
-
-    // 9. Inline code: `text`
-    _parseInlineDelimiter(
-      pattern: RegExp(r'`([^`\n]+?)`'),
-      type: 'code',
       textRef: () => currentText,
       onReplace: (newText) => currentText = newText,
       entities: entities,
@@ -316,28 +436,41 @@ class EntityParser {
 
     // 10. Italic: *text* (avoiding **) and _text_ (protecting snake_case)
     _parseInlineDelimiter(
-      pattern: RegExp(r'(?<!\*)\*([^\*\n]+?)\*(?!\*)'),
+      pattern: RegExp(r'(?<!\*)\*(?!\s)([^\*\n]+?)(?<!\s)\*(?!\*)'),
       type: 'italic',
       textRef: () => currentText,
       onReplace: (newText) => currentText = newText,
       entities: entities,
     );
     _parseInlineDelimiter(
-      pattern: RegExp(r'(?<!\w)_([^\n_]+?)_(?!\w)'),
+      pattern: RegExp(r'(?<!\w)_(?!\s)([^\n_]+?)(?<!\s)_(?!\w)'),
       type: 'italic',
       textRef: () => currentText,
       onReplace: (newText) => currentText = newText,
       entities: entities,
     );
 
-    // 11. Raw URLs in remaining clean text that are not yet covered by a text_link
+    // 11. Raw URLs in remaining clean text that are not yet covered by a link/code/latex
     for (final match in _urlRegex.allMatches(currentText)) {
       final url = match.group(0)!;
       final start = match.start;
       final len = url.length;
 
-      final bool alreadyCovered = entities.any((e) =>
-          e.offset <= start && (e.offset + e.length) >= (start + len));
+      final bool alreadyCovered = _overlapsEntityTypes(
+            start,
+            start + len,
+            entities,
+            const {'text_link', 'link', 'url', 'pre', 'code'},
+          ) ||
+          _getBlockingProtectedEnd(
+                prefixStart: start,
+                prefixLen: len,
+                suffixStart: start + len,
+                suffixLen: 0,
+                entities: entities,
+                text: currentText,
+              ) !=
+              -1;
 
       if (!alreadyCovered) {
         entities.add(_RawEntity(
@@ -352,13 +485,25 @@ class EntityParser {
     // Sort entities primarily by offset ascending, secondarily by length descending (outer first)
     entities.sort((a, b) {
       if (a.offset != b.offset) return a.offset.compareTo(b.offset);
-      return b.length.compareTo(a.length);
+      if (a.length != b.length) return b.length.compareTo(a.length);
+      return _entityPriority(a.type).compareTo(_entityPriority(b.type));
     });
 
     return ParsedMessage(
       cleanText: currentText,
       entities: entities.map((e) => e.toMessageEntity()).toList(),
     );
+  }
+
+  static int _entityPriority(String type) {
+    switch (type) {
+      case 'pre':
+      case 'blockquote':
+      case 'quote':
+        return 0;
+      default:
+        return 1;
+    }
   }
 
   static void _parseInlineDelimiter({
@@ -370,26 +515,53 @@ class EntityParser {
   }) {
     while (true) {
       final text = textRef();
-      final match = pattern.firstMatch(text);
-      if (match == null) break;
-
-      final fullMatch = match.group(0)!;
-      // Get the first non-null capturing group
+      RegExpMatch? selectedMatch;
       String innerContent = '';
-      for (int g = 1; g <= match.groupCount; g++) {
-        final val = match.group(g);
-        if (val != null) {
-          innerContent = val;
+      int prefixLen = 0;
+      int suffixLen = 0;
+
+      int searchPos = 0;
+      while (searchPos < text.length) {
+        final match = pattern.allMatches(text, searchPos).firstOrNull;
+        if (match == null) break;
+
+        final fullMatch = match.group(0)!;
+        String candidateInner = '';
+        for (int g = 1; g <= match.groupCount; g++) {
+          final val = match.group(g);
+          if (val != null) {
+            candidateInner = val;
+            break;
+          }
+        }
+        final pLen = fullMatch.indexOf(candidateInner);
+        final sLen = fullMatch.length - pLen - candidateInner.length;
+        final sStart = match.start + pLen + candidateInner.length;
+
+        final blockingEnd = _getBlockingProtectedEnd(
+          prefixStart: match.start,
+          prefixLen: pLen,
+          suffixStart: sStart,
+          suffixLen: sLen,
+          entities: entities,
+          text: text,
+        );
+
+        if (blockingEnd == -1) {
+          selectedMatch = match;
+          innerContent = candidateInner;
+          prefixLen = pLen;
+          suffixLen = sLen;
           break;
         }
+        searchPos = blockingEnd > searchPos ? blockingEnd : match.start + 1;
       }
 
-      final startIndex = match.start;
-      final matchEnd = startIndex + fullMatch.length;
+      if (selectedMatch == null) break;
 
-      // Find prefix and suffix lengths
-      final prefixLen = fullMatch.indexOf(innerContent);
-      final suffixLen = fullMatch.length - prefixLen - innerContent.length;
+      final fullMatch = selectedMatch.group(0)!;
+      final startIndex = selectedMatch.start;
+      final matchEnd = startIndex + fullMatch.length;
 
       final newText = text.replaceRange(startIndex, matchEnd, innerContent);
       onReplace(newText);
@@ -491,18 +663,24 @@ class EntityParser {
       closings.putIfAbsent(end, () => []).add(entity);
     }
 
-    // At same start offset: longer entities open first (outer wraps inner); if equal length, smaller index opens first
+    // At same start offset: longer entities open first (outer wraps inner);
+    // if equal length, block entities open before inline entities, then by original index.
     for (final list in openings.values) {
       list.sort((a, b) {
         if (a.length != b.length) return b.length.compareTo(a.length);
+        final prioCmp = _entityPriority(a.type).compareTo(_entityPriority(b.type));
+        if (prioCmp != 0) return prioCmp;
         return orderMap[a]!.compareTo(orderMap[b]!);
       });
     }
 
-    // At same end offset: shorter entities close first (inner closes before outer); if equal length, larger index closes first (LIFO)
+    // At same end offset: shorter entities close first (inner closes before outer);
+    // if equal length, inline entities close before block entities, then reverse index (LIFO).
     for (final list in closings.values) {
       list.sort((a, b) {
         if (a.length != b.length) return a.length.compareTo(b.length);
+        final prioCmp = _entityPriority(b.type).compareTo(_entityPriority(a.type));
+        if (prioCmp != 0) return prioCmp;
         return orderMap[b]!.compareTo(orderMap[a]!);
       });
     }

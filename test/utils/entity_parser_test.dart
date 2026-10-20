@@ -496,5 +496,38 @@ void main() {
       // Trailing spaces/enters after code block are trimmed
       expect(output.endsWith('```'), isTrue);
     });
+
+    test('preserveWhitespace does not inject non-breaking spaces inside LaTeX formulas', () {
+      const input = r'Formula: $x_1   +   x_2 = 5$ and block:' '\n' r'$$\begin{pmatrix} 1   &   2 \\ 3   &   4 \end{pmatrix}$$';
+      final output = TextMessageWidget.preserveWhitespace(input);
+
+      expect(output.contains('\u00A0'), isFalse);
+      expect(output.contains(r'$x_1   +   x_2 = 5$'), isTrue);
+      expect(output.contains(r'$$\begin{pmatrix} 1   &   2 \\ 3   &   4 \end{pmatrix}$$'), isTrue);
+    });
+
+    test('parseMarkdown protects LaTeX formulas and inline code from delimiter stripping', () {
+      const input = r'Check $f^*(x) + g^*(y) = x_{1} + y_{2}$ and `def __init__(self, *args, **kwargs):` with **bold**';
+      final parsed = EntityParser.parseMarkdown(input);
+
+      // LaTeX formula and inline code contents must remain completely intact
+      expect(parsed.cleanText.contains(r'$f^*(x) + g^*(y) = x_{1} + y_{2}$'), isTrue);
+      expect(parsed.cleanText.contains('def __init__(self, *args, **kwargs):'), isTrue);
+
+      // Only 'code' and 'bold' entities should be created (no bogus italic/underline inside LaTeX or code)
+      expect(parsed.entities.map((e) => e.type).toList(), equals(['code', 'bold']));
+
+      final reconstructed = EntityParser.toMarkdown(parsed.cleanText, parsed.entities);
+      expect(reconstructed, equals(input));
+    });
+
+    test('parseMarkdown does not turn CLI flags or markdown table dashes into underline', () {
+      const input = 'Run flutter analyze --no-pub --fatal-infos and __real underline__';
+      final parsed = EntityParser.parseMarkdown(input);
+
+      expect(parsed.cleanText, equals('Run flutter analyze --no-pub --fatal-infos and real underline'));
+      expect(parsed.entities.length, equals(1));
+      expect(parsed.entities.first.type, equals('underline'));
+    });
   });
 }

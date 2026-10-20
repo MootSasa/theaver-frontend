@@ -157,7 +157,7 @@ List<FeedItem> groupMessagesIntoFeedItems(
       final isFilename = m.fileName != null && content == m.fileName;
       final isFileurl = m.fileUrl != null && content == m.fileUrl;
       if (content.isNotEmpty && !isFilename && !isFileurl) {
-        caption = content;
+        caption = m.content;
         entities = m.entities;
         primary = m;
         break;
