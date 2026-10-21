@@ -8,6 +8,7 @@ import 'database/app_database.dart';
 import 'notification_service.dart';
 import '../utils/date_time_utils.dart';
 import '../models/chat_draft.dart';
+import '../utils/emoji_utils.dart';
 
 /// Chat represents a chat conversation.
 class Chat {
@@ -1336,6 +1337,8 @@ class ChatService {
       if (effectiveMessageType == 'round') {
         effectiveMessageType = 'video';
         effectiveIsRound = true;
+      } else if (fileUrl == null && EmojiUtils.isDiceEmoji(content)) {
+        effectiveMessageType = 'dice';
       }
 
       final body = <String, dynamic>{

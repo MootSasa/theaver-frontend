@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
 import '../services/emoji_effect_cache_service.dart';
+import '../services/emoji_haptic_service.dart';
 
 class EmojiUtils {
   static const String _fontFamily = 'AppleEmoji';
@@ -139,6 +140,40 @@ class EmojiUtils {
 
   /// Returns true if [text] contains at least one emoji and no non-emoji text.
   static bool isEmojiOnly(String text) => countEmojiOnly(text) > 0;
+
+  /// Supported Telegram dice game emojis.
+  static const Set<String> diceEmojis = {'🎲', '🎯', '🏀', '⚽', '🎳', '🎰'};
+
+  /// Mapping from dice emoji to its hex codepoint.
+  static const Map<String, String> diceEmojiToCodepointMap = {
+    '🎲': '1f3b2',
+    '🎯': '1f3af',
+    '🏀': '1f3c0',
+    '⚽': '26bd',
+    '🎳': '1f3b3',
+    '🎰': '1f3b0',
+  };
+
+  /// Returns true if [text] is a single standalone dice game emoji.
+  static bool isDiceEmoji(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+    return diceEmojis.contains(trimmed) ||
+        diceEmojiToCodepointMap.values.contains(trimmed.toLowerCase());
+  }
+
+  /// Converts a dice emoji or codepoint to its standard hex codepoint.
+  static String? diceCodepoint(String text) {
+    final trimmed = text.trim();
+    if (diceEmojiToCodepointMap.containsKey(trimmed)) {
+      return diceEmojiToCodepointMap[trimmed];
+    }
+    final lower = trimmed.toLowerCase();
+    if (diceEmojiToCodepointMap.values.contains(lower)) {
+      return lower;
+    }
+    return null;
+  }
 
   /// Loads and caches the animated emoji [LottieComposition] from local cache or server.
   static Future<LottieComposition?> loadAnimatedEmojiComposition(String emoji) {
@@ -445,6 +480,7 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   }
 
   void _playAnimation() {
+    EmojiHapticService.instance.playInteractiveEmojiHaptic(widget.emoji);
     _triggerEffect();
 
     if (_composition != null && !_controller.isAnimating) {
