@@ -80,6 +80,7 @@ class Chat {
       'poll',
       'document',
       'file',
+      'dice',
     };
     return !supportedTypes.contains(lastMessageType!.toLowerCase());
   }
@@ -194,6 +195,7 @@ class ReplyInfo {
       'poll',
       'document',
       'file',
+      'dice',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
@@ -502,6 +504,7 @@ class Message {
       'poll',
       'document',
       'file',
+      'dice',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
