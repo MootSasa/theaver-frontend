@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
@@ -7,10 +7,28 @@ import '../services/emoji_effect_cache_service.dart';
 
 class EmojiUtils {
   static const String _fontFamily = 'AppleEmoji';
+  static const String _appleSystemFontFamily = 'Apple Color Emoji';
   static const String _assetPath = 'assets/fonts/AppleColorEmoji.ttf';
 
   static final ValueNotifier<bool> isFontLoading = ValueNotifier(false);
   static final ValueNotifier<bool> isFontLoaded = ValueNotifier(false);
+
+  /// Returns true when running natively on an Apple device (iOS or macOS),
+  /// where the system's native Apple Color Emoji font is already installed.
+  static bool get isApplePlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
+  /// Active emoji font family for the current platform:
+  /// - Web: `null` (browser fallback)
+  /// - iOS / macOS: native system `'Apple Color Emoji'`
+  /// - Android / Windows / Linux: bundled compact `'AppleEmoji'` (`64x64`)
+  static String? get effectiveFontFamily {
+    if (kIsWeb) return null;
+    if (isApplePlatform) return _appleSystemFontFamily;
+    return _fontFamily;
+  }
 
   /// Tracks message keys that have already auto-played so rebuilding within
   /// the 3-second freshness window does not re-trigger autoPlay repeatedly.
@@ -127,10 +145,11 @@ class EmojiUtils {
     return EmojiEffectCacheService.instance.getAnimatedEmojiComposition(emoji);
   }
 
-  /// Loads and registers the Apple Emoji font from assets.
+  /// Loads and registers the compact Apple Emoji font from assets on non-Apple native platforms.
+  /// On Apple devices (iOS/macOS), uses the native system Apple Color Emoji font directly.
   static Future<void> loadAppleEmojiFont() async {
-    if (kIsWeb) {
-      // Skip downloading the 44 MB AppleColorEmoji.ttf into WebAssembly memory on Web
+    if (kIsWeb || isApplePlatform) {
+      isFontLoaded.value = true;
       return;
     }
     debugPrint('DEBUG: EmojiUtils.loadAppleEmojiFont() started from assets');
@@ -157,7 +176,11 @@ class EmojiUtils {
   }
 
   /// The font family name to use in TextStyle.fontFamilyFallback
-  static List<String> get fontFallbacks => kIsWeb ? const [] : [_fontFamily];
+  static List<String> get fontFallbacks {
+    if (kIsWeb) return const [];
+    if (isApplePlatform) return const [_appleSystemFontFamily];
+    return const [_fontFamily];
+  }
 
   /// Returns the top 7 most frequent emojis for reactions.
   static List<String> getFrequentEmojis() {
@@ -174,36 +197,88 @@ class EmojiUtils {
     return EmojiEffectCacheService.instance.resolveEffectCodepoint(emoji);
   }
 
-  /// Helper widget to display a single Apple emoji using the font.
+  /// Helper widget to display a single compact Apple emoji using the local/bundled font
+  /// (used in the emoji picker panel, reaction bar, inline previews, etc.).
   static Widget appleEmoji(String emoji, {double size = 24.0, TextStyle? fallbackStyle}) {
     return Text(
       emoji.trim(),
       style: (fallbackStyle ?? const TextStyle()).copyWith(
         fontSize: size,
-        fontFamily: kIsWeb ? null : _fontFamily,
+        fontFamily: effectiveFontFamily,
       ),
     );
   }
 
-  /// Helper widget to display multiple emojis (emoji-only message) with Apple Emoji font.
+  /// Helper widget to display multiple large emojis (2–9 emoji-only message).
+  /// - On Apple devices (iOS/macOS), uses the native local 'Apple Color Emoji' font directly.
+  /// - On non-Apple native devices, loads the high-resolution 160x160 PNGs from the server
+  ///   with a Telegram-style silhouette shimmer while downloading.
   static Widget emojiOnlyText(
     String text, {
     required double fontSize,
     TextStyle? fallbackStyle,
     TextAlign textAlign = TextAlign.start,
   }) {
-    return Text(
-      text.trim(),
+    final trimmed = text.trim();
+    if (kIsWeb || isApplePlatform) {
+      return Text(
+        trimmed,
+        textAlign: textAlign,
+        style: (fallbackStyle ?? const TextStyle()).copyWith(
+          fontSize: fontSize,
+          height: 1.25,
+          fontFamily: effectiveFontFamily,
+        ),
+      );
+    }
+
+    final List<InlineSpan> spans = [];
+    for (final cluster in trimmed.characters) {
+      if (cluster.trim().isEmpty) {
+        spans.add(
+          TextSpan(
+            text: cluster,
+            style: (fallbackStyle ?? const TextStyle()).copyWith(
+              fontSize: fontSize * 0.45,
+              height: 1.25,
+            ),
+          ),
+        );
+      } else if (isEmojiGrapheme(cluster)) {
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1.5, vertical: 2.0),
+              child: HighResStaticEmoji(
+                emoji: cluster,
+                size: fontSize,
+                fallbackStyle: fallbackStyle,
+              ),
+            ),
+          ),
+        );
+      } else {
+        spans.add(
+          TextSpan(
+            text: cluster,
+            style: (fallbackStyle ?? const TextStyle()).copyWith(
+              fontSize: fontSize,
+              height: 1.25,
+              fontFamily: effectiveFontFamily,
+            ),
+          ),
+        );
+      }
+    }
+
+    return Text.rich(
+      TextSpan(children: spans),
       textAlign: textAlign,
-      style: (fallbackStyle ?? const TextStyle()).copyWith(
-        fontSize: fontSize,
-        height: 1.25,
-        fontFamily: kIsWeb ? null : _fontFamily,
-      ),
     );
   }
 
-  /// Builds a [TextSpan] where emojis use the Apple Emoji font.
+  /// Builds a [TextSpan] where inline emojis use the local/compact Apple Emoji font.
   static TextSpan buildEmojiTextSpan(String text, {required TextStyle style}) {
     final List<InlineSpan> children = [];
 
@@ -216,7 +291,7 @@ class EmojiUtils {
             TextSpan(
               text: emoji,
               style: style.copyWith(
-                fontFamily: kIsWeb ? null : _fontFamily,
+                fontFamily: effectiveFontFamily,
                 fontSize: (style.fontSize ?? 14.0),
               ),
             ),
@@ -424,18 +499,19 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
                       repeat: false,
                       addRepaintBoundary: true,
                     )
-                  : _isLoadingAnimated
-                      ? _EmojiSilhouetteShimmer(
-                          key: const ValueKey('lottie_shimmer'),
-                          emoji: widget.emoji,
-                          size: widget.width * 0.72,
-                          fallbackStyle: widget.style,
-                        )
-                      : EmojiUtils.appleEmoji(
-                          widget.emoji,
-                          size: staticSize,
-                          fallbackStyle: widget.style,
-                        ),
+                      : _isLoadingAnimated
+                          ? _EmojiSilhouetteShimmer(
+                              key: const ValueKey('lottie_shimmer'),
+                              emoji: widget.emoji,
+                              size: widget.width * 0.72,
+                              fallbackStyle: widget.style,
+                            )
+                          : HighResStaticEmoji(
+                              key: const ValueKey('lottie_static_fallback'),
+                              emoji: widget.emoji,
+                              size: staticSize,
+                              fallbackStyle: widget.style,
+                            ),
             ),
           ),
         ),
@@ -444,8 +520,127 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   }
 }
 
+/// Renders a large static emoji in messages:
+/// - On Apple devices (iOS/macOS), uses the local system 'Apple Color Emoji' font directly.
+/// - On non-Apple native devices, loads the original 160x160 PNG from the server
+///   (`/api/static-emojis/:codepoint`) with disk + RAM caching, displaying the
+///   Telegram-style silhouette + moving shimmer (`_EmojiSilhouetteShimmer`) while loading,
+///   and falling back to the compact bundled font if offline.
+class HighResStaticEmoji extends StatefulWidget {
+  final String emoji;
+  final double size;
+  final TextStyle? fallbackStyle;
+
+  const HighResStaticEmoji({
+    Key? key,
+    required this.emoji,
+    required this.size,
+    this.fallbackStyle,
+  }) : super(key: key);
+
+  @override
+  State<HighResStaticEmoji> createState() => _HighResStaticEmojiState();
+}
+
+class _HighResStaticEmojiState extends State<HighResStaticEmoji> {
+  Uint8List? _bytes;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initOrLoadStatic();
+  }
+
+  @override
+  void didUpdateWidget(covariant HighResStaticEmoji oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.emoji.trim() != widget.emoji.trim()) {
+      _bytes = null;
+      _isLoading = false;
+      _initOrLoadStatic();
+    }
+  }
+
+  void _initOrLoadStatic() {
+    if (kIsWeb || EmojiUtils.isApplePlatform) {
+      return;
+    }
+    final cacheService = EmojiEffectCacheService.instance;
+    final syncBytes = cacheService.getCachedStaticEmojiSync(widget.emoji);
+    if (syncBytes != null) {
+      _bytes = syncBytes;
+      _isLoading = false;
+      return;
+    }
+    if (cacheService.isStaticEmojiMissing(widget.emoji)) {
+      _isLoading = false;
+      return;
+    }
+    _isLoading = true;
+    _loadStaticAsync();
+  }
+
+  Future<void> _loadStaticAsync() async {
+    final targetEmoji = widget.emoji.trim();
+    final bytes = await EmojiEffectCacheService.instance.getStaticEmojiBytes(widget.emoji);
+    if (!mounted || widget.emoji.trim() != targetEmoji) return;
+    setState(() {
+      _bytes = bytes;
+      _isLoading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb || EmojiUtils.isApplePlatform) {
+      return EmojiUtils.appleEmoji(
+        widget.emoji,
+        size: widget.size,
+        fallbackStyle: widget.fallbackStyle,
+      );
+    }
+
+    // In AppleColorEmoji.ttf, a 160x160 glyph bitmap corresponds to ppem=137 (160/137 ≈ 1.168).
+    final double boxSize = widget.size * 1.168;
+    final bytes = _bytes;
+
+    return SizedBox(
+      width: boxSize,
+      height: boxSize,
+      child: Center(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: bytes != null
+              ? Image.memory(
+                  bytes,
+                  key: const ValueKey('static_highres_loaded'),
+                  width: boxSize,
+                  height: boxSize,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.medium,
+                  gaplessPlayback: true,
+                )
+              : _isLoading
+                  ? _EmojiSilhouetteShimmer(
+                      key: const ValueKey('static_highres_shimmer'),
+                      emoji: widget.emoji,
+                      size: widget.size,
+                      fallbackStyle: widget.fallbackStyle,
+                    )
+                  : EmojiUtils.appleEmoji(
+                      widget.emoji,
+                      size: widget.size,
+                      fallbackStyle: widget.fallbackStyle,
+                    ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Renders the exact silhouette of [emoji] with a smooth moving diagonal shimmer/glare
-/// while the vector Lottie emoji is being downloaded from the server (Telegram-style).
+/// while the vector Lottie emoji or high-res static emoji is being downloaded from the server.
 class _EmojiSilhouetteShimmer extends StatefulWidget {
   final String emoji;
   final double size;

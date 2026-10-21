@@ -42,13 +42,15 @@ class AppUpdateInfo {
   factory AppUpdateInfo.fromJson(Map<String, dynamic> json) {
     final hasUpdateRaw = json['has_update'] as bool? ?? false;
     final forceUpdateRaw = json['force_update'] as bool? ?? false;
+    final rawDownloadUrl = json['download_url'] as String? ?? '';
+    final resolvedDownloadUrl = AppConfig.resolveMediaUrl(rawDownloadUrl) ?? rawDownloadUrl;
     return AppUpdateInfo(
       hasUpdate: hasUpdateRaw || forceUpdateRaw,
       latestVersion: json['latest_version'] as String? ?? '',
       latestBuild: (json['latest_build'] as num?)?.toInt() ?? 0,
       minSupportedBuild: (json['min_supported_build'] as num?)?.toInt() ?? 1,
       forceUpdate: forceUpdateRaw,
-      downloadUrl: json['download_url'] as String? ?? '',
+      downloadUrl: resolvedDownloadUrl,
       apkSizeBytes: (json['apk_size_bytes'] as num?)?.toInt() ?? 0,
       sha256: json['sha256'] as String? ?? '',
       releaseNotes: json['release_notes'] as String? ?? '',
@@ -345,9 +347,10 @@ class AppUpdateService {
         }
       }
 
+      final resolvedUrl = AppConfig.resolveMediaUrl(downloadUrl) ?? downloadUrl;
       String fileName = 'theaver_update.apk';
       try {
-        final uri = Uri.parse(downloadUrl);
+        final uri = Uri.parse(resolvedUrl);
         if (uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty) {
           fileName = uri.pathSegments.last;
         }
@@ -362,7 +365,7 @@ class AppUpdateService {
       }
 
       await _dio.download(
-        downloadUrl,
+        resolvedUrl,
         savePath,
         onReceiveProgress: onProgress,
         cancelToken: cancelToken,

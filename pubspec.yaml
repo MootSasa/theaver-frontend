@@ -110,7 +110,6 @@ flutter:
   assets:
     - assets/icons/
     - assets/l10n/
-    - assets/fonts/AppleColorEmoji.woff2
     - assets/fonts/AppleColorEmoji.ttf
     - assets/animations/
     - assets/wallpapers/christmas/

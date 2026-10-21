@@ -515,7 +515,7 @@ class EmojiElementBuilder extends MarkdownElementBuilder {
         element.textContent,
         size: fontSize * 1,
         fallbackStyle: preferredStyle?.copyWith(
-          fontFamily: 'AppleEmoji',
+          fontFamily: EmojiUtils.effectiveFontFamily,
         ),
       ),
     );
