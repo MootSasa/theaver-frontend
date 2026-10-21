@@ -868,15 +868,12 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
   @override
   Widget build(BuildContext context) {
     const double effectSize = _EmojiEffectWidget.effectSize;
-    final trimmed = widget.emoji.trim();
-    final bool isCentered = trimmed == '🍑' || trimmed == '1f351';
 
-    // In Telegram's 512x512 emoji effect compositions, directional emitters sit
+    // In Telegram's 512x512 emoji effect compositions, the emitter origin sits
     // at x ≈ 392 (+0.265 * effectSize from horizontal center) and y = 256 (center).
-    // Centered interaction effects like the peach slap are centered directly over the emoji.
-    final double hShift = isCentered
-        ? 0.0
-        : (widget.isMe ? -effectSize * 0.265 : effectSize * 0.265);
+    final double hShift = widget.isMe
+        ? -effectSize * 0.265
+        : effectSize * 0.265;
 
     return IgnorePointer(
       child: CompositedTransformFollower(
@@ -889,7 +886,7 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
           width: effectSize,
           height: effectSize,
           child: Transform.scale(
-            scaleX: isCentered ? 1.0 : (widget.isMe ? 1.0 : -1.0),
+            scaleX: widget.isMe ? 1.0 : -1.0,
             alignment: Alignment.center,
             child: Lottie(
               composition: widget.composition,
