@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/services/dice_cache_service.dart';
 import 'package:theaver/services/emoji_effect_cache_service.dart';
 import 'package:theaver/services/emoji_haptic_service.dart';
@@ -281,6 +282,36 @@ void main() {
       slotMachine.dispose();
 
       controller.dispose();
+    });
+
+    test('EmojiHapticService uniform haptics mode toggles and notifies listeners', () async {
+      SharedPreferences.setMockInitialValues({'emoji_haptic_uniform_tap': false});
+      final haptic = EmojiHapticService.instance;
+      await haptic.init();
+      expect(haptic.isUniformHaptics, isFalse);
+
+      bool notified = false;
+      void listener() {
+        notified = true;
+      }
+
+      haptic.addListener(listener);
+
+      await haptic.setUniformHaptics(true);
+      expect(haptic.isUniformHaptics, isTrue);
+      expect(notified, isTrue);
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('emoji_haptic_uniform_tap'), isTrue);
+
+      // Reset
+      notified = false;
+      await haptic.setUniformHaptics(false);
+      expect(haptic.isUniformHaptics, isFalse);
+      expect(notified, isTrue);
+      expect(prefs.getBool('emoji_haptic_uniform_tap'), isFalse);
+
+      haptic.removeListener(listener);
     });
   });
 }

@@ -456,6 +456,8 @@
   "settings_liquid_glass": "Liquid Glass дизайн",
   "settings_liquid_glass_desc": "Эффект жидкого стекла для элементов интерфейса",
   "settings_liquid_glass_unsupported": "Недоступно на этой платформе",
+  "settings_haptic_uniform_title": "Вибрация одной силы",
+  "settings_haptic_uniform_subtitle": "Использовать мягкий tap одинаковой силы для всех анимаций эмодзи и кубиков",
   "settings_theme": "Тема",
   "theme_light": "Светлая",
   "theme_dark": "Тёмная",
