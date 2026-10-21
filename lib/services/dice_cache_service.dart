@@ -7,6 +7,33 @@ import 'package:path_provider/path_provider.dart';
 import '../config/app_config.dart';
 import '../utils/emoji_utils.dart';
 
+/// Resolved asset indices for the 5 composited layers of the Telegram slot machine (1f3b0).
+class SlotReelIndices {
+  final int backgroundIndex; // 1 (idle) or 2 (win)
+  final int leverIndex; // 3 (front-pull)
+  final int leftSpinIndex; // 9 (left_spinload)
+  final int leftOutcomeIndex; // 4..8
+  final int centerSpinIndex; // 15 (middle_spinload)
+  final int centerOutcomeIndex; // 10..14
+  final int rightSpinIndex; // 21 (right_spinload)
+  final int rightOutcomeIndex; // 16..20
+  final bool isWin;
+  final bool is777;
+
+  const SlotReelIndices({
+    required this.backgroundIndex,
+    required this.leverIndex,
+    required this.leftSpinIndex,
+    required this.leftOutcomeIndex,
+    required this.centerSpinIndex,
+    required this.centerOutcomeIndex,
+    required this.rightSpinIndex,
+    required this.rightOutcomeIndex,
+    required this.isWin,
+    required this.is777,
+  });
+}
+
 /// Service managing client-side disk & RAM caching of interactive Telegram dice
 /// animations (🎲, 🎯, 🏀, ⚽, 🎳, 🎰) fetched on-demand from the backend server.
 class DiceCacheService {
@@ -39,18 +66,70 @@ class DiceCacheService {
     return dir;
   }
 
+  /// Calculates the asset indices for the 5 layers of the Telegram slot machine (🎰).
+  /// [value] is in the range 1..64.
+  static SlotReelIndices getSlotIndices(int value) {
+    final int raw = (value - 1).clamp(0, 63);
+    final int leftRaw = raw & 3;
+    final int centerRaw = (raw >> 2) & 3;
+    final int rightRaw = (raw >> 4) & 3;
+
+    final bool is777 = (leftRaw == 3 && centerRaw == 3 && rightRaw == 3);
+    final bool isWin = (leftRaw == centerRaw && centerRaw == rightRaw);
+
+    // Left reel: 0=BAR(6), 1=BERRIES(7), 2=LEMON(8), 3=SEVEN(4 if 777 else 5)
+    int leftOutcome;
+    switch (leftRaw) {
+      case 0: leftOutcome = 6; break;
+      case 1: leftOutcome = 7; break;
+      case 2: leftOutcome = 8; break;
+      case 3:
+      default:
+        leftOutcome = is777 ? 4 : 5;
+        break;
+    }
+
+    // Center reel: 0=BAR(12), 1=BERRIES(13), 2=LEMON(14), 3=SEVEN(10 if 777 else 11)
+    int centerOutcome;
+    switch (centerRaw) {
+      case 0: centerOutcome = 12; break;
+      case 1: centerOutcome = 13; break;
+      case 2: centerOutcome = 14; break;
+      case 3:
+      default:
+        centerOutcome = is777 ? 10 : 11;
+        break;
+    }
+
+    // Right reel: 0=BAR(18), 1=BERRIES(19), 2=LEMON(20), 3=SEVEN(16 if 777 else 17)
+    int rightOutcome;
+    switch (rightRaw) {
+      case 0: rightOutcome = 18; break;
+      case 1: rightOutcome = 19; break;
+      case 2: rightOutcome = 20; break;
+      case 3:
+      default:
+        rightOutcome = is777 ? 16 : 17;
+        break;
+    }
+
+    return SlotReelIndices(
+      backgroundIndex: isWin ? 2 : 1,
+      leverIndex: 3,
+      leftSpinIndex: 9,
+      leftOutcomeIndex: leftOutcome,
+      centerSpinIndex: 15,
+      centerOutcomeIndex: centerOutcome,
+      rightSpinIndex: 21,
+      rightOutcomeIndex: rightOutcome,
+      isWin: isWin,
+      is777: is777,
+    );
+  }
+
   /// Calculates the asset index (1 = rolling animation, 2..N = outcome animation)
   /// for a given dice emoji and outcome value.
   static int getOutcomeIndex(String emoji, int value) {
-    final cp = EmojiUtils.diceCodepoint(emoji) ?? emoji;
-    if (cp == '1f3b0' || emoji == '🎰') {
-      // 🎰 Slot machine: 20 outcome files (2..21)
-      if (value == 64) return 21; // 777 Jackpot
-      if (value == 1) return 2;   // BAR
-      if (value == 22) return 7;  // Berries
-      if (value == 43) return 13; // Lemons
-      return ((value - 1) % 20) + 2;
-    }
     // Standard dice: 🎲, 🎯, 🏀, ⚽, 🎳
     // value 1..N maps to index 2..(N+1)
     return value + 1;
@@ -142,6 +221,17 @@ class DiceCacheService {
 
   /// Silently prefetches rolling animation and outcome animation for a dice message.
   void prefetchDice(String emoji, int value) {
+    final cp = EmojiUtils.diceCodepoint(emoji);
+    if (cp == null) return;
+    if (cp == '1f3b0') {
+      final indices = getSlotIndices(value);
+      getDiceComposition(cp, indices.backgroundIndex);
+      getDiceComposition(cp, indices.leverIndex);
+      getDiceComposition(cp, indices.leftOutcomeIndex);
+      getDiceComposition(cp, indices.centerOutcomeIndex);
+      getDiceComposition(cp, indices.rightOutcomeIndex);
+      return;
+    }
     final outcomeIdx = getOutcomeIndex(emoji, value);
     getDiceComposition(emoji, 1); // roll start
     getDiceComposition(emoji, outcomeIdx); // outcome

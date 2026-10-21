@@ -1,8 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:theaver/services/dice_cache_service.dart';
 import 'package:theaver/services/emoji_effect_cache_service.dart';
 import 'package:theaver/services/emoji_haptic_service.dart';
 import 'package:theaver/utils/emoji_utils.dart';
+import 'package:theaver/widgets/message/dice_message_widget.dart';
+import 'package:theaver/widgets/message/slot_machine_widget.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -45,11 +48,52 @@ void main() {
       expect(DiceCacheService.getOutcomeIndex('🎳', 1), equals(2));
       expect(DiceCacheService.getOutcomeIndex('🎳', 6), equals(7));
 
-      // 🎰 Slot Machine special jackpots & outcomes
-      expect(DiceCacheService.getOutcomeIndex('🎰', 64), equals(21)); // 777 Jackpot
-      expect(DiceCacheService.getOutcomeIndex('🎰', 1), equals(2));   // BAR
-      expect(DiceCacheService.getOutcomeIndex('🎰', 22), equals(7));  // Berries
-      expect(DiceCacheService.getOutcomeIndex('🎰', 43), equals(13)); // Lemons
+      // 🎰 Slot Machine 5-layer composite mapping
+      // Value 1: BAR BAR BAR (Jackpot)
+      final slot1 = DiceCacheService.getSlotIndices(1);
+      expect(slot1.isWin, isTrue);
+      expect(slot1.is777, isFalse);
+      expect(slot1.backgroundIndex, equals(2)); // drumsBG+light_win
+      expect(slot1.leverIndex, equals(3));
+      expect(slot1.leftOutcomeIndex, equals(6));   // left_bar
+      expect(slot1.centerOutcomeIndex, equals(12)); // middle_bar
+      expect(slot1.rightOutcomeIndex, equals(18));  // right_bar
+
+      // Value 22: BERRIES BERRIES BERRIES (Jackpot)
+      final slot22 = DiceCacheService.getSlotIndices(22);
+      expect(slot22.isWin, isTrue);
+      expect(slot22.is777, isFalse);
+      expect(slot22.backgroundIndex, equals(2));
+      expect(slot22.leftOutcomeIndex, equals(7));   // left_berries
+      expect(slot22.centerOutcomeIndex, equals(13)); // middle_berries
+      expect(slot22.rightOutcomeIndex, equals(19));  // right_berries
+
+      // Value 43: LEMON LEMON LEMON (Jackpot)
+      final slot43 = DiceCacheService.getSlotIndices(43);
+      expect(slot43.isWin, isTrue);
+      expect(slot43.is777, isFalse);
+      expect(slot43.backgroundIndex, equals(2));
+      expect(slot43.leftOutcomeIndex, equals(8));   // left_lemon
+      expect(slot43.centerOutcomeIndex, equals(14)); // middle_lemon
+      expect(slot43.rightOutcomeIndex, equals(20));  // right_lemon
+
+      // Value 64: 777 Jackpot
+      final slot64 = DiceCacheService.getSlotIndices(64);
+      expect(slot64.isWin, isTrue);
+      expect(slot64.is777, isTrue);
+      expect(slot64.backgroundIndex, equals(2));
+      expect(slot64.leftOutcomeIndex, equals(4));   // left_7_win
+      expect(slot64.centerOutcomeIndex, equals(10)); // middle_7_win
+      expect(slot64.rightOutcomeIndex, equals(16));  // right_7_win
+
+      // Non-win (Value 2: left Berries, mid BAR, right BAR)
+      final slot2 = DiceCacheService.getSlotIndices(2);
+      expect(slot2.isWin, isFalse);
+      expect(slot2.is777, isFalse);
+      expect(slot2.backgroundIndex, equals(1)); // drumsBG+light_idle
+      expect(slot2.leftOutcomeIndex, equals(7));   // left_berries
+      expect(slot2.centerOutcomeIndex, equals(12)); // middle_bar
+      expect(slot2.rightOutcomeIndex, equals(18));  // right_bar
     });
 
     test('EmojiHapticService handles all interactive emojis and cancels safely', () {
@@ -93,6 +137,39 @@ void main() {
       expect(EmojiEffectCacheService.instance.hasAnimatedEmoji('1f351'), isTrue);
       expect(EmojiEffectCacheService.instance.hasEffect('🍑'), isTrue);
       expect(EmojiEffectCacheService.instance.hasEffect('1f351'), isTrue);
+    });
+
+    testWidgets('DiceMessageWidget renders with autoPlay=false without crashing', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: DiceMessageWidget(
+              emoji: '🎲',
+              value: 6,
+              autoPlay: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(DiceMessageWidget), findsOneWidget);
+    });
+
+    testWidgets('SlotMachineWidget renders composite layers without crashing', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: DiceMessageWidget(
+              emoji: '🎰',
+              value: 64, // 777 Jackpot
+              autoPlay: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(DiceMessageWidget), findsOneWidget);
+      expect(find.byType(SlotMachineWidget), findsOneWidget);
     });
   });
 }

@@ -3,6 +3,7 @@ import 'package:lottie/lottie.dart';
 import '../../services/dice_cache_service.dart';
 import '../../services/emoji_haptic_service.dart';
 import '../../utils/emoji_utils.dart';
+import 'slot_machine_widget.dart';
 
 /// Interactive Telegram dice game widget (🎲, 🎯, 🏀, ⚽, 🎳, 🎰).
 /// Plays rolling animation followed by outcome animation, with authentic
@@ -39,6 +40,9 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this);
+    if (!widget.autoPlay) {
+      _controller.value = 1.0;
+    }
     _loadCompositions();
   }
 
@@ -58,19 +62,37 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
 
   Future<void> _loadCompositions() async {
     final emoji = widget.emoji;
-    final val = widget.value;
+    final val = widget.value ?? 1;
 
-    // Prefetch both roll and outcome
-    if (val != null) {
-      DiceCacheService.instance.prefetchDice(emoji, val);
+    // Slots (🎰) are handled by dedicated composite SlotMachineWidget
+    if (EmojiUtils.diceCodepoint(emoji) == '1f3b0' || emoji == '🎰') {
+      return;
     }
 
+    final outcomeIdx = DiceCacheService.getOutcomeIndex(emoji, val);
+
+    // If historical message (!autoPlay), immediately load and display the outcome at final frame
+    if (!widget.autoPlay) {
+      final outcomeComp = await DiceCacheService.instance.getDiceComposition(emoji, outcomeIdx);
+      if (!mounted) return;
+      setState(() {
+        _outcomeComposition = outcomeComp;
+        _isRolling = false;
+      });
+      if (outcomeComp != null) {
+        _controller.duration = outcomeComp.duration;
+        _controller.value = 1.0; // Frozen on final outcome frame!
+      }
+      // Prefetch roll composition in background for replay on tap
+      DiceCacheService.instance.getDiceComposition(emoji, 1).then((comp) {
+        if (mounted) _rollComposition = comp;
+      });
+      return;
+    }
+
+    // Newly sent message with autoPlay: load roll first, then play sequence
     final rollComp = await DiceCacheService.instance.getDiceComposition(emoji, 1);
-    LottieComposition? outcomeComp;
-    if (val != null) {
-      final outcomeIdx = DiceCacheService.getOutcomeIndex(emoji, val);
-      outcomeComp = await DiceCacheService.instance.getDiceComposition(emoji, outcomeIdx);
-    }
+    final outcomeComp = await DiceCacheService.instance.getDiceComposition(emoji, outcomeIdx);
 
     if (!mounted) return;
 
@@ -79,13 +101,9 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
       _outcomeComposition = outcomeComp;
     });
 
-    if (widget.autoPlay && !_hasPlayedOnce && val != null) {
+    if (!_hasPlayedOnce) {
       _hasPlayedOnce = true;
       _playSequence();
-    } else if (outcomeComp != null && !_isRolling) {
-      // Show final frame of outcome
-      _controller.duration = outcomeComp.duration;
-      _controller.value = 1.0;
     }
   }
 
@@ -96,9 +114,17 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
     // Trigger haptic for roll start & landing
     EmojiHapticService.instance.playDiceHaptic(widget.emoji, val);
 
-    if (_rollComposition != null) {
-      setState(() => _isRolling = true);
-      _controller.duration = _rollComposition!.duration;
+    final rollComp = _rollComposition ??
+        await DiceCacheService.instance.getDiceComposition(widget.emoji, 1);
+
+    if (!mounted) return;
+
+    if (rollComp != null) {
+      setState(() {
+        _rollComposition = rollComp;
+        _isRolling = true;
+      });
+      _controller.duration = rollComp.duration;
       _controller.reset();
       await _controller.forward();
     }
@@ -127,7 +153,19 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
 
   @override
   Widget build(BuildContext context) {
-    final currentComp = _isRolling ? _rollComposition : (_outcomeComposition ?? _rollComposition);
+    // 1. Delegate 🎰 to composite 5-layer SlotMachineWidget
+    if (EmojiUtils.diceCodepoint(widget.emoji) == '1f3b0' || widget.emoji == '🎰') {
+      return SlotMachineWidget(
+        value: widget.value ?? 1,
+        size: widget.size,
+        autoPlay: widget.autoPlay,
+      );
+    }
+
+    // 2. Standard dice (🎲, 🎯, 🏀, ⚽, 🎳)
+    final currentComp = _isRolling
+        ? _rollComposition
+        : (_outcomeComposition ?? (widget.autoPlay ? _rollComposition : null));
 
     Widget content;
     if (currentComp != null) {
@@ -159,3 +197,4 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
     );
   }
 }
+
