@@ -256,10 +256,13 @@ class EmojiHapticService extends ChangeNotifier {
 
       case '🥂':
       case '1f942':
-        actions[8] = () => _pulse(HapticType.heavy); // Glasses collide and clink
-        actions[20] = () => _pulse(HapticType.tap); // Glass resonance
-        actions[68] = () => _pulse(HapticType.impact); // Second cheer clink
-        actions[82] = () => _pulse(HapticType.tap); // Settle
+        // Glasses pull apart in anticipation during f0-f60 (no strike at f8).
+        // Middle cheer clink: glasses collide firmly at frame 68
+        actions[68] = () => _pulse(HapticType.heavy);
+        actions[74] = () => _pulse(HapticType.tap);
+        // Final cheer clink: glasses collide for the toast at frame 158
+        actions[158] = () => _pulse(HapticType.heavy);
+        actions[164] = () => _pulse(HapticType.tap);
         break;
 
       case '🍆':
@@ -394,6 +397,7 @@ class EmojiHapticService extends ChangeNotifier {
       // 1f3c0_1: basketball bouncing on floor: f0 (slam), f50 (floor bounce), f100 (floor bounce)
       actions[0] = () => _pulse(HapticType.impact);
       actions[50] = () => _pulse(HapticType.heavy);
+      actions[100] = () => _pulse(HapticType.impact);
     } else if (trimmed == '⚽' || trimmed == '26bd') {
       // 26bd_1: football bouncing on floor: f0 (slam), f60 (floor bounce)
       actions[0] = () => _pulse(HapticType.impact);
@@ -429,39 +433,51 @@ class EmojiHapticService extends ChangeNotifier {
 
     // 1. 🏀 Basketball
     if (trimmed == '🏀' || trimmed == '1f3c0') {
-      // In all basketball outcomes (1f3c0_2..6), the ball starts on the floor and is
-      // bounced/dribbled firmly onto the court at frame 40 before shooting!
-      actions[40] = () => _pulse(HapticType.heavy);
+      // In all basketball outcomes (1f3c0_2..6), the ball starts on the floor (f0),
+      // rises up, drops back to the floor for the 2nd bounce (f40), and is launched into the shot!
+      actions[0] = () => _pulse(HapticType.impact); // 1st ground bounce
+      actions[40] = () => _pulse(HapticType.heavy); // 2nd ground bounce & shot launch
 
       if (value == 1) {
-        // Miss / airball
-        actions[100] = () => _pulse(HapticType.impact);
-        actions[120] = () => _pulse(HapticType.tap);
-      } else if (value >= 2 && value <= 3) {
-        // Rim hit and bounce out + floor bounces
-        actions[75] = () => _pulse(HapticType.impact); // Rim strike
-        actions[102] = () => _pulse(HapticType.selection); // Rim rattle
-        actions[120] = () => _pulse(HapticType.heavy); // 1st floor bounce
-        actions[132] = () => _pulse(HapticType.impact); // 2nd floor bounce
-        actions[156] = () => _pulse(HapticType.tap); // 3rd floor bounce
+        // 1f3c0_2: Rim graze / airball miss
+        actions[115] = () => _pulse(HapticType.heavy); // Rim graze strike
+        actions[121] = () => _pulse(HapticType.impact); // Rebound off rim
+      } else if (value == 2) {
+        // 1f3c0_3: Rim rattle and bounce out
+        actions[100] = () => _pulse(HapticType.heavy); // Rim strike
+        actions[104] = () => _pulse(HapticType.impact); // Rim bounce
+        actions[111] = () => _pulse(HapticType.tap); // Opposite rim rattle
+        actions[125] = () => _pulse(HapticType.selection); // Rim roll out
+      } else if (value == 3) {
+        // 1f3c0_4: Backboard bank and rim roll out
+        actions[114] = () => _pulse(HapticType.heavy); // Backboard strike
+        actions[119] = () => _pulse(HapticType.impact); // Rim bounce
+        actions[129] = () => _pulse(HapticType.tap); // Rim roll out
+      } else if (value == 4) {
+        // 1f3c0_5: Rim rattle, bank, and IN (Score!)
+        actions[100] = () => _pulse(HapticType.heavy); // Rim strike
+        actions[104] = () => _pulse(HapticType.impact); // Rim bounce
+        actions[111] = () => _pulse(HapticType.tap); // Rim rattle
+        actions[125] = () => _pulse(HapticType.tap); // Rim settle
+        actions[133] = () => _pulse(HapticType.heavy); // Swish into net!
+        actions[167] = () => _pulse(HapticType.impact); // Net exit drop
       } else {
-        // Scored basket (4..5): rim entry + floor bounces
-        actions[75] = () => _pulse(HapticType.impact); // Rim entry
-        actions[119] = () => _pulse(HapticType.heavy); // Net swish + 1st floor bounce
-        actions[131] = () => _pulse(HapticType.impact); // 2nd floor bounce
-        actions[156] = () => _pulse(HapticType.tap); // 3rd floor bounce
+        // 1f3c0_6 (value 5): Nothing but net! Clean SWISH (Score!)
+        actions[104] = () => _pulse(HapticType.heavy); // Clean swish into net
+        actions[117] = () => _pulse(HapticType.impact); // Net stretch climax
+        actions[128] = () => _pulse(HapticType.tap); // Net recoil
       }
     }
     // 2. ⚽ Football
     else if (trimmed == '⚽' || trimmed == '26bd') {
-      // In all football outcomes (26bd_2..6), the foot strikes the ball at the turf at frame 2-5
+      // In all football outcomes (26bd_2..6), the foot strikes the ball at the turf at frame 2
       actions[2] = () => _pulse(HapticType.heavy);
 
       if (value == 1) {
         actions[45] = () => _pulse(HapticType.impact);
         actions[65] = () => _pulse(HapticType.tap);
       } else if (value == 2) {
-        actions[44] = () => _pulse(HapticType.heavy); // Crossbar clang
+        // High miss over the crossbar (flies into stands, no post hit)
         actions[120] = () => _pulse(HapticType.impact);
         actions[141] = () => _pulse(HapticType.tap);
       } else {
@@ -656,10 +672,12 @@ class EmojiHapticService extends ChangeNotifier {
 
       case '🥂':
       case '1f942':
-        _schedule(133, () => _pulse(HapticType.heavy)); // Glasses clink
-        _schedule(333, () => _pulse(HapticType.tap)); // Resonance
-        _schedule(1133, () => _pulse(HapticType.impact)); // Cheer clink
-        _schedule(1367, () => _pulse(HapticType.tap)); // Settle
+        // Middle cheer clink: glasses collide firmly at frame 68 (1133ms)
+        _schedule(1133, () => _pulse(HapticType.heavy));
+        _schedule(1233, () => _pulse(HapticType.tap));
+        // Final cheer clink: glasses collide for the toast at frame 158 (2633ms)
+        _schedule(2633, () => _pulse(HapticType.heavy));
+        _schedule(2733, () => _pulse(HapticType.tap));
         break;
 
       case '🍆':
@@ -776,22 +794,32 @@ class EmojiHapticService extends ChangeNotifier {
 
     // 🏀 Basketball (1..5)
     if (trimmed == '🏀' || trimmed == '1f3c0') {
-      // Frame 40 dribble slam on floor
-      _schedule(667, () => _pulse(HapticType.heavy));
+      _pulse(HapticType.impact); // Frame 0: 1st ground bounce
+      _schedule(667, () => _pulse(HapticType.heavy)); // Frame 40: 2nd ground bounce & shot launch
+
       if (value == 1) {
-        _schedule(1660, () => _pulse(HapticType.impact));
-        _schedule(2000, () => _pulse(HapticType.tap));
-      } else if (value >= 2 && value <= 3) {
-        _schedule(1250, () => _pulse(HapticType.impact)); // Rim
-        _schedule(1700, () => _pulse(HapticType.selection));
-        _schedule(2000, () => _pulse(HapticType.heavy)); // Floor 1
-        _schedule(2200, () => _pulse(HapticType.impact)); // Floor 2
-        _schedule(2600, () => _pulse(HapticType.tap)); // Floor 3
+        _schedule(1917, () => _pulse(HapticType.heavy)); // f115: rim graze
+        _schedule(2017, () => _pulse(HapticType.impact)); // f121: rebound
+      } else if (value == 2) {
+        _schedule(1667, () => _pulse(HapticType.heavy)); // f100: rim hit
+        _schedule(1733, () => _pulse(HapticType.impact)); // f104: bounce
+        _schedule(1850, () => _pulse(HapticType.tap)); // f111: rattle
+        _schedule(2083, () => _pulse(HapticType.selection)); // f125: roll out
+      } else if (value == 3) {
+        _schedule(1900, () => _pulse(HapticType.heavy)); // f114: backboard strike
+        _schedule(1983, () => _pulse(HapticType.impact)); // f119: rim bounce
+        _schedule(2150, () => _pulse(HapticType.tap)); // f129: roll out
+      } else if (value == 4) {
+        _schedule(1667, () => _pulse(HapticType.heavy)); // f100: rim hit
+        _schedule(1733, () => _pulse(HapticType.impact)); // f104: bounce
+        _schedule(1850, () => _pulse(HapticType.tap)); // f111: rattle
+        _schedule(2083, () => _pulse(HapticType.tap)); // f125: settle
+        _schedule(2217, () => _pulse(HapticType.heavy)); // f133: swish!
+        _schedule(2783, () => _pulse(HapticType.impact)); // f167: net exit
       } else {
-        _schedule(1250, () => _pulse(HapticType.impact)); // Rim entry
-        _schedule(1980, () => _pulse(HapticType.heavy)); // Floor 1
-        _schedule(2180, () => _pulse(HapticType.impact)); // Floor 2
-        _schedule(2600, () => _pulse(HapticType.tap)); // Floor 3
+        _schedule(1733, () => _pulse(HapticType.heavy)); // f104: clean swish
+        _schedule(1950, () => _pulse(HapticType.impact)); // f117: stretch climax
+        _schedule(2133, () => _pulse(HapticType.tap)); // f128: recoil
       }
       return;
     }
@@ -804,7 +832,7 @@ class EmojiHapticService extends ChangeNotifier {
         _schedule(750, () => _pulse(HapticType.impact));
         _schedule(1080, () => _pulse(HapticType.tap));
       } else if (value == 2) {
-        _schedule(730, () => _pulse(HapticType.heavy));
+        // High miss over the crossbar: turf kick, then stands/ground landing (no post hit)
         _schedule(2000, () => _pulse(HapticType.impact));
         _schedule(2350, () => _pulse(HapticType.tap));
       } else {
