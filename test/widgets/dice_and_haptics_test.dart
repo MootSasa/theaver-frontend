@@ -248,21 +248,51 @@ void main() {
       expect(bombBinding.frameActions.keys, containsAll([0, 50, 75, 98]));
       bombBinding.dispose();
 
+      final champagneBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '🍾');
+      expect(champagneBinding.frameActions.keys, containsAll([3, 18, 71, 91, 123]));
+      champagneBinding.dispose();
+
+      final cheersBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '🥂');
+      expect(cheersBinding.frameActions.keys, containsAll([8, 20, 68, 82]));
+      cheersBinding.dispose();
+
+      final balloonBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '🎈');
+      expect(balloonBinding.frameActions.keys, containsAll([57, 65, 74, 82, 91, 97, 107, 116, 127, 144]));
+      balloonBinding.dispose();
+
+      final fireworkBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '🎆');
+      expect(fireworkBinding.frameActions.keys, containsAll([31, 36, 49, 54, 65, 76, 87, 125, 134]));
+      fireworkBinding.dispose();
+
       controller.dispose();
     });
 
-    test('attachDiceOutcome registers keyframes for sports and games', () {
+    test('attachDiceRoll and attachDiceOutcome register calibrated keyframes for sports, dice and slots', () {
       final controller = AnimationController(
         vsync: const TestVSync(),
         duration: const Duration(seconds: 3),
       );
 
+      // Roll phase ground bounces
+      final bballRoll = EmojiHapticService.instance.attachDiceRoll(controller, '🏀');
+      expect(bballRoll.frameActions.keys, containsAll([0, 50]));
+      bballRoll.dispose();
+
+      final soccerRoll = EmojiHapticService.instance.attachDiceRoll(controller, '⚽');
+      expect(soccerRoll.frameActions.keys, containsAll([0, 60]));
+      soccerRoll.dispose();
+
+      final diceRoll = EmojiHapticService.instance.attachDiceRoll(controller, '🎲');
+      expect(diceRoll.frameActions.keys, containsAll([0, 60]));
+      diceRoll.dispose();
+
+      // Outcome phase
       final bballScore = EmojiHapticService.instance.attachDiceOutcome(controller, '🏀', 4);
-      expect(bballScore.frameActions.keys, containsAll([75, 119, 131, 156]));
+      expect(bballScore.frameActions.keys, containsAll([40, 75, 119, 131, 156]));
       bballScore.dispose();
 
       final bballRim = EmojiHapticService.instance.attachDiceOutcome(controller, '🏀', 2);
-      expect(bballRim.frameActions.keys, containsAll([75, 102, 120, 132, 156]));
+      expect(bballRim.frameActions.keys, containsAll([40, 75, 102, 120, 132, 156]));
       bballRim.dispose();
 
       final soccerGoal = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 4);
@@ -274,11 +304,11 @@ void main() {
       bowlingStrike.dispose();
 
       final diceSix = EmojiHapticService.instance.attachDiceOutcome(controller, '🎲', 6);
-      expect(diceSix.frameActions.keys, containsAll([0, 30, 60, 80, 89]));
+      expect(diceSix.frameActions.keys, containsAll([0, 60, 100, 130, 150, 155]));
       diceSix.dispose();
 
       final slotMachine = EmojiHapticService.instance.attachSlotMachine(controller, 64);
-      expect(slotMachine.frameActions.keys, containsAll([0, 65, 83, 101, 111]));
+      expect(slotMachine.frameActions.keys, containsAll([0, 32, 58, 84, 98]));
       slotMachine.dispose();
 
       controller.dispose();

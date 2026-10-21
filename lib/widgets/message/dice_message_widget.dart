@@ -3,7 +3,6 @@ import 'package:lottie/lottie.dart';
 import '../../services/dice_cache_service.dart';
 import '../../services/emoji_haptic_service.dart';
 import '../../utils/emoji_utils.dart';
-import '../../utils/haptic_utils.dart';
 import 'slot_machine_widget.dart';
 
 /// Interactive Telegram dice game widget (🎲, 🎯, 🏀, ⚽, 🎳, 🎰).
@@ -126,8 +125,12 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
         _isRolling = true;
       });
       _hapticBinding?.dispose();
-      _hapticBinding = null;
-      HapticUtils.selection(); // Subtle initial throw / release tap
+      final rollFrames = (rollComp.endFrame - rollComp.startFrame).round();
+      _hapticBinding = EmojiHapticService.instance.attachDiceRoll(
+        _controller,
+        widget.emoji,
+        totalFrames: rollFrames > 0 ? rollFrames : 100,
+      );
       _controller.duration = rollComp.duration;
       _controller.reset();
       await _controller.forward();
