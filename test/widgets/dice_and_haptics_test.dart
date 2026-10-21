@@ -365,5 +365,50 @@ void main() {
 
       haptic.removeListener(listener);
     });
+
+    testWidgets('EmojiHapticService attaches and plays all 13 newly added expressive emojis', (tester) async {
+      final controller = AnimationController(vsync: const TestVSync(), duration: const Duration(seconds: 3));
+      final haptic = EmojiHapticService.instance;
+
+      final testCases = <String, List<int>>{
+        '🧨': [0, 73, 80, 85, 90, 96, 107],
+        '1f9e8': [0, 73, 80, 85, 90, 96, 107],
+        '🤯': [71, 84, 98, 113, 122, 137],
+        '1f92f': [71, 84, 98, 113, 122, 137],
+        '💥': [0, 10, 34, 104],
+        '1f4a5': [0, 10, 34, 104],
+        '👊': [0, 69, 91, 97, 105],
+        '1f44a': [0, 69, 91, 97, 105],
+        '🚀': [0, 50, 65, 80, 86, 118],
+        '1f680': [0, 50, 65, 80, 86, 118],
+        '💔': [0, 26, 36, 98, 108],
+        '1f494': [0, 26, 36, 98, 108],
+        '💯': [0, 50, 63, 80],
+        '1f4af': [0, 50, 63, 80],
+        '🥳': [0, 34, 100],
+        '1f973': [0, 34, 100],
+        '🪙': [0, 26, 112, 124],
+        '1fa99': [0, 26, 112, 124],
+        '👻': [0, 71, 91],
+        '1f47b': [0, 71, 91],
+        '😱': [0, 32, 42, 53, 82],
+        '1f631': [0, 32, 42, 53, 82],
+        '🎩': [0, 12, 86, 98],
+        '1f3a9': [0, 12, 86, 98],
+        '🗿': [0, 24, 78],
+        '1f5ff': [0, 24, 78],
+      };
+
+      for (final entry in testCases.entries) {
+        final binding = haptic.attachInteractiveEmoji(controller, entry.key, totalFrames: 180);
+        expect(binding.frameActions.keys, containsAll(entry.value), reason: 'Failed for ${entry.key}');
+        binding.dispose();
+
+        expect(() => haptic.playInteractiveEmojiHaptic(entry.key), returnsNormally);
+        haptic.cancelAll();
+      }
+
+      controller.dispose();
+    });
   });
 }

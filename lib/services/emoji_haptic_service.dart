@@ -373,6 +373,117 @@ class EmojiHapticService extends ChangeNotifier {
         actions[134] = () => _pulseClimax(); // Rocket 8 climax explosion
         break;
 
+      case '🧨':
+      case '1f9e8':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[73] = () => _pulse(HapticType.selection);
+        actions[80] = () => _pulse(HapticType.tap);
+        actions[85] = () => _pulse(HapticType.impact);
+        actions[90] = () => _pulseClimax(withSecondaryEcho: true); // Massive detonation
+        actions[96] = () => _pulse(HapticType.impact); // Blast shockwave
+        actions[107] = () => _pulse(HapticType.tap); // Smoke settle
+        break;
+
+      case '🤯':
+      case '1f92f':
+        actions[71] = () => _pulse(HapticType.selection);
+        actions[84] = () => _pulse(HapticType.tap);
+        actions[98] = () => _pulse(HapticType.impact);
+        actions[113] = () => _pulseClimax(); // Brain eruption mushroom cloud
+        actions[122] = () => _pulse(HapticType.impact); // Flying pieces
+        actions[137] = () => _pulse(HapticType.tap); // Smoke dissipate
+        break;
+
+      case '💥':
+      case '1f4a5':
+        actions[0] = () => _pulseClimax(); // Flash explosion blast
+        actions[10] = () => _pulse(HapticType.impact); // Circular shockwave expansion
+        actions[34] = () => _pulse(HapticType.tap); // Dissipation
+        actions[104] = () => _pulse(HapticType.tap); // Residual tremor
+        break;
+
+      case '👊':
+      case '1f44a':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[69] = () => _pulse(HapticType.tap); // Windup back
+        actions[91] = () => _pulseClimax(); // Fist punch slam right into screen glass
+        actions[97] = () => _pulse(HapticType.impact);
+        actions[105] = () => _pulse(HapticType.selection); // Recoil
+        break;
+
+      case '🚀':
+      case '1f680':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[50] = () => _pulse(HapticType.tap);
+        actions[65] = () => _pulse(HapticType.tap);
+        actions[80] = () => _pulse(HapticType.impact); // Engine rev up
+        actions[86] = () => _pulseClimax(); // Rocket liftoff thrust
+        actions[118] = () => _pulse(HapticType.impact); // Trail flame
+        break;
+
+      case '💔':
+      case '1f494':
+        actions[0] = () => _pulse(HapticType.tap); // Heart beat
+        actions[26] = () => _pulse(HapticType.heavy); // Crack splits in two
+        actions[36] = () => _pulse(HapticType.impact); // Halves separation shudder
+        actions[98] = () => _pulse(HapticType.impact); // Halves slam and re-seal
+        actions[108] = () => _pulse(HapticType.tap); // Beat of healed heart
+        break;
+
+      case '💯':
+      case '1f4af':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[50] = () => _pulse(HapticType.impact); // Underline 1
+        actions[63] = () => _pulse(HapticType.heavy); // Stamp underline 2
+        actions[80] = () => _pulse(HapticType.tap); // Ink splatter
+        break;
+
+      case '🥳':
+      case '1f973':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[34] = () => _pulse(HapticType.impact); // Horn blower extends
+        actions[100] = () => _pulseClimax(); // Confetti explosion blast
+        break;
+
+      case '🪙':
+      case '1fa99':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[26] = () => _pulse(HapticType.tap); // Coin toss flick
+        actions[112] = () => _pulse(HapticType.heavy); // Metallic coin slap catch
+        actions[124] = () => _pulse(HapticType.tap); // Palm settle
+        break;
+
+      case '👻':
+      case '1f47b':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[71] = () => _pulse(HapticType.heavy); // Sudden "BOO!" scare jump
+        actions[91] = () => _pulse(HapticType.tap); // Wobble float
+        break;
+
+      case '😱':
+      case '1f631':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[32] = () => _pulse(HapticType.heavy); // Slap hands on cheeks
+        actions[42] = () => _pulse(HapticType.tap); // Tremble
+        actions[53] = () => _pulse(HapticType.tap); // Tremble
+        actions[82] = () => _pulse(HapticType.impact); // Gasp of horror
+        break;
+
+      case '🎩':
+      case '1f3a9':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[12] = () => _pulse(HapticType.tap); // Wand flourish
+        actions[86] = () => _pulse(HapticType.heavy); // Wand taps top hat brim
+        actions[98] = () => _pulse(HapticType.impact); // Rabbit pops out
+        break;
+
+      case '🗿':
+      case '1f5ff':
+        actions[0] = () => _pulse(HapticType.selection);
+        actions[24] = () => _pulse(HapticType.impact); // Stone monolith shifts
+        actions[78] = () => _pulse(HapticType.heavy); // Solid stone turn lock
+        break;
+
       default:
         break;
     }
@@ -773,6 +884,117 @@ class EmojiHapticService extends ChangeNotifier {
         _schedule(750, () => _pulse(HapticType.tap));
         break;
 
+      case '🧨':
+      case '1f9e8':
+        _pulse(HapticType.selection);
+        _schedule(1217, () => _pulse(HapticType.selection));
+        _schedule(1333, () => _pulse(HapticType.tap));
+        _schedule(1417, () => _pulse(HapticType.impact));
+        _schedule(1500, () => _pulseClimax(withSecondaryEcho: true)); // Massive detonation
+        _schedule(1600, () => _pulse(HapticType.impact)); // Blast shockwave
+        _schedule(1783, () => _pulse(HapticType.tap)); // Smoke settle
+        break;
+
+      case '🤯':
+      case '1f92f':
+        _schedule(1183, () => _pulse(HapticType.selection));
+        _schedule(1400, () => _pulse(HapticType.tap));
+        _schedule(1633, () => _pulse(HapticType.impact));
+        _schedule(1883, () => _pulseClimax()); // Brain eruption mushroom cloud
+        _schedule(2033, () => _pulse(HapticType.impact)); // Flying pieces
+        _schedule(2283, () => _pulse(HapticType.tap)); // Smoke dissipate
+        break;
+
+      case '💥':
+      case '1f4a5':
+        _pulseClimax(); // Flash explosion blast
+        _schedule(167, () => _pulse(HapticType.impact)); // Circular shockwave expansion
+        _schedule(567, () => _pulse(HapticType.tap)); // Dissipation
+        _schedule(1733, () => _pulse(HapticType.tap)); // Residual tremor
+        break;
+
+      case '👊':
+      case '1f44a':
+        _pulse(HapticType.selection);
+        _schedule(1150, () => _pulse(HapticType.tap)); // Windup back
+        _schedule(1517, () => _pulseClimax()); // Fist punch slam right into screen glass
+        _schedule(1617, () => _pulse(HapticType.impact));
+        _schedule(1750, () => _pulse(HapticType.selection)); // Recoil
+        break;
+
+      case '🚀':
+      case '1f680':
+        _pulse(HapticType.selection);
+        _schedule(833, () => _pulse(HapticType.tap));
+        _schedule(1083, () => _pulse(HapticType.tap));
+        _schedule(1333, () => _pulse(HapticType.impact)); // Engine rev up
+        _schedule(1433, () => _pulseClimax()); // Rocket liftoff thrust
+        _schedule(1967, () => _pulse(HapticType.impact)); // Trail flame
+        break;
+
+      case '💔':
+      case '1f494':
+        _pulse(HapticType.tap); // Heart beat
+        _schedule(433, () => _pulse(HapticType.heavy)); // Crack splits in two
+        _schedule(600, () => _pulse(HapticType.impact)); // Halves separation shudder
+        _schedule(1633, () => _pulse(HapticType.impact)); // Halves slam and re-seal
+        _schedule(1800, () => _pulse(HapticType.tap)); // Beat of healed heart
+        break;
+
+      case '💯':
+      case '1f4af':
+        _pulse(HapticType.selection);
+        _schedule(833, () => _pulse(HapticType.impact)); // Underline 1
+        _schedule(1050, () => _pulse(HapticType.heavy)); // Stamp underline 2
+        _schedule(1333, () => _pulse(HapticType.tap)); // Ink splatter
+        break;
+
+      case '🥳':
+      case '1f973':
+        _pulse(HapticType.selection);
+        _schedule(567, () => _pulse(HapticType.impact)); // Horn blower extends
+        _schedule(1667, () => _pulseClimax()); // Confetti explosion blast
+        break;
+
+      case '🪙':
+      case '1fa99':
+        _pulse(HapticType.selection);
+        _schedule(433, () => _pulse(HapticType.tap)); // Coin toss flick
+        _schedule(1867, () => _pulse(HapticType.heavy)); // Metallic coin slap catch
+        _schedule(2067, () => _pulse(HapticType.tap)); // Palm settle
+        break;
+
+      case '👻':
+      case '1f47b':
+        _pulse(HapticType.selection);
+        _schedule(1183, () => _pulse(HapticType.heavy)); // Sudden "BOO!" scare jump
+        _schedule(1517, () => _pulse(HapticType.tap)); // Wobble float
+        break;
+
+      case '😱':
+      case '1f631':
+        _pulse(HapticType.selection);
+        _schedule(533, () => _pulse(HapticType.heavy)); // Slap hands on cheeks
+        _schedule(700, () => _pulse(HapticType.tap)); // Tremble
+        _schedule(883, () => _pulse(HapticType.tap)); // Tremble
+        _schedule(1367, () => _pulse(HapticType.impact)); // Gasp of horror
+        break;
+
+      case '🎩':
+      case '1f3a9':
+        _pulse(HapticType.selection);
+        _schedule(200, () => _pulse(HapticType.tap)); // Wand flourish
+        _schedule(1433, () => _pulse(HapticType.heavy)); // Wand taps top hat brim
+        _schedule(1633, () => _pulse(HapticType.impact)); // Rabbit pops out
+        break;
+
+      case '🗿':
+      case '1f5ff':
+        _pulse(HapticType.selection);
+        _schedule(400, () => _pulse(HapticType.impact)); // Stone monolith shifts
+        _schedule(1300, () => _pulse(HapticType.heavy)); // Solid stone turn lock
+        break;
+
       default:
         break;
     }
@@ -928,7 +1150,6 @@ class EmojiHapticService extends ChangeNotifier {
         s == '💜' ||
         s == '🖤' ||
         s == '🤍' ||
-        s == '🤎' ||
-        s == '💔';
+        s == '🤎';
   }
 }
