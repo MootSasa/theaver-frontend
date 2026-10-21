@@ -132,6 +132,10 @@ class EmojiEffectCacheService {
   final Map<String, LottieComposition> _animatedMemoryCache = {};
   final Map<String, Future<LottieComposition?>> _animatedInFlight = {};
 
+  final Map<String, Uint8List> _staticEmojiMemoryCache = {};
+  final Map<String, Future<Uint8List?>> _staticEmojiInFlight = {};
+  final Set<String> _missingStaticEmojis = {};
+
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
     receiveTimeout: const Duration(seconds: 30),
@@ -140,6 +144,7 @@ class EmojiEffectCacheService {
   bool _indexSynced = false;
   Directory? _effectsCacheDir;
   Directory? _animatedCacheDir;
+  Directory? _staticCacheDir;
 
   static String _stripFe0f(String cp) {
     var s = cp.replaceAll('-fe0f-', '-');
@@ -278,6 +283,21 @@ class EmojiEffectCacheService {
     return _animatedMemoryCache[cp];
   }
 
+  /// Returns the already-loaded high-res static emoji PNG bytes from RAM if available.
+  Uint8List? getCachedStaticEmojiSync(String emoji) {
+    for (final candidate in EmojiUtils.codepointCandidates(emoji)) {
+      final bytes = _staticEmojiMemoryCache[candidate];
+      if (bytes != null) return bytes;
+    }
+    return null;
+  }
+
+  /// Returns true if the server returned 404 for this static emoji during the current session.
+  bool isStaticEmojiMissing(String emoji) {
+    final cp = EmojiUtils.emojiToCodepoint(emoji);
+    return cp.isEmpty || _missingStaticEmojis.contains(cp);
+  }
+
   /// Warms up the local disk and memory cache for the given emoji's effect in background.
   void prefetchEffect(String emoji) {
     final cp = resolveEffectCodepoint(emoji);
@@ -290,6 +310,31 @@ class EmojiEffectCacheService {
     final cp = resolveAnimatedEmojiCodepoint(emoji);
     if (cp == null || _animatedMemoryCache.containsKey(cp)) return;
     getAnimatedEmojiComposition(emoji);
+  }
+
+  /// Gets the high-res 160x160 static emoji PNG bytes for [emoji], checking RAM cache first,
+  /// then local disk cache, and finally downloading from `/api/static-emojis/:codepoint`.
+  Future<Uint8List?> getStaticEmojiBytes(String emoji) {
+    final candidates = EmojiUtils.codepointCandidates(emoji);
+    if (candidates.isEmpty) return SynchronousFuture<Uint8List?>(null);
+
+    final primaryCp = candidates.first;
+    if (_missingStaticEmojis.contains(primaryCp)) {
+      return SynchronousFuture<Uint8List?>(null);
+    }
+
+    final cached = getCachedStaticEmojiSync(emoji);
+    if (cached != null) {
+      return SynchronousFuture<Uint8List?>(cached);
+    }
+
+    return _staticEmojiInFlight.putIfAbsent(primaryCp, () async {
+      try {
+        return await _loadOrDownloadStaticEmoji(primaryCp, candidates);
+      } finally {
+        _staticEmojiInFlight.remove(primaryCp);
+      }
+    });
   }
 
   /// Gets the effect [LottieComposition] for [emoji], checking RAM cache first,
@@ -370,6 +415,88 @@ class EmojiEffectCacheService {
     return dir;
   }
 
+  Future<Directory> _getStaticCacheDirectory() async {
+    if (_staticCacheDir != null && await _staticCacheDir!.exists()) {
+      return _staticCacheDir!;
+    }
+    final appCache = await getApplicationCacheDirectory();
+    final dir = Directory(path.join(appCache.path, 'static_emojis'));
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    _staticCacheDir = dir;
+    return dir;
+  }
+
+  Future<Uint8List?> _loadOrDownloadStaticEmoji(
+    String primaryCp,
+    List<String> candidates,
+  ) async {
+    File? diskFile;
+    if (!kIsWeb) {
+      try {
+        final dir = await _getStaticCacheDirectory();
+        for (final candidate in candidates) {
+          final f = File(path.join(dir.path, '$candidate.png'));
+          if (await f.exists()) {
+            final length = await f.length();
+            if (length > 0) {
+              final bytes = await f.readAsBytes();
+              for (final c in candidates) {
+                _staticEmojiMemoryCache[c] = bytes;
+              }
+              return bytes;
+            } else {
+              await f.delete();
+            }
+          }
+        }
+        diskFile = File(path.join(dir.path, '$primaryCp.png'));
+      } catch (e) {
+        debugPrint('EmojiEffectCacheService: static emoji disk cache read error for $primaryCp: $e');
+      }
+    }
+
+    try {
+      final url = '${AppConfig.baseUrl}/api/static-emojis/$primaryCp';
+      final response = await _dio.get<List<int>>(
+        url,
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final data = response.data;
+      if (data == null || data.isEmpty) {
+        return null;
+      }
+
+      final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+      for (final c in candidates) {
+        _staticEmojiMemoryCache[c] = bytes;
+      }
+
+      if (!kIsWeb && diskFile != null) {
+        try {
+          final tempFile = File('${diskFile.path}.tmp');
+          await tempFile.writeAsBytes(bytes, flush: true);
+          await tempFile.rename(diskFile.path);
+        } catch (e) {
+          debugPrint('EmojiEffectCacheService: failed to save static emoji $primaryCp to disk: $e');
+        }
+      }
+
+      return bytes;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        _missingStaticEmojis.add(primaryCp);
+      } else {
+        debugPrint('EmojiEffectCacheService: failed to download static emoji $primaryCp: $e');
+      }
+      return null;
+    } catch (e) {
+      debugPrint('EmojiEffectCacheService: failed to download static emoji $primaryCp: $e');
+      return null;
+    }
+  }
+
   Future<LottieComposition?> _loadOrDownload({
     required String codepoint,
     required String endpointPrefix,
@@ -439,9 +566,11 @@ class EmojiEffectCacheService {
     }
   }
 
-  /// Clears in-memory cached compositions (called when user clears cache).
+  /// Clears in-memory cached compositions and static PNGs (called when user clears cache).
   void clearMemoryCache() {
     _effectsMemoryCache.clear();
     _animatedMemoryCache.clear();
+    _staticEmojiMemoryCache.clear();
+    _missingStaticEmojis.clear();
   }
 }

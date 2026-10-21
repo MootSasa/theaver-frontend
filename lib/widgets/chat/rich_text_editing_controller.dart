@@ -742,7 +742,7 @@ class RichTextEditingController extends TextEditingController {
             children.add(TextSpan(
               text: m.group(0),
               style: segStyle.copyWith(
-                fontFamily: 'AppleEmoji',
+                fontFamily: EmojiUtils.effectiveFontFamily,
               ),
             ));
             return '';

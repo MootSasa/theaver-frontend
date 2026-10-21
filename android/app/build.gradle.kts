@@ -51,6 +51,16 @@ android {
             )
         }
     }
+
+    packaging {
+        jniLibs {
+            excludes += listOf(
+                "**/libmdk*.so",
+                "**/libffmpeg*.so",
+                "**/libfvp*.so"
+            )
+        }
+    }
 }
 
 dependencies {
