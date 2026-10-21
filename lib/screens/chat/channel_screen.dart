@@ -1464,7 +1464,6 @@ class _ChannelScreenState extends State<ChannelScreen>
                             emoji: message.content,
                             width: emojiFontSize * 1.8,
                             height: emojiFontSize * 1.8,
-                            onTap: () => HapticUtils.tap(),
                             isMe: false, // In channels usually left-aligned effects
                             autoPlay: shouldAutoPlay,
                             autoPlayId: stableKey,

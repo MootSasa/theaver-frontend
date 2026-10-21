@@ -516,6 +516,7 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
             widget.onTap?.call();
             if (_isLoadingAnimated && comp == null) {
               _pendingTapPlay = true;
+              EmojiHapticService.instance.playInteractiveEmojiHaptic(widget.emoji);
               _triggerEffect();
             } else {
               _playAnimation();
@@ -801,6 +802,7 @@ class EmojiEffectOverlay {
         width: _EmojiEffectWidget.effectSize,
         height: _EmojiEffectWidget.effectSize,
         child: _EmojiEffectWidget(
+          emoji: emoji,
           composition: composition,
           layerLink: layerLink,
           emojiSize: emojiSize,
@@ -818,6 +820,7 @@ class EmojiEffectOverlay {
 class _EmojiEffectWidget extends StatefulWidget {
   static const double effectSize = 384.0;
 
+  final String emoji;
   final LottieComposition composition;
   final LayerLink layerLink;
   final double emojiSize;
@@ -826,6 +829,7 @@ class _EmojiEffectWidget extends StatefulWidget {
   final VoidCallback onComplete;
 
   const _EmojiEffectWidget({
+    required this.emoji,
     required this.composition,
     required this.layerLink,
     required this.emojiSize,
@@ -864,12 +868,15 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
   @override
   Widget build(BuildContext context) {
     const double effectSize = _EmojiEffectWidget.effectSize;
+    final trimmed = widget.emoji.trim();
+    final bool isCentered = trimmed == '🍑' || trimmed == '1f351';
 
-    // In Telegram's 512x512 emoji effect compositions, the emitter origin sits
+    // In Telegram's 512x512 emoji effect compositions, directional emitters sit
     // at x ≈ 392 (+0.265 * effectSize from horizontal center) and y = 256 (center).
-    final double hShift = widget.isMe
-        ? -effectSize * 0.265
-        : effectSize * 0.265;
+    // Centered interaction effects like the peach slap are centered directly over the emoji.
+    final double hShift = isCentered
+        ? 0.0
+        : (widget.isMe ? -effectSize * 0.265 : effectSize * 0.265);
 
     return IgnorePointer(
       child: CompositedTransformFollower(
@@ -882,7 +889,7 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
           width: effectSize,
           height: effectSize,
           child: Transform.scale(
-            scaleX: widget.isMe ? 1.0 : -1.0,
+            scaleX: isCentered ? 1.0 : (widget.isMe ? 1.0 : -1.0),
             alignment: Alignment.center,
             child: Lottie(
               composition: widget.composition,

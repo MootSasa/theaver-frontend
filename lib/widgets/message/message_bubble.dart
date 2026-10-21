@@ -11,7 +11,6 @@ import '../../models/name_color_preset.dart';
 import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
-import '../../utils/haptic_utils.dart';
 import '../chat/message_reply_info.dart';
 import '../chat/reactions_panel.dart';
 import 'message_status_widget.dart';
@@ -1108,7 +1107,6 @@ class MessageBubble extends StatelessWidget {
             width: emojiFontSize * 1.8,
             height: emojiFontSize * 1.8,
             style: textStyle,
-            onTap: () => HapticUtils.tap(),
             isMe: isMe,
             autoPlay: shouldAutoPlay,
             autoPlayId: stableKey,

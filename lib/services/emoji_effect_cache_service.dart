@@ -49,7 +49,7 @@ class EmojiEffectCacheService {
     '1f325', '1f325-fe0f', '1f326', '1f326-fe0f', '1f327', '1f327-fe0f', '1f328', '1f328-fe0f',
     '1f329', '1f329-fe0f', '1f32d', '1f32e', '1f331', '1f332', '1f333', '1f334',
     '1f335', '1f337', '1f338', '1f339', '1f33a', '1f33c', '1f33f', '1f340',
-    '1f346', '1f34c', '1f353', '1f354', '1f355', '1f356', '1f357', '1f358',
+    '1f346', '1f34c', '1f351', '1f353', '1f354', '1f355', '1f356', '1f357', '1f358',
     '1f359', '1f35f', '1f361', '1f362', '1f363', '1f365', '1f366', '1f369',
     '1f36a', '1f36b', '1f36d', '1f36e', '1f370', '1f371', '1f373', '1f377',
     '1f378', '1f379', '1f37c', '1f37d', '1f37d-fe0f', '1f37e', '1f37f', '1f382',
@@ -251,6 +251,10 @@ class EmojiEffectCacheService {
 
   /// Resolves the canonical server codepoint for an emoji effect if one exists.
   String? resolveEffectCodepoint(String emoji) {
+    final lower = emoji.trim().toLowerCase();
+    if (_effectLookup.containsKey(lower)) {
+      return _effectLookup[lower];
+    }
     for (final candidate in EmojiUtils.codepointCandidates(emoji)) {
       final found = _effectLookup[candidate];
       if (found != null) return found;
@@ -260,6 +264,10 @@ class EmojiEffectCacheService {
 
   /// Resolves the canonical server codepoint for a vector animated emoji if one exists.
   String? resolveAnimatedEmojiCodepoint(String emoji) {
+    final lower = emoji.trim().toLowerCase();
+    if (_animatedLookup.containsKey(lower)) {
+      return _animatedLookup[lower];
+    }
     for (final candidate in EmojiUtils.codepointCandidates(emoji)) {
       final found = _animatedLookup[candidate];
       if (found != null) return found;

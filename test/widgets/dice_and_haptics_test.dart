@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:theaver/services/dice_cache_service.dart';
+import 'package:theaver/services/emoji_effect_cache_service.dart';
 import 'package:theaver/services/emoji_haptic_service.dart';
 import 'package:theaver/utils/emoji_utils.dart';
 
@@ -81,7 +82,17 @@ void main() {
       expect(() => haptic.playDiceHaptic('⚽', 5), returnsNormally);
       expect(() => haptic.playDiceHaptic('🎳', 6), returnsNormally);
       expect(() => haptic.playDiceHaptic('🎰', 64), returnsNormally);
+      // Non-interactive / static emojis handle safely without error
+      expect(() => haptic.playInteractiveEmojiHaptic('🪑'), returnsNormally);
+      expect(() => haptic.playInteractiveEmojiHaptic('random_text'), returnsNormally);
       haptic.cancelAll();
+    });
+
+    test('Peach 🍑 is recognized as both animated emoji and effect', () {
+      expect(EmojiEffectCacheService.instance.hasAnimatedEmoji('🍑'), isTrue);
+      expect(EmojiEffectCacheService.instance.hasAnimatedEmoji('1f351'), isTrue);
+      expect(EmojiEffectCacheService.instance.hasEffect('🍑'), isTrue);
+      expect(EmojiEffectCacheService.instance.hasEffect('1f351'), isTrue);
     });
   });
 }

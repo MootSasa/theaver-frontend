@@ -150,8 +150,7 @@ class EmojiHapticService {
         break;
 
       default:
-        // Generic interactive emoji touch feedback
-        HapticUtils.tap();
+        // Emojis without dedicated authentic haptic patterns do not trigger touch vibration
         break;
     }
   }
