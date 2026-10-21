@@ -473,14 +473,28 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
     });
   }
 
+  HapticBinding? _hapticBinding;
+
   @override
   void dispose() {
+    _hapticBinding?.dispose();
     _controller.dispose();
     super.dispose();
   }
 
   void _playAnimation() {
-    EmojiHapticService.instance.playInteractiveEmojiHaptic(widget.emoji);
+    final comp = _composition;
+    if (comp != null) {
+      _hapticBinding?.dispose();
+      final totalFrames = (comp.endFrame - comp.startFrame).round();
+      _hapticBinding = EmojiHapticService.instance.attachInteractiveEmoji(
+        _controller,
+        widget.emoji,
+        totalFrames: totalFrames > 0 ? totalFrames : 180,
+      );
+    } else {
+      EmojiHapticService.instance.playInteractiveEmojiHaptic(widget.emoji);
+    }
     _triggerEffect();
 
     if (_composition != null && !_controller.isAnimating) {

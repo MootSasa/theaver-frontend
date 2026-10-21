@@ -84,8 +84,11 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     }
   }
 
+  HapticBinding? _hapticBinding;
+
   @override
   void dispose() {
+    _hapticBinding?.dispose();
     _mainController.dispose();
     _leverController.dispose();
     _bgController.dispose();
@@ -134,8 +137,13 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     if (_isRolling) return;
     setState(() => _isRolling = true);
 
-    // Synchronized authentic Telegram haptics for slot roll and stops
-    EmojiHapticService.instance.playDiceHaptic('🎰', widget.value);
+    // Frame-accurate synchronized Telegram haptics for slot roll, stops, and jackpot
+    _hapticBinding?.dispose();
+    _hapticBinding = EmojiHapticService.instance.attachSlotMachine(
+      _mainController,
+      widget.value,
+      totalFrames: 180,
+    );
 
     // 1. Pull lever
     _leverController.forward(from: 0.0);

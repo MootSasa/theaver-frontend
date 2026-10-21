@@ -171,5 +171,116 @@ void main() {
       expect(find.byType(DiceMessageWidget), findsOneWidget);
       expect(find.byType(SlotMachineWidget), findsOneWidget);
     });
+
+    testWidgets('HapticBinding triggers actions on exact keyframes and resets on 0', (tester) async {
+      final controller = AnimationController(
+        vsync: const TestVSync(),
+        duration: const Duration(seconds: 3),
+      );
+
+      final triggeredFrames = <int>[];
+      final binding = HapticBinding(
+        animation: controller,
+        totalFrames: 180,
+        frameActions: {
+          24: () => triggeredFrames.add(24),
+          36: () => triggeredFrames.add(36),
+          162: () => triggeredFrames.add(162),
+        },
+      );
+
+      // Advance to frame 20 (no triggers)
+      controller.value = 20 / 180;
+      expect(triggeredFrames, isEmpty);
+
+      // Advance to frame 30 (frame 24 triggers)
+      controller.value = 30 / 180;
+      expect(triggeredFrames, equals([24]));
+
+      // Advance to frame 170 (frames 36 and 162 trigger)
+      controller.value = 170 / 180;
+      expect(triggeredFrames, equals([24, 36, 162]));
+
+      // Advance again to 180 (no duplicate triggers)
+      controller.value = 1.0;
+      expect(triggeredFrames, equals([24, 36, 162]));
+
+      // Reset to 0 (clears triggers)
+      controller.value = 0.0;
+      triggeredFrames.clear();
+
+      // Advance back to frame 30 (frame 24 triggers again on replay)
+      controller.value = 30 / 180;
+      expect(triggeredFrames, equals([24]));
+
+      binding.dispose();
+      controller.value = 1.0;
+      // Disposed: no further triggers
+      expect(triggeredFrames, equals([24]));
+
+      controller.dispose();
+    });
+
+    test('attachInteractiveEmoji registers keyframes correctly', () {
+      final controller = AnimationController(
+        vsync: const TestVSync(),
+        duration: const Duration(seconds: 3),
+      );
+
+      final coffinBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '⚰️');
+      expect(coffinBinding.frameActions.containsKey(24), isTrue);
+      expect(coffinBinding.frameActions.containsKey(36), isTrue);
+      expect(coffinBinding.frameActions.containsKey(162), isTrue);
+      coffinBinding.dispose();
+
+      final clapBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '👏');
+      expect(clapBinding.totalFrames, equals(130));
+      expect(clapBinding.frameActions.keys, containsAll([14, 33, 52, 71, 90, 109]));
+      clapBinding.dispose();
+
+      final peachBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '🍑');
+      expect(peachBinding.totalFrames, equals(120));
+      expect(peachBinding.frameActions.keys, containsAll([30, 35, 45, 54]));
+      peachBinding.dispose();
+
+      final bombBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '💣');
+      expect(bombBinding.frameActions.keys, containsAll([0, 50, 75, 98]));
+      bombBinding.dispose();
+
+      controller.dispose();
+    });
+
+    test('attachDiceOutcome registers keyframes for sports and games', () {
+      final controller = AnimationController(
+        vsync: const TestVSync(),
+        duration: const Duration(seconds: 3),
+      );
+
+      final bballScore = EmojiHapticService.instance.attachDiceOutcome(controller, '🏀', 4);
+      expect(bballScore.frameActions.keys, containsAll([75, 119, 131, 156]));
+      bballScore.dispose();
+
+      final bballRim = EmojiHapticService.instance.attachDiceOutcome(controller, '🏀', 2);
+      expect(bballRim.frameActions.keys, containsAll([75, 102, 120, 132, 156]));
+      bballRim.dispose();
+
+      final soccerGoal = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 4);
+      expect(soccerGoal.frameActions.keys, containsAll([2, 44, 53, 112, 138]));
+      soccerGoal.dispose();
+
+      final bowlingStrike = EmojiHapticService.instance.attachDiceOutcome(controller, '🎳', 6);
+      expect(bowlingStrike.frameActions.keys, containsAll([90, 94, 107]));
+      bowlingStrike.dispose();
+
+      final diceSix = EmojiHapticService.instance.attachDiceOutcome(controller, '🎲', 6);
+      expect(diceSix.frameActions.keys, containsAll([0, 30, 60, 80, 89]));
+      diceSix.dispose();
+
+      final slotMachine = EmojiHapticService.instance.attachSlotMachine(controller, 64);
+      expect(slotMachine.frameActions.keys, containsAll([0, 65, 83, 101, 111]));
+      slotMachine.dispose();
+
+      controller.dispose();
+    });
   });
 }

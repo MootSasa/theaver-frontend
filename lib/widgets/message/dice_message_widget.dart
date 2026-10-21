@@ -3,6 +3,7 @@ import 'package:lottie/lottie.dart';
 import '../../services/dice_cache_service.dart';
 import '../../services/emoji_haptic_service.dart';
 import '../../utils/emoji_utils.dart';
+import '../../utils/haptic_utils.dart';
 import 'slot_machine_widget.dart';
 
 /// Interactive Telegram dice game widget (🎲, 🎯, 🏀, ⚽, 🎳, 🎰).
@@ -46,6 +47,8 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
     _loadCompositions();
   }
 
+  HapticBinding? _hapticBinding;
+
   @override
   void didUpdateWidget(covariant DiceMessageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -56,6 +59,7 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
 
   @override
   void dispose() {
+    _hapticBinding?.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -111,9 +115,6 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
     if (_isRolling) return;
     final val = widget.value ?? 1;
 
-    // Trigger haptic for roll start & landing
-    EmojiHapticService.instance.playDiceHaptic(widget.emoji, val);
-
     final rollComp = _rollComposition ??
         await DiceCacheService.instance.getDiceComposition(widget.emoji, 1);
 
@@ -124,6 +125,9 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
         _rollComposition = rollComp;
         _isRolling = true;
       });
+      _hapticBinding?.dispose();
+      _hapticBinding = null;
+      HapticUtils.selection(); // Subtle initial throw / release tap
       _controller.duration = rollComp.duration;
       _controller.reset();
       await _controller.forward();
@@ -143,6 +147,14 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
         _outcomeComposition = outcomeComp;
         _isRolling = false;
       });
+      _hapticBinding?.dispose();
+      final totalFrames = (outcomeComp.endFrame - outcomeComp.startFrame).round();
+      _hapticBinding = EmojiHapticService.instance.attachDiceOutcome(
+        _controller,
+        widget.emoji,
+        val,
+        totalFrames: totalFrames > 0 ? totalFrames : 180,
+      );
       _controller.duration = outcomeComp.duration;
       _controller.reset();
       await _controller.forward();
