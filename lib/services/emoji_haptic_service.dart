@@ -399,9 +399,10 @@ class EmojiHapticService extends ChangeNotifier {
       actions[50] = () => _pulse(HapticType.heavy);
       actions[100] = () => _pulse(HapticType.impact);
     } else if (trimmed == '⚽' || trimmed == '26bd') {
-      // 26bd_1: football bouncing on floor: f0 (slam), f60 (floor bounce)
+      // 26bd_1: football bouncing on floor: f0 (slam), f60 (floor bounce), f120 (floor bounce)
       actions[0] = () => _pulse(HapticType.impact);
       actions[60] = () => _pulse(HapticType.heavy);
+      actions[120] = () => _pulse(HapticType.impact);
     } else if (trimmed == '🎲' || trimmed == '1f3b2') {
       // 1f3b2_1: rolling dice: f0 (throw), f60 (floor landing)
       actions[0] = () => _pulse(HapticType.selection);
@@ -468,23 +469,38 @@ class EmojiHapticService extends ChangeNotifier {
         actions[128] = () => _pulse(HapticType.tap); // Net recoil
       }
     }
-    // 2. ⚽ Football
+    // 2. ⚽ Football (1..5)
     else if (trimmed == '⚽' || trimmed == '26bd') {
       // In all football outcomes (26bd_2..6), the foot strikes the ball at the turf at frame 2
       actions[2] = () => _pulse(HapticType.heavy);
 
       if (value == 1) {
-        actions[45] = () => _pulse(HapticType.impact);
-        actions[65] = () => _pulse(HapticType.tap);
+        // 26bd_2: Wide left miss (flies past goal into background)
+        actions[120] = () => _pulse(HapticType.impact); // 1st ground bounce far wide
+        actions[142] = () => _pulse(HapticType.tap); // 2nd ground bounce
       } else if (value == 2) {
-        // High miss over the crossbar (flies into stands, no post hit)
-        actions[120] = () => _pulse(HapticType.impact);
-        actions[141] = () => _pulse(HapticType.tap);
+        // 26bd_3: Upper-right post/crossbar hit and rebound out! (hit 3 spark at f90)
+        actions[90] = () => _pulse(HapticType.heavy); // Post strike & ricochet
+        actions[112] = () => _pulse(HapticType.impact); // Rebound turf landing
+        actions[144] = () => _pulse(HapticType.tap); // 2nd turf bounce
+      } else if (value == 3) {
+        // 26bd_4: Clean goal into center/left net (net bulges at f96-f105)
+        actions[96] = () => _pulse(HapticType.heavy); // Ball hits back of the net
+        actions[105] = () => _pulse(HapticType.impact); // Net maximum stretch
+        actions[112] = () => _pulse(HapticType.impact); // Ball drops from net onto turf
+        actions[130] = () => _pulse(HapticType.tap); // Turf settle
+      } else if (value == 4) {
+        // 26bd_5: Post-and-IN goal! (hit 3 post strike at f90, ricochets into net at f98)
+        actions[90] = () => _pulse(HapticType.heavy); // Post strike
+        actions[98] = () => _pulse(HapticType.heavy); // Ricochet into net
+        actions[112] = () => _pulse(HapticType.impact); // Net ripple / bounce
+        actions[126] = () => _pulse(HapticType.tap); // Turf settle inside goal
       } else {
-        actions[44] = () => _pulse(HapticType.heavy); // Net strike
-        actions[53] = () => _pulse(HapticType.impact); // Net vibration
-        actions[112] = () => _pulse(HapticType.impact); // 1st bounce inside goal
-        actions[138] = () => _pulse(HapticType.tap); // 2nd bounce / roll
+        // 26bd_6 (value 5): Upper-corner rocket goal!
+        actions[92] = () => _pulse(HapticType.heavy); // Blasts into top-corner net
+        actions[105] = () => _pulse(HapticType.impact); // Net stretch recoil
+        actions[120] = () => _pulse(HapticType.impact); // Ball drops from high net
+        actions[140] = () => _pulse(HapticType.tap); // Turf settle inside goal
       }
     }
     // 3. 🎲 Dice (1..6)
@@ -828,18 +844,34 @@ class EmojiHapticService extends ChangeNotifier {
     if (trimmed == '⚽' || trimmed == '26bd') {
       // Frame 2 turf kick off
       _pulse(HapticType.heavy);
+
       if (value == 1) {
-        _schedule(750, () => _pulse(HapticType.impact));
-        _schedule(1080, () => _pulse(HapticType.tap));
+        // 26bd_2: Wide left miss
+        _schedule(2000, () => _pulse(HapticType.impact)); // f120: ground bounce
+        _schedule(2367, () => _pulse(HapticType.tap)); // f142: 2nd bounce
       } else if (value == 2) {
-        // High miss over the crossbar: turf kick, then stands/ground landing (no post hit)
-        _schedule(2000, () => _pulse(HapticType.impact));
-        _schedule(2350, () => _pulse(HapticType.tap));
+        // 26bd_3: Post strike & rebound out
+        _schedule(1500, () => _pulse(HapticType.heavy)); // f90: post strike
+        _schedule(1867, () => _pulse(HapticType.impact)); // f112: turf landing
+        _schedule(2400, () => _pulse(HapticType.tap)); // f144: 2nd turf bounce
+      } else if (value == 3) {
+        // 26bd_4: Clean goal into center/left net
+        _schedule(1600, () => _pulse(HapticType.heavy)); // f96: net hit
+        _schedule(1750, () => _pulse(HapticType.impact)); // f105: net stretch
+        _schedule(1867, () => _pulse(HapticType.impact)); // f112: drop to turf
+        _schedule(2167, () => _pulse(HapticType.tap)); // f130: turf settle
+      } else if (value == 4) {
+        // 26bd_5: Post-and-IN goal
+        _schedule(1500, () => _pulse(HapticType.heavy)); // f90: post strike
+        _schedule(1633, () => _pulse(HapticType.heavy)); // f98: ricochet into net
+        _schedule(1867, () => _pulse(HapticType.impact)); // f112: net ripple
+        _schedule(2100, () => _pulse(HapticType.tap)); // f126: turf settle
       } else {
-        _schedule(730, () => _pulse(HapticType.heavy));
-        _schedule(880, () => _pulse(HapticType.impact));
-        _schedule(1870, () => _pulse(HapticType.impact));
-        _schedule(2300, () => _pulse(HapticType.tap));
+        // 26bd_6 (value 5): Upper-corner rocket goal
+        _schedule(1533, () => _pulse(HapticType.heavy)); // f92: top net blast
+        _schedule(1750, () => _pulse(HapticType.impact)); // f105: net recoil
+        _schedule(2000, () => _pulse(HapticType.impact)); // f120: drop to turf
+        _schedule(2333, () => _pulse(HapticType.tap)); // f140: turf settle
       }
       return;
     }

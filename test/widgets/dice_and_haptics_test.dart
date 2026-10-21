@@ -280,7 +280,7 @@ void main() {
       bballRoll.dispose();
 
       final soccerRoll = EmojiHapticService.instance.attachDiceRoll(controller, '⚽');
-      expect(soccerRoll.frameActions.keys, containsAll([0, 60]));
+      expect(soccerRoll.frameActions.keys, containsAll([0, 60, 120]));
       soccerRoll.dispose();
 
       final diceRoll = EmojiHapticService.instance.attachDiceRoll(controller, '🎲');
@@ -300,14 +300,26 @@ void main() {
       expect(bballRim.frameActions.keys, containsAll([0, 40, 100, 104, 111, 125]));
       bballRim.dispose();
 
-      final soccerGoal = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 4);
-      expect(soccerGoal.frameActions.keys, containsAll([2, 44, 53, 112, 138]));
-      soccerGoal.dispose();
+      // Football all 5 outcomes tested individually
+      final soccerVal1 = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 1);
+      expect(soccerVal1.frameActions.keys, containsAll([2, 120, 142]));
+      soccerVal1.dispose();
 
-      final soccerOverBar = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 2);
-      expect(soccerOverBar.frameActions.keys, containsAll([2, 120, 141]));
-      expect(soccerOverBar.frameActions.containsKey(44), isFalse); // No crossbar hit
-      soccerOverBar.dispose();
+      final soccerVal2 = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 2);
+      expect(soccerVal2.frameActions.keys, containsAll([2, 90, 112, 144]));
+      soccerVal2.dispose();
+
+      final soccerVal3 = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 3);
+      expect(soccerVal3.frameActions.keys, containsAll([2, 96, 105, 112, 130]));
+      soccerVal3.dispose();
+
+      final soccerVal4 = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 4);
+      expect(soccerVal4.frameActions.keys, containsAll([2, 90, 98, 112, 126]));
+      soccerVal4.dispose();
+
+      final soccerVal5 = EmojiHapticService.instance.attachDiceOutcome(controller, '⚽', 5);
+      expect(soccerVal5.frameActions.keys, containsAll([2, 92, 105, 120, 140]));
+      soccerVal5.dispose();
 
       final bowlingStrike = EmojiHapticService.instance.attachDiceOutcome(controller, '🎳', 6);
       expect(bowlingStrike.frameActions.keys, containsAll([90, 94, 107]));
