@@ -4470,7 +4470,6 @@ class EmojiHapticService extends ChangeNotifier {
 
       case '🥛':
       case '1f95b':
-      case '🥗':
         const frames = 143;
         actions[21] = () => _pulse(HapticType.tap);
         actions[36] = () => _pulse(HapticType.tap);
