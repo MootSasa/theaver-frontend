@@ -457,6 +457,8 @@
   "settings_liquid_glass": "Liquid Glass design",
   "settings_liquid_glass_desc": "Liquid glass effect for UI elements",
   "settings_liquid_glass_unsupported": "Not available on this platform",
+  "settings_haptic_uniform_title": "Uniform Haptic Feedback",
+  "settings_haptic_uniform_subtitle": "Use a gentle tap of uniform strength for all emoji and dice animations",
   "settings_theme": "Theme",
   "theme_light": "Light",
   "theme_dark": "Dark",

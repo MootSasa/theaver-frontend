@@ -16,6 +16,7 @@ import 'services/chat_folder_service.dart';
 import 'services/chat_swipe_service.dart';
 import 'services/cache_service.dart';
 import 'services/draft_service.dart';
+import 'services/emoji_haptic_service.dart';
 import 'services/chat_realtime_manager.dart';
 import 'services/database/app_database.dart';
 import 'services/liquid_glass_provider.dart';
@@ -137,6 +138,7 @@ void main() async {
   await ChatSwipeService().init();
   await CacheService().init();
   await DraftService().init();
+  await EmojiHapticService.instance.init();
   ChatRealtimeManager().init();
   ProfileInstantCache.instance.warmupSelf();
 
@@ -167,6 +169,7 @@ class TheaverApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => WallpaperProvider()..init()),
         ChangeNotifierProvider(create: (_) => ProfileThemeProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => WalletSecurityProvider()),
+        ChangeNotifierProvider.value(value: EmojiHapticService.instance),
         ChangeNotifierProxyProvider<WalletSecurityProvider, BankingCardsProvider>(
           create: (_) => BankingCardsProvider(),
           update: (_, security, cards) => cards!..update(security),

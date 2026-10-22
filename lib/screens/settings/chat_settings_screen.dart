@@ -12,6 +12,7 @@ import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../services/wallpaper_provider.dart';
+import '../../services/emoji_haptic_service.dart';
 import '../../theme/theme_provider.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/common/adaptive_switch.dart';
@@ -487,6 +488,30 @@ class ChatSettingsScreen extends StatelessWidget {
 
             // Chat Swipe Gesture Setting (Telegram style)
             const ChatSwipeSettingCard(),
+
+            const SizedBox(height: 12),
+
+            // Emoji & Dice Uniform Haptic Feedback Setting
+            Consumer<EmojiHapticService>(
+              builder: (context, hapticService, _) {
+                return ListTile(
+                  leading: iconoir.SingleTapGesture(
+                    color: hapticService.isUniformHaptics ? activePrimary : Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(l10n.translate('settings_haptic_uniform_title')),
+                  subtitle: Text(
+                    l10n.translate('settings_haptic_uniform_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: AdaptiveSwitch(
+                    value: hapticService.isUniformHaptics,
+                    onChanged: (val) => hapticService.setUniformHaptics(val),
+                  ),
+                );
+              },
+            ),
 
             const SizedBox(height: 12),
 

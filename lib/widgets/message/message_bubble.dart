@@ -11,7 +11,6 @@ import '../../models/name_color_preset.dart';
 import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
-import '../../utils/haptic_utils.dart';
 import '../chat/message_reply_info.dart';
 import '../chat/reactions_panel.dart';
 import 'message_status_widget.dart';
@@ -33,6 +32,7 @@ import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
 import 'poll_message_widget.dart';
 import 'unsupported_message_widget.dart';
+import 'dice_message_widget.dart';
 
 /// Радиус скругления "облачка" сообщения.
 const double kMessageBorderRadius = 18.0;
@@ -786,6 +786,13 @@ class MessageBubble extends StatelessWidget {
     return true;
   }
 
+  bool get _isDice {
+    if (_hasMedia || message.isUnsupported) return false;
+    if (message.messageType == 'dice') return true;
+    return message.messageType == 'text' &&
+        EmojiUtils.isDiceEmoji(message.content);
+  }
+
   int get _emojiOnlyCount {
     if (_hasMedia || message.messageType != 'text' || message.entities.isNotEmpty) {
       return 0;
@@ -799,8 +806,9 @@ class MessageBubble extends StatelessWidget {
     final String? resolvedFileUrl = AppConfig.resolveMediaUrl(message.fileUrl);
     final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
     final bool hasCaption = !isUnsupported && _hasCaption;
-    final int emojiCount = (!isUnsupported && !hasMedia) ? _emojiOnlyCount : 0;
-    final bool isBigEmoji = emojiCount > 0;
+    final bool isDice = _isDice;
+    final int emojiCount = (!isUnsupported && !hasMedia && !isDice) ? _emojiOnlyCount : 0;
+    final bool isBigEmoji = (emojiCount > 0) || isDice;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
@@ -1057,6 +1065,31 @@ class MessageBubble extends StatelessWidget {
         subtextColor: bubbleSubtextColor,
         accentColor: effectivePreset.primaryColor,
       );
+    } else if (isDice) {
+      int? diceValue;
+      if (message.mediaPayload != null) {
+        final val = message.mediaPayload?['value'];
+        if (val is num) {
+          diceValue = val.toInt();
+        }
+      }
+      final String stableKey = message.localId ?? message.id;
+      final bool shouldAutoPlay = message.sendStatus == 0 ||
+          (DateTime.tryParse(message.createdAt)
+                  ?.toLocal()
+                  .isAfter(DateTime.now().subtract(const Duration(seconds: 3))) ??
+              false);
+      textBodyWidget = Padding(
+        padding: const EdgeInsets.only(top: 4.0, bottom: 16.0, left: 4.0, right: 4.0),
+        child: DiceMessageWidget(
+          key: ValueKey('dice_$stableKey'),
+          emoji: message.content,
+          value: diceValue,
+          isMe: isMe,
+          size: 130.0,
+          autoPlay: shouldAutoPlay,
+        ),
+      );
     } else if (isBigEmoji) {
       if (emojiCount == 1) {
         const double emojiFontSize = 64.0;
@@ -1074,7 +1107,6 @@ class MessageBubble extends StatelessWidget {
             width: emojiFontSize * 1.8,
             height: emojiFontSize * 1.8,
             style: textStyle,
-            onTap: () => HapticUtils.tap(),
             isMe: isMe,
             autoPlay: shouldAutoPlay,
             autoPlayId: stableKey,

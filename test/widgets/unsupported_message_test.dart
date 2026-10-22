@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:theaver/l10n/app_localizations.dart';
-import 'package:theaver/models/theav_theme.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/widgets/message/message_bubble.dart';
 import 'package:theaver/widgets/message/unsupported_message_widget.dart';
@@ -20,6 +19,7 @@ void main() {
         'poll',
         'document',
         'file',
+        'dice',
       ];
       for (final type in supported) {
         final msg = Message(
