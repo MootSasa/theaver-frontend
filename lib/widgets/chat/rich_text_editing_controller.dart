@@ -736,24 +736,26 @@ class RichTextEditingController extends TextEditingController {
 
       // Check for emojis
       if (EmojiUtils.isFontLoaded.value && EmojiUtils.emojiRegex.hasMatch(segText)) {
-        segText.splitMapJoin(
-          EmojiUtils.emojiRegex,
-          onMatch: (m) {
+        final buffer = StringBuffer();
+        for (final cluster in segText.characters) {
+          if (EmojiUtils.isEmojiGrapheme(cluster)) {
+            if (buffer.isNotEmpty) {
+              children.add(TextSpan(text: buffer.toString(), style: segStyle));
+              buffer.clear();
+            }
             children.add(TextSpan(
-              text: m.group(0),
+              text: cluster,
               style: segStyle.copyWith(
                 fontFamily: EmojiUtils.effectiveFontFamily,
               ),
             ));
-            return '';
-          },
-          onNonMatch: (nonMatch) {
-            if (nonMatch.isNotEmpty) {
-              children.add(TextSpan(text: nonMatch, style: segStyle));
-            }
-            return '';
-          },
-        );
+          } else {
+            buffer.write(cluster);
+          }
+        }
+        if (buffer.isNotEmpty) {
+          children.add(TextSpan(text: buffer.toString(), style: segStyle));
+        }
       } else {
         children.add(TextSpan(text: segText, style: segStyle));
       }

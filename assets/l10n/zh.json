@@ -297,6 +297,7 @@
   "chat_open_file": "打开",
   "chat_file_not_found": "文件未找到",
   "chat_typing": "正在输入...",
+  "chat_watching_emoji": "正在看 {emoji}",
   "chat_user_typing": "{name}正在输入...",
   "chat_status_online": "在线",
   "chat_status_last_seen_just_now": "刚刚在线",

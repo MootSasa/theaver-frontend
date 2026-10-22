@@ -297,6 +297,7 @@
   "chat_open_file": "Apri",
   "chat_file_not_found": "File non trovato",
   "chat_typing": "sta scrivendo...",
+  "chat_watching_emoji": "sta guardando {emoji}",
   "chat_user_typing": "{name} sta scrivendo...",
   "chat_status_online": "in linea",
   "chat_status_last_seen_just_now": "ultimo accesso poco fa",

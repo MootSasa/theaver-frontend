@@ -16,9 +16,15 @@ class AppLocalizations {
     return Localizations.of<AppLocalizations>(context, AppLocalizations);
   }
 
-  /// Получить локализованный текст по ключу
-  String translate(String key) {
-    return _localizedStrings[key] ?? key;
+  /// Получить локализованный текст по ключу с поддержкой параметров
+  String translate(String key, [Map<String, String>? params]) {
+    String str = _localizedStrings[key] ?? key;
+    if (params != null) {
+      params.forEach((paramKey, paramValue) {
+        str = str.replaceAll('{$paramKey}', paramValue);
+      });
+    }
+    return str;
   }
 
   /// Загрузить файл локализации
@@ -63,8 +69,8 @@ class _AppLocalizationsDelegate
 extension AppLocalizationsExtension on BuildContext {
   AppLocalizations get l10n => AppLocalizations.of(this)!;
   
-  /// Получить перевод по ключу
-  String tr(String key) => l10n.translate(key);
+  /// Получить перевод по ключу с поддержкой параметров
+  String tr(String key, [Map<String, String>? params]) => l10n.translate(key, params);
 }
 
 /// Провайдер для управления языком приложения

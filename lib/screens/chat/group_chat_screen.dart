@@ -20,6 +20,7 @@ import '../../services/unread_count_provider.dart';
 import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
+import '../../services/emoji_interaction_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
@@ -364,6 +365,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onMessageRead: _onMessageRead,
       onTyping: _onTypingIndicator,
       onUserStatus: _onUserStatusUpdate,
+      onEmojiInteraction: _onEmojiInteraction,
       onReconnect: _triggerSilentSync,
     );
   }
@@ -767,6 +769,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           });
         }
       });
+    }
+  }
+
+  void _onEmojiInteraction(WebSocketEvent event) {
+    final chatId = event.data['chat_id']?.toString();
+    if (chatId != widget.chatId) return;
+
+    final senderId = event.data['user_id']?.toString();
+    if (senderId == _currentUserId) return;
+
+    final messageId = event.data['message_id']?.toString() ?? '';
+
+    if (mounted) {
+      // Play animation, haptics, and effect ONLY if this emoji is visible on screen
+      EmojiInteractionManager.instance.trigger(messageId);
     }
   }
 

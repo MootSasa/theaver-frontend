@@ -297,6 +297,7 @@
   "chat_open_file": "Ouvrir",
   "chat_file_not_found": "Fichier introuvable",
   "chat_typing": "écrit...",
+  "chat_watching_emoji": "regarde {emoji}",
   "chat_user_typing": "{name} écrit...",
   "chat_status_online": "en ligne",
   "chat_status_last_seen_just_now": "en ligne à l'instant",

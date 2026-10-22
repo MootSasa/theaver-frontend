@@ -25,6 +25,8 @@ import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/emoji_effect_cache_service.dart';
+import '../../services/emoji_interaction_manager.dart';
 import '../../utils/emoji_utils.dart';
 import '../../services/database/app_database.dart';
 import '../../l10n/app_localizations.dart';
@@ -142,6 +144,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Timer? _typingTimer;
   // ignore: unused_field
   String? _typingUserId;
+  String? _watchingEmoji;
+  Timer? _watchingEmojiTimer;
 
   // File attachment
   final FileService _fileService = FileService();
@@ -452,6 +456,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onReactionUpdated: _onMessageReactionUpdated,
       onMessageRead: _onMessageRead,
       onTyping: _onTypingIndicator,
+      onEmojiInteraction: _onEmojiInteraction,
       onUserStatus: _onUserStatusUpdate,
       onUnreadCountUpdated: _onUnreadCountUpdated,
       onUserAppearanceUpdated: _onUserAppearanceUpdated,
@@ -770,6 +775,36 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           });
         }
       });
+    }
+  }
+
+  void _onEmojiInteraction(WebSocketEvent event) {
+    final chatId = event.data['chat_id']?.toString();
+    if (chatId != widget.chatId) return;
+
+    final senderId = event.data['user_id']?.toString();
+    if (senderId == _currentUserId) return;
+
+    final emoji = event.data['emoji']?.toString() ?? '';
+    final messageId = event.data['message_id']?.toString() ?? '';
+
+    if (mounted) {
+      if (EmojiEffectCacheService.instance.hasAnimatedEmoji(emoji)) {
+        setState(() {
+          _watchingEmoji = emoji;
+        });
+        _watchingEmojiTimer?.cancel();
+        _watchingEmojiTimer = Timer(const Duration(milliseconds: 3800), () {
+          if (mounted) {
+            setState(() {
+              _watchingEmoji = null;
+            });
+          }
+        });
+      }
+
+      // Play animation, haptics, and effect ONLY if this emoji is visible on screen
+      EmojiInteractionManager.instance.trigger(messageId);
     }
   }
 
@@ -2468,7 +2503,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
                 isOnline: _isOtherUserOnline,
                 lastSeen: _otherUserLastSeen,
-                statusText: _isTyping ? context.l10n.translate('chat_typing') : null,
+                statusText: _watchingEmoji != null
+                    ? context.l10n.translate('chat_watching_emoji', {'emoji': _watchingEmoji!})
+                    : (_isTyping ? context.l10n.translate('chat_typing') : null),
                 isChannel: false,
                 isMuted: _isMuted,
                 heroTag: heroTag,
@@ -4168,6 +4205,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _uploadProgressNotifier.dispose();
     _chatSubscription?.cancel();
     _typingTimer?.cancel();
+    _watchingEmojiTimer?.cancel();
     _highlightTimer?.cancel();
 
     // Clear the open chat indicator in the provider

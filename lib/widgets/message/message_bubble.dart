@@ -10,6 +10,7 @@ import '../../models/theav_theme.dart';
 import '../../models/name_color_preset.dart';
 import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/websocket_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../chat/message_reply_info.dart';
 import '../chat/reactions_panel.dart';
@@ -1110,6 +1111,14 @@ class MessageBubble extends StatelessWidget {
             isMe: isMe,
             autoPlay: shouldAutoPlay,
             autoPlayId: stableKey,
+            messageId: message.id,
+            onTap: () {
+              WebSocketService().sendEmojiInteraction(
+                message.chatId,
+                messageId: message.id,
+                emoji: message.content,
+              );
+            },
           ),
         );
       } else {

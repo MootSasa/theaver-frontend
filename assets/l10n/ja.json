@@ -297,6 +297,7 @@
   "chat_open_file": "開く",
   "chat_file_not_found": "ファイルが見つかりません",
   "chat_typing": "入力中...",
+  "chat_watching_emoji": "{emoji} を見ています",
   "chat_user_typing": "{name}が入力中...",
   "chat_status_online": "オンライン",
   "chat_status_last_seen_just_now": "つい最近",

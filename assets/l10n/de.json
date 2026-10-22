@@ -297,6 +297,7 @@
   "chat_open_file": "Öffnen",
   "chat_file_not_found": "Datei nicht gefunden",
   "chat_typing": "tippt...",
+  "chat_watching_emoji": "schaut sich {emoji} an",
   "chat_user_typing": "{name} tippt...",
   "chat_status_online": "online",
   "chat_status_last_seen_just_now": "zuletzt gerade eben gesehen",
