@@ -2552,7 +2552,7 @@ class EmojiHapticService extends ChangeNotifier {
         actions[179] = () => _pulse(HapticType.selection);
         break;
 
-      case '📅':
+      case '📆':
       case '1f4c6':
         actions[16] = () => _pulse(HapticType.tap);
         actions[41] = () => _pulse(HapticType.selection);
@@ -2672,7 +2672,7 @@ class EmojiHapticService extends ChangeNotifier {
         actions[126] = () => _pulse(HapticType.selection);
         break;
 
-      case '📫':
+      case '📬':
       case '1f4ec':
         actions[20] = () => _pulse(HapticType.heavy);
         actions[23] = () => _pulse(HapticType.tap);
@@ -2682,7 +2682,7 @@ class EmojiHapticService extends ChangeNotifier {
         actions[150] = () => _pulse(HapticType.tap);
         break;
 
-      case '📪':
+      case '📭':
       case '1f4ed':
         actions[13] = () => _pulse(HapticType.selection);
         actions[29] = () => _pulse(HapticType.tap);
