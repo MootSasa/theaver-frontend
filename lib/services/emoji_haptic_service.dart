@@ -2465,20 +2465,18 @@ class EmojiHapticService extends ChangeNotifier {
         actions[27] = () => _pulse(HapticType.tap);
         actions[36] = () => _pulse(HapticType.tap);
         actions[47] = () => _pulse(HapticType.impact);
-        actions[81] = () => _pulse(HapticType.heavy);
-        actions[114] = () => _pulse(HapticType.tap);
-        actions[150] = () => _pulse(HapticType.tap);
+        actions[88] = () => _pulse(HapticType.tap);
+        actions[100] = () => _pulse(HapticType.tap);
+        actions[115] = () => _pulse(HapticType.impact);
         break;
 
       case '💭':
       case '1f4ad':
-        actions[9] = () => _pulse(HapticType.selection);
-        actions[24] = () => _pulse(HapticType.tap);
+        actions[20] = () => _pulse(HapticType.selection);
         actions[39] = () => _pulse(HapticType.tap);
+        actions[48] = () => _pulse(HapticType.tap);
         actions[60] = () => _pulse(HapticType.heavy);
-        actions[84] = () => _pulse(HapticType.impact);
-        actions[113] = () => _pulse(HapticType.tap);
-        actions[138] = () => _pulse(HapticType.tap);
+        actions[78] = () => _pulse(HapticType.selection);
         break;
 
       case '💰':
@@ -2565,19 +2563,21 @@ class EmojiHapticService extends ChangeNotifier {
 
       case '📈':
       case '1f4c8':
-        actions[10] = () => _pulse(HapticType.tap);
-        actions[50] = () => _pulse(HapticType.selection);
-        actions[90] = () => _pulse(HapticType.impact);
-        actions[145] = () => _pulse(HapticType.selection);
+        actions[10] = () => _pulse(HapticType.selection);
+        actions[46] = () => _pulse(HapticType.tap);
+        actions[73] = () => _pulse(HapticType.tap);
+        actions[92] = () => _pulse(HapticType.impact);
+        actions[116] = () => _pulse(HapticType.tap);
         actions[180] = () => _pulse(HapticType.heavy);
         break;
 
       case '📉':
       case '1f4c9':
-        actions[10] = () => _pulse(HapticType.tap);
-        actions[50] = () => _pulse(HapticType.selection);
-        actions[90] = () => _pulse(HapticType.impact);
-        actions[145] = () => _pulse(HapticType.selection);
+        actions[10] = () => _pulse(HapticType.selection);
+        actions[46] = () => _pulse(HapticType.tap);
+        actions[73] = () => _pulse(HapticType.tap);
+        actions[92] = () => _pulse(HapticType.impact);
+        actions[116] = () => _pulse(HapticType.tap);
         actions[180] = () => _pulse(HapticType.heavy);
         break;
 
@@ -2624,12 +2624,12 @@ class EmojiHapticService extends ChangeNotifier {
 
       case '📞':
       case '1f4de':
-        actions[8] = () => _pulse(HapticType.tap);
-        actions[24] = () => _pulse(HapticType.tap);
-        actions[43] = () => _pulse(HapticType.tap);
-        actions[75] = () => _pulse(HapticType.selection);
-        actions[87] = () => _pulse(HapticType.impact);
-        actions[122] = () => _pulse(HapticType.impact);
+        actions[10] = () => _pulse(HapticType.tap);
+        actions[25] = () => _pulse(HapticType.tap);
+        actions[45] = () => _pulse(HapticType.impact);
+        actions[89] = () => _pulse(HapticType.impact);
+        actions[105] = () => _pulse(HapticType.impact);
+        actions[125] = () => _pulse(HapticType.heavy);
         break;
 
       case '📣':
@@ -2771,7 +2771,6 @@ class EmojiHapticService extends ChangeNotifier {
         actions[73] = () => _pulse(HapticType.heavy);
         actions[104] = () => _pulse(HapticType.tap);
         actions[123] = () => _pulse(HapticType.tap);
-        actions[156] = () => _pulse(HapticType.selection);
         break;
 
       case '🔝':
