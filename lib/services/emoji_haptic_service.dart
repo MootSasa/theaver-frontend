@@ -180,12 +180,13 @@ class EmojiHapticService extends ChangeNotifier {
 
     // 1. ❤️ Hearts: canonical Telegram HeartbeatHaptic (3 heartbeat cycles: 6 pulses)
     if (_isHeart(trimmed)) {
-      actions[0] = () => _pulse(HapticType.impact);
-      actions[12] = () => _pulse(HapticType.tap);
-      actions[60] = () => _pulse(HapticType.impact);
-      actions[72] = () => _pulse(HapticType.tap);
-      actions[120] = () => _pulse(HapticType.impact);
-      actions[132] = () => _pulse(HapticType.tap);
+      // 3 double heartbeats ("tuk-tuk") on the scale peaks of the heart Lottie.
+      actions[5] = () => _pulse(HapticType.impact);
+      actions[20] = () => _pulse(HapticType.tap);
+      actions[64] = () => _pulse(HapticType.impact);
+      actions[79] = () => _pulse(HapticType.tap);
+      actions[129] = () => _pulse(HapticType.impact);
+      actions[144] = () => _pulse(HapticType.tap);
       return HapticBinding(
         animation: animation,
         totalFrames: totalFrames,
@@ -1554,12 +1555,12 @@ class EmojiHapticService extends ChangeNotifier {
     final trimmed = emoji.trim();
 
     if (_isHeart(trimmed)) {
-      _schedule(0, () => _pulse(HapticType.impact));
-      _schedule(200, () => _pulse(HapticType.tap));
-      _schedule(1000, () => _pulse(HapticType.impact));
-      _schedule(1200, () => _pulse(HapticType.tap));
-      _schedule(2000, () => _pulse(HapticType.impact));
-      _schedule(2200, () => _pulse(HapticType.tap));
+      _schedule(83, () => _pulse(HapticType.impact));
+      _schedule(333, () => _pulse(HapticType.tap));
+      _schedule(1067, () => _pulse(HapticType.impact));
+      _schedule(1317, () => _pulse(HapticType.tap));
+      _schedule(2150, () => _pulse(HapticType.impact));
+      _schedule(2400, () => _pulse(HapticType.tap));
       return;
     }
 

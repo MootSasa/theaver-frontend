@@ -237,6 +237,13 @@ void main() {
       expect(coffinBinding.frameActions.containsKey(162), isTrue);
       coffinBinding.dispose();
 
+      // ❤️ 3 double heartbeats (impact + tap) on the Lottie beat peaks.
+      for (final heart in ['❤️', '2764', '🧡', '🤍', '🤎']) {
+        final heartBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, heart);
+        expect(heartBinding.frameActions.keys, equals([5, 20, 64, 79, 129, 144]), reason: heart);
+        heartBinding.dispose();
+      }
+
       final clapBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '👏');
       expect(clapBinding.totalFrames, equals(130));
       expect(clapBinding.frameActions.keys, containsAll([14, 33, 52, 71, 90, 109]));
