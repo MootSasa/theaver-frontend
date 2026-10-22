@@ -591,8 +591,8 @@ void main() {
       const effectCodepoints = [
         '1f192', '1f31a', '1f32d', '1f346', '1f34c', '1f351', '1f353', '1f37e',
         '1f382', '1f383', '1f384', '1f385', '1f389', '1f38a', '1f44d', '1f44e',
-        '1f44f', '1f47b', '1f48b', '1f494', '1f4a5', '1f4a9', '1f4af', '1f525',
-        '1f5ff', '1f631', '1f90d', '1f90e', '1f92e', '1f92f', '1f973', '26a1', '2764',
+        '1f47b', '1f48b', '1f494', '1f4a5', '1f4a9', '1f4af', '1f525',
+        '1f5ff', '1f631', '1f92e', '1f92f', '1f973', '26a1',
       ];
 
       for (final cp in effectCodepoints) {
@@ -613,8 +613,14 @@ void main() {
         binding.dispose();
       }
 
-      // Variation selectors are normalized; unknown effects produce empty bindings.
-      expect(EmojiHapticService.effectKeyframesFor('2764-fe0f'), isNotNull);
+      // 👏 and hearts keep only the emoji's own haptics (no effect pulses).
+      for (final cp in ['1f44f', '2764', '2764-fe0f', '1f90d', '1f90e']) {
+        expect(EmojiHapticService.effectKeyframesFor(cp), isNull, reason: '$cp must not vibrate on effect');
+        final b = haptic.attachEmojiEffect(controller, cp);
+        expect(b.frameActions, isEmpty);
+        b.dispose();
+      }
+      expect(EmojiHapticService.effectKeyframesFor('26a1-fe0f'), isNotNull);
       final empty = haptic.attachEmojiEffect(controller, '1f600');
       expect(empty.frameActions, isEmpty);
       empty.dispose();

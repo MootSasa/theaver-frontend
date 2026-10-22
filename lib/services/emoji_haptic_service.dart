@@ -1236,6 +1236,9 @@ class EmojiHapticService extends ChangeNotifier {
   /// frame-accurate even when the effect starts later than the emoji itself.
   /// Effect events that coincide (±5 frames) with an emoji keyframe are omitted
   /// to avoid double pulses.
+  ///
+  /// 👏 (`1f44f`) and hearts (`2764`, `1f90d`, `1f90e`) intentionally have no
+  /// effect haptics: only the emoji's own pattern (claps / heartbeat) is played.
   static const Map<String, List<(int, HapticType)>> _effectKeyframes = {
     // 🆒 sparkle bursts around COOL sign
     '1f192': [(5, HapticType.impact), (31, HapticType.tap), (54, HapticType.tap), (120, HapticType.impact)],
@@ -1269,8 +1272,6 @@ class EmojiHapticService extends ChangeNotifier {
     '1f44d': [(11, HapticType.tap), (34, HapticType.tap), (52, HapticType.tap), (64, HapticType.tap), (86, HapticType.tap)],
     // 👎 crosses & "no" signs
     '1f44e': [(13, HapticType.tap), (29, HapticType.tap), (58, HapticType.tap), (69, HapticType.tap), (85, HapticType.tap), (103, HapticType.tap)],
-    // 👏 extra flying claps
-    '1f44f': [(1, HapticType.tap), (44, HapticType.tap), (65, HapticType.tap), (101, HapticType.tap), (117, HapticType.tap), (138, HapticType.impact)],
     // 👻 flying ghosts
     '1f47b': [(2, HapticType.impact), (18, HapticType.tap), (45, HapticType.tap), (62, HapticType.tap), (82, HapticType.tap), (101, HapticType.tap)],
     // 💋 kisses, splashes, lips prints
@@ -1289,10 +1290,6 @@ class EmojiHapticService extends ChangeNotifier {
     '1f5ff': [(10, HapticType.tap), (111, HapticType.heavy), (140, HapticType.heavy)],
     // 😱 screaming faces & ghosts
     '1f631': [(12, HapticType.tap), (25, HapticType.tap), (64, HapticType.tap), (94, HapticType.impact), (116, HapticType.impact), (132, HapticType.tap)],
-    // 🤍 / 🤎 / ❤️ floating hearts
-    '1f90d': [(2, HapticType.selection), (43, HapticType.selection), (97, HapticType.selection)],
-    '1f90e': [(2, HapticType.selection), (43, HapticType.selection), (97, HapticType.selection)],
-    '2764': [(2, HapticType.selection), (43, HapticType.selection), (97, HapticType.selection)],
     // 🤮 splatter
     '1f92e': [(0, HapticType.tap), (17, HapticType.heavy), (63, HapticType.impact), (69, HapticType.tap)],
     // 🤯 brain explosion waves
