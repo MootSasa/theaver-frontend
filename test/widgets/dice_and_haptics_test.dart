@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -241,8 +244,13 @@ void main() {
 
       final peachBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '🍑');
       expect(peachBinding.totalFrames, equals(120));
-      expect(peachBinding.frameActions.keys, equals([31, 50, 57, 102, 111]));
+      expect(peachBinding.frameActions.keys, equals([31]));
       peachBinding.dispose();
+
+      // The 4 remaining peach slaps live in the fullscreen effect binding.
+      final peachEffect = EmojiHapticService.instance.attachEmojiEffect(controller, '1f351');
+      expect(peachEffect.frameActions.keys, equals([50, 57, 102, 111]));
+      peachEffect.dispose();
 
       final bombBinding = EmojiHapticService.instance.attachInteractiveEmoji(controller, '💣');
       expect(bombBinding.frameActions.keys, containsAll([0, 50, 75, 98]));
@@ -573,6 +581,43 @@ void main() {
         expect(() => haptic.playInteractiveEmojiHaptic(entry.key), returnsNormally);
         haptic.cancelAll();
       }
+
+      controller.dispose();
+    });
+
+    test('attachEmojiEffect keyframes match existing effect files and stay within their duration', () {
+      final controller = AnimationController(vsync: const TestVSync(), duration: const Duration(seconds: 3));
+      final haptic = EmojiHapticService.instance;
+      const effectCodepoints = [
+        '1f192', '1f31a', '1f32d', '1f346', '1f34c', '1f351', '1f353', '1f37e',
+        '1f382', '1f383', '1f384', '1f385', '1f389', '1f38a', '1f44d', '1f44e',
+        '1f44f', '1f47b', '1f48b', '1f494', '1f4a5', '1f4a9', '1f4af', '1f525',
+        '1f5ff', '1f631', '1f90d', '1f90e', '1f92e', '1f92f', '1f973', '26a1', '2764',
+      ];
+
+      for (final cp in effectCodepoints) {
+        final keyframes = EmojiHapticService.effectKeyframesFor(cp);
+        expect(keyframes, isNotNull, reason: 'No effect haptics for $cp');
+
+        final file = File('../backend/assets/emoji_effects/$cp.json');
+        if (file.existsSync()) {
+          final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+          final total = ((json['op'] as num) - (json['ip'] as num)).round();
+          for (final (frame, _) in keyframes!) {
+            expect(frame, inInclusiveRange(0, total), reason: 'Frame $frame out of range for $cp');
+          }
+        }
+
+        final binding = haptic.attachEmojiEffect(controller, cp);
+        expect(binding.frameActions.keys, equals(keyframes!.map((k) => k.$1)));
+        binding.dispose();
+      }
+
+      // Variation selectors are normalized; unknown effects produce empty bindings.
+      expect(EmojiHapticService.effectKeyframesFor('2764-fe0f'), isNotNull);
+      final empty = haptic.attachEmojiEffect(controller, '1f600');
+      expect(empty.frameActions, isEmpty);
+      empty.dispose();
 
       controller.dispose();
     });

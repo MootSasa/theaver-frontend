@@ -858,6 +858,7 @@ class _EmojiEffectWidget extends StatefulWidget {
 
 class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  HapticBinding? _hapticBinding;
 
   @override
   void initState() {
@@ -866,6 +867,17 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
       vsync: this,
       duration: widget.composition.duration,
     );
+    final effectCodepoint =
+        EmojiEffectCacheService.instance.resolveEffectCodepoint(widget.emoji);
+    if (effectCodepoint != null) {
+      final totalFrames =
+          (widget.composition.endFrame - widget.composition.startFrame).round();
+      _hapticBinding = EmojiHapticService.instance.attachEmojiEffect(
+        _controller,
+        effectCodepoint,
+        totalFrames: totalFrames > 0 ? totalFrames : 180,
+      );
+    }
     _controller.forward().whenComplete(() {
       if (mounted) {
         widget.onComplete();
@@ -875,6 +887,7 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
 
   @override
   void dispose() {
+    _hapticBinding?.dispose();
     _controller.dispose();
     super.dispose();
   }

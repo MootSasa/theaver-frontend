@@ -193,14 +193,11 @@ class EmojiHapticService extends ChangeNotifier {
       );
     }
 
-    // 2. 🍑 Peach: 5 distinct slaps (1 on main emoji + 4 flying peach slaps in effect)
+    // 2. 🍑 Peach: main slap on the emoji itself. The other 4 slaps happen in the
+    // fullscreen effect and are bound via [attachEmojiEffect] ('1f351').
     if (trimmed == '🍑' || trimmed == '1f351') {
       const frames = 120;
       actions[31] = () => _pulse(HapticType.heavy); // 1st slap (main peach)
-      actions[50] = () => _pulse(HapticType.impact); // 2nd slap (effect hand 1)
-      actions[57] = () => _pulse(HapticType.heavy); // 3rd slap (effect hand 2)
-      actions[102] = () => _pulse(HapticType.impact); // 4th slap (effect hand 4)
-      actions[111] = () => _pulse(HapticType.heavy); // 5th slap (effect hand 3)
       return HapticBinding(
         animation: animation,
         totalFrames: frames,
@@ -1231,6 +1228,109 @@ class EmojiHapticService extends ChangeNotifier {
     );
   }
 
+  /// Calibrated keyframes (60 FPS, relative to the effect composition start) for
+  /// fullscreen emoji effects from `backend/assets/emoji_effects/<codepoint>.json`.
+  ///
+  /// Effects are played by their own AnimationController (loaded asynchronously),
+  /// so their haptics are bound separately from the emoji animation to stay
+  /// frame-accurate even when the effect starts later than the emoji itself.
+  /// Effect events that coincide (±5 frames) with an emoji keyframe are omitted
+  /// to avoid double pulses.
+  static const Map<String, List<(int, HapticType)>> _effectKeyframes = {
+    // 🆒 sparkle bursts around COOL sign
+    '1f192': [(5, HapticType.impact), (31, HapticType.tap), (54, HapticType.tap), (120, HapticType.impact)],
+    // 🌚 space burst, star shower, falling stars, final explosion
+    '1f31a': [(2, HapticType.impact), (11, HapticType.tap), (62, HapticType.selection), (101, HapticType.selection), (163, HapticType.heavy)],
+    // 🌭 sauce explosions
+    '1f32d': [(29, HapticType.impact), (45, HapticType.impact), (95, HapticType.tap), (121, HapticType.impact), (141, HapticType.tap)],
+    // 🍆 splash marks
+    '1f346': [(18, HapticType.impact), (109, HapticType.tap), (127, HapticType.tap)],
+    // 🍌 banana burst, final explosion cascade
+    '1f34c': [(5, HapticType.impact), (128, HapticType.heavy), (136, HapticType.tap), (145, HapticType.tap)],
+    // 🍑 4 slaps on flying peaches (hand 1, hand 2, hand 4, hand 3)
+    '1f351': [(50, HapticType.impact), (57, HapticType.heavy), (102, HapticType.impact), (111, HapticType.heavy)],
+    // 🍓 juice splashes
+    '1f353': [(5, HapticType.impact), (100, HapticType.impact), (153, HapticType.tap)],
+    // 🍾 glass clinks & splashes
+    '1f37e': [(48, HapticType.tap), (79, HapticType.impact), (99, HapticType.tap), (130, HapticType.tap)],
+    // 🎂 confetti launch waves, firework explosions, berries vanish
+    '1f382': [(1, HapticType.impact), (11, HapticType.tap), (21, HapticType.tap), (120, HapticType.heavy), (141, HapticType.tap)],
+    // 🎃 candy/pumpkin/bat waves, red eye scare
+    '1f383': [(0, HapticType.impact), (26, HapticType.tap), (50, HapticType.tap), (109, HapticType.heavy), (117, HapticType.tap)],
+    // 🎄 ornament burst, sparkle bursts
+    '1f384': [(0, HapticType.selection), (10, HapticType.impact), (70, HapticType.tap), (121, HapticType.tap), (137, HapticType.tap), (152, HapticType.tap)],
+    // 🎅 four gift/toy bursts
+    '1f385': [(0, HapticType.impact), (34, HapticType.impact), (88, HapticType.impact), (134, HapticType.heavy)],
+    // 🎉 confetti burst and spirals
+    '1f389': [(3, HapticType.impact), (27, HapticType.tap), (107, HapticType.tap)],
+    // 🎊 ball burst, confetti waves, sparks
+    '1f38a': [(9, HapticType.impact), (49, HapticType.tap), (62, HapticType.tap), (137, HapticType.tap), (153, HapticType.tap)],
+    // 👍 popping thumbs
+    '1f44d': [(11, HapticType.tap), (34, HapticType.tap), (52, HapticType.tap), (64, HapticType.tap), (86, HapticType.tap)],
+    // 👎 crosses & "no" signs
+    '1f44e': [(13, HapticType.tap), (29, HapticType.tap), (58, HapticType.tap), (69, HapticType.tap), (85, HapticType.tap), (103, HapticType.tap)],
+    // 👏 extra flying claps
+    '1f44f': [(1, HapticType.tap), (44, HapticType.tap), (65, HapticType.tap), (101, HapticType.tap), (117, HapticType.tap), (138, HapticType.impact)],
+    // 👻 flying ghosts
+    '1f47b': [(2, HapticType.impact), (18, HapticType.tap), (45, HapticType.tap), (62, HapticType.tap), (82, HapticType.tap), (101, HapticType.tap)],
+    // 💋 kisses, splashes, lips prints
+    '1f48b': [(2, HapticType.tap), (14, HapticType.tap), (51, HapticType.tap), (61, HapticType.tap), (82, HapticType.tap), (93, HapticType.tap), (107, HapticType.tap), (121, HapticType.tap)],
+    // 💔 hearts shatter, envelopes
+    '1f494': [(6, HapticType.impact), (17, HapticType.tap), (45, HapticType.tap), (74, HapticType.tap), (85, HapticType.impact)],
+    // 💥 repeated collisions
+    '1f4a5': [(21, HapticType.impact), (82, HapticType.impact), (92, HapticType.tap), (111, HapticType.impact), (124, HapticType.impact), (135, HapticType.impact), (145, HapticType.tap)],
+    // 💩 splats
+    '1f4a9': [(20, HapticType.impact), (56, HapticType.impact)],
+    // 💯 opening explosion, finale explosions
+    '1f4af': [(2, HapticType.impact), (110, HapticType.heavy), (132, HapticType.tap), (140, HapticType.tap), (154, HapticType.tap), (162, HapticType.tap)],
+    // 🔥 flame bursts
+    '1f525': [(27, HapticType.tap), (59, HapticType.impact), (86, HapticType.tap), (100, HapticType.tap), (116, HapticType.tap)],
+    // 🗿 question marks, falling stones
+    '1f5ff': [(10, HapticType.tap), (111, HapticType.heavy), (140, HapticType.heavy)],
+    // 😱 screaming faces & ghosts
+    '1f631': [(12, HapticType.tap), (25, HapticType.tap), (64, HapticType.tap), (94, HapticType.impact), (116, HapticType.impact), (132, HapticType.tap)],
+    // 🤍 / 🤎 / ❤️ floating hearts
+    '1f90d': [(2, HapticType.selection), (43, HapticType.selection), (97, HapticType.selection)],
+    '1f90e': [(2, HapticType.selection), (43, HapticType.selection), (97, HapticType.selection)],
+    '2764': [(2, HapticType.selection), (43, HapticType.selection), (97, HapticType.selection)],
+    // 🤮 splatter
+    '1f92e': [(0, HapticType.tap), (17, HapticType.heavy), (63, HapticType.impact), (69, HapticType.tap)],
+    // 🤯 brain explosion waves
+    '1f92f': [(1, HapticType.heavy), (15, HapticType.tap), (41, HapticType.tap), (78, HapticType.impact)],
+    // 🥳 confetti burst & rain
+    '1f973': [(2, HapticType.impact), (12, HapticType.tap), (22, HapticType.tap), (71, HapticType.tap)],
+    // ⚡ lightning strikes
+    '26a1': [(27, HapticType.impact), (43, HapticType.impact), (66, HapticType.tap), (84, HapticType.impact), (111, HapticType.heavy), (124, HapticType.tap), (138, HapticType.impact), (150, HapticType.tap)],
+  };
+
+  /// Returns the calibrated effect keyframes for the resolved effect codepoint
+  /// (e.g. `1f351`), or `null` if the effect has no dedicated haptics.
+  @visibleForTesting
+  static List<(int, HapticType)>? effectKeyframesFor(String effectCodepoint) =>
+      _effectKeyframes[effectCodepoint.trim().toLowerCase().replaceAll('-fe0f', '')];
+
+  /// Attaches frame-accurate haptic feedback to the AnimationController of a
+  /// fullscreen emoji effect overlay. [effectCodepoint] is the resolved server
+  /// codepoint of the effect file (see `EmojiEffectCacheService.resolveEffectCodepoint`).
+  HapticBinding attachEmojiEffect(
+    Animation<double> animation,
+    String effectCodepoint, {
+    int totalFrames = 180,
+  }) {
+    final Map<int, VoidCallback> actions = {};
+    final keyframes = effectKeyframesFor(effectCodepoint);
+    if (keyframes != null) {
+      for (final (frame, type) in keyframes) {
+        actions[frame] = () => _pulse(type);
+      }
+    }
+    return HapticBinding(
+      animation: animation,
+      totalFrames: totalFrames,
+      frameActions: actions,
+    );
+  }
+
   /// Attaches frame-accurate haptic feedback to the roll / idle phase AnimationController of a dice or ball.
   HapticBinding attachDiceRoll(
     Animation<double> animation,
@@ -1467,11 +1567,7 @@ class EmojiHapticService extends ChangeNotifier {
     }
 
     if (trimmed == '🍑' || trimmed == '1f351') {
-      _schedule(517, () => _pulse(HapticType.heavy));
-      _schedule(833, () => _pulse(HapticType.impact));
-      _schedule(950, () => _pulse(HapticType.heavy));
-      _schedule(1700, () => _pulse(HapticType.impact));
-      _schedule(1850, () => _pulse(HapticType.heavy));
+      _schedule(517, () => _pulse(HapticType.heavy)); // effect slaps: attachEmojiEffect('1f351')
       return;
     }
 
