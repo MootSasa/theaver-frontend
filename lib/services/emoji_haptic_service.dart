@@ -3506,6 +3506,486 @@ class EmojiHapticService extends ChangeNotifier {
         actions[150] = () => _pulse(HapticType.selection);
         break;
 
+
+
+      case '😲':
+      case '1f632':
+        actions[10] = () => _pulse(HapticType.selection);
+        actions[24] = () => _pulse(HapticType.impact);
+        actions[52] = () => _pulse(HapticType.tap);
+        actions[71] = () => _pulse(HapticType.tap);
+        actions[93] = () => _pulse(HapticType.tap);
+        actions[139] = () => _pulse(HapticType.impact);
+        break;
+
+      case '😳':
+      case '1f633':
+        actions[30] = () => _pulse(HapticType.selection);
+        actions[58] = () => _pulse(HapticType.tap);
+        actions[113] = () => _pulse(HapticType.impact);
+        actions[126] = () => _pulse(HapticType.impact);
+        actions[145] = () => _pulse(HapticType.tap);
+        actions[168] = () => _pulse(HapticType.selection);
+        break;
+
+      case '😴':
+      case '1f634':
+        actions[28] = () => _pulse(HapticType.selection);
+        actions[54] = () => _pulse(HapticType.tap);
+        actions[72] = () => _pulse(HapticType.impact);
+        actions[102] = () => _pulse(HapticType.tap);
+        actions[126] = () => _pulse(HapticType.impact);
+        actions[144] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😵':
+      case '1f635':
+        actions[14] = () => _pulse(HapticType.selection);
+        actions[32] = () => _pulse(HapticType.impact);
+        actions[43] = () => _pulse(HapticType.heavy);
+        actions[62] = () => _pulse(HapticType.tap);
+        actions[101] = () => _pulse(HapticType.impact);
+        actions[117] = () => _pulse(HapticType.tap);
+        actions[149] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😵‍💫':
+      case '1f635-200d-1f4ab':
+        actions[10] = () => _pulse(HapticType.impact);
+        actions[30] = () => _pulse(HapticType.tap);
+        actions[60] = () => _pulse(HapticType.impact);
+        actions[86] = () => _pulse(HapticType.tap);
+        actions[110] = () => _pulse(HapticType.tap);
+        actions[130] = () => _pulse(HapticType.impact);
+        break;
+
+      case '😶':
+      case '1f636':
+        actions[20] = () => _pulse(HapticType.selection);
+        actions[57] = () => _pulse(HapticType.tap);
+        actions[77] = () => _pulse(HapticType.selection);
+        actions[116] = () => _pulse(HapticType.tap);
+        actions[140] = () => _pulse(HapticType.selection);
+        actions[162] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😶‍🌫️':
+      case '😶‍🌫':
+      case '1f636-200d-1f32b':
+      case '1f636-200d-1f32b-fe0f':
+        actions[21] = () => _pulse(HapticType.selection);
+        actions[67] = () => _pulse(HapticType.impact);
+        actions[84] = () => _pulse(HapticType.tap);
+        actions[96] = () => _pulse(HapticType.tap);
+        actions[112] = () => _pulse(HapticType.tap);
+        actions[140] = () => _pulse(HapticType.impact);
+        actions[160] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😷':
+      case '1f637':
+        actions[26] = () => _pulse(HapticType.selection);
+        actions[93] = () => _pulse(HapticType.impact);
+        actions[110] = () => _pulse(HapticType.heavy);
+        actions[121] = () => _pulse(HapticType.impact);
+        actions[134] = () => _pulse(HapticType.tap);
+        actions[152] = () => _pulse(HapticType.selection);
+        break;
+
+      case '😸':
+      case '1f638':
+        const frames = 160;
+        actions[14] = () => _pulse(HapticType.selection);
+        actions[31] = () => _pulse(HapticType.tap);
+        actions[66] = () => _pulse(HapticType.selection);
+        actions[79] = () => _pulse(HapticType.impact);
+        actions[103] = () => _pulse(HapticType.impact);
+        actions[135] = () => _pulse(HapticType.tap);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '😹':
+      case '1f639':
+        const frames = 150;
+        actions[14] = () => _pulse(HapticType.selection);
+        actions[24] = () => _pulse(HapticType.impact);
+        actions[42] = () => _pulse(HapticType.heavy);
+        actions[59] = () => _pulse(HapticType.tap);
+        actions[82] = () => _pulse(HapticType.heavy);
+        actions[107] = () => _pulse(HapticType.tap);
+        actions[131] = () => _pulse(HapticType.tap);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '😺':
+      case '1f63a':
+        actions[16] = () => _pulse(HapticType.selection);
+        actions[44] = () => _pulse(HapticType.impact);
+        actions[78] = () => _pulse(HapticType.impact);
+        actions[96] = () => _pulse(HapticType.tap);
+        actions[115] = () => _pulse(HapticType.tap);
+        actions[138] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😻':
+      case '1f63b':
+        actions[17] = () => _pulse(HapticType.impact);
+        actions[32] = () => _pulse(HapticType.tap);
+        actions[65] = () => _pulse(HapticType.impact);
+        actions[80] = () => _pulse(HapticType.tap);
+        actions[115] = () => _pulse(HapticType.impact);
+        actions[130] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😼':
+      case '1f63c':
+        actions[27] = () => _pulse(HapticType.selection);
+        actions[44] = () => _pulse(HapticType.tap);
+        actions[77] = () => _pulse(HapticType.impact);
+        actions[94] = () => _pulse(HapticType.tap);
+        actions[136] = () => _pulse(HapticType.impact);
+        actions[160] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😽':
+      case '1f63d':
+        actions[15] = () => _pulse(HapticType.tap);
+        actions[31] = () => _pulse(HapticType.tap);
+        actions[57] = () => _pulse(HapticType.tap);
+        actions[78] = () => _pulse(HapticType.impact);
+        actions[93] = () => _pulse(HapticType.tap);
+        actions[123] = () => _pulse(HapticType.tap);
+        actions[166] = () => _pulse(HapticType.tap);
+        break;
+
+      case '😾':
+      case '1f63e':
+        const frames = 170;
+        actions[12] = () => _pulse(HapticType.selection);
+        actions[25] = () => _pulse(HapticType.tap);
+        actions[43] = () => _pulse(HapticType.impact);
+        actions[62] = () => _pulse(HapticType.tap);
+        actions[88] = () => _pulse(HapticType.tap);
+        actions[114] = () => _pulse(HapticType.tap);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '😿':
+      case '1f63f':
+        actions[8] = () => _pulse(HapticType.selection);
+        actions[28] = () => _pulse(HapticType.impact);
+        actions[58] = () => _pulse(HapticType.tap);
+        actions[85] = () => _pulse(HapticType.heavy);
+        actions[110] = () => _pulse(HapticType.impact);
+        actions[151] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🙀':
+      case '1f640':
+        const frames = 150;
+        actions[18] = () => _pulse(HapticType.selection);
+        actions[32] = () => _pulse(HapticType.heavy);
+        actions[55] = () => _pulse(HapticType.impact);
+        actions[80] = () => _pulse(HapticType.tap);
+        actions[95] = () => _pulse(HapticType.tap);
+        actions[114] = () => _pulse(HapticType.tap);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '🙁':
+      case '1f641':
+        actions[23] = () => _pulse(HapticType.selection);
+        actions[67] = () => _pulse(HapticType.tap);
+        actions[89] = () => _pulse(HapticType.tap);
+        actions[107] = () => _pulse(HapticType.tap);
+        actions[153] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🙂':
+      case '1f642':
+        actions[26] = () => _pulse(HapticType.selection);
+        actions[74] = () => _pulse(HapticType.tap);
+        actions[92] = () => _pulse(HapticType.impact);
+        actions[109] = () => _pulse(HapticType.tap);
+        actions[155] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🙃':
+      case '1f643':
+        actions[13] = () => _pulse(HapticType.selection);
+        actions[35] = () => _pulse(HapticType.heavy);
+        actions[67] = () => _pulse(HapticType.impact);
+        actions[97] = () => _pulse(HapticType.tap);
+        actions[125] = () => _pulse(HapticType.tap);
+        actions[164] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🙄':
+      case '1f644':
+        const frames = 140;
+        actions[8] = () => _pulse(HapticType.selection);
+        actions[20] = () => _pulse(HapticType.tap);
+        actions[42] = () => _pulse(HapticType.tap);
+        actions[58] = () => _pulse(HapticType.impact);
+        actions[95] = () => _pulse(HapticType.tap);
+        actions[127] = () => _pulse(HapticType.tap);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '🙈':
+      case '1f648':
+        actions[24] = () => _pulse(HapticType.impact);
+        actions[60] = () => _pulse(HapticType.tap);
+        actions[90] = () => _pulse(HapticType.tap);
+        actions[140] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🙉':
+      case '1f649':
+        const frames = 137;
+        actions[14] = () => _pulse(HapticType.selection);
+        actions[30] = () => _pulse(HapticType.impact);
+        actions[50] = () => _pulse(HapticType.tap);
+        actions[77] = () => _pulse(HapticType.tap);
+        actions[123] = () => _pulse(HapticType.impact);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '🙊':
+      case '1f64a':
+        const frames = 140;
+        actions[8] = () => _pulse(HapticType.selection);
+        actions[27] = () => _pulse(HapticType.impact);
+        actions[58] = () => _pulse(HapticType.tap);
+        actions[81] = () => _pulse(HapticType.tap);
+        actions[110] = () => _pulse(HapticType.impact);
+        actions[131] = () => _pulse(HapticType.tap);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '🙌':
+      case '1f64c':
+        const frames = 100;
+        actions[18] = () => _pulse(HapticType.selection);
+        actions[37] = () => _pulse(HapticType.tap);
+        actions[59] = () => _pulse(HapticType.tap);
+        actions[70] = () => _pulse(HapticType.heavy);
+        actions[82] = () => _pulse(HapticType.tap);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '🙏':
+      case '1f64f':
+        actions[19] = () => _pulse(HapticType.tap);
+        actions[41] = () => _pulse(HapticType.heavy);
+        actions[68] = () => _pulse(HapticType.impact);
+        actions[95] = () => _pulse(HapticType.tap);
+        actions[138] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🚂':
+      case '1f682':
+        actions[15] = () => _pulse(HapticType.tap);
+        actions[30] = () => _pulse(HapticType.impact);
+        actions[60] = () => _pulse(HapticType.tap);
+        actions[90] = () => _pulse(HapticType.tap);
+        actions[120] = () => _pulse(HapticType.impact);
+        actions[150] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🚑':
+      case '1f691':
+        actions[15] = () => _pulse(HapticType.selection);
+        actions[46] = () => _pulse(HapticType.tap);
+        actions[88] = () => _pulse(HapticType.impact);
+        actions[111] = () => _pulse(HapticType.selection);
+        actions[146] = () => _pulse(HapticType.impact);
+        actions[154] = () => _pulse(HapticType.heavy);
+        break;
+
+      case '🚓':
+      case '1f693':
+        actions[21] = () => _pulse(HapticType.tap);
+        actions[49] = () => _pulse(HapticType.impact);
+        actions[74] = () => _pulse(HapticType.impact);
+        actions[105] = () => _pulse(HapticType.tap);
+        actions[125] = () => _pulse(HapticType.heavy);
+        actions[147] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🚕':
+      case '1f695':
+        actions[28] = () => _pulse(HapticType.selection);
+        actions[45] = () => _pulse(HapticType.impact);
+        actions[68] = () => _pulse(HapticType.heavy);
+        actions[78] = () => _pulse(HapticType.tap);
+        actions[101] = () => _pulse(HapticType.tap);
+        actions[129] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🚗':
+      case '1f697':
+        actions[11] = () => _pulse(HapticType.selection);
+        actions[45] = () => _pulse(HapticType.impact);
+        actions[70] = () => _pulse(HapticType.tap);
+        actions[110] = () => _pulse(HapticType.tap);
+        actions[132] = () => _pulse(HapticType.heavy);
+        actions[152] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🚩':
+      case '1f6a9':
+        actions[22] = () => _pulse(HapticType.selection);
+        actions[55] = () => _pulse(HapticType.tap);
+        actions[82] = () => _pulse(HapticType.impact);
+        actions[111] = () => _pulse(HapticType.tap);
+        actions[138] = () => _pulse(HapticType.impact);
+        actions[157] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🚹':
+      case '1f6b9':
+        actions[14] = () => _pulse(HapticType.tap);
+        actions[35] = () => _pulse(HapticType.tap);
+        actions[57] = () => _pulse(HapticType.tap);
+        actions[75] = () => _pulse(HapticType.impact);
+        actions[96] = () => _pulse(HapticType.tap);
+        actions[142] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🚺':
+      case '1f6ba':
+        actions[14] = () => _pulse(HapticType.tap);
+        actions[35] = () => _pulse(HapticType.tap);
+        actions[57] = () => _pulse(HapticType.tap);
+        actions[75] = () => _pulse(HapticType.impact);
+        actions[96] = () => _pulse(HapticType.tap);
+        actions[142] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🚼':
+      case '1f6bc':
+        const frames = 175;
+        actions[19] = () => _pulse(HapticType.selection);
+        actions[60] = () => _pulse(HapticType.tap);
+        actions[79] = () => _pulse(HapticType.impact);
+        actions[97] = () => _pulse(HapticType.heavy);
+        actions[116] = () => _pulse(HapticType.tap);
+        actions[135] = () => _pulse(HapticType.selection);
+        return HapticBinding(
+          animation: animation,
+          totalFrames: frames,
+          frameActions: actions,
+        );
+
+      case '🛂':
+      case '1f6c2':
+        actions[16] = () => _pulse(HapticType.selection);
+        actions[33] = () => _pulse(HapticType.tap);
+        actions[55] = () => _pulse(HapticType.tap);
+        actions[93] = () => _pulse(HapticType.selection);
+        actions[123] = () => _pulse(HapticType.heavy);
+        actions[147] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🛃':
+      case '1f6c3':
+        actions[16] = () => _pulse(HapticType.selection);
+        actions[45] = () => _pulse(HapticType.impact);
+        actions[64] = () => _pulse(HapticType.tap);
+        actions[84] = () => _pulse(HapticType.tap);
+        actions[122] = () => _pulse(HapticType.heavy);
+        actions[161] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🛄':
+      case '1f6c4':
+        actions[73] = () => _pulse(HapticType.selection);
+        actions[90] = () => _pulse(HapticType.tap);
+        actions[107] = () => _pulse(HapticType.heavy);
+        actions[130] = () => _pulse(HapticType.impact);
+        actions[143] = () => _pulse(HapticType.tap);
+        actions[162] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🛅':
+      case '1f6c5':
+        actions[14] = () => _pulse(HapticType.tap);
+        actions[44] = () => _pulse(HapticType.heavy);
+        actions[55] = () => _pulse(HapticType.impact);
+        actions[123] = () => _pulse(HapticType.tap);
+        actions[138] = () => _pulse(HapticType.impact);
+        actions[155] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🛍️':
+      case '🛍':
+      case '1f6cd':
+      case '1f6cd-fe0f':
+        actions[22] = () => _pulse(HapticType.tap);
+        actions[35] = () => _pulse(HapticType.impact);
+        actions[63] = () => _pulse(HapticType.tap);
+        actions[89] = () => _pulse(HapticType.tap);
+        actions[115] = () => _pulse(HapticType.tap);
+        actions[163] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🛒':
+      case '1f6d2':
+        actions[23] = () => _pulse(HapticType.tap);
+        actions[60] = () => _pulse(HapticType.impact);
+        actions[68] = () => _pulse(HapticType.tap);
+        actions[96] = () => _pulse(HapticType.heavy);
+        actions[119] = () => _pulse(HapticType.impact);
+        actions[157] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🛥️':
+      case '🛥':
+      case '1f6e5':
+      case '1f6e5-fe0f':
+        actions[30] = () => _pulse(HapticType.tap);
+        actions[65] = () => _pulse(HapticType.impact);
+        actions[83] = () => _pulse(HapticType.heavy);
+        actions[98] = () => _pulse(HapticType.tap);
+        actions[120] = () => _pulse(HapticType.impact);
+        actions[150] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🛷':
+      case '1f6f7':
+        actions[29] = () => _pulse(HapticType.tap);
+        actions[41] = () => _pulse(HapticType.impact);
+        actions[77] = () => _pulse(HapticType.tap);
+        actions[104] = () => _pulse(HapticType.impact);
+        actions[129] = () => _pulse(HapticType.heavy);
+        actions[144] = () => _pulse(HapticType.tap);
+        break;
+
       default:
         break;
     }
@@ -3666,6 +4146,19 @@ class EmojiHapticService extends ChangeNotifier {
     '1f62b': [(6, HapticType.tap), (28, HapticType.impact), (65, HapticType.tap), (122, HapticType.impact), (148, HapticType.tap)],
     // 😭 бумажный кораблик начинает покачиваться на волнах слёз, гребень волны подбрасывает кораблик вверх, лопание пузырей на гребне бурлящих волн, яркий всплеск волны и нырок кораблика, качание кораблика на синей океанской зыби, кораблик уплывает в закатные волны
     '1f62d': [(27, HapticType.tap), (54, HapticType.impact), (84, HapticType.tap), (105, HapticType.heavy), (137, HapticType.tap), (168, HapticType.selection)],
+
+    // 😴 вспышка первых сонных звёздочек, первая овечка перепрыгивает через забор, взлёт и покачивание полумесяца в небе, хлопок сонного облака и мерцание звезд, третья овечка перепрыгивает через забор, парение сонных букв Z в лунном свете
+    '1f634': [(15, HapticType.tap), (38, HapticType.impact), (61, HapticType.tap), (83, HapticType.tap), (96, HapticType.impact), (115, HapticType.tap)],
+    // 😵‍💫 вспышка и вылет роя головокружительных смайликов, первый вираж кружащихся смайликов по спирали, скрещивание орбит и резкий разлёт голов, вихревой перехват траектории звёзд, первый комиксный взрыв «Bang», финальный каскадный взрыв комиксных вспышек
+    '1f635-200d-1f4ab': [(18, HapticType.tap), (43, HapticType.tap), (73, HapticType.impact), (98, HapticType.tap), (122, HapticType.impact), (150, HapticType.heavy)],
+    // 🙈 взрыв тропических листьев и вылет птиц, залп летящих бананов и кокосов, пик вращения кокосов в воздухе, падение плодов и клубы пыли на земле, финальный шелест опадающих листьев
+    '1f648': [(12, HapticType.impact), (50, HapticType.tap), (75, HapticType.tap), (110, HapticType.heavy), (154, HapticType.tap)],
+    // 🙉 акустический хлопок звуковой волны, мощный басовый импульс наушников, звуковой залп из громкоговорителя, взрыв аудиочастиц из колонок, затухание звука и появление значка тишины
+    '1f649': [(4, HapticType.impact), (40, HapticType.heavy), (60, HapticType.tap), (103, HapticType.impact), (138, HapticType.tap)],
+    // 🙊 вылет первых букв и слов из рта, акробатический кувырок и выпад змейки, взрыв разноцветных слогов болтовни, резкий бросок змеи со всплеском, рассеивание облака звуковой пыли
+    '1f64a': [(20, HapticType.tap), (40, HapticType.impact), (70, HapticType.tap), (95, HapticType.heavy), (141, HapticType.tap)],
+    // 🙏 яркая вспышка священных искр при начале молитвы, раскрытие сияющего ореола божественного света, мягкое кружение лепестков лотоса, россыпь золотых искр, мягкое мерцание звезд вокруг сложенных ладоней
+    '1f64f': [(6, HapticType.impact), (32, HapticType.tap), (54, HapticType.tap), (82, HapticType.tap), (112, HapticType.tap)],
   };
 
   /// Returns the calibrated effect keyframes for the resolved effect codepoint
