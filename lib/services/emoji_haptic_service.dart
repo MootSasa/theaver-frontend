@@ -2791,6 +2791,179 @@ class EmojiHapticService extends ChangeNotifier {
         actions[144] = () => _pulse(HapticType.heavy);
         break;
 
+      case '🔬':
+      case '1f52c':
+        actions[28] = () => _pulse(HapticType.tap);
+        actions[47] = () => _pulse(HapticType.selection);
+        actions[80] = () => _pulse(HapticType.impact);
+        actions[108] = () => _pulse(HapticType.tap);
+        actions[139] = () => _pulse(HapticType.heavy);
+        actions[165] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🔭':
+      case '1f52d':
+        actions[15] = () => _pulse(HapticType.impact);
+        actions[30] = () => _pulse(HapticType.tap);
+        actions[76] = () => _pulse(HapticType.heavy);
+        actions[101] = () => _pulse(HapticType.selection);
+        actions[142] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🔮':
+      case '1f52e':
+        actions[17] = () => _pulse(HapticType.selection);
+        actions[36] = () => _pulse(HapticType.tap);
+        actions[50] = () => _pulse(HapticType.impact);
+        actions[67] = () => _pulse(HapticType.heavy);
+        actions[94] = () => _pulse(HapticType.impact);
+        actions[126] = () => _pulse(HapticType.heavy);
+        actions[162] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🕊️':
+      case '🕊':
+      case '1f54a':
+      case '1f54a-fe0f':
+        actions[18] = () => _pulse(HapticType.impact);
+        actions[45] = () => _pulse(HapticType.heavy);
+        actions[68] = () => _pulse(HapticType.tap);
+        actions[119] = () => _pulse(HapticType.tap);
+        actions[151] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🕷️':
+      case '🕷':
+      case '1f577':
+        actions[11] = () => _pulse(HapticType.tap);
+        actions[28] = () => _pulse(HapticType.tap);
+        actions[54] = () => _pulse(HapticType.impact);
+        actions[96] = () => _pulse(HapticType.heavy);
+        actions[123] = () => _pulse(HapticType.tap);
+        actions[143] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🕸️':
+      case '🕸':
+      case '1f578':
+      case '1f578-fe0f':
+        actions[17] = () => _pulse(HapticType.tap);
+        actions[38] = () => _pulse(HapticType.heavy);
+        actions[47] = () => _pulse(HapticType.tap);
+        actions[78] = () => _pulse(HapticType.heavy);
+        actions[96] = () => _pulse(HapticType.tap);
+        actions[136] = () => _pulse(HapticType.impact);
+        actions[160] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🕺':
+      case '1f57a':
+        actions[19] = () => _pulse(HapticType.heavy);
+        actions[37] = () => _pulse(HapticType.impact);
+        actions[71] = () => _pulse(HapticType.tap);
+        actions[100] = () => _pulse(HapticType.heavy);
+        actions[119] = () => _pulse(HapticType.impact);
+        actions[164] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🖐️':
+      case '🖐':
+      case '1f590':
+        actions[13] = () => _pulse(HapticType.tap);
+        actions[30] = () => _pulse(HapticType.selection);
+        actions[42] = () => _pulse(HapticType.heavy);
+        actions[73] = () => _pulse(HapticType.impact);
+        actions[100] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🖕':
+      case '1f595':
+        actions[57] = () => _pulse(HapticType.selection);
+        actions[87] = () => _pulse(HapticType.heavy);
+        actions[105] = () => _pulse(HapticType.tap);
+        actions[131] = () => _pulse(HapticType.impact);
+        actions[155] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🖖':
+      case '1f596':
+        actions[25] = () => _pulse(HapticType.selection);
+        actions[41] = () => _pulse(HapticType.impact);
+        actions[74] = () => _pulse(HapticType.tap);
+        actions[88] = () => _pulse(HapticType.heavy);
+        break;
+
+      case '🖨️':
+      case '🖨':
+      case '1f5a8':
+      case '1f5a8-fe0f':
+        actions[20] = () => _pulse(HapticType.selection);
+        actions[30] = () => _pulse(HapticType.impact);
+        actions[60] = () => _pulse(HapticType.tap);
+        actions[85] = () => _pulse(HapticType.tap);
+        actions[110] = () => _pulse(HapticType.tap);
+        actions[148] = () => _pulse(HapticType.tap);
+        actions[153] = () => _pulse(HapticType.heavy);
+        break;
+
+      case '🗂️':
+      case '🗂':
+      case '1f5c2':
+      case '1f5c2-fe0f':
+        actions[26] = () => _pulse(HapticType.impact);
+        actions[49] = () => _pulse(HapticType.tap);
+        actions[76] = () => _pulse(HapticType.tap);
+        actions[100] = () => _pulse(HapticType.impact);
+        actions[116] = () => _pulse(HapticType.tap);
+        actions[145] = () => _pulse(HapticType.heavy);
+        break;
+
+      case '🗝️':
+      case '🗝':
+      case '1f5dd':
+        actions[12] = () => _pulse(HapticType.selection);
+        actions[36] = () => _pulse(HapticType.tap);
+        actions[55] = () => _pulse(HapticType.impact);
+        actions[73] = () => _pulse(HapticType.heavy);
+        actions[102] = () => _pulse(HapticType.tap);
+        actions[122] = () => _pulse(HapticType.tap);
+        break;
+
+      case '🗣️':
+      case '🗣':
+      case '1f5e3':
+      case '1f5e3-fe0f':
+        actions[25] = () => _pulse(HapticType.tap);
+        actions[41] = () => _pulse(HapticType.impact);
+        actions[61] = () => _pulse(HapticType.heavy);
+        actions[77] = () => _pulse(HapticType.tap);
+        actions[106] = () => _pulse(HapticType.tap);
+        actions[142] = () => _pulse(HapticType.impact);
+        break;
+
+      case '🗯️':
+      case '🗯':
+      case '1f5ef':
+      case '1f5ef-fe0f':
+        actions[31] = () => _pulse(HapticType.selection);
+        actions[42] = () => _pulse(HapticType.heavy);
+        actions[58] = () => _pulse(HapticType.impact);
+        actions[84] = () => _pulse(HapticType.tap);
+        actions[110] = () => _pulse(HapticType.tap);
+        actions[155] = () => _pulse(HapticType.selection);
+        break;
+
+      case '🗳️':
+      case '🗳':
+      case '1f5f3':
+      case '1f5f3-fe0f':
+        actions[38] = () => _pulse(HapticType.impact);
+        actions[48] = () => _pulse(HapticType.tap);
+        actions[87] = () => _pulse(HapticType.impact);
+        actions[95] = () => _pulse(HapticType.tap);
+        actions[143] = () => _pulse(HapticType.heavy);
+        break;
+
 
       default:
         break;
@@ -2915,6 +3088,14 @@ class EmojiHapticService extends ChangeNotifier {
     '1f51d': [(8, HapticType.tap), (48, HapticType.selection), (88, HapticType.tap), (114, HapticType.tap), (135, HapticType.heavy)],
     // 🔞 появление запретных атрибутов с петлёй и клубникой, всплеск крови и укол шприца, вторая волна брызг и вращение сигареты, вылет каскада сигарет, клубы сигаретного дыма
     '1f51e': [(10, HapticType.tap), (26, HapticType.impact), (76, HapticType.impact), (105, HapticType.tap), (134, HapticType.heavy)],
+    // 🕊️ вспышка пацифистских символов мира, вылет первой волны цветов, мощный салют розовых бутонов, каскад лепестков мира, мягкое опадание цветов
+    '1f54a': [(1, HapticType.impact), (32, HapticType.tap), (93, HapticType.heavy), (109, HapticType.tap), (135, HapticType.selection)],
+    // 🕺 зажигание диско-прожекторов и лучей, ритмичный взмах светового луча, вспышка клубных софитов, взрыв конфетти и фейерверк дискотеки
+    '1f57a': [(5, HapticType.impact), (49, HapticType.tap), (85, HapticType.impact), (148, HapticType.heavy)],
+    // 🖕 ударная волна комиксного взрыва, грохочущие разряды возмущения, искры молний гнева, финальный громовой взрыв
+    '1f595': [(10, HapticType.heavy), (35, HapticType.tap), (69, HapticType.tap), (142, HapticType.heavy)],
+    // 🖖 звук включения телепорта, появление Спока с поднятой бровью, салют экипажа корабля, вспышка гиперпрыжка в варп
+    '1f596': [(10, HapticType.tap), (55, HapticType.impact), (105, HapticType.impact), (145, HapticType.heavy)],
   };
 
   /// Returns the calibrated effect keyframes for the resolved effect codepoint
