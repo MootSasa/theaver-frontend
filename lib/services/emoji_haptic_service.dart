@@ -404,11 +404,10 @@ class EmojiHapticService extends ChangeNotifier {
 
       case '👊':
       case '1f44a':
-        actions[0] = () => _pulse(HapticType.selection);
-        actions[69] = () => _pulse(HapticType.tap); // Windup back
-        actions[91] = () => _pulseClimax(); // Fist punch slam right into screen glass
-        actions[97] = () => _pulse(HapticType.impact);
-        actions[105] = () => _pulse(HapticType.selection); // Recoil
+        // Fist pulls back slowly in anticipation (f0-f91).
+        // Strike onto screen glass occurs precisely at frame 97 (peak scale 120.5% + impact burst)
+        actions[97] = () => _pulseClimax(withSecondaryEcho: true); // Powerful punch smash into screen glass
+        actions[108] = () => _pulse(HapticType.impact); // Screen recoil shockwave
         break;
 
       case '🚀':
@@ -915,11 +914,9 @@ class EmojiHapticService extends ChangeNotifier {
 
       case '👊':
       case '1f44a':
-        _pulse(HapticType.selection);
-        _schedule(1150, () => _pulse(HapticType.tap)); // Windup back
-        _schedule(1517, () => _pulseClimax()); // Fist punch slam right into screen glass
-        _schedule(1617, () => _pulse(HapticType.impact));
-        _schedule(1750, () => _pulse(HapticType.selection)); // Recoil
+        // Strike onto screen glass occurs precisely at frame 97 (1617 ms)
+        _schedule(1617, () => _pulseClimax(withSecondaryEcho: true)); // Powerful punch smash into screen glass
+        _schedule(1800, () => _pulse(HapticType.impact)); // Screen recoil shockwave
         break;
 
       case '🚀':
