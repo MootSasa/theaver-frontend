@@ -4,6 +4,7 @@ import '../l10n/app_localizations.dart';
 import '../services/chat_service.dart';
 import '../widgets/chat/message_context_menu.dart';
 import '../widgets/message/poll_message_widget.dart';
+import '../utils/emoji_utils.dart';
 
 class MessageContextMenuService {
   static final MessageContextMenuService _instance =
@@ -39,6 +40,7 @@ class MessageContextMenuService {
     final size = renderBox.size;
 
     final bool isPoll = message.messageType == 'poll';
+    final bool isDice = message.messageType == 'dice' || EmojiUtils.isDiceEmoji(message.content);
     final Map<String, dynamic>? pollData = isPoll ? message.mediaPayload : null;
     final int? pollId = PollMessageWidget.getPollId(pollData);
     final String? effectiveUserId =
@@ -113,12 +115,12 @@ class MessageContextMenuService {
           isMe: isMe,
           sendStatus: message.sendStatus,
           onReply: onReply,
-          onQuote: isPoll ? null : onQuote,
+          onQuote: (isPoll || isDice) ? null : onQuote,
           onCopy: () {
             Clipboard.setData(ClipboardData(text: message.content));
           },
           onPin: onPin,
-          onEdit: isPoll ? null : onEdit,
+          onEdit: (isPoll || isDice) ? null : onEdit,
           onViewPollResults: onViewPollResults,
           onRetractVote: onRetractVote,
           onStopPoll: onStopPoll,

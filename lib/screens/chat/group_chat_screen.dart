@@ -779,6 +779,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final senderId = event.data['user_id']?.toString();
     if (senderId == _currentUserId) return;
 
+    final action = event.data['action']?.toString() ?? 'tap';
+    if (action != 'tap') return; // Group chats only trigger synchronized animations on direct tap
+
     final messageId = event.data['message_id']?.toString() ?? '';
 
     if (mounted) {
@@ -1630,6 +1633,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             final serverId = sentMessage is Message ? sentMessage.id : null;
             if (serverId != null && serverId.isNotEmpty) {
               await syncService.confirmMessageSent(pendingLocalId, serverId);
+              if (sentMessage is Message) {
+                try {
+                  await AppDatabase().saveMessage(_messageToCompanion(sentMessage.copyWith(
+                    localId: pendingLocalId,
+                    sendStatus: 1,
+                  )));
+                } catch (_) {}
+              }
               if (mounted) {
                 setState(() {
                   final idx =

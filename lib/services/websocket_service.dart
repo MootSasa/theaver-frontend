@@ -507,12 +507,18 @@ class WebSocketService {
     });
   }
 
-  /// Send animated emoji interaction (tap playback) to chat participants
-  void sendEmojiInteraction(String chatId, {required String messageId, required String emoji}) {
+  /// Send animated emoji interaction (tap playback or watching acknowledgement) to chat participants
+  void sendEmojiInteraction(
+    String chatId, {
+    required String messageId,
+    required String emoji,
+    String action = 'tap',
+  }) {
     sendMessage('emoji_interaction', {
       'chat_id': chatId,
       'message_id': messageId,
       'emoji': emoji,
+      'action': action,
     });
   }
 

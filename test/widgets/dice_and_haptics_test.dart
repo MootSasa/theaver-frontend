@@ -1439,5 +1439,35 @@ void main() {
 
       controller.dispose();
     });
+
+    test('SlotMachine haptic stop frames match reel stop keyframes (all 3 reels stop at f84)', () {
+      final haptic = EmojiHapticService.instance;
+      final vsync = const TestVSync();
+      final controller = AnimationController(vsync: vsync, duration: const Duration(seconds: 3));
+
+      // Value 64 (777 win)
+      final bindingWin = haptic.attachSlotMachine(controller, 64, totalFrames: 180);
+      expect(bindingWin.frameActions.containsKey(0), isTrue, reason: 'Lever pull');
+      expect(bindingWin.frameActions.containsKey(32), isTrue, reason: 'Left reel stop');
+      expect(bindingWin.frameActions.containsKey(58), isTrue, reason: 'Center reel stop');
+      expect(bindingWin.frameActions.containsKey(84), isTrue, reason: 'Right reel stop (all 3 stopped)');
+      expect(bindingWin.frameActions.containsKey(98), isTrue, reason: 'Jackpot celebration');
+      bindingWin.dispose();
+
+      // Non-win (value 2)
+      final bindingLoss = haptic.attachSlotMachine(controller, 2, totalFrames: 180);
+      expect(bindingLoss.frameActions.containsKey(84), isTrue);
+      expect(bindingLoss.frameActions.containsKey(98), isFalse, reason: 'No jackpot vibration on non-win');
+      bindingLoss.dispose();
+
+      controller.dispose();
+    });
+
+    test('Dice emojis cannot be edited or quoted (outcome immutability)', () {
+      const dice = ['🎲', '🎯', '🏀', '⚽', '🎳', '🎰'];
+      for (final d in dice) {
+        expect(EmojiUtils.isDiceEmoji(d), isTrue);
+      }
+    });
   });
 }

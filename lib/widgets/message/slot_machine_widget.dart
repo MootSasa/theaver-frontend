@@ -38,7 +38,8 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
   late AnimationController _leverController;
   late AnimationController _bgController;
 
-  LottieComposition? _bgComp;
+  LottieComposition? _idleBgComp;
+  LottieComposition? _winBgComp;
   LottieComposition? _leftComp;
   LottieComposition? _centerComp;
   LottieComposition? _rightComp;
@@ -46,12 +47,14 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
 
   bool _isRolling = false;
   bool _hasPlayedOnce = false;
+  bool _showWinBackground = false;
   late SlotReelIndices _indices;
 
   @override
   void initState() {
     super.initState();
     _indices = DiceCacheService.getSlotIndices(widget.value);
+    _showWinBackground = (!widget.autoPlay && _indices.isWin);
 
     _mainController = AnimationController(
       vsync: this,
@@ -66,13 +69,33 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
       duration: const Duration(milliseconds: 1667),
     );
 
+    _mainController.addListener(_onMainFrame);
+
     if (!widget.autoPlay) {
       _mainController.value = 1.0;
       _leverController.value = 1.0;
-      _bgController.value = 1.0;
+      if (_indices.isWin) {
+        _bgController.repeat();
+      } else {
+        _bgController.value = 1.0;
+      }
     }
 
     _loadCompositions();
+  }
+
+  void _onMainFrame() {
+    // Total duration is 3000ms at 60fps = 180 frames.
+    // Right reel lands at frame 84, meaning all 3 reels have fully stopped.
+    final frame = (_mainController.value * 180).floor();
+    if (_indices.isWin && frame >= 84 && !_showWinBackground) {
+      if (mounted) {
+        setState(() {
+          _showWinBackground = true;
+        });
+        _bgController.repeat();
+      }
+    }
   }
 
   @override
@@ -80,6 +103,7 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.value != widget.value) {
       _indices = DiceCacheService.getSlotIndices(widget.value);
+      _showWinBackground = (!widget.autoPlay && _indices.isWin);
       _loadCompositions();
     }
   }
@@ -88,6 +112,7 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
 
   @override
   void dispose() {
+    _mainController.removeListener(_onMainFrame);
     _hapticBinding?.dispose();
     _mainController.dispose();
     _leverController.dispose();
@@ -99,14 +124,18 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     const cp = '1f3b0';
     _indices = DiceCacheService.getSlotIndices(widget.value);
 
-    final bgFuture = DiceCacheService.instance.getDiceComposition(cp, _indices.backgroundIndex);
+    final idleBgFuture = DiceCacheService.instance.getDiceComposition(cp, 1);
+    final winBgFuture = _indices.isWin
+        ? DiceCacheService.instance.getDiceComposition(cp, 2)
+        : Future.value(null);
     final leverFuture = DiceCacheService.instance.getDiceComposition(cp, _indices.leverIndex);
     final leftFuture = DiceCacheService.instance.getDiceComposition(cp, _indices.leftOutcomeIndex);
     final centerFuture = DiceCacheService.instance.getDiceComposition(cp, _indices.centerOutcomeIndex);
     final rightFuture = DiceCacheService.instance.getDiceComposition(cp, _indices.rightOutcomeIndex);
 
     final results = await Future.wait([
-      bgFuture,
+      idleBgFuture,
+      winBgFuture,
       leverFuture,
       leftFuture,
       centerFuture,
@@ -116,11 +145,12 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     if (!mounted) return;
 
     setState(() {
-      _bgComp = results[0];
-      _leverComp = results[1];
-      _leftComp = results[2];
-      _centerComp = results[3];
-      _rightComp = results[4];
+      _idleBgComp = results[0];
+      _winBgComp = results[1];
+      _leverComp = results[2];
+      _leftComp = results[3];
+      _centerComp = results[4];
+      _rightComp = results[5];
     });
 
     if (widget.autoPlay && !_hasPlayedOnce) {
@@ -129,13 +159,22 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     } else if (!_isRolling) {
       _mainController.value = 1.0;
       _leverController.value = 1.0;
-      _bgController.value = 1.0;
+      if (_indices.isWin) {
+        _bgController.repeat();
+      } else {
+        _bgController.value = 1.0;
+      }
     }
   }
 
   Future<void> _playSequence() async {
     if (_isRolling) return;
-    setState(() => _isRolling = true);
+    setState(() {
+      _isRolling = true;
+      _showWinBackground = false;
+    });
+    _bgController.stop();
+    _bgController.value = 0.0;
 
     // Frame-accurate synchronized Telegram haptics for slot roll, stops, and jackpot
     _hapticBinding?.dispose();
@@ -151,13 +190,6 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     // 2. Spin reels
     final future = _mainController.forward(from: 0.0);
 
-    // 3. Background lights
-    if (_indices.isWin) {
-      _bgController.repeat();
-    } else {
-      _bgController.forward(from: 0.0);
-    }
-
     try {
       await future.orCancel;
     } catch (_) {
@@ -172,17 +204,18 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
   Widget build(BuildContext context) {
     Widget content;
     if (_leftComp != null && _centerComp != null && _rightComp != null) {
+      final bgComp = _showWinBackground ? _winBgComp : _idleBgComp;
       content = SizedBox(
         width: widget.size,
         height: widget.size,
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Layer 0: Background
-            if (_bgComp != null)
+            // Layer 0: Background (static casing during roll; flashing siren only after all 3 reels stop on win)
+            if (bgComp != null)
               Lottie(
-                composition: _bgComp!,
-                controller: _bgController,
+                composition: bgComp,
+                controller: _showWinBackground ? _bgController : null,
                 width: widget.size,
                 height: widget.size,
                 fit: BoxFit.contain,

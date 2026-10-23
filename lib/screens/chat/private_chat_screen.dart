@@ -785,26 +785,40 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final senderId = event.data['user_id']?.toString();
     if (senderId == _currentUserId) return;
 
+    final action = event.data['action']?.toString() ?? 'tap';
     final emoji = event.data['emoji']?.toString() ?? '';
     final messageId = event.data['message_id']?.toString() ?? '';
 
     if (mounted) {
-      if (EmojiEffectCacheService.instance.hasAnimatedEmoji(emoji)) {
-        setState(() {
-          _watchingEmoji = emoji;
-        });
-        _watchingEmojiTimer?.cancel();
-        _watchingEmojiTimer = Timer(const Duration(milliseconds: 3800), () {
-          if (mounted) {
-            setState(() {
-              _watchingEmoji = null;
-            });
-          }
-        });
+      if (action == 'tap') {
+        // The other user tapped on an emoji message.
+        // Play animation, haptics, and effect ONLY if this emoji is currently visible on screen.
+        final wasVisible = EmojiInteractionManager.instance.trigger(messageId);
+        if (wasVisible && EmojiEffectCacheService.instance.hasAnimatedEmoji(emoji)) {
+          // Since we are viewing and playing the emoji animation, notify the sender that we are watching!
+          _wsService.sendEmojiInteraction(
+            widget.chatId,
+            messageId: messageId,
+            emoji: emoji,
+            action: 'watching',
+          );
+        }
+      } else if (action == 'watching') {
+        // The recipient is currently watching our tapped emoji animation on their screen!
+        if (EmojiEffectCacheService.instance.hasAnimatedEmoji(emoji)) {
+          setState(() {
+            _watchingEmoji = emoji;
+          });
+          _watchingEmojiTimer?.cancel();
+          _watchingEmojiTimer = Timer(const Duration(milliseconds: 3800), () {
+            if (mounted) {
+              setState(() {
+                _watchingEmoji = null;
+              });
+            }
+          });
+        }
       }
-
-      // Play animation, haptics, and effect ONLY if this emoji is visible on screen
-      EmojiInteractionManager.instance.trigger(messageId);
     }
   }
 
@@ -2281,6 +2295,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             final serverId = sentMessage is Message ? sentMessage.id : null;
             if (serverId != null && serverId.isNotEmpty) {
               await syncService.confirmMessageSent(pendingLocalId, serverId);
+              if (sentMessage is Message) {
+                try {
+                  await AppDatabase().saveMessage(_messageToCompanion(sentMessage.copyWith(
+                    localId: pendingLocalId,
+                    sendStatus: 1,
+                  )));
+                } catch (_) {}
+              }
               // Обновить в UI
               if (mounted) {
                 setState(() {
