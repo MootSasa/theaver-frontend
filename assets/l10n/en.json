@@ -697,6 +697,7 @@
   "chat_open_file": "Open",
   "chat_file_not_found": "File not found",
   "chat_typing": "is typing...",
+  "chat_watching_emoji": "is looking at {emoji}",
   "chat_user_typing": "{name} is typing...",
   "chat_status_last_seen_just_now": "last seen just now",
   "chat_status_last_seen_minutes": "last seen {m}m ago",

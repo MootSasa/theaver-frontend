@@ -17,6 +17,7 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onReactionUpdated;
   final void Function(WebSocketEvent event)? onMessageRead;
   final void Function(WebSocketEvent event)? onTyping;
+  final void Function(WebSocketEvent event)? onEmojiInteraction;
   final void Function(WebSocketEvent event)? onUserStatus;
   final void Function(WebSocketEvent event)? onUserAvatarUpdated;
   final void Function(WebSocketEvent event)? onUserAppearanceUpdated;
@@ -31,6 +32,7 @@ class ChatSubscription {
     this.onReactionUpdated,
     this.onMessageRead,
     this.onTyping,
+    this.onEmojiInteraction,
     this.onUserStatus,
     this.onUserAvatarUpdated,
     this.onUserAppearanceUpdated,
@@ -81,6 +83,7 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onReactionUpdated,
     void Function(WebSocketEvent event)? onMessageRead,
     void Function(WebSocketEvent event)? onTyping,
+    void Function(WebSocketEvent event)? onEmojiInteraction,
     void Function(WebSocketEvent event)? onUserStatus,
     void Function(WebSocketEvent event)? onUserAvatarUpdated,
     void Function(WebSocketEvent event)? onUserAppearanceUpdated,
@@ -99,6 +102,7 @@ class ChatRealtimeManager {
       onReactionUpdated: onReactionUpdated,
       onMessageRead: onMessageRead,
       onTyping: onTyping,
+      onEmojiInteraction: onEmojiInteraction,
       onUserStatus: onUserStatus,
       onUserAvatarUpdated: onUserAvatarUpdated,
       onUserAppearanceUpdated: onUserAppearanceUpdated,
@@ -158,6 +162,11 @@ class ChatRealtimeManager {
       case WebSocketEventType.typing:
         _dispatchForChat(event.data['chat_id']?.toString(),
             (s) => s.onTyping?.call(event));
+        break;
+
+      case WebSocketEventType.emojiInteraction:
+        _dispatchForChat(event.data['chat_id']?.toString(),
+            (s) => s.onEmojiInteraction?.call(event));
         break;
 
       case WebSocketEventType.unreadCountUpdated:

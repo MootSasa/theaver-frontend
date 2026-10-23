@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
 import '../services/emoji_effect_cache_service.dart';
 import '../services/emoji_haptic_service.dart';
+import '../services/emoji_interaction_manager.dart';
 
 class EmojiUtils {
   static const String _fontFamily = 'AppleEmoji';
@@ -35,9 +36,10 @@ class EmojiUtils {
   /// the 3-second freshness window does not re-trigger autoPlay repeatedly.
   static final Set<String> _autoPlayedKeys = {};
 
-  /// Regular expression to match emojis across UTF-16 surrogates and BMP symbol ranges.
+  /// Regular expression to match emojis including full ZWJ sequences,
+  /// variation selectors, Fitzpatrick skin tones, and keycap sequences.
   static final RegExp emojiRegex = RegExp(
-    r'(\u00a9|\u00ae|[\u203c-\u3299]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])',
+    r'(?:[\u00a9\u00ae\u203c-\u3299]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])(?:[\ufe0e\ufe0f]|\ud83c[\udffb-\udfff])?(?:\u200d(?:[\u00a9\u00ae\u203c-\u3299]|\ud83c[\ud000-\udfff]|\ud83d[\ud000-\udfff]|\ud83e[\ud000-\udfff])(?:[\ufe0e\ufe0f]|\ud83c[\udffb-\udfff])?)*',
     unicode: false,
   );
 
@@ -315,31 +317,35 @@ class EmojiUtils {
 
   /// Builds a [TextSpan] where inline emojis use the local/compact Apple Emoji font.
   static TextSpan buildEmojiTextSpan(String text, {required TextStyle style}) {
+    if (text.isEmpty) {
+      return TextSpan(text: '', style: style);
+    }
     final List<InlineSpan> children = [];
+    final buffer = StringBuffer();
 
     try {
-      text.splitMapJoin(
-        emojiRegex,
-        onMatch: (match) {
-          final emoji = match.group(0)!;
+      for (final cluster in text.characters) {
+        if (isEmojiGrapheme(cluster)) {
+          if (buffer.isNotEmpty) {
+            children.add(TextSpan(text: buffer.toString(), style: style));
+            buffer.clear();
+          }
           children.add(
             TextSpan(
-              text: emoji,
+              text: cluster,
               style: style.copyWith(
                 fontFamily: effectiveFontFamily,
                 fontSize: (style.fontSize ?? 14.0),
               ),
             ),
           );
-          return '';
-        },
-        onNonMatch: (nonEmoji) {
-          if (nonEmoji.isNotEmpty) {
-            children.add(TextSpan(text: nonEmoji, style: style));
-          }
-          return '';
-        },
-      );
+        } else {
+          buffer.write(cluster);
+        }
+      }
+      if (buffer.isNotEmpty) {
+        children.add(TextSpan(text: buffer.toString(), style: style));
+      }
     } catch (e) {
       children.add(TextSpan(text: text, style: style));
     }
@@ -360,6 +366,7 @@ class LottieEmoji extends StatefulWidget {
   final bool autoPlay;
   final bool isMe;
   final String? autoPlayId;
+  final String? messageId;
 
   const LottieEmoji({
     Key? key,
@@ -372,6 +379,7 @@ class LottieEmoji extends StatefulWidget {
     this.autoPlay = false,
     this.isMe = true,
     this.autoPlayId,
+    this.messageId,
   }) : super(key: key);
 
   @override
@@ -386,17 +394,63 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   bool _hasTriggeredAutoPlay = false;
   bool _pendingTapPlay = false;
 
+  bool _isVisibleOnScreen() {
+    if (!mounted) return false;
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) return false;
+    final position = renderBox.localToGlobal(Offset.zero);
+    final size = renderBox.size;
+    final rect = Rect.fromLTWH(position.dx, position.dy, size.width, size.height);
+    final mediaQuery = MediaQuery.maybeOf(context);
+    final screenSize = mediaQuery?.size ?? const Size(1000, 2000);
+    final screenRect = Rect.fromLTWH(0, 0, screenSize.width, screenSize.height);
+    return rect.overlaps(screenRect);
+  }
+
+  void _registerPlayer() {
+    final targetId = widget.messageId ?? widget.autoPlayId;
+    if (targetId != null && targetId.isNotEmpty) {
+      EmojiInteractionManager.instance.registerPlayer(
+        messageId: targetId,
+        isVisible: _isVisibleOnScreen,
+        play: () {
+          if (_isLoadingAnimated && _composition == null) {
+            _pendingTapPlay = true;
+            EmojiHapticService.instance.playInteractiveEmojiHaptic(widget.emoji);
+            _triggerEffect();
+          } else {
+            _playAnimation();
+          }
+        },
+      );
+    }
+  }
+
+  void _unregisterPlayer([String? id]) {
+    final targetId = id ?? widget.messageId ?? widget.autoPlayId;
+    if (targetId != null && targetId.isNotEmpty) {
+      EmojiInteractionManager.instance.unregisterPlayer(targetId);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(vsync: this);
     EmojiEffectCacheService.instance.prefetchEffect(widget.emoji);
+    _registerPlayer();
     _initOrLoadComposition();
   }
 
   @override
   void didUpdateWidget(covariant LottieEmoji oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final oldId = oldWidget.messageId ?? oldWidget.autoPlayId;
+    final newId = widget.messageId ?? widget.autoPlayId;
+    if (oldId != newId) {
+      _unregisterPlayer(oldId);
+      _registerPlayer();
+    }
     if (oldWidget.emoji.trim() != widget.emoji.trim()) {
       _composition = null;
       _isLoadingAnimated = false;
@@ -477,6 +531,7 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
 
   @override
   void dispose() {
+    _unregisterPlayer();
     _hapticBinding?.dispose();
     _controller.dispose();
     super.dispose();
@@ -858,6 +913,7 @@ class _EmojiEffectWidget extends StatefulWidget {
 
 class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  HapticBinding? _hapticBinding;
 
   @override
   void initState() {
@@ -866,6 +922,17 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
       vsync: this,
       duration: widget.composition.duration,
     );
+    final effectCodepoint =
+        EmojiEffectCacheService.instance.resolveEffectCodepoint(widget.emoji);
+    if (effectCodepoint != null) {
+      final totalFrames =
+          (widget.composition.endFrame - widget.composition.startFrame).round();
+      _hapticBinding = EmojiHapticService.instance.attachEmojiEffect(
+        _controller,
+        effectCodepoint,
+        totalFrames: totalFrames > 0 ? totalFrames : 180,
+      );
+    }
     _controller.forward().whenComplete(() {
       if (mounted) {
         widget.onComplete();
@@ -875,6 +942,7 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
 
   @override
   void dispose() {
+    _hapticBinding?.dispose();
     _controller.dispose();
     super.dispose();
   }

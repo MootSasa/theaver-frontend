@@ -30,6 +30,7 @@ enum WebSocketEventType {
   userAvatarUpdated,
   userAppearanceUpdated,
   draftUpdated,
+  emojiInteraction,
 }
 
 /// WebSocket event data
@@ -91,6 +92,8 @@ class WebSocketEvent {
         return WebSocketEventType.userAppearanceUpdated;
       case 'draft_updated':
         return WebSocketEventType.draftUpdated;
+      case 'emoji_interaction':
+        return WebSocketEventType.emojiInteraction;
       default:
         return WebSocketEventType.connected;
     }
@@ -501,6 +504,21 @@ class WebSocketService {
     sendMessage('typing', {
       'chat_id': chatId,
       'is_typing': isTyping,
+    });
+  }
+
+  /// Send animated emoji interaction (tap playback or watching acknowledgement) to chat participants
+  void sendEmojiInteraction(
+    String chatId, {
+    required String messageId,
+    required String emoji,
+    String action = 'tap',
+  }) {
+    sendMessage('emoji_interaction', {
+      'chat_id': chatId,
+      'message_id': messageId,
+      'emoji': emoji,
+      'action': action,
     });
   }
 

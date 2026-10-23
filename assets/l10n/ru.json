@@ -696,6 +696,7 @@
   "chat_open_file": "Открыть",
   "chat_file_not_found": "Файл не найден",
   "chat_typing": "печатает...",
+  "chat_watching_emoji": "смотрит на {emoji}",
   "chat_user_typing": "{name} печатает...",
   "chat_status_last_seen_just_now": "был(а) только что",
   "chat_status_last_seen_minutes": "был(а) {m} мин. назад",
