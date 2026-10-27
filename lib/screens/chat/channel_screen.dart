@@ -402,6 +402,8 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _onFocusChanged() {
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
+    } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
+      DraftService().flushDraft(widget.channelId);
     }
   }
 
@@ -805,18 +807,25 @@ class _ChannelScreenState extends State<ChannelScreen>
       setState(() {
         _messages.insert(0, message);
       });
-      // Don't auto-scroll to bottom on new message - user should stay at current position
-      // _scrollToBottom(); // Removed: user should control scroll position
+      if (message.senderId != _currentUserId) {
+        unawaited(_markMessagesAsRead());
+      }
     }
   }
 
   Future<void> _markMessagesAsRead() async {
-    await ChatService.markMessagesAsRead(
+    final result = await ChatService.markMessagesAsRead(
       chatId: widget.channelId,
       chatTitle: widget.channelName,
     );
+    final markedCount = result['marked_count'] as int? ?? 0;
     // Notify via WebSocket that messages were read
-    _wsService.sendMessageRead(widget.channelId);
+    _wsService.sendMessageRead(widget.channelId, markedCount: markedCount);
+    if (result['success'] == true || markedCount > 0) {
+      try {
+        _unreadCountProvider?.clear(widget.channelId);
+      } catch (_) {}
+    }
   }
 
   Future<void> _loadData() async {
@@ -2930,7 +2939,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     return ChatInputBar(
       controller: _messageController,
       focusNode: _inputFocusNode,
-      hintText: 'Write a post...',
+      hintText: AppLocalizations.of(context)?.translate('channel_write_post') ??
+          'Write a post...',
       replyToMessage: _replyToMessage,
       isQuote: _isQuote,
       quoteText: _quoteText,

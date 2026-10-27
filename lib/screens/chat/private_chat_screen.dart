@@ -641,6 +641,20 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                   _isOtherUserOnline = participant.isOnline;
                   _otherUserLastSeen = participant.lastSeen;
                 });
+                final lastSeenIso = participant.lastSeen?.toIso8601String();
+                try {
+                  await db.updateChatPresence(
+                    widget.chatId,
+                    otherUserId: participant.id,
+                    isOnline: participant.isOnline,
+                    lastSeen: lastSeenIso,
+                  );
+                  await db.updateUserStatus(
+                    participant.id,
+                    isOnline: participant.isOnline,
+                    lastSeen: lastSeenIso,
+                  );
+                } catch (_) {}
                 break;
               }
             }
@@ -655,6 +669,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onFocusChanged() {
+    if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
+      DraftService().flushDraft(widget.chatId);
+    }
     if (mounted) {
       setState(() {});
     }
@@ -896,6 +913,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         }
         _updateFeedItems();
       });
+      try {
+        _unreadCountProvider?.setCount(widget.chatId, newUnreadCount);
+      } catch (_) {}
     }
   }
 
@@ -1210,6 +1230,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _otherUserLastSeen = DateTime.now();
         }
       });
+      final lastSeenIso = _otherUserLastSeen?.toIso8601String();
+      try {
+        final db = AppDatabase();
+        db.updateChatPresence(
+          widget.chatId,
+          otherUserId: userId,
+          isOnline: _isOtherUserOnline,
+          lastSeen: lastSeenIso,
+        );
+        if (userId != null) {
+          db.updateUserStatus(
+            userId,
+            isOnline: _isOtherUserOnline,
+            lastSeen: lastSeenIso,
+          );
+        }
+      } catch (_) {}
     }
   }
 
@@ -1348,7 +1385,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final markedCount = result['marked_count'] as int? ?? 0;
     if (markedCount > 0) {
       _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
+    }
 
+    if (result['success'] == true || markedCount > 0) {
       // Optimistically clear unread count, but KEEP the divider
       // (_showUnreadDivider and _firstUnreadMessageId persist until user leaves chat)
       if (mounted) {
@@ -1357,11 +1396,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         });
       }
 
-      // Update the provider
-      if (mounted) {
-        final provider = context.read<UnreadCountProvider>();
-        provider.clear(widget.chatId);
-      }
+      try {
+        _unreadCountProvider?.clear(widget.chatId);
+      } catch (_) {}
     }
   }
 
@@ -1672,6 +1709,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             _isOtherUserOnline = participant.isOnline;
             _otherUserLastSeen = participant.lastSeen;
           });
+          final lastSeenIso = participant.lastSeen?.toIso8601String();
+          try {
+            final db = AppDatabase();
+            unawaited(db.updateChatPresence(
+              widget.chatId,
+              otherUserId: participant.id,
+              isOnline: participant.isOnline,
+              lastSeen: lastSeenIso,
+            ));
+            unawaited(db.updateUserStatus(
+              participant.id,
+              isOnline: participant.isOnline,
+              lastSeen: lastSeenIso,
+            ));
+          } catch (_) {}
           ProfileInstantCache.instance.prefetchUser(
             participant.id,
             chatId: widget.chatId,
@@ -1683,9 +1735,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     // Get unread info before loading messages
     final unreadInfo = await ChatService.getUnreadInfo(chatId: widget.chatId);
-    if (unreadInfo['success'] == true) {
+    if (unreadInfo['success'] == true && mounted) {
+      final serverUnread = unreadInfo['unread_count'] as int? ?? 0;
       setState(() {
-        _unreadCount = unreadInfo['unread_count'] as int? ?? 0;
+        _unreadCount = serverUnread;
         _firstUnreadMessageId =
             unreadInfo['first_unread_message_id'] as String?;
         // Установить разделитель при входе в чат (если есть непрочитанные)
@@ -1695,6 +1748,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         }
         _updateFeedItems();
       });
+      try {
+        _unreadCountProvider?.setCount(widget.chatId, serverUnread);
+      } catch (_) {}
     }
 
     // Load saved keyboard height

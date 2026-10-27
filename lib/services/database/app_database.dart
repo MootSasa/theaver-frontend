@@ -554,6 +554,47 @@ class AppDatabase extends _$AppDatabase {
         .write(MessagesCompanion(senderAvatarUrl: Value(avatarUrl)));
   }
 
+  /// Обновить статус онлайн и время последнего визита собеседника во всех личных чатах с этим пользователем
+  Future<void> updateUserStatus(
+    String userId, {
+    required bool isOnline,
+    String? lastSeen,
+  }) async {
+    if (userId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)
+          ..where((t) =>
+              t.chatType.equals('private') & t.otherUserId.equals(userId)))
+        .write(
+      ChatsCompanion(
+        isOnline: Value(isOnline),
+        lastSeen: lastSeen != null
+            ? Value(lastSeen)
+            : (isOnline ? const Value.absent() : Value(DateTime.now().toIso8601String())),
+      ),
+    );
+  }
+
+  /// Обновить статус онлайн, время последнего визита и otherUserId для конкретного личного чата
+  Future<void> updateChatPresence(
+    String chatId, {
+    String? otherUserId,
+    required bool isOnline,
+    String? lastSeen,
+  }) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        otherUserId: otherUserId != null && otherUserId.isNotEmpty
+            ? Value(otherUserId)
+            : const Value.absent(),
+        isOnline: Value(isOnline),
+        lastSeen: Value(lastSeen),
+      ),
+    );
+  }
+
   /// Дедупликация чатов "Избранное": оставляет один канонический чат, переносит сообщения и удаляет дубликаты
   Future<void> _cleanupDuplicateSavedChats([String? userId]) async {
     final savedChatsList = await (select(chats)..where((t) => t.chatType.equals('saved'))).get();

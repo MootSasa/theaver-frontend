@@ -1016,5 +1016,8 @@
   "check_updates_error": "Failed to check for updates",
   "settings_send_by_enter_title": "Send by Enter",
   "settings_send_by_enter_subtitle_on": "Enter — send message, Shift+Enter or Ctrl+Enter — new line",
-  "settings_send_by_enter_subtitle_off": "Ctrl+Enter — send message, Enter — new line"
+  "settings_send_by_enter_subtitle_off": "Ctrl+Enter — send message, Enter — new line",
+  "chat_draft_prefix": "Draft",
+  "chat_add_caption": "Add a caption...",
+  "channel_write_post": "Write a post..."
 }

@@ -950,5 +950,8 @@
   "message_unsupported_update_btn": "更新 Theaver",
   "message_unsupported_preview": "不支持的消息",
   "app_up_to_date": "您已使用最新版本的 Theaver",
-  "check_updates_error": "检查更新失败"
+  "check_updates_error": "检查更新失败",
+  "chat_draft_prefix": "草稿",
+  "chat_add_caption": "添加说明...",
+  "channel_write_post": "撰写帖子..."
 }

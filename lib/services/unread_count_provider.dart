@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'database/app_database.dart';
 import 'websocket_service.dart';
 import 'chat_service.dart';
 import 'notification_service.dart';
@@ -16,6 +17,12 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Map of chatId -> unreadCount
   final Map<String, int> _counts = {};
 
+  /// Set of chatIds that have received an explicit count update before full initial load
+  final Set<String> _knownChatIds = {};
+
+  /// Whether loadFromChats has been called at least once for the active session
+  bool _hasLoadedInitialChats = false;
+
   /// Map of chatId -> reference count of mounted chat tiles showing this chat.
   /// Messages in any open chat should NOT increment unread badges.
   final Map<String, int> _openChatCounts = {};
@@ -25,6 +32,10 @@ class UnreadCountProvider extends ChangeNotifier {
 
   /// Stream subscription for WebSocket events
   StreamSubscription<WebSocketEvent>? _wsSubscription;
+
+  /// Whether the provider has authoritative count data for [chatId]
+  bool hasAuthoritativeCount(String chatId) =>
+      _hasLoadedInitialChats || _knownChatIds.contains(chatId);
 
   /// Get unread count for a specific chat
   int getCount(String chatId) => _counts[chatId] ?? 0;
@@ -100,7 +111,10 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Load counts from the server (getChats API returns unread_count per chat)
   void loadFromChats(List<Chat> chats) {
     _counts.clear();
+    _knownChatIds.clear();
+    _hasLoadedInitialChats = true;
     for (final chat in chats) {
+      _knownChatIds.add(chat.id);
       if (chat.unreadCount > 0 || chat.unreadCount == -1) {
         _counts[chat.id] = chat.unreadCount;
       }
@@ -110,11 +124,13 @@ class UnreadCountProvider extends ChangeNotifier {
 
   /// Set count for a specific chat (from server response)
   void setCount(String chatId, int count) {
+    _knownChatIds.add(chatId);
     if (count == 0) {
       _counts.remove(chatId);
     } else {
       _counts[chatId] = count;
     }
+    _persistCountToDb(chatId, count);
     notifyListeners();
   }
 
@@ -122,16 +138,21 @@ class UnreadCountProvider extends ChangeNotifier {
   void increment(String chatId) {
     // Don't increment if user has this chat open in any tile
     if (isChatOpen(chatId)) return;
+    _knownChatIds.add(chatId);
     final current = _counts[chatId] ?? 0;
-    _counts[chatId] = current == -1 ? 1 : current + 1;
+    final nextCount = current == -1 ? 1 : current + 1;
+    _counts[chatId] = nextCount;
+    _persistCountToDb(chatId, nextCount);
     notifyListeners();
   }
 
   /// Optimistically decrement unread count for a chat (when messages marked as read)
   void decrement(String chatId, int count) {
+    _knownChatIds.add(chatId);
     final current = _counts[chatId] ?? 0;
     if (current == -1) {
       _counts.remove(chatId);
+      _persistCountToDb(chatId, 0);
       NotificationService().cancelChatNotifications(chatId);
       notifyListeners();
       return;
@@ -143,12 +164,15 @@ class UnreadCountProvider extends ChangeNotifier {
     } else {
       _counts[chatId] = newCount;
     }
+    _persistCountToDb(chatId, newCount);
     notifyListeners();
   }
 
   /// Clear unread count for a chat (optimistically)
   void clear(String chatId) {
+    _knownChatIds.add(chatId);
     _counts.remove(chatId);
+    _persistCountToDb(chatId, 0);
     NotificationService().cancelChatNotifications(chatId);
     notifyListeners();
   }
@@ -164,15 +188,15 @@ class UnreadCountProvider extends ChangeNotifier {
     final unreadCount = event.data['unread_count'] as int? ?? 0;
 
     if (chatId != null) {
+      _knownChatIds.add(chatId);
       if (unreadCount == 0) {
         _counts.remove(chatId);
         NotificationService().cancelChatNotifications(chatId);
       } else {
         _counts[chatId] = unreadCount;
       }
+      _persistCountToDb(chatId, unreadCount);
       notifyListeners();
-      // Persist to local storage
-      _persistCounts();
     }
   }
 
@@ -186,19 +210,21 @@ class UnreadCountProvider extends ChangeNotifier {
     // with the exact count from PostgreSQL on every new message.
     if (event.data.containsKey('unread_count') && event.data['unread_count'] is int) {
       final unreadCount = event.data['unread_count'] as int;
+      _knownChatIds.add(chatId);
       if (unreadCount == 0) {
         _counts.remove(chatId);
       } else {
         _counts[chatId] = unreadCount;
       }
+      _persistCountToDb(chatId, unreadCount);
       notifyListeners();
     }
   }
 
-  /// Persist counts to local storage
-  Future<void> _persistCounts() async {
-    // Local storage saves full chat objects, so we don't need separate persistence
-    // The main_screen will save chats with updated unread counts
+  void _persistCountToDb(String chatId, int count) {
+    try {
+      AppDatabase().updateUnreadCount(chatId, count);
+    } catch (_) {}
   }
 
   /// Sync counts from server on reconnect (reload chats)

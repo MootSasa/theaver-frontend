@@ -6,13 +6,26 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
+import '../chat/swipe_to_reply_wrapper.dart';
 import 'tile_viewport_scope.dart';
 
-/// Обёртка для обработки свайпа двумя пальцами по тачпаду слева направо на ПК:
+enum _TrackpadGestureMode {
+  undecided,
+  rejected,
+  back,
+  reply,
+}
+
+/// Обёртка для обработки горизонтальных жестов двумя пальцами по тачпаду на ПК:
 /// - Нативные жесты тачпада (`PointerPanZoomStartEvent` / `PointerPanZoomUpdateEvent` / `PointerPanZoomEndEvent`)
 /// - В среде WSLg (где RDP-клиент транслирует тачпад в обычные колёсные события без фазы отпускания пальцев) —
 ///   прямой мост к Windows Precision Touchpad (`_WslTouchpadBridge`), который отслеживает физическое касание
-///   двух пальцев (`TipSwitch`) и вызывает возврат строго в момент отрыва пальцев от тачпада (`END`).
+///   двух пальцев (`TipSwitch`) и вызывает действие строго в момент отрыва пальцев от тачпада (`END`).
+///
+/// Обеспечивает строгое разделение жеста «Назад» (свайп вправо) и «Ответить на сообщение» (свайп влево):
+/// - Как только жест зафиксирован в одном направлении (`back` или `reply`), обратное движение пальцев
+///   до отрыва от тачпада работает исключительно как отмена текущего незавершённого действия (возврат к 0)
+///   и никогда не запускает противоположный жест.
 class TrackpadBackGestureWrapper extends StatefulWidget {
   final Widget child;
   final VoidCallback onTriggerBack;
@@ -40,8 +53,8 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
 
   double _panDx = 0.0;
   double _panDy = 0.0;
-  bool _isTrackingHorizontalBack = false;
-  bool _isRejected = false;
+  _TrackpadGestureMode _gestureMode = _TrackpadGestureMode.undecided;
+  TrackpadReplyTarget? _activeReplyWrapper;
   bool _thresholdReached = false;
   String? _tileId;
 
@@ -76,50 +89,83 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
 
   @override
   void dispose() {
+    _activeReplyWrapper?.cancelTrackpadDrag();
+    _activeReplyWrapper = null;
     _WslTouchpadBridge.instance.unregisterWrapper(this);
     _reboundController.dispose();
     super.dispose();
   }
 
+  bool _canTriggerBackNow() {
+    return widget.canTriggerBack == null || widget.canTriggerBack!();
+  }
+
   void _startGesture() {
-    if (widget.canTriggerBack != null && !widget.canTriggerBack!()) {
-      _isRejected = true;
-      return;
+    if (_activeReplyWrapper != null) {
+      _activeReplyWrapper!.cancelTrackpadDrag();
+      _activeReplyWrapper = null;
     }
     _reboundController.stop();
     _panDx = 0.0;
     _panDy = 0.0;
-    _isTrackingHorizontalBack = false;
-    _isRejected = false;
+    _gestureMode = _TrackpadGestureMode.undecided;
     _thresholdReached = false;
   }
 
   void _applyHorizontalDelta(double dx, double dy) {
-    if (_isRejected) return;
+    if (_gestureMode == _TrackpadGestureMode.rejected) return;
 
-    if (!_isTrackingHorizontalBack) {
+    if (_gestureMode == _TrackpadGestureMode.reply) {
+      // Жест зафиксирован как свайп для ответа: движение вправо (dx > 0) лишь возвращает пузырь
+      // сообщения к исходному положению (отмена ответа) и никогда не активирует жест «Назад».
+      _activeReplyWrapper?.updateTrackpadDrag(dx);
+      return;
+    }
+
+    if (_gestureMode == _TrackpadGestureMode.undecided) {
       _panDx += dx;
       _panDy += dy;
 
-      // Если жест начался вертикально или влево — отклоняем его, чтобы не мешать обычному скроллу
+      // Если жест начался вертикально — отклоняем его, чтобы не мешать обычному скроллу
       if (_panDy.abs() > 10.0 && _panDy.abs() > _panDx.abs()) {
-        _isRejected = true;
+        _gestureMode = _TrackpadGestureMode.rejected;
         _panDx = 0.0;
         return;
       }
-      if (_panDx < -8.0) {
-        _isRejected = true;
+
+      // Если жест начался влево — проверяем, наведён ли курсор на сообщение для свайпа-ответа
+      if (_panDx < -10.0 && _panDx.abs() > _panDy.abs() * 1.25) {
+        final replyTarget = SwipeToReplyWrapper.resolveHoveredForTile(_tileId);
+        if (replyTarget != null) {
+          _gestureMode = _TrackpadGestureMode.reply;
+          _activeReplyWrapper = replyTarget;
+          replyTarget.startTrackpadDrag();
+          replyTarget.updateTrackpadDrag(_panDx);
+          _panDx = 0.0;
+          return;
+        }
+        _gestureMode = _TrackpadGestureMode.rejected;
         _panDx = 0.0;
         return;
       }
+
+      // Если жест начался вправо — проверяем, доступен ли возврат «Назад» и нет ли активного ответа
       if (_panDx > 10.0 && _panDx > _panDy.abs() * 1.25) {
-        _isTrackingHorizontalBack = true;
+        if (!_canTriggerBackNow() ||
+            SwipeToReplyWrapper.isAnyReplyGestureActive) {
+          _gestureMode = _TrackpadGestureMode.rejected;
+          _panDx = 0.0;
+          return;
+        }
+        _gestureMode = _TrackpadGestureMode.back;
       } else {
         return;
       }
     } else {
+      // _gestureMode == _TrackpadGestureMode.back:
       // Накапливаем смещение с мягким резиновым сопротивлением после порога.
-      // При движении обратно влево (dx < 0) уменьшаем _panDx 1:1, позволяя отменить взведение.
+      // При движении обратно влево (dx < 0) уменьшаем _panDx 1:1 вплоть до 0.0 для отмены возврата,
+      // никогда не переключаясь в режим ответа на сообщение.
       final effectiveDx =
           (_panDx >= _kTriggerThreshold && dx > 0) ? dx * 0.38 : dx;
       _panDx = (_panDx + effectiveDx).clamp(0.0, _kMaxPullDistance);
@@ -140,17 +186,26 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
   }
 
   void _finishGesture() {
-    if (!_isTrackingHorizontalBack || _isRejected) {
+    if (_gestureMode == _TrackpadGestureMode.reply) {
+      final replyTarget = _activeReplyWrapper;
+      _activeReplyWrapper = null;
+      _gestureMode = _TrackpadGestureMode.undecided;
       _panDx = 0.0;
       _panDy = 0.0;
-      _isTrackingHorizontalBack = false;
-      _isRejected = false;
+      replyTarget?.endTrackpadDrag();
+      return;
+    }
+
+    if (_gestureMode != _TrackpadGestureMode.back) {
+      _panDx = 0.0;
+      _panDy = 0.0;
+      _gestureMode = _TrackpadGestureMode.undecided;
       return;
     }
 
     final shouldPop = _panDx >= _kTriggerThreshold;
     final startVal = _panDx;
-    _isTrackingHorizontalBack = false;
+    _gestureMode = _TrackpadGestureMode.undecided;
     _thresholdReached = false;
 
     _reboundAnimation = Tween<double>(begin: startVal, end: 0.0).animate(
@@ -166,9 +221,18 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
   }
 
   void _cancelGesture() {
+    if (_gestureMode == _TrackpadGestureMode.reply) {
+      final replyTarget = _activeReplyWrapper;
+      _activeReplyWrapper = null;
+      _gestureMode = _TrackpadGestureMode.undecided;
+      _panDx = 0.0;
+      _panDy = 0.0;
+      replyTarget?.cancelTrackpadDrag();
+      return;
+    }
+
     final startVal = _panDx;
-    _isTrackingHorizontalBack = false;
-    _isRejected = false;
+    _gestureMode = _TrackpadGestureMode.undecided;
     _thresholdReached = false;
     if (startVal > 0.0) {
       _reboundAnimation = Tween<double>(begin: startVal, end: 0.0).animate(
@@ -183,14 +247,17 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
 
   void _onPanZoomStart(PointerPanZoomStartEvent event) {
     _WslTouchpadBridge.instance.markHovered(this);
+    if (_WslTouchpadBridge.instance.isHandlingActiveGesture) return;
     _startGesture();
   }
 
   void _onPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    if (_WslTouchpadBridge.instance.isHandlingActiveGesture) return;
     _applyHorizontalDelta(event.panDelta.dx, event.panDelta.dy);
   }
 
   void _onPanZoomEnd(PointerPanZoomEndEvent event) {
+    if (_WslTouchpadBridge.instance.isHandlingActiveGesture) return;
     _finishGesture();
   }
 
@@ -264,6 +331,8 @@ class _WslTouchpadBridge {
   bool _isStarting = false;
   bool _isReady = false;
   bool _isTwoFingersDown = false;
+
+  bool get isHandlingActiveGesture => _isReady && _isTwoFingersDown;
 
   bool get _isWslEnvironment {
     if (kIsWeb || !Platform.isLinux) return false;

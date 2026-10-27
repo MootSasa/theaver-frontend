@@ -780,12 +780,14 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                                 minLines: 1,
                                 style: const TextStyle(color: Colors.white, fontSize: 15),
                                 cursorColor: const Color(0xFF33A9FF),
-                                decoration: const InputDecoration(
-                                  hintText: 'Добавить подпись... / Add caption...',
-                                  hintStyle: TextStyle(color: Colors.white38, fontSize: 14),
+                                decoration: InputDecoration(
+                                  hintText: AppLocalizations.of(context)
+                                          ?.translate('chat_add_caption') ??
+                                      'Add a caption...',
+                                  hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
                                   border: InputBorder.none,
                                   isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(vertical: 10),
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
                                 ),
                               ),
                             ),

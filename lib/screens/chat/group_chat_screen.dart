@@ -521,6 +521,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void _onFocusChanged() {
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
+    } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
+      DraftService().flushDraft(widget.chatId);
     }
   }
 
@@ -772,6 +774,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onMessageRead: _onMessageRead,
       onTyping: _onTypingIndicator,
       onUserStatus: _onUserStatusUpdate,
+      onUnreadCountUpdated: _onUnreadCountUpdated,
       onEmojiInteraction: _onEmojiInteraction,
       onReconnect: _triggerSilentSync,
     );
@@ -1064,6 +1067,24 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (_) {}
   }
 
+  void _onUnreadCountUpdated(WebSocketEvent event) {
+    final newUnreadCount = event.data['unread_count'] as int? ?? 0;
+    if (mounted) {
+      setState(() {
+        _unreadCount = newUnreadCount;
+        if (_unreadCount == 0) {
+          _firstUnreadMessageId = null;
+          _hasScrolledToUnread = false;
+          _showUnreadDivider = false;
+        }
+        _updateFeedItems();
+      });
+      try {
+        _unreadCountProvider?.setCount(widget.chatId, newUnreadCount);
+      } catch (_) {}
+    }
+  }
+
   void _onNewMessage(WebSocketEvent event) {
     final messageData = event.data['message'] as Map<String, dynamic>?;
     if (messageData == null) return;
@@ -1115,8 +1136,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _messages.insert(0, message);
         _updateFeedItems();
       });
-      // Don't auto-scroll to bottom on new message - user should stay at current position
-      // _scrollToBottom(); // Removed: user should control scroll position
+      if (message.senderId != _currentUserId) {
+        _onMessageVisible(message.id);
+      }
     }
   }
 
@@ -1259,12 +1281,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _markMessagesAsRead() async {
-    await ChatService.markMessagesAsRead(
+    final result = await ChatService.markMessagesAsRead(
       chatId: widget.chatId,
       chatTitle: widget.groupName,
     );
+    final markedCount = result['marked_count'] as int? ?? 0;
     // Notify via WebSocket that messages were read
-    _wsService.sendMessageRead(widget.chatId);
+    _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
+    if (result['success'] == true || markedCount > 0) {
+      if (mounted) {
+        setState(() {
+          _unreadCount = 0;
+        });
+      }
+      try {
+        _unreadCountProvider?.clear(widget.chatId);
+      } catch (_) {}
+    }
   }
 
   Future<void> _loadData() async {
@@ -1288,8 +1321,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     // Get unread info before loading messages
     final unreadInfo = await ChatService.getUnreadInfo(chatId: widget.chatId);
     if (unreadInfo['success'] == true && mounted) {
+      final serverUnread = unreadInfo['unread_count'] as int? ?? 0;
       setState(() {
-        _unreadCount = unreadInfo['unread_count'] as int? ?? 0;
+        _unreadCount = serverUnread;
         _firstUnreadMessageId = unreadInfo['first_unread_message_id'] as String?;
         if (_unreadCount > 0 && _firstUnreadMessageId != null) {
           _showUnreadDivider = true;
@@ -1297,6 +1331,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
         _updateFeedItems();
       });
+      try {
+        _unreadCountProvider?.setCount(widget.chatId, serverUnread);
+      } catch (_) {}
     }
 
     // Load messages
@@ -3719,7 +3756,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     return ChatInputBar(
       controller: _messageController,
       focusNode: _inputFocusNode,
-      hintText: 'Type a message...',
       isEditing: _isEditing,
       onCancelEditing: _cancelEditing,
       onEditLastMessage: _editLastOwnMessage,

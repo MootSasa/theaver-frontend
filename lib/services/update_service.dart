@@ -80,6 +80,20 @@ class AppUpdateInfo {
     final mb = apkSizeBytes / (1024 * 1024);
     return '${mb.toStringAsFixed(1)} MB';
   }
+
+  Map<String, dynamic> toJson() => {
+        'has_update': hasUpdate,
+        'latest_version': latestVersion,
+        'latest_build': latestBuild,
+        'min_supported_build': minSupportedBuild,
+        'force_update': forceUpdate,
+        'download_url': downloadUrl,
+        'apk_size_bytes': apkSizeBytes,
+        'sha256': sha256,
+        'release_notes': releaseNotes,
+        'architecture': architecture,
+        'channel': channel,
+      };
 }
 
 /// Сервис проверки, загрузки и запуска установки обновлений
@@ -89,6 +103,8 @@ class AppUpdateService {
 
   static const String prefAutoCheckKey = 'auto_check_updates';
   static const String prefIgnoredBuildKey = 'ignored_update_build';
+  static const String prefNotifiedBuildKey = 'notified_update_build';
+  static const String prefNotifiedTimestampKey = 'notified_update_timestamp_ms';
   static const String prefChannelKey = 'update_channel';
 
   final Dio _dio = Dio(
@@ -318,6 +334,40 @@ class AppUpdateService {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(prefIgnoredBuildKey, buildNumber);
+    } catch (_) {}
+  }
+
+  /// Нужно ли отправлять системное уведомление на устройство об этой сборке
+  Future<bool> shouldNotifyDevice(AppUpdateInfo update) async {
+    if (!update.hasUpdate || update.latestBuild <= 0) return false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final notifiedBuild = prefs.getInt(prefNotifiedBuildKey) ?? 0;
+      if (update.latestBuild > notifiedBuild) {
+        return true;
+      }
+      if (update.forceUpdate) {
+        final notifiedAtMs = prefs.getInt(prefNotifiedTimestampKey) ?? 0;
+        final elapsedMs = DateTime.now().millisecondsSinceEpoch - notifiedAtMs;
+        if (elapsedMs >= const Duration(hours: 12).inMilliseconds) {
+          return true;
+        }
+      }
+      return false;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Пометить сборку как уже отправленную в системные уведомления устройства
+  Future<void> markDeviceNotified(int buildNumber) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(prefNotifiedBuildKey, buildNumber);
+      await prefs.setInt(
+        prefNotifiedTimestampKey,
+        DateTime.now().millisecondsSinceEpoch,
+      );
     } catch (_) {}
   }
 

@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' as drift;
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
+import '../utils/date_time_utils.dart';
 import 'database/app_database.dart';
 import 'sync_service.dart';
 import 'websocket_service.dart';
@@ -150,12 +151,6 @@ class ChatRealtimeManager {
 
       case WebSocketEventType.messageRead:
         final readChatId = event.data['chat_id']?.toString();
-        final readUnreadCount = event.data['unread_count'] as int? ?? 0;
-        if (readChatId != null) {
-          try {
-            await AppDatabase().updateUnreadCount(readChatId, readUnreadCount);
-          } catch (_) {}
-        }
         _dispatchForChat(readChatId, (s) => s.onMessageRead?.call(event));
         break;
 
@@ -190,6 +185,21 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.userStatus:
+        final statusUserId = event.data['user_id']?.toString();
+        final statusIsOnline = event.data['is_online'] == true;
+        final statusLastSeen = event.data['last_seen'] != null
+            ? DateTimeUtils.parseUtcDateTime(event.data['last_seen'])
+                ?.toIso8601String()
+            : (statusIsOnline ? null : DateTime.now().toIso8601String());
+        if (statusUserId != null) {
+          try {
+            await AppDatabase().updateUserStatus(
+              statusUserId,
+              isOnline: statusIsOnline,
+              lastSeen: statusLastSeen,
+            );
+          } catch (_) {}
+        }
         _dispatchGlobal((s) => s.onUserStatus?.call(event));
         break;
 

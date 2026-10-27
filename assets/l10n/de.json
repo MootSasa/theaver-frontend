@@ -950,5 +950,8 @@
   "message_unsupported_update_btn": "Theaver aktualisieren",
   "message_unsupported_preview": "Nicht unterstützte Nachricht",
   "app_up_to_date": "Sie verwenden die neueste Version von Theaver",
-  "check_updates_error": "Fehler beim Suchen nach Updates"
+  "check_updates_error": "Fehler beim Suchen nach Updates",
+  "chat_draft_prefix": "Entwurf",
+  "chat_add_caption": "Bildunterschrift hinzufügen...",
+  "channel_write_post": "Beitrag schreiben..."
 }

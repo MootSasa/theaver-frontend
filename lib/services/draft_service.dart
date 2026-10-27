@@ -16,12 +16,14 @@ class DraftService {
   }
 
   static const String _storageKey = 'chat_drafts_v1';
+  static const Duration kPublishDebounceDuration = Duration(milliseconds: 1500);
   final Map<String, ChatDraft> _drafts = {};
+  final Map<String, ChatDraft> _publishedDrafts = {};
   final Map<String, Timer> _debounceTimers = {};
   StreamSubscription<WebSocketEvent>? _wsSubscription;
   bool _initialized = false;
 
-  /// ValueNotifier exposing all current drafts for reactive UI updates (e.g. chat list badge)
+  /// ValueNotifier exposing published drafts for reactive UI updates (e.g. chat list badge)
   final ValueNotifier<Map<String, ChatDraft>> draftsNotifier =
       ValueNotifier<Map<String, ChatDraft>>({});
 
@@ -35,11 +37,13 @@ class DraftService {
         final decoded = jsonDecode(raw) as Map<String, dynamic>;
         for (final entry in decoded.entries) {
           if (entry.value is Map<String, dynamic>) {
-            _drafts[entry.key] =
+            final draft =
                 ChatDraft.fromJson(entry.value as Map<String, dynamic>);
+            _drafts[entry.key] = draft;
+            _publishedDrafts[entry.key] = draft;
           }
         }
-        draftsNotifier.value = Map.unmodifiable(_drafts);
+        draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
       }
     } catch (e) {
       debugPrint('DraftService: Error initializing from local storage: $e');
@@ -66,31 +70,39 @@ class DraftService {
       // Only replace if local is not being typed actively (no pending debounce)
       if (!_debounceTimers.containsKey(chatId)) {
         _drafts[chatId] = remoteDraft;
-        draftsNotifier.value = Map.unmodifiable(_drafts);
+        _publishedDrafts[chatId] = remoteDraft;
+        draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
         _persistLocally();
       }
     } else {
       // Draft was cleared remotely
       if (!_debounceTimers.containsKey(chatId)) {
         _drafts.remove(chatId);
-        draftsNotifier.value = Map.unmodifiable(_drafts);
+        _publishedDrafts.remove(chatId);
+        draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
         _persistLocally();
       }
     }
   }
 
-  /// Get active draft for a chat
+  /// Get active in-memory draft for a chat (used when opening/restoring chat input)
   ChatDraft? getDraft(String chatId) {
     return _drafts[chatId];
   }
 
-  /// Save draft locally immediately, and debounce sync to the server
+  /// Get published draft for the main screen chat list preview
+  ChatDraft? getPublishedDraft(String chatId) {
+    return _publishedDrafts[chatId];
+  }
+
+  /// Save draft locally immediately, and debounce publication to chat list & server sync
   void saveDraft(
     String chatId, {
     required String text,
     String? replyToMessageId,
     String? quoteText,
     bool isQuote = false,
+    bool immediate = false,
   }) {
     final trimmed = text.trim();
     if (trimmed.isEmpty && (replyToMessageId == null || replyToMessageId.isEmpty)) {
@@ -106,28 +118,44 @@ class DraftService {
       updatedAt: DateTime.now(),
     );
 
-    // Instant local save
+    // Instant local save for input restoration
     _drafts[chatId] = draft;
-    draftsNotifier.value = Map.unmodifiable(_drafts);
     _persistLocally();
 
-    // Debounce server synchronization (600ms)
     _debounceTimers[chatId]?.cancel();
-    _debounceTimers[chatId] = Timer(const Duration(milliseconds: 600), () {
+    if (immediate) {
       _debounceTimers.remove(chatId);
+      _publishedDrafts[chatId] = draft;
+      draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
+      _syncToServer(chatId, draft);
+      return;
+    }
+
+    // Debounce chat list publication and server synchronization while actively typing
+    _debounceTimers[chatId] = Timer(kPublishDebounceDuration, () {
+      _debounceTimers.remove(chatId);
+      _publishedDrafts[chatId] = draft;
+      draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
       _syncToServer(chatId, draft);
     });
   }
 
-  /// Flushes any pending debounced draft to the server immediately (e.g. on screen exit)
+  /// Flushes any pending debounced draft to the chat list and server immediately
+  /// (e.g. on screen exit, tile switch, or input blur)
   Future<void> flushDraft(String chatId) async {
     final timer = _debounceTimers.remove(chatId);
-    if (timer != null) {
-      timer.cancel();
-      final draft = _drafts[chatId];
-      if (draft != null) {
+    final draft = _drafts[chatId];
+    if (draft != null) {
+      if (_publishedDrafts[chatId] != draft) {
+        _publishedDrafts[chatId] = draft;
+        draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
+      }
+      if (timer != null) {
+        timer.cancel();
         await _syncToServer(chatId, draft);
       }
+    } else if (timer != null) {
+      timer.cancel();
     }
   }
 
@@ -136,9 +164,10 @@ class DraftService {
     _debounceTimers[chatId]?.cancel();
     _debounceTimers.remove(chatId);
 
-    if (_drafts.containsKey(chatId)) {
-      _drafts.remove(chatId);
-      draftsNotifier.value = Map.unmodifiable(_drafts);
+    final hadDraft = _drafts.remove(chatId) != null;
+    final hadPublished = _publishedDrafts.remove(chatId) != null;
+    if (hadDraft || hadPublished) {
+      draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
       _persistLocally();
     }
 
@@ -159,13 +188,14 @@ class DraftService {
         if (existing == null || chat.draft!.updatedAt.isAfter(existing.updatedAt)) {
           if (!_debounceTimers.containsKey(chat.id)) {
             _drafts[chat.id] = chat.draft!;
+            _publishedDrafts[chat.id] = chat.draft!;
             changed = true;
           }
         }
       }
     }
     if (changed) {
-      draftsNotifier.value = Map.unmodifiable(_drafts);
+      draftsNotifier.value = Map.unmodifiable(_publishedDrafts);
       _persistLocally();
     }
   }
@@ -202,6 +232,7 @@ class DraftService {
     _debounceTimers.forEach((_, t) => t.cancel());
     _debounceTimers.clear();
     _drafts.clear();
+    _publishedDrafts.clear();
     draftsNotifier.value = {};
     _initialized = false;
   }
