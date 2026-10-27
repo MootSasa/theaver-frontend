@@ -34,6 +34,9 @@ import '../theme/viewport_gradient_box.dart';
 import 'poll_message_widget.dart';
 import 'unsupported_message_widget.dart';
 import 'dice_message_widget.dart';
+import 'message_interactive_state.dart';
+import '../tiling/tile_viewport_scope.dart';
+import '../../utils/date_time_utils.dart';
 
 /// Радиус скругления "облачка" сообщения.
 const double kMessageBorderRadius = 18.0;
@@ -648,13 +651,6 @@ class MessageBubbleLayout extends StatelessWidget {
                   ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.9)
                   : Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.9),
               borderRadius: BorderRadius.circular(14.0),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -692,6 +688,8 @@ class MessageBubble extends StatelessWidget {
   final String? chatType;
   final String? chatTitle;
   final bool isHighlighted;
+  final bool isSelected;
+  final bool isSelectionMode;
   final Map<String, int>? reactions;
   final String? myReaction;
   final Set<String>? myReactions;
@@ -710,6 +708,8 @@ class MessageBubble extends StatelessWidget {
     this.chatType,
     this.chatTitle,
     this.isHighlighted = false,
+    this.isSelected = false,
+    this.isSelectionMode = false,
     this.reactions,
     this.myReaction,
     this.myReactions,
@@ -719,6 +719,87 @@ class MessageBubble extends StatelessWidget {
     this.onFileTap,
     required this.formatTime,
   }) : super(key: key);
+
+  MessageBubble copyWithKey(Key? newKey) {
+    return MessageBubble(
+      key: newKey,
+      message: message,
+      isMe: isMe,
+      currentUserId: currentUserId,
+      senderName: senderName,
+      chatType: chatType,
+      chatTitle: chatTitle,
+      isHighlighted: false,
+      isSelected: false,
+      isSelectionMode: false,
+      reactions: reactions,
+      myReaction: myReaction,
+      myReactions: myReactions,
+      onReactionTap: onReactionTap,
+      onRetry: onRetry,
+      onReplyTap: onReplyTap,
+      onFileTap: onFileTap,
+      formatTime: formatTime,
+    );
+  }
+
+  /// Checks whether [globalPosition] falls inside the visual message bubble/album box
+  /// (as opposed to the empty horizontal space beside the bubble in the row).
+  static bool isGlobalPointInsideBubble(
+    BuildContext? rootContext,
+    Offset globalPosition,
+  ) {
+    return _hitTestMetaData(rootContext, globalPosition, 'message_bubble_box');
+  }
+
+  /// Checks whether [globalPosition] falls inside selectable text content
+  /// (`MetaData(metaData: 'message_selectable_content')`) of the message,
+  /// including a small margin for the bubble's inner padding so LMB drag
+  /// starting at the edge of the first/last character selects text reliably.
+  static bool isGlobalPointInsideSelectableText(
+    BuildContext? rootContext,
+    Offset globalPosition,
+  ) {
+    return _hitTestMetaData(
+      rootContext,
+      globalPosition,
+      'message_selectable_content',
+      inflatePadding: 14.0,
+    );
+  }
+
+  static bool _hitTestMetaData(
+    BuildContext? rootContext,
+    Offset globalPosition,
+    String targetMetaData, {
+    double inflatePadding = 0.0,
+  }) {
+    final rootRender = rootContext?.findRenderObject();
+    if (rootRender == null || !rootRender.attached) return false;
+    bool foundMatch = false;
+
+    void visit(RenderObject node) {
+      if (foundMatch) return;
+      if (node is RenderMetaData && node.metaData == targetMetaData) {
+        if (node.hasSize && node.attached) {
+          try {
+            final local = node.globalToLocal(globalPosition);
+            if (local.dx >= -inflatePadding &&
+                local.dy >= -inflatePadding &&
+                local.dx <= node.size.width + inflatePadding &&
+                local.dy <= node.size.height + inflatePadding) {
+              foundMatch = true;
+              return;
+            }
+          } catch (_) {}
+        }
+      }
+      node.visitChildren(visit);
+    }
+
+    visit(rootRender);
+    return foundMatch;
+  }
 
   bool get _hasMedia {
     final url = message.fileUrl?.trim();
@@ -814,10 +895,23 @@ class MessageBubble extends StatelessWidget {
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final double effectiveBubbleRadius = themeExt?.bubbleRadius ?? kMessageBorderRadius;
+    final bool useSelectedBubbleStyle = isSelected || isHighlighted;
 
-    final Color bubbleColor = isMe
-        ? (themeExt?.palette.chatBubbleOutgoing ?? Theme.of(context).colorScheme.primary)
-        : (themeExt?.palette.chatBubbleIncoming ?? Theme.of(context).colorScheme.secondaryContainer);
+    final Color bubbleColor = useSelectedBubbleStyle
+        ? (isMe
+            ? (themeExt?.palette.chatBubbleOutgoingSelected ??
+                Color.alphaBlend(
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.28),
+                  Theme.of(context).colorScheme.primary,
+                ))
+            : (themeExt?.palette.chatBubbleIncomingSelected ??
+                Color.alphaBlend(
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.22),
+                  Theme.of(context).colorScheme.secondaryContainer,
+                )))
+        : (isMe
+            ? (themeExt?.palette.chatBubbleOutgoing ?? Theme.of(context).colorScheme.primary)
+            : (themeExt?.palette.chatBubbleIncoming ?? Theme.of(context).colorScheme.secondaryContainer));
 
     final Color bubbleTextColor = isMe
         ? (themeExt?.palette.chatBubbleOutgoingText ?? Theme.of(context).colorScheme.onPrimary)
@@ -834,15 +928,19 @@ class MessageBubble extends StatelessWidget {
 
     final TextStyle textStyle = TextStyle(
       fontSize: 16.0,
-      height: 1.4,
+      height: 1.12,
+      leadingDistribution: TextLeadingDistribution.even,
       color: isBigEmoji
           ? (Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black)
           : bubbleTextColor,
     );
 
     final String trimmedContent = message.content.trim();
-    final List<String> contentLines = trimmedContent.split('\n');
-    final String lastLine = contentLines.isNotEmpty ? contentLines.last.trim() : '';
+    final int lastNewlineIdx = trimmedContent.lastIndexOf('\n');
+    final String lastLine = (lastNewlineIdx == -1
+            ? trimmedContent
+            : trimmedContent.substring(lastNewlineIdx + 1))
+        .trimLeft();
     final bool contentEndsWithQuote =
         lastLine.startsWith('>') || lastLine.startsWith('**>');
     final bool entityEndsWithQuote = message.entities.any((e) =>
@@ -879,15 +977,26 @@ class MessageBubble extends StatelessWidget {
     final previewOpts = message.linkPreviewOptions;
     final bool previewDisabled = previewOpts?.isDisabled ?? false;
     String? previewUrl = previewOpts?.url;
-    if (previewUrl == null && !previewDisabled) {
+    if ((previewUrl == null || previewUrl.isEmpty) && !previewDisabled) {
       if (message.content.contains('http://') ||
           message.content.contains('https://') ||
           message.content.contains('www.')) {
         final urls = EntityParser.extractUrls(message.content);
         if (urls.isNotEmpty) previewUrl = urls.first;
       }
+      if ((previewUrl == null || previewUrl.isEmpty) && message.entities.isNotEmpty) {
+        for (final e in message.entities) {
+          if ((e.type == 'text_link' || e.type == 'link' || e.type == 'url') &&
+              e.url != null &&
+              e.url!.isNotEmpty) {
+            previewUrl = e.url;
+            break;
+          }
+        }
+      }
     }
-    final bool hasEffectivePreview = previewUrl != null && !previewDisabled;
+    final bool hasEffectivePreview =
+        previewUrl != null && previewUrl.isNotEmpty && !previewDisabled;
     final bool showAbove = previewOpts?.showAboveText ?? false;
     final bool previewAtBottom = hasEffectivePreview && !showAbove && !hasMedia;
 
@@ -1001,7 +1110,7 @@ class MessageBubble extends StatelessWidget {
           );
 
     final double maxOuterBubbleWidth = math.min(
-      MediaQuery.of(context).size.width * 0.76,
+      TileViewportScope.widthOf(context) * 0.76,
       kMaxMessageBubbleWidth,
     );
     final double maxBubbleWidth = maxOuterBubbleWidth - 24.0; // 24 = horizontal padding
@@ -1076,9 +1185,8 @@ class MessageBubble extends StatelessWidget {
       }
       final String stableKey = message.localId ?? message.id;
       final bool shouldAutoPlay = message.sendStatus == 0 ||
-          (DateTime.tryParse(message.createdAt)
-                  ?.toLocal()
-                  .isAfter(DateTime.now().subtract(const Duration(seconds: 3))) ??
+          (DateTimeUtils.parseUtcDateTime(message.createdAt)
+                  ?.isAfter(DateTime.now().subtract(const Duration(seconds: 3))) ??
               false);
       textBodyWidget = Padding(
         padding: const EdgeInsets.only(top: 4.0, bottom: 16.0, left: 4.0, right: 4.0),
@@ -1096,9 +1204,8 @@ class MessageBubble extends StatelessWidget {
         const double emojiFontSize = 64.0;
         final String stableKey = message.localId ?? message.id;
         final bool shouldAutoPlay = message.sendStatus == 0 ||
-            (DateTime.tryParse(message.createdAt)
-                    ?.toLocal()
-                    .isAfter(DateTime.now().subtract(const Duration(seconds: 3))) ??
+            (DateTimeUtils.parseUtcDateTime(message.createdAt)
+                    ?.isAfter(DateTime.now().subtract(const Duration(seconds: 3))) ??
                 false);
         textBodyWidget = Padding(
           padding: const EdgeInsets.only(top: 4.0, bottom: 16.0, left: 4.0, right: 4.0),
@@ -1134,37 +1241,20 @@ class MessageBubble extends StatelessWidget {
         );
       }
     } else {
-      textBodyWidget = TextMessageWidget(
-        text: message.content,
-        style: textStyle,
-        isMe: isMe,
-        entities: message.entities,
-        nameColorPreset: effectivePreset,
-        replyStripStyle: effectiveStripStyle,
+      textBodyWidget = MetaData(
+        metaData: 'message_selectable_content',
+        child: TextMessageWidget(
+          text: message.content,
+          style: textStyle,
+          isMe: isMe,
+          entities: message.entities,
+          nameColorPreset: effectivePreset,
+          replyStripStyle: effectiveStripStyle,
+        ),
       );
 
-      if (!hasMedia) {
-        final previewOpts = message.linkPreviewOptions;
-        final bool previewDisabled = previewOpts?.isDisabled ?? false;
-        String? previewUrl = previewOpts?.url;
-        if ((previewUrl == null || previewUrl.isEmpty) && !previewDisabled) {
-          final urls = EntityParser.extractUrls(message.content);
-          if (urls.isNotEmpty) {
-            previewUrl = urls.first;
-          } else if (message.entities.isNotEmpty) {
-            for (final e in message.entities) {
-              if ((e.type == 'text_link' || e.type == 'link' || e.type == 'url') &&
-                  e.url != null &&
-                  e.url!.isNotEmpty) {
-                previewUrl = e.url;
-                break;
-              }
-            }
-          }
-        }
-
-        if (previewUrl != null && previewUrl.isNotEmpty && !previewDisabled) {
-          final bool showAbove = previewOpts?.showAboveText ?? false;
+      if (!hasMedia && hasEffectivePreview) {
+        {
           final bool preferLarge = previewOpts?.preferLargeMedia ?? false;
           final String? themeCode = TheavThemeService.extractThemeCode(previewUrl);
           final Widget previewCard = themeCode != null
@@ -1220,13 +1310,16 @@ class MessageBubble extends StatelessWidget {
       if (_isRoundVideo || _isVoice) {
         innerContent = mediaWidget;
       } else if (hasCaption) {
-        Widget captionWidget = TextMessageWidget(
-          text: message.content,
-          style: textStyle,
-          isMe: isMe,
-          entities: message.entities,
-          nameColorPreset: effectivePreset,
-          replyStripStyle: effectiveStripStyle,
+        Widget captionWidget = MetaData(
+          metaData: 'message_selectable_content',
+          child: TextMessageWidget(
+            text: message.content,
+            style: textStyle,
+            isMe: isMe,
+            entities: message.entities,
+            nameColorPreset: effectivePreset,
+            replyStripStyle: effectiveStripStyle,
+          ),
         );
         if (_isImage || _isVideo) {
           captionWidget = ConstrainedBox(
@@ -1314,13 +1407,6 @@ class MessageBubble extends StatelessWidget {
                         ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.9)
                         : Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(14.0),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
                   ),
                   child: replyWidget,
                 )
@@ -1345,9 +1431,18 @@ class MessageBubble extends StatelessWidget {
                 ? const EdgeInsets.all(4.0)
                 : const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0);
 
-    final bool useOutgoingGradient = isMe &&
-        (themeExt?.palette.chatBubbleOutgoingGradient != null &&
-            themeExt!.palette.chatBubbleOutgoingGradient!.length >= 2) &&
+    final List<Color>? activeGradientColors = useSelectedBubbleStyle
+        ? (isMe
+            ? (themeExt?.palette.chatBubbleOutgoingSelectedGradient ??
+                themeExt?.palette.chatBubbleOutgoingGradient)
+            : (themeExt?.palette.chatBubbleIncomingSelectedGradient ??
+                themeExt?.palette.chatBubbleIncomingGradient))
+        : (isMe
+            ? themeExt?.palette.chatBubbleOutgoingGradient
+            : themeExt?.palette.chatBubbleIncomingGradient);
+
+    final bool useBubbleGradient = activeGradientColors != null &&
+        activeGradientColors.length >= 2 &&
         !isPureMedia &&
         !isBigEmoji &&
         !_isRoundVideo;
@@ -1381,42 +1476,52 @@ class MessageBubble extends StatelessWidget {
                 metadataWidth: metadataWidthEstimate,
               ));
 
+    final Widget paddedContent = Padding(
+      padding: bubblePadding,
+      child: bubbleContent,
+    );
+
+    final Widget decoratedBubble = MetaData(
+      metaData: 'message_bubble_box',
+      child: useBubbleGradient
+          ? ViewportGradientBox(
+              borderRadius: BorderRadius.circular(effectiveBubbleRadius),
+              gradientColors: activeGradientColors,
+              solidColor: backgroundColor,
+              child: paddedContent,
+            )
+          : (backgroundColor == Colors.transparent
+              ? paddedContent
+              : DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    borderRadius: BorderRadius.circular(effectiveBubbleRadius),
+                  ),
+                  child: paddedContent,
+                )),
+    );
+
     Widget bubbleCore = Container(
       margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
       constraints: BoxConstraints(
         maxWidth: maxOuterBubbleWidth,
       ),
-      child: ViewportGradientBox(
-        borderRadius: BorderRadius.circular(effectiveBubbleRadius),
-        gradientColors: useOutgoingGradient ? themeExt.palette.chatBubbleOutgoingGradient : null,
-        solidColor: backgroundColor,
-        child: Padding(
-          padding: bubblePadding,
-          child: bubbleContent,
-        ),
-      ),
+      child: decoratedBubble,
     );
 
-    Widget result = Align(
+    Widget alignedBubble = Align(
       alignment: alignment,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeInOut,
-        color: isHighlighted
-            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.18)
-            : Colors.transparent,
-        child: bubbleCore,
-      ),
+      child: bubbleCore,
     );
 
     // Reactions row below message bubble if present
     final effectiveReactions = reactions ?? (message.reactions.isNotEmpty ? message.reactions : null);
     if (effectiveReactions != null && effectiveReactions.isNotEmpty) {
       final effectiveMyReactions = myReactions ?? (myReaction != null && myReaction!.isNotEmpty ? {myReaction!} : message.myReactions);
-      result = Column(
+      alignedBubble = Column(
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          result,
+          alignedBubble,
           Padding(
             padding: const EdgeInsets.only(top: 4.0, left: 12, right: 12),
             child: MessageReactionsRow(
@@ -1430,7 +1535,44 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
-    return result;
+    final Color rowHighlightColor = themeExt?.palette.messageSelectionOverlay ??
+        Theme.of(context).colorScheme.primary.withValues(alpha: 0.18);
+
+    Widget rowContent = alignedBubble;
+    if (isSelectionMode) {
+      rowContent = Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 10.0, right: 2.0),
+            child: MessageSelectionCheckbox(isSelected: isSelected),
+          ),
+          Expanded(
+            child: IgnorePointer(
+              child: alignedBubble,
+            ),
+          ),
+        ],
+      );
+    }
+
+    final String interactiveMessageKey =
+        (message.localId != null && message.localId!.isNotEmpty)
+            ? message.localId!
+            : (message.id.isNotEmpty
+                ? message.id
+                : 'msg_${message.content.hashCode}');
+
+    return MessageInteractiveScope(
+      messageKey: interactiveMessageKey,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        width: double.infinity,
+        color: useSelectedBubbleStyle ? rowHighlightColor : Colors.transparent,
+        child: rowContent,
+      ),
+    );
   }
 
   Size _computeSingleMediaSize(double maxAllowedWidth) {
@@ -1460,7 +1602,7 @@ class MessageBubble extends StatelessWidget {
     double mediaHeight = 220.0,
   }) {
     if (_isRoundVideo) {
-      final double circleSize = math.min(240.0, MediaQuery.of(context).size.width * 0.68);
+      final double circleSize = math.min(240.0, TileViewportScope.widthOf(context) * 0.68);
       return VideoMessageWidget(
         key: ValueKey('vmsg_${message.id}'),
         messageId: message.id,
@@ -1723,6 +1865,7 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
   @override
   void initState() {
     super.initState();
+    _syncCacheImmediate();
     _checkCache();
   }
 
@@ -1733,7 +1876,20 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
       _cachedFile = null;
       _cachedFirstFrame = null;
       _isPlayingInline = false;
+      _syncCacheImmediate();
       _checkCache();
+    }
+  }
+
+  void _syncCacheImmediate() {
+    if (widget.url.isEmpty) return;
+    final syncFile = MediaCacheManager.instance.getCachedFileSync(widget.url);
+    if (syncFile != null) {
+      _cachedFile = syncFile;
+      if (widget.isVideo) {
+        _cachedFirstFrame = MediaCacheManager.instance
+            .getCachedVideoThumbnailSync(syncFile.path);
+      }
     }
   }
 
@@ -1741,9 +1897,17 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
     if (widget.url.isNotEmpty) {
       final f = await MediaCacheManager.instance.getCachedFile(widget.url);
       if (mounted && f != null) {
-        setState(() => _cachedFile = f);
+        if (_cachedFile?.path != f.path) {
+          setState(() => _cachedFile = f);
+        }
         if (widget.isVideo && _cachedFirstFrame == null) {
-          _extractLocalFirstFrame(f.path);
+          final syncThumb =
+              MediaCacheManager.instance.getCachedVideoThumbnailSync(f.path);
+          if (syncThumb != null) {
+            setState(() => _cachedFirstFrame = syncThumb);
+          } else {
+            _extractLocalFirstFrame(f.path);
+          }
         }
       }
     }
@@ -1757,10 +1921,14 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
         'getVideoThumbnail',
         {'videoPath': filePath},
       );
-      if (res != null && res['thumbnail'] != null && mounted) {
-        setState(() {
-          _cachedFirstFrame = res['thumbnail'] as Uint8List?;
-        });
+      final bytes = res != null ? res['thumbnail'] as Uint8List? : null;
+      if (bytes != null) {
+        MediaCacheManager.instance.cacheVideoThumbnail(filePath, bytes);
+        if (mounted) {
+          setState(() {
+            _cachedFirstFrame = bytes;
+          });
+        }
       }
     } catch (_) {}
   }
@@ -1797,6 +1965,11 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
       );
     }
 
+    final bool hasOpaqueMedia = (!widget.isVideo && _cachedFile != null) ||
+        (widget.isVideo && isCached && _cachedFirstFrame != null);
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
+    final int targetCacheWidth = (widget.maxWidth * dpr).round().clamp(240, 1080);
+
     return GestureDetector(
       onTap: () {
         if (!isCached) {
@@ -1819,11 +1992,12 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // 1. Blurred preview placeholder (always shown until media is downloaded)
-              BlurredMediaPlaceholder(
-                thumbBase64: widget.thumbBase64,
-                fit: BoxFit.cover,
-              ),
+              // 1. Blurred preview placeholder (only mounted until opaque media is ready)
+              if (!hasOpaqueMedia)
+                BlurredMediaPlaceholder(
+                  thumbBase64: widget.thumbBase64,
+                  fit: BoxFit.cover,
+                ),
 
               // 2. Real first frame for video ONLY after the video file is cached
               if (widget.isVideo && isCached) ...[
@@ -1833,6 +2007,7 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                     width: widget.maxWidth,
                     height: widget.height,
                     fit: BoxFit.cover,
+                    filterQuality: FilterQuality.low,
                     gaplessPlayback: true,
                   )
                 else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
@@ -1841,6 +2016,8 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                     width: widget.maxWidth,
                     height: widget.height,
                     fit: BoxFit.cover,
+                    cacheWidth: targetCacheWidth,
+                    filterQuality: FilterQuality.low,
                     loadingBuilder: (context, child, loadingProgress) {
                       if (loadingProgress == null) return child;
                       return const SizedBox.shrink();
@@ -1857,6 +2034,8 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                     _cachedFile!,
                     width: widget.maxWidth,
                     height: widget.height,
+                    cacheWidth: targetCacheWidth,
+                    filterQuality: FilterQuality.low,
                     fit: BoxFit.cover,
                     gaplessPlayback: true,
                   ),
@@ -1914,6 +2093,59 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                   ),
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Telegram-style circular checkbox for message multi-selection.
+class MessageSelectionCheckbox extends StatelessWidget {
+  final bool isSelected;
+
+  const MessageSelectionCheckbox({
+    Key? key,
+    required this.isSelected,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final Color primaryColor =
+        themeExt?.palette.primary ?? Theme.of(context).colorScheme.primary;
+    final Color onPrimaryColor =
+        themeExt?.palette.onPrimary ?? Theme.of(context).colorScheme.onPrimary;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      width: 22.0,
+      height: 22.0,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: isSelected
+            ? primaryColor
+            : (isDark
+                ? Colors.black.withValues(alpha: 0.25)
+                : Colors.white.withValues(alpha: 0.45)),
+        border: Border.all(
+          color: isSelected
+              ? Colors.white.withValues(alpha: 0.9)
+              : (isDark ? Colors.white60 : Colors.black45),
+          width: 1.6,
+        ),
+      ),
+      child: AnimatedScale(
+        scale: isSelected ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutBack,
+        child: Center(
+          child: Icon(
+            Icons.check_rounded,
+            size: 15.0,
+            color: onPrimaryColor,
           ),
         ),
       ),

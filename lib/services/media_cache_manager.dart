@@ -50,7 +50,52 @@ class MediaCacheManager {
   final Map<String, ValueNotifier<double>> _progressNotifiers = {};
   final Map<String, ValueNotifier<DownloadByteProgress>> _byteProgressNotifiers = {};
   final Map<String, String> _localPathCache = {};
+  final Map<String, Uint8List> _videoThumbnailCache = {};
   final Set<String> _userCancelledUrls = {};
+
+  /// Synchronously returns a cached [File] if its local path is already known in memory.
+  /// Prevents a 1-frame placeholder flash when cloning media bubbles for the blur context menu.
+  File? getCachedFileSync(String url) {
+    if (kIsWeb || url.isEmpty) return null;
+    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    final cachedPath = _localPathCache[url] ?? _localPathCache[resolvedUrl];
+    if (cachedPath != null) {
+      return File(cachedPath);
+    }
+
+    final uri = Uri.tryParse(url);
+    final isNetwork =
+        uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+    if (!isNetwork &&
+        !url.startsWith('/api/') &&
+        !url.startsWith('/uploads/')) {
+      try {
+        final filePath =
+            url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
+        final directFile = File(filePath);
+        if (directFile.existsSync() && directFile.lengthSync() > 0) {
+          _localPathCache[url] = filePath;
+          return directFile;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Synchronously returns a cached video first-frame thumbnail if already extracted.
+  Uint8List? getCachedVideoThumbnailSync(String filePath) {
+    if (filePath.isEmpty) return null;
+    return _videoThumbnailCache[filePath];
+  }
+
+  /// Caches an extracted video first-frame thumbnail in memory.
+  void cacheVideoThumbnail(String filePath, Uint8List bytes) {
+    if (filePath.isEmpty || bytes.isEmpty) return;
+    if (_videoThumbnailCache.length >= 120) {
+      _videoThumbnailCache.remove(_videoThumbnailCache.keys.first);
+    }
+    _videoThumbnailCache[filePath] = bytes;
+  }
 
   /// Formats byte count into human-readable string (e.g. 14.2 MB)
   static String formatBytes(int bytes, [int decimals = 1]) {
@@ -139,6 +184,7 @@ class MediaCacheManager {
         final filePath = url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
         final directFile = File(filePath);
         if (await directFile.exists() && await directFile.length() > 0) {
+          _localPathCache[url] = filePath;
           return directFile;
         }
       } catch (_) {}

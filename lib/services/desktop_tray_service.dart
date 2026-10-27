@@ -1,4 +1,6 @@
 import 'dart:io' show Platform, File;
+import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
@@ -16,6 +18,34 @@ class DesktopTrayService with TrayListener, WindowListener {
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
+
+  Size _currentMinSize = const Size(360, 420);
+  Size get currentMinSize => _currentMinSize;
+
+  /// Динамически обновляет минимальный размер окна ОС в зависимости от числа
+  /// открытых тайлов и возможности их перестроения по горизонтали/вертикали.
+  Future<void> updateMinimumWindowSize(Size minSize, {bool expandIfNeeded = false}) async {
+    if (kIsWeb || (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS)) {
+      return;
+    }
+    if (!_isInitialized) return;
+    if (_currentMinSize == minSize && !expandIfNeeded) return;
+
+    _currentMinSize = minSize;
+    try {
+      await windowManager.setMinimumSize(minSize);
+      if (expandIfNeeded) {
+        final currentSize = await windowManager.getSize();
+        final targetW = math.max(currentSize.width, minSize.width);
+        final targetH = math.max(currentSize.height, minSize.height);
+        if (targetW > currentSize.width || targetH > currentSize.height) {
+          await windowManager.setSize(Size(targetW, targetH), animate: true);
+        }
+      }
+    } catch (e) {
+      debugPrint('DesktopTrayService: updateMinimumWindowSize error: $e');
+    }
+  }
 
   /// Извлекает иконку приложения из assets во временную/системную директорию
   /// для передачи абсолютного пути в Win32/X11 API trayManager.
@@ -53,7 +83,7 @@ class DesktopTrayService with TrayListener, WindowListener {
 
       const windowOptions = WindowOptions(
         size: Size(1100, 750),
-        minimumSize: Size(450, 600),
+        minimumSize: Size(360, 420),
         center: true,
         backgroundColor: Colors.transparent,
         skipTaskbar: false,

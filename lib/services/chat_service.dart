@@ -586,6 +586,19 @@ class Message {
       duration = (json['media_payload']['duration'] as num).toInt();
     }
 
+    final Map<String, dynamic>? parsedMediaPayload = json['media_payload'] is Map
+        ? Map<String, dynamic>.from(json['media_payload'] as Map)
+        : (json['media_payload'] is String && (json['media_payload'] as String).isNotEmpty
+            ? (() {
+                try {
+                  final decoded = jsonDecode(json['media_payload'] as String);
+                  return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+                } catch (_) {
+                  return null;
+                }
+              })()
+            : null);
+
     return Message(
       id: json['id']?.toString() ?? '',
       chatId: json['chat_id']?.toString() ?? '',
@@ -607,10 +620,16 @@ class Message {
       replyToMessageId: json['reply_to_message_id']?.toString(),
       isRead: json['is_read'] ?? false,
       readAt: json['read_at']?.toString(),
-      isQuote: json['is_quote'] ?? false,
-      quoteText: json['quote_text']?.toString(),
-      quoteOffset: (json['quote_offset'] as num?)?.toInt() ?? 0,
-      quoteLength: (json['quote_length'] as num?)?.toInt() ?? 0,
+      isQuote: (json['is_quote'] == true) ||
+          (parsedMediaPayload?['is_quote'] == true),
+      quoteText: json['quote_text']?.toString() ??
+          parsedMediaPayload?['quote_text']?.toString(),
+      quoteOffset: (json['quote_offset'] as num?)?.toInt() ??
+          (parsedMediaPayload?['quote_offset'] as num?)?.toInt() ??
+          0,
+      quoteLength: (json['quote_length'] as num?)?.toInt() ??
+          (parsedMediaPayload?['quote_length'] as num?)?.toInt() ??
+          0,
       replyInfo: replyInfo,
       localId: json['local_id']?.toString(),
       sendStatus: (json['send_status'] as num?)?.toInt() ?? 1,
@@ -668,18 +687,7 @@ class Message {
       isRound: json['is_round'] == true || json['message_type'] == 'round',
       waveform: waveform,
       duration: duration,
-      mediaPayload: json['media_payload'] is Map
-          ? Map<String, dynamic>.from(json['media_payload'] as Map)
-          : (json['media_payload'] is String && (json['media_payload'] as String).isNotEmpty
-              ? (() {
-                  try {
-                    final decoded = jsonDecode(json['media_payload'] as String);
-                    return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
-                  } catch (_) {
-                    return null;
-                  }
-                })()
-              : null),
+      mediaPayload: parsedMediaPayload,
     );
   }
 
@@ -791,10 +799,14 @@ class Message {
           : null,
       replyToMessageId: model.replyToMessageId,
       isRead: model.isRead,
-      isQuote: model.isQuote,
-      quoteText: model.quoteText,
-      quoteOffset: model.quoteOffset,
-      quoteLength: model.quoteLength,
+      isQuote: model.isQuote || (dbMediaPayload?['is_quote'] == true),
+      quoteText: model.quoteText ?? dbMediaPayload?['quote_text']?.toString(),
+      quoteOffset: model.quoteOffset != 0
+          ? model.quoteOffset
+          : ((dbMediaPayload?['quote_offset'] as num?)?.toInt() ?? 0),
+      quoteLength: model.quoteLength != 0
+          ? model.quoteLength
+          : ((dbMediaPayload?['quote_length'] as num?)?.toInt() ?? 0),
       replyInfo: replyInfo,
       localId: model.localId,
       sendStatus: model.sendStatus,
@@ -1354,15 +1366,30 @@ class ChatService {
       if (waveform != null && waveform.isNotEmpty) body['waveform'] = waveform;
       if (duration != null && duration > 0) body['duration'] = duration;
       if (groupedId != null && groupedId.isNotEmpty) body['grouped_id'] = groupedId;
-      if (mediaPayload != null && mediaPayload.isNotEmpty) body['media_payload'] = mediaPayload;
+      final effectiveMediaPayload = <String, dynamic>{
+        if (mediaPayload != null) ...mediaPayload,
+      };
       if (replyToMessageId != null) {
         body['reply_to_message_id'] = replyToMessageId;
         if (isQuote) {
           body['is_quote'] = true;
-          if (quoteText != null) body['quote_text'] = quoteText;
-          if (quoteOffset > 0) body['quote_offset'] = quoteOffset;
-          if (quoteLength > 0) body['quote_length'] = quoteLength;
+          effectiveMediaPayload['is_quote'] = true;
+          if (quoteText != null) {
+            body['quote_text'] = quoteText;
+            effectiveMediaPayload['quote_text'] = quoteText;
+          }
+          if (quoteOffset > 0) {
+            body['quote_offset'] = quoteOffset;
+            effectiveMediaPayload['quote_offset'] = quoteOffset;
+          }
+          if (quoteLength > 0) {
+            body['quote_length'] = quoteLength;
+            effectiveMediaPayload['quote_length'] = quoteLength;
+          }
         }
+      }
+      if (effectiveMediaPayload.isNotEmpty) {
+        body['media_payload'] = effectiveMediaPayload;
       }
       if (localId != null) body['local_id'] = localId;
       if (entities != null && entities.isNotEmpty) {
@@ -1422,6 +1449,14 @@ class ChatService {
             localId: localId,
             sendStatus: 1,
             groupedId: rawMsg['grouped_id']?.toString() ?? groupedId,
+          );
+        }
+        if (isQuote && !parsedMessage.isQuote) {
+          parsedMessage = parsedMessage.copyWith(
+            isQuote: true,
+            quoteText: parsedMessage.quoteText ?? quoteText,
+            quoteOffset: parsedMessage.quoteOffset != 0 ? parsedMessage.quoteOffset : quoteOffset,
+            quoteLength: parsedMessage.quoteLength != 0 ? parsedMessage.quoteLength : quoteLength,
           );
         }
         return {

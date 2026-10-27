@@ -208,30 +208,33 @@ class ProfileSectionPillState extends State<ProfileSectionPill>
       final Widget morphChild = SizedBox(
         width: _menuWidth,
         height: folderMenuHeight,
-        child: LiquidGlassMorph(
-          key: const ValueKey<String>('profile_section_pill_morph'),
-          alignment: Alignment.topCenter,
-          motion: LiquidGlassMorphMotion.fluid,
-          smoothness: 28,
-          style: pillStyle,
-          child: _isOpen
-              ? _SectionMorphMenuList(
-                  key: const ValueKey<String>('section_menu'),
-                  width: _menuWidth,
-                  sections: widget.sections,
-                  selectedIndex: safeIndex,
-                  isDark: isDark,
-                  onSelectSection: _selectItem,
-                )
-              : _TitlePillContent(
-                  key: const ValueKey<String>('section_pill'),
-                  minWidth: closedPillWidth,
-                  title: currentSection.label,
-                  titleKey: currentSection.type.name,
-                  showChevron: widget.sections.length > 1,
-                  isDark: isDark,
-                  onTap: _toggleMenu,
-                ),
+        child: LiquidGlassBatch(
+          enabled: !_isOpen,
+          child: LiquidGlassMorph(
+            key: const ValueKey<String>('profile_section_pill_morph'),
+            alignment: Alignment.topCenter,
+            motion: LiquidGlassMorphMotion.fluid,
+            smoothness: 28,
+            style: pillStyle,
+            child: _isOpen
+                ? _SectionMorphMenuList(
+                    key: const ValueKey<String>('section_menu'),
+                    width: _menuWidth,
+                    sections: widget.sections,
+                    selectedIndex: safeIndex,
+                    isDark: isDark,
+                    onSelectSection: _selectItem,
+                  )
+                : _TitlePillContent(
+                    key: const ValueKey<String>('section_pill'),
+                    minWidth: closedPillWidth,
+                    title: currentSection.label,
+                    titleKey: currentSection.type.name,
+                    showChevron: widget.sections.length > 1,
+                    isDark: isDark,
+                    onTap: _toggleMenu,
+                  ),
+          ),
         ),
       );
 

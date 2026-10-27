@@ -5,6 +5,7 @@ import 'auth_service.dart';
 import 'chat_service.dart';
 import 'search_service.dart';
 import 'account_manager.dart';
+import 'tiling_layout_controller.dart';
 import '../config/app_config.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/profile/user_profile_popup.dart';
@@ -270,6 +271,14 @@ class DeepLinkService {
           (c) => c.name.toLowerCase() == channelName.toLowerCase(),
           orElse: () => channels.first,
         );
+        if (TilingLayoutController.instance.isWorkspaceMounted) {
+          TilingLayoutController.instance.openChatInActiveTile(
+            chatId: match.id,
+            chatType: 'channel',
+            chatName: match.name,
+          );
+          return;
+        }
         Navigator.of(context).push(
           SwipeBackPageRoute(
             builder: (_) => ChannelScreen(
@@ -321,6 +330,14 @@ class DeepLinkService {
 
   /// Navigates to existing private chat.
   void _navigateToPrivateChat(BuildContext context, String chatId) {
+    if (TilingLayoutController.instance.isWorkspaceMounted) {
+      TilingLayoutController.instance.openChatInActiveTile(
+        chatId: chatId,
+        chatType: 'private',
+        chatName: '',
+      );
+      return;
+    }
     Navigator.of(context).push(
       SwipeBackPageRoute(
         builder: (_) => PrivateChatScreen(chatId: chatId),

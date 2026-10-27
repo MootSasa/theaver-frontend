@@ -68,7 +68,7 @@ class LiquidGlassAppBar extends StatelessWidget
       blur: 12.0,
       refractionIndex: 1.1,
       refractionWidth: 24,
-      dispersion: 1.32,
+      dispersion: 0.0,
       saturation: 1.2,
       liteGlass: isLite,
     );

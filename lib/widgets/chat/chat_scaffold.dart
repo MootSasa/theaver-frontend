@@ -1,17 +1,16 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:inspire_blur/inspire_blur.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/wallpaper_provider.dart';
-import '../theme/four_corner_gradient.dart';
+import '../theme/baked_chat_wallpaper.dart';
 import '../theme/motion_wallpaper_wrapper.dart';
-import '../theme/tiled_wallpaper_pattern.dart';
+import '../tiling/tile_viewport_scope.dart';
+
 
 export '../theme/tiled_wallpaper_pattern.dart';
 
@@ -59,6 +58,48 @@ class ChatScaffold extends StatelessWidget {
     final defaultCanPop = canPop ?? !isKeyboardVisible;
     final glassProvider = context.watch<LiquidGlassProvider?>();
 
+    final Widget stackContent = Stack(
+      fit: StackFit.expand,
+      children: [
+        // 1. Wallpaper background layer
+        _buildBackground(context),
+
+        // 2. Main content layer
+        Positioned.fill(
+          child: Column(
+            children: [
+              Expanded(child: body),
+              if (bottomBar != null)
+                SafeArea(
+                  top: false,
+                  child: bottomBar!,
+                ),
+            ],
+          ),
+        ),
+
+        // 3. Top scroll edge / status bar blur
+        _buildTopScrollEdge(context, glassProvider),
+
+        // 4. Floating AppBar layer
+        if (appBar != null)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: appBar!,
+          ),
+
+        // 5. Floating Action Button layer
+        if (floatingActionButton != null)
+          Positioned(
+            right: 16,
+            bottom: bottomInset + 80,
+            child: floatingActionButton!,
+          ),
+      ],
+    );
+
     return PopScope(
       canPop: defaultCanPop,
       onPopInvokedWithResult: (didPop, result) {
@@ -74,53 +115,15 @@ class ChatScaffold extends StatelessWidget {
       child: Scaffold(
         resizeToAvoidBottomInset: false,
         backgroundColor: backgroundColor ?? Theme.of(context).scaffoldBackgroundColor,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            // 1. Wallpaper background layer
-            _buildBackground(context),
-
-            // 2. Main content layer
-            Positioned.fill(
-              child: Column(
-                children: [
-                  Expanded(child: body),
-                  if (bottomBar != null)
-                    SafeArea(
-                      top: false,
-                      child: bottomBar!,
-                    ),
-                ],
-              ),
-            ),
-
-            // 3. Top scroll edge / status bar blur
-            _buildTopScrollEdge(context, glassProvider),
-
-            // 4. Floating AppBar layer
-            if (appBar != null)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: appBar!,
-              ),
-
-            // 5. Floating Action Button layer
-            if (floatingActionButton != null)
-              Positioned(
-                right: 16,
-                bottom: bottomInset + 80,
-                child: floatingActionButton!,
-              ),
-          ],
-        ),
+        body: stackContent,
       ),
     );
   }
 
   Widget _buildTopScrollEdge(BuildContext context, LiquidGlassProvider? glassProvider) {
-    if (!enableStatusBarBlur) return const SizedBox.shrink();
+    if (!enableStatusBarBlur || TileViewportScope.hasTopNeighborOf(context)) {
+      return const SizedBox.shrink();
+    }
 
     final statusBarHeight = MediaQuery.paddingOf(context).top;
     // On PC / desktop / web, statusBarHeight is 0, so do not apply blur at all
@@ -143,22 +146,17 @@ class ChatScaffold extends StatelessWidget {
       );
     }
 
-    // Fallback for classic / matte mode
+    // Fallback for classic / matte mode using downsampled soft edge blur
     return Positioned(
       top: 0,
       left: 0,
       right: 0,
       height: statusBarHeight,
-      child: IgnorePointer(
-        child: InspireBackdropBlur(
-          clipBehavior: Clip.hardEdge,
-          config: InspireBlurConfig.topToBottom(
-            sigma: 16.0,
-            extent: 1.0,
-            fadeCurve: Curves.easeOutCubic,
-          ),
-          child: const SizedBox.expand(),
-        ),
+      child: const LiquidGlassScrollEdge(
+        edge: LiquidGlassEdge.top,
+        style: LiquidGlassScrollEdgeStyle.soft,
+        blur: 16.0,
+        color: Colors.transparent,
       ),
     );
   }
@@ -170,99 +168,34 @@ class ChatScaffold extends StatelessWidget {
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final wp = themeExt?.wallpaper;
+    final wallpaperPath = context.watch<WallpaperProvider?>()?.wallpaperPath;
 
     if (wp != null) {
-      // 1. Base 4-corner gradient or background color
-      Widget baseBackground;
-      if (wp.fourCornerGradient != null) {
-        final grad = wp.fourCornerGradient!;
-        baseBackground = CustomPaint(
-          painter: FourCornerGradientPainter(
-            topLeft: grad.topLeft,
-            topRight: grad.topRight,
-            bottomLeft: grad.bottomLeft,
-            bottomRight: grad.bottomRight,
-          ),
-          child: const SizedBox.expand(),
-        );
-      } else {
-        baseBackground = Container(color: wp.backgroundColor);
-      }
+      final bool hasSvgPattern = wp.patternOpacity > 0 &&
+          ((wp.assetSvgPath != null && wp.assetSvgPath!.isNotEmpty) ||
+              (!kIsWeb &&
+                  wp.customSvgPath != null &&
+                  wp.customSvgPath!.isNotEmpty));
+      final bool isPureSolid = wp.type != 'image' &&
+          wp.fourCornerGradient == null &&
+          !hasSvgPattern;
 
-      Widget content;
-      if (wp.type == 'image') {
-        final imgProvider = wp.getImageProvider(
-          fallbackPath: context.watch<WallpaperProvider?>()?.wallpaperPath,
-        );
-        if (imgProvider != null) {
-          Widget img = Image(
-            image: imgProvider,
-            fit: BoxFit.cover,
-            width: double.infinity,
-            height: double.infinity,
-            errorBuilder: (context, error, stackTrace) => baseBackground,
-          );
-          if (wp.blurRadius > 0) {
-            img = ImageFiltered(
-              imageFilter: ui.ImageFilter.blur(
-                sigmaX: wp.blurRadius,
-                sigmaY: wp.blurRadius,
-              ),
-              child: img,
-            );
-          }
-          content = Stack(
-            fit: StackFit.expand,
-            children: [
-              img,
-              if (wp.dimming > 0)
-                Container(
-                  color: Colors.black.withValues(alpha: wp.dimming),
-                ),
-            ],
-          );
-        } else {
-          content = baseBackground;
-        }
-      } else {
-        // Pattern over 4-corner gradient
-        final svgPath = wp.assetSvgPath;
-        Widget patternWidget = const SizedBox.shrink();
-
-        if (svgPath != null && wp.patternOpacity > 0) {
-          patternWidget = TiledWallpaperPattern(
-            assetPath: svgPath,
-            colorFilter: ColorFilter.mode(
-              wp.patternColor.withValues(alpha: wp.patternOpacity),
-              BlendMode.srcIn,
-            ),
-          );
-        } else if (!kIsWeb && wp.customSvgPath != null && File(wp.customSvgPath!).existsSync() && wp.patternOpacity > 0) {
-          patternWidget = TiledWallpaperPattern(
-            filePath: wp.customSvgPath!,
-            colorFilter: ColorFilter.mode(
-              wp.patternColor.withValues(alpha: wp.patternOpacity),
-              BlendMode.srcIn,
-            ),
-          );
-        }
-
-        content = Stack(
-          fit: StackFit.expand,
-          children: [
-            baseBackground,
-            patternWidget,
-          ],
+      if (isPureSolid) {
+        return Positioned.fill(
+          child: ColoredBox(color: wp.backgroundColor),
         );
       }
+
+      final Widget content = BakedChatWallpaper(
+        wallpaper: wp,
+        fallbackWallpaperPath: wallpaperPath,
+      );
 
       if (wp.motionEnabled) {
         return Positioned.fill(
-          child: RepaintBoundary(
-            child: MotionWallpaperWrapper(
-              enabled: true,
-              child: content,
-            ),
+          child: MotionWallpaperWrapper(
+            enabled: true,
+            child: content,
           ),
         );
       }
@@ -272,15 +205,13 @@ class ChatScaffold extends StatelessWidget {
       );
     }
 
-    final wallpaperPath = context.watch<WallpaperProvider?>()?.wallpaperPath;
     if (!kIsWeb && wallpaperPath != null && wallpaperPath.isNotEmpty) {
       final file = File(wallpaperPath);
       if (file.existsSync()) {
         return Positioned.fill(
           child: RepaintBoundary(
-            child: Image.file(
-              file,
-              fit: BoxFit.cover,
+            child: BakedChatWallpaper(
+              fallbackWallpaperPath: wallpaperPath,
             ),
           ),
         );
@@ -299,6 +230,9 @@ class ChatBottomScrollEdge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (TileViewportScope.hasBottomNeighborOf(context)) {
+      return const SizedBox.shrink();
+    }
     final glassProvider = context.watch<LiquidGlassProvider?>();
     final isGlass = glassProvider?.enabled ?? false;
     if (!isGlass) return const SizedBox.shrink();

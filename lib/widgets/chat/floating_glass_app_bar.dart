@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -8,10 +7,13 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../tiling/tile_viewport_scope.dart';
 import '../user/avatar_with_status.dart';
 import 'animated_ellipsis_text.dart';
 
@@ -87,6 +89,12 @@ class FloatingGlassAppBar extends StatefulWidget {
   final VoidCallback? onViewProfile;
   final WidgetBuilder? profileScreenBuilder;
   final String? heroTag;
+  final bool isSelectionMode;
+  final int selectedCount;
+  final VoidCallback? onCancelSelection;
+  final VoidCallback? onCopySelected;
+  final VoidCallback? onForwardSelected;
+  final VoidCallback? onDeleteSelected;
 
   const FloatingGlassAppBar({
     Key? key,
@@ -113,6 +121,12 @@ class FloatingGlassAppBar extends StatefulWidget {
     this.onViewProfile,
     this.profileScreenBuilder,
     this.heroTag,
+    this.isSelectionMode = false,
+    this.selectedCount = 0,
+    this.onCancelSelection,
+    this.onCopySelected,
+    this.onForwardSelected,
+    this.onDeleteSelected,
   }) : super(key: key);
 
   @override
@@ -120,9 +134,12 @@ class FloatingGlassAppBar extends StatefulWidget {
 }
 
 class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
-  final LayerLink _rightPillLayerLink = LayerLink();
-  final OverlayPortalController _overlayPortalController = OverlayPortalController();
   bool _isMenuOpen = false;
+  String? _registeredTileId;
+
+  // Состояние перетаскивания тайла чата за центральную плашку
+  Offset? _dragStartGlobal;
+  bool _isDraggingTile = false;
 
   @visibleForTesting
   bool get isMenuOpen => _isMenuOpen;
@@ -132,13 +149,59 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   bool get isMenuWide => _isMenuOpen;
 
   @override
-  void initState() {
-    super.initState();
-    _overlayPortalController.show();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final tileId = TileViewportScope.maybeTileIdOf(context);
+    if (_registeredTileId != tileId) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.unregisterTileBackHandler(
+          _registeredTileId!,
+          _handleBackForTile,
+        );
+      }
+      _registeredTileId = tileId;
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.registerTileBackHandler(
+          _registeredTileId!,
+          _handleBackForTile,
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_registeredTileId != null) {
+      TilingLayoutController.instance.unregisterTileBackHandler(
+        _registeredTileId!,
+        _handleBackForTile,
+      );
+    }
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant FloatingGlassAppBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isSelectionMode && _isMenuOpen) {
+      _isMenuOpen = false;
+    }
+  }
+
+  bool _handleBackForTile() {
+    if (widget.isSelectionMode) {
+      widget.onCancelSelection?.call();
+      return true;
+    }
+    if (_isMenuOpen) {
+      _closeMenu();
+      return true;
+    }
+    return false;
   }
 
   void _openMenu() {
-    if (_isMenuOpen) return;
+    if (_isMenuOpen || widget.isSelectionMode) return;
     HapticUtils.tap();
     setState(() {
       _isMenuOpen = true;
@@ -160,6 +223,118 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     }
   }
 
+  bool _canDragChatTile() {
+    final controller = TilingLayoutController.instance;
+    if (!controller.isWorkspaceMounted) return false;
+    if (controller.windowSize.width < TilingLayoutController.kTwoColumnBreakpoint) {
+      return false;
+    }
+    final tileId = _registeredTileId ?? TileViewportScope.maybeTileIdOf(context);
+    if (tileId == null || tileId == TilingLayoutController.kLeftTileId) {
+      return false;
+    }
+    // Dragging an already-open tile makes sense when 2 chat tiles are open (to swap/re-orient)
+    return controller.chatTiles.length >= 2 &&
+        controller.chatTiles.any((t) => t.tileId == tileId);
+  }
+
+  void _onCenterPillPanStart(DragStartDetails details) {
+    if (!_canDragChatTile()) {
+      _dragStartGlobal = null;
+      _isDraggingTile = false;
+      return;
+    }
+    _dragStartGlobal = details.globalPosition;
+    _isDraggingTile = false;
+  }
+
+  void _onCenterPillPanUpdate(DragUpdateDetails details) {
+    if (_dragStartGlobal == null) return;
+    final controller = TilingLayoutController.instance;
+
+    if (!_isDraggingTile) {
+      final delta = (details.globalPosition - _dragStartGlobal!).distance;
+      if (delta < 8.0) return;
+
+      final tileId = _registeredTileId ?? TileViewportScope.maybeTileIdOf(context);
+      if (tileId == null) return;
+
+      final idx = controller.chatTiles.indexWhere((t) => t.tileId == tileId);
+      if (idx == -1) return;
+      final descriptor = controller.chatTiles[idx];
+
+      if (_isMenuOpen) {
+        _closeMenu();
+      }
+
+      Rect initialRect = Rect.fromCenter(
+        center: _dragStartGlobal!,
+        width: 360,
+        height: 480,
+      );
+      final navContext = descriptor.navigatorKey.currentContext;
+      final renderBox = navContext?.findRenderObject() as RenderBox?;
+      if (renderBox != null && renderBox.hasSize) {
+        final topLeft = renderBox.localToGlobal(Offset.zero);
+        initialRect = topLeft & renderBox.size;
+      }
+
+      _isDraggingTile = true;
+      HapticUtils.selection();
+      controller.startDraggingChat(
+        DraggingChatPayload(
+          chatId: descriptor.chatId,
+          chatType: descriptor.chatType,
+          chatName: descriptor.chatName,
+          avatarUrl: descriptor.avatarUrl,
+          isOnline: descriptor.isOnline,
+          lastSeen: descriptor.lastSeen,
+          otherUserId: descriptor.otherUserId,
+          sourceTileId: descriptor.tileId,
+          initialGlobalRect: initialRect,
+          currentGlobalPosition: details.globalPosition,
+          velocity: details.delta,
+        ),
+      );
+      controller.updateDraggingChat(
+        details.globalPosition,
+        velocity: details.delta,
+      );
+      return;
+    }
+
+    controller.updateDraggingChat(
+      details.globalPosition,
+      velocity: details.delta,
+    );
+  }
+
+  void _onCenterPillPanEnd(DragEndDetails details) {
+    _dragStartGlobal = null;
+    if (_isDraggingTile) {
+      _isDraggingTile = false;
+      TilingLayoutController.instance.endDraggingChat();
+    }
+  }
+
+  void _onCenterPillPanCancel() {
+    _dragStartGlobal = null;
+    if (_isDraggingTile) {
+      _isDraggingTile = false;
+      TilingLayoutController.instance.cancelDraggingChat();
+    }
+  }
+
+  double _calculateSelectionRightPillWidth() {
+    int count = 0;
+    if (widget.onCopySelected != null) count++;
+    if (widget.onForwardSelected != null) count++;
+    if (widget.onDeleteSelected != null) count++;
+    if (count <= 1) return _kRightPillChannelWidth;
+    if (count == 2) return _kRightPillChatWidth;
+    return 128.0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final glassProvider = context.watch<LiquidGlassProvider>();
@@ -169,9 +344,17 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final statusBarHeight = MediaQuery.of(context).padding.top;
 
     final bool hasCall = !widget.isChannel && widget.onVoiceCall != null;
-    final double rightCollapsedWidth =
-        hasCall ? _kRightPillChatWidth : _kRightPillChannelWidth;
+    final double rightCollapsedWidth = widget.isSelectionMode
+        ? _calculateSelectionRightPillWidth()
+        : (hasCall ? _kRightPillChatWidth : _kRightPillChannelWidth);
     final double adaptiveMenuWidth = _calculateAdaptiveMenuWidth(context);
+
+    final pillStyle = glassProvider.createStyle(
+      context: context,
+      cornerRadius: _kAppBarBorderRadius,
+      refractionIndex: 1.1,
+      refractionWidth: 24,
+    );
 
     final morphStyle = glassProvider.createStyle(
       context: context,
@@ -181,20 +364,23 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     );
 
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
+    final tileHeight = TileViewportScope.heightOf(context);
 
-    return PopScope(
-      canPop: !_isMenuOpen,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _isMenuOpen) {
-          _closeMenu();
-        }
-      },
-      child: SizedBox(
-        width: double.infinity,
-        height: normalHeight,
-        child: Stack(
+    final Widget stackWidget = Stack(
           clipBehavior: Clip.none,
           children: [
+            // Fullscreen backdrop to dismiss menu on outside tap
+            Positioned.fill(
+              key: const ValueKey<String>('chat_appbar_backdrop'),
+              child: IgnorePointer(
+                ignoring: !_isMenuOpen,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _closeMenu,
+                ),
+              ),
+            ),
+
             // 1. Left Pill: Circular Back Button (44x44)
             Positioned(
               key: const ValueKey<String>('chat_appbar_left_pill'),
@@ -204,7 +390,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               height: _kAppBarHeight,
               child: isGlassEnabled
                   ? LiquidGlassLens(
-                      style: morphStyle,
+                      style: pillStyle,
                       touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
                         stretch: 6,
                         squeeze: 0.65,
@@ -219,7 +405,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                     ),
             ),
 
-            // 2. Center Pill: Avatar + Name & Status Pill (Telegram Style)
+            // 2. Center Pill: Avatar + Name & Status Pill (Telegram Style + Drag Handle for Tile)
             Positioned(
               key: const ValueKey<String>('chat_appbar_center_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
@@ -228,118 +414,147 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               height: _kAppBarHeight,
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: _handleCenterPillTap,
+                onTap: widget.isSelectionMode ? null : _handleCenterPillTap,
+                onPanStart: _onCenterPillPanStart,
+                onPanUpdate: _onCenterPillPanUpdate,
+                onPanEnd: _onCenterPillPanEnd,
+                onPanCancel: _onCenterPillPanCancel,
                 child: isGlassEnabled
                     ? LiquidGlassLens(
-                        style: morphStyle,
-                        child: _buildCenterPillContent(context, isDark, theme),
+                        style: pillStyle,
+                        child: RepaintBoundary(
+                          child: _buildCenterPillContent(context, isDark, theme),
+                        ),
                       )
                     : _buildMattePill(
                         isDark: isDark,
-                        child: _buildCenterPillContent(context, isDark, theme),
+                        child: RepaintBoundary(
+                          child: _buildCenterPillContent(context, isDark, theme),
+                        ),
                       ),
               ),
             ),
 
-            // 3. Right Pill: Actions (Call + Three Dots), fluidly morphing into the menu via OverlayPortal
+            // 3. Right Pill: Actions (Call + Three Dots), fluidly morphing into the menu directly in Stack
             Positioned(
               key: const ValueKey<String>('chat_appbar_right_pill'),
               top: statusBarHeight + _kAppBarVerticalPadding,
               right: _kAppBarHorizontalPadding,
-              child: OverlayPortal(
-                controller: _overlayPortalController,
-                overlayChildBuilder: (context) {
-                  return Stack(
-                    children: [
-                      // Fullscreen backdrop to dismiss menu on outside tap
-                      Positioned.fill(
-                        key: const ValueKey<String>('chat_appbar_backdrop'),
-                        child: IgnorePointer(
-                          ignoring: !_isMenuOpen,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _closeMenu,
+              child: widget.isSelectionMode
+                  ? SizedBox(
+                      width: rightCollapsedWidth,
+                      height: _kAppBarHeight,
+                      child: isGlassEnabled
+                          ? LiquidGlassLens(
+                              style: pillStyle,
+                              child: _SelectionRightPillContent(
+                                key: const ValueKey<String>('chat_selection_right_pill_content'),
+                                width: rightCollapsedWidth,
+                                onCopy: widget.onCopySelected,
+                                onForward: widget.onForwardSelected,
+                                onDelete: widget.onDeleteSelected,
+                              ),
+                            )
+                          : _buildMattePill(
+                              isDark: isDark,
+                              child: _SelectionRightPillContent(
+                                key: const ValueKey<String>('chat_selection_right_pill_matte_content'),
+                                width: rightCollapsedWidth,
+                                onCopy: widget.onCopySelected,
+                                onForward: widget.onForwardSelected,
+                                onDelete: widget.onDeleteSelected,
+                              ),
+                            ),
+                    )
+                  : isGlassEnabled
+                      ? SizedBox(
+                          width: adaptiveMenuWidth,
+                          height: _kMenuHeight,
+                          child: LiquidGlassMorph(
+                            key: const ValueKey<String>('chat_right_morph'),
+                            alignment: Alignment.topRight,
+                            motion: _kChatMenuMotion,
+                            smoothness: 28,
+                            style: morphStyle,
+                            child: _isMenuOpen
+                                ? _ChatActionsMorphMenu(
+                                    key: const ValueKey<String>('chat_actions_menu'),
+                                    width: adaptiveMenuWidth,
+                                    isMuted: widget.isMuted,
+                                    onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
+                                    onSearch: () { _closeMenu(); widget.onSearch?.call(); },
+                                    onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
+                                    onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
+                                    onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                  )
+                                : _RightPillContent(
+                                    key: const ValueKey<String>('chat_right_pill_content'),
+                                    width: rightCollapsedWidth,
+                                    hasCall: hasCall,
+                                    onVoiceCall: widget.onVoiceCall,
+                                    onThreeDotsTap: _toggleMenu,
+                                  ),
+                          ),
+                        )
+                      : AnimatedContainer(
+                          key: const ValueKey<String>('chat_right_matte_container'),
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeOutCubic,
+                          width: _isMenuOpen ? adaptiveMenuWidth : rightCollapsedWidth,
+                          height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
+                          alignment: Alignment.topRight,
+                          child: _buildMattePill(
+                            isDark: isDark,
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 180),
+                              child: _isMenuOpen
+                                  ? _ChatActionsMorphMenu(
+                                      key: const ValueKey<String>('chat_actions_menu_matte'),
+                                      width: adaptiveMenuWidth,
+                                      isMuted: widget.isMuted,
+                                      onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
+                                      onSearch: () { _closeMenu(); widget.onSearch?.call(); },
+                                      onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
+                                      onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
+                                      onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                    )
+                                  : _RightPillContent(
+                                      key: const ValueKey<String>('chat_right_pill_matte_content'),
+                                      width: rightCollapsedWidth,
+                                      hasCall: hasCall,
+                                      onVoiceCall: widget.onVoiceCall,
+                                      onThreeDotsTap: _toggleMenu,
+                                    ),
+                            ),
                           ),
                         ),
-                      ),
-                      CompositedTransformFollower(
-                        link: _rightPillLayerLink,
-                        showWhenUnlinked: false,
-                        targetAnchor: Alignment.topRight,
-                        followerAnchor: Alignment.topRight,
-                        child: isGlassEnabled
-                            ? LiquidGlassMorph(
-                                key: const ValueKey<String>('chat_right_morph'),
-                                alignment: Alignment.topRight,
-                                motion: _kChatMenuMotion,
-                                smoothness: 28,
-                                style: morphStyle,
-                                child: _isMenuOpen
-                                    ? _ChatActionsMorphMenu(
-                                        key: const ValueKey<String>('chat_actions_menu'),
-                                        width: adaptiveMenuWidth,
-                                        isMuted: widget.isMuted,
-                                        onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
-                                        onSearch: () { _closeMenu(); widget.onSearch?.call(); },
-                                        onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
-                                        onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                                        onReport: () { _closeMenu(); widget.onReport?.call(); },
-                                      )
-                                    : _RightPillContent(
-                                        key: const ValueKey<String>('chat_right_pill_content'),
-                                        width: rightCollapsedWidth,
-                                        hasCall: hasCall,
-                                        onVoiceCall: widget.onVoiceCall,
-                                        onThreeDotsTap: _toggleMenu,
-                                      ),
-                              )
-                            : AnimatedContainer(
-                                key: const ValueKey<String>('chat_right_matte_container'),
-                                duration: const Duration(milliseconds: 250),
-                                curve: Curves.easeOutCubic,
-                                width: _isMenuOpen ? adaptiveMenuWidth : rightCollapsedWidth,
-                                height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
-                                alignment: Alignment.topRight,
-                                child: _buildMattePill(
-                                  isDark: isDark,
-                                  child: AnimatedSwitcher(
-                                    duration: const Duration(milliseconds: 180),
-                                    child: _isMenuOpen
-                                        ? _ChatActionsMorphMenu(
-                                            key: const ValueKey<String>('chat_actions_menu_matte'),
-                                            width: adaptiveMenuWidth,
-                                            isMuted: widget.isMuted,
-                                            onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
-                                            onSearch: () { _closeMenu(); widget.onSearch?.call(); },
-                                            onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
-                                            onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                                            onReport: () { _closeMenu(); widget.onReport?.call(); },
-                                          )
-                                        : _RightPillContent(
-                                            key: const ValueKey<String>('chat_right_pill_matte_content'),
-                                            width: rightCollapsedWidth,
-                                            hasCall: hasCall,
-                                            onVoiceCall: widget.onVoiceCall,
-                                            onThreeDotsTap: _toggleMenu,
-                                          ),
-                                  ),
-                                ),
-                              ),
-                      ),
-                    ],
-                  );
-                },
-                child: CompositedTransformTarget(
-                  link: _rightPillLayerLink,
-                  child: SizedBox(
-                    width: rightCollapsedWidth,
-                    height: _kAppBarHeight,
-                  ),
-                ),
-              ),
             ),
           ],
-        ),
+    );
+
+    return PopScope(
+      canPop: !_isMenuOpen && !widget.isSelectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          if (widget.isSelectionMode) {
+            widget.onCancelSelection?.call();
+          } else if (_isMenuOpen) {
+            _closeMenu();
+          }
+        }
+      },
+      child: SizedBox(
+        width: double.infinity,
+        height: _isMenuOpen ? tileHeight : normalHeight,
+        child: isGlassEnabled
+            ? LiquidGlassBlender(
+                smoothness: 0,
+                style: pillStyle,
+                child: stackWidget,
+              )
+            : BackdropGroup(
+                child: stackWidget,
+              ),
       ),
     );
   }
@@ -376,7 +591,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
     // 16 (left padding) + 22 (icon) + 12 (gap) + 16 (right padding) + 18 (safe curve margin) = 84.0
     final computedWidth = (maxTextWidth + 84.0).ceilToDouble();
-    final screenWidth = MediaQuery.sizeOf(context).width;
+    final screenWidth = TileViewportScope.widthOf(context);
     final maxAvailableWidth = screenWidth - (_kAppBarHorizontalPadding * 2);
 
     return computedWidth.clamp(200.0, maxAvailableWidth);
@@ -389,23 +604,49 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       behavior: HitTestBehavior.opaque,
       onTap: () {
         HapticUtils.tap();
+        if (widget.isSelectionMode) {
+          widget.onCancelSelection?.call();
+          return;
+        }
         if (_isMenuOpen) {
           _closeMenu();
+          return;
+        }
+        final tileId = _registeredTileId ?? TileViewportScope.maybeTileIdOf(context);
+        if (tileId != null &&
+            tileId != TilingLayoutController.kLeftTileId &&
+            TilingLayoutController.instance.isWorkspaceMounted &&
+            !Navigator.of(context).canPop()) {
+          TilingLayoutController.instance.handleBackAction(forTileId: tileId);
         } else {
           widget.onBack();
         }
       },
       child: Center(
-        child: iconoir.NavArrowLeft(
-          width: 22.0,
-          height: 22.0,
-          color: primaryTextColor,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          transitionBuilder: (child, animation) =>
+              ScaleTransition(scale: animation, child: child),
+          child: widget.isSelectionMode
+              ? iconoir.Xmark(
+                  key: const ValueKey<String>('selection_cancel_icon'),
+                  width: 22.0,
+                  height: 22.0,
+                  color: primaryTextColor,
+                )
+              : iconoir.NavArrowLeft(
+                  key: const ValueKey<String>('back_arrow_icon'),
+                  width: 22.0,
+                  height: 22.0,
+                  color: primaryTextColor,
+                ),
         ),
       ),
     );
   }
 
   void _handleCenterPillTap() {
+    if (_isDraggingTile) return;
     if (_isMenuOpen) {
       _closeMenu();
       return;
@@ -467,6 +708,29 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
     final secondaryTextColor = themeExt?.palette.subtext ??
         (isDark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF4A4A4C));
+
+    if (widget.isSelectionMode) {
+      return Center(
+        key: const ValueKey<String>('chat_selection_counter'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          child: Text(
+            context.l10n.translate(
+              'chat_selected_count',
+              {'count': '${widget.selectedCount}'},
+            ),
+            style: TextStyle(
+              fontSize: _kTitleFontSize,
+              fontWeight: FontWeight.w600,
+              color: primaryTextColor,
+              fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      );
+    }
 
     final heroKey = widget.heroTag ?? widget.name;
 
@@ -591,8 +855,8 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final pillBg = themeExt?.palette.appBarBackground ?? defaultBg;
     return ClipRRect(
       borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+      child: BackdropFilter.grouped(
+        filter: BlurUtils.createDownsampledBlur(15),
         child: Container(
           decoration: BoxDecoration(
             color: pillBg,
@@ -707,6 +971,101 @@ class _RightPillContent extends StatelessWidget {
         maxHeight: _kAppBarHeight,
         alignment: Alignment.centerRight,
         child: content,
+      ),
+    );
+  }
+}
+
+/// Content of the right pill when multi-message selection mode is active:
+/// [ Copy | Forward | Delete ]
+class _SelectionRightPillContent extends StatelessWidget {
+  final double width;
+  final VoidCallback? onCopy;
+  final VoidCallback? onForward;
+  final VoidCallback? onDelete;
+
+  const _SelectionRightPillContent({
+    super.key,
+    required this.width,
+    this.onCopy,
+    this.onForward,
+    this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final isDark = theme.brightness == Brightness.dark;
+    final primaryTextColor = themeExt?.palette.appBarForeground ??
+        (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final deleteColor = themeExt?.palette.error ?? const Color(0xFFFF3B30);
+
+    return SizedBox(
+      width: width,
+      height: _kAppBarHeight,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (onCopy != null)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticUtils.tap();
+                onCopy!();
+              },
+              child: SizedBox(
+                width: 38,
+                height: _kAppBarHeight,
+                child: Center(
+                  child: iconoir.Copy(
+                    width: 20.0,
+                    height: 20.0,
+                    color: primaryTextColor,
+                  ),
+                ),
+              ),
+            ),
+          if (onForward != null)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticUtils.tap();
+                onForward!();
+              },
+              child: SizedBox(
+                width: 38,
+                height: _kAppBarHeight,
+                child: Center(
+                  child: iconoir.ForwardMessage(
+                    width: 20.0,
+                    height: 20.0,
+                    color: primaryTextColor,
+                  ),
+                ),
+              ),
+            ),
+          if (onDelete != null)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticUtils.tap();
+                onDelete!();
+              },
+              child: SizedBox(
+                width: 38,
+                height: _kAppBarHeight,
+                child: Center(
+                  child: iconoir.Trash(
+                    width: 20.0,
+                    height: 20.0,
+                    color: deleteColor,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1111,7 +1470,8 @@ class _MarqueeScrollWrapperState extends State<_MarqueeScrollWrapper> {
   @override
   void didUpdateWidget(covariant _MarqueeScrollWrapper oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.child != widget.child) {
+    if (oldWidget.child.runtimeType != widget.child.runtimeType ||
+        oldWidget.child.key != widget.child.key) {
       _stopLoop();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _evaluateScroll();
@@ -1131,22 +1491,24 @@ class _MarqueeScrollWrapperState extends State<_MarqueeScrollWrapper> {
           });
         }
 
-        return SingleChildScrollView(
-          controller: _controller,
-          scrollDirection: Axis.horizontal,
-          physics: const NeverScrollableScrollPhysics(),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _MeasureSize(
-                onChange: _onChildSizeChanged,
-                child: widget.child,
-              ),
-              if (_shouldScroll) ...[
-                const SizedBox(width: _kMarqueeGap),
-                widget.child,
+        return RepaintBoundary(
+          child: SingleChildScrollView(
+            controller: _controller,
+            scrollDirection: Axis.horizontal,
+            physics: const NeverScrollableScrollPhysics(),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _MeasureSize(
+                  onChange: _onChildSizeChanged,
+                  child: widget.child,
+                ),
+                if (_shouldScroll) ...[
+                  const SizedBox(width: _kMarqueeGap),
+                  widget.child,
+                ],
               ],
-            ],
+            ),
           ),
         );
       },
@@ -1282,7 +1644,7 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        filter: BlurUtils.createDownsampledBlur(15),
         child: Container(
           decoration: BoxDecoration(
             color: isDark

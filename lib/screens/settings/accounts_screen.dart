@@ -6,10 +6,11 @@ import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
 import '../../services/database/app_database.dart';
 import '../auth/login_screen.dart';
-import '../main/main_screen.dart';
+import '../../widgets/tiling/tiling_workspace_scaffold.dart';
 import '../../utils/swipe_back_route.dart';
 
 enum _TokenStatus { valid, offline, expired }
@@ -68,9 +69,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
         } catch (_) {}
 
         if (!mounted) return;
-        // Navigate to main screen with new account
-        Navigator.of(context).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const MainScreen()),
+        TilingLayoutController.instance.closeAllChats();
+        // Navigate to main workspace with new account on root navigator
+        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+          SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
           (route) => false,
         );
       } else {

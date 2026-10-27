@@ -12,6 +12,9 @@ import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../services/notification_service.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../services/unread_count_provider.dart';
 import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/unread_separator.dart';
@@ -45,6 +48,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
   StreamSubscription? _wsSubscription;
   final ScrollController _scrollController = ScrollController();
   bool _showScrollDownFab = false;
+  UnreadCountProvider? _unreadCountProvider;
 
   @override
   void initState() {
@@ -52,12 +56,32 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
     _loadMessages();
     _subscribeWebSocket();
     _markChatAsRead();
+    NotificationService().addActiveChat(widget.chatId);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        _unreadCountProvider = context.read<UnreadCountProvider>();
+        _unreadCountProvider?.openChat(widget.chatId);
+      } catch (_) {}
+    });
 
     _scrollController.addListener(_onScroll);
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      _unreadCountProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+  }
+
+  @override
   void dispose() {
+    try {
+      _unreadCountProvider?.closeChat(widget.chatId);
+    } catch (_) {}
+    NotificationService().removeActiveChat(widget.chatId);
     _scrollController.removeListener(_onScroll);
     _wsSubscription?.cancel();
     _scrollController.dispose();
@@ -174,7 +198,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
         statusText: chatSubtitle,
         avatarWidget: _buildServiceAvatar(theme),
         isChannel: true,
-        onBack: () => Navigator.pop(context),
+        onBack: () => TilingLayoutController.popOrCloseChatTile(context),
         onTitleTap: () => _showChatInfoDialog(context, l10n),
         onAvatarTap: () => _showChatInfoDialog(context, l10n),
       ),

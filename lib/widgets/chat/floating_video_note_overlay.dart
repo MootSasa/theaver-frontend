@@ -236,16 +236,8 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
               child: Container(
                 width: _kSize,
                 height: _kSize,
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.35),
-                      blurRadius: 14,
-                      spreadRadius: 2,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
                 ),
                 child: Stack(
                   alignment: Alignment.center,

@@ -1,5 +1,7 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
@@ -111,21 +113,48 @@ class EmojiUtils {
     return false;
   }
 
+  static const int _kMaxEmojiCountCacheSize = 512;
+  static final Map<String, int> _emojiOnlyCountCache = <String, int>{};
+
+  static bool _isPotentialEmojiCodeUnit(int cu) {
+    return cu >= 0x2000 || cu == 0x00A9 || cu == 0x00AE;
+  }
+
+  /// Fast O(N) code-unit check that returns false in <1us for normal Latin/Cyrillic text
+  /// without allocating grapheme cluster iterators or running regular expressions.
+  static bool hasPotentialEmoji(String text) {
+    final len = text.length;
+    for (int i = 0; i < len; i++) {
+      if (_isPotentialEmojiCodeUnit(text.codeUnitAt(i))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Returns true if [text] (trimmed) consists of exactly 1 emoji grapheme cluster.
   static bool isSingleEmoji(String text) {
-    final trimmed = text.trim();
-    if (trimmed.isEmpty) return false;
-    final chars = trimmed.characters;
-    if (chars.length != 1) return false;
-    return isEmojiGrapheme(chars.first);
+    return countEmojiOnly(text) == 1;
   }
 
   /// If [text] consists ONLY of emojis (and optional whitespace/newlines),
   /// returns the total number of emoji grapheme clusters (> 0).
   /// Returns 0 if [text] is empty or contains any non-emoji character.
   static int countEmojiOnly(String text) {
+    if (text.isEmpty || text.length > 160) return 0;
+    final cached = _emojiOnlyCountCache[text];
+    if (cached != null) return cached;
+
     final trimmed = text.trim();
     if (trimmed.isEmpty) return 0;
+
+    // Fast O(1) bailout on first code unit for normal text (Latin/Cyrillic/punctuation)
+    final firstCu = trimmed.codeUnitAt(0);
+    final isKeycapStart =
+        (firstCu >= 0x30 && firstCu <= 0x39) || firstCu == 0x23 || firstCu == 0x2A;
+    if (!_isPotentialEmojiCodeUnit(firstCu) && !isKeycapStart) {
+      return 0;
+    }
 
     int count = 0;
     for (final cluster in trimmed.characters) {
@@ -133,15 +162,135 @@ class EmojiUtils {
         continue;
       }
       if (!isEmojiGrapheme(cluster)) {
-        return 0;
+        count = 0;
+        break;
       }
       count++;
     }
+
+    if (_emojiOnlyCountCache.length >= _kMaxEmojiCountCacheSize) {
+      _emojiOnlyCountCache.remove(_emojiOnlyCountCache.keys.first);
+    }
+    _emojiOnlyCountCache[text] = count;
     return count;
   }
 
   /// Returns true if [text] contains at least one emoji and no non-emoji text.
   static bool isEmojiOnly(String text) => countEmojiOnly(text) > 0;
+
+  static const int _kMaxSettledLottieCacheSize = 160;
+  static final Map<String, ui.Image> _settledLottieFrameCache = <String, ui.Image>{};
+  static final Map<String, Future<ui.Image?>> _settledLottieInFlight =
+      <String, Future<ui.Image?>>{};
+
+  /// Synchronous lookup of a pre-baked static [ui.Image] frame for a Lottie composition.
+  static ui.Image? getBakedLottieFrameSync(String cacheKey) {
+    return _settledLottieFrameCache[cacheKey];
+  }
+
+  /// Pre-bakes a single frame ([progress] in 0.0..1.0) of [composition] at [targetPx]x[targetPx]
+  /// into a GPU-backed [ui.Image] texture so stopped animated emojis / dice don't re-rasterize
+  /// hundreds of vector paths on every scroll frame.
+  static Future<ui.Image?> bakeLottieFrame({
+    required String cacheKey,
+    required LottieComposition composition,
+    required double progress,
+    required int targetPx,
+  }) {
+    final existing = _settledLottieFrameCache[cacheKey];
+    if (existing != null) return Future<ui.Image?>.value(existing);
+    final inFlight = _settledLottieInFlight[cacheKey];
+    if (inFlight != null) return inFlight;
+
+    final future = _doBakeLottieFrame(
+      cacheKey: cacheKey,
+      composition: composition,
+      progress: progress,
+      targetPx: targetPx.clamp(32, 512),
+    );
+    _settledLottieInFlight[cacheKey] = future;
+    return future;
+  }
+
+  static Future<ui.Image?> _doBakeLottieFrame({
+    required String cacheKey,
+    required LottieComposition composition,
+    required double progress,
+    required int targetPx,
+  }) async {
+    try {
+      final recorder = ui.PictureRecorder();
+      final rect = Rect.fromLTWH(0, 0, targetPx.toDouble(), targetPx.toDouble());
+      final canvas = Canvas(recorder, rect);
+      final drawable = LottieDrawable(composition)..setProgress(progress.clamp(0.0, 1.0));
+      drawable.draw(canvas, rect, fit: BoxFit.contain);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(targetPx, targetPx);
+      picture.dispose();
+
+      if (_settledLottieFrameCache.length >= _kMaxSettledLottieCacheSize) {
+        final oldestKey = _settledLottieFrameCache.keys.first;
+        _settledLottieFrameCache.remove(oldestKey);
+      }
+      _settledLottieFrameCache[cacheKey] = image;
+      return image;
+    } catch (_) {
+      return null;
+    } finally {
+      _settledLottieInFlight.remove(cacheKey);
+    }
+  }
+
+  /// Pre-bakes multiple stacked Lottie layers (e.g., SlotMachineWidget's 5 layers)
+  /// at their respective settled progresses into a single composite [ui.Image] texture.
+  static Future<ui.Image?> bakeCompositeLottieFrames({
+    required String cacheKey,
+    required List<(LottieComposition, double)> layers,
+    required int targetPx,
+  }) {
+    final existing = _settledLottieFrameCache[cacheKey];
+    if (existing != null) return Future<ui.Image?>.value(existing);
+    final inFlight = _settledLottieInFlight[cacheKey];
+    if (inFlight != null) return inFlight;
+
+    final future = _doBakeCompositeLottieFrames(
+      cacheKey: cacheKey,
+      layers: layers,
+      targetPx: targetPx.clamp(32, 512),
+    );
+    _settledLottieInFlight[cacheKey] = future;
+    return future;
+  }
+
+  static Future<ui.Image?> _doBakeCompositeLottieFrames({
+    required String cacheKey,
+    required List<(LottieComposition, double)> layers,
+    required int targetPx,
+  }) async {
+    try {
+      final recorder = ui.PictureRecorder();
+      final rect = Rect.fromLTWH(0, 0, targetPx.toDouble(), targetPx.toDouble());
+      final canvas = Canvas(recorder, rect);
+      for (final (comp, progress) in layers) {
+        final drawable = LottieDrawable(comp)..setProgress(progress.clamp(0.0, 1.0));
+        drawable.draw(canvas, rect, fit: BoxFit.contain);
+      }
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(targetPx, targetPx);
+      picture.dispose();
+
+      if (_settledLottieFrameCache.length >= _kMaxSettledLottieCacheSize) {
+        final oldestKey = _settledLottieFrameCache.keys.first;
+        _settledLottieFrameCache.remove(oldestKey);
+      }
+      _settledLottieFrameCache[cacheKey] = image;
+      return image;
+    } catch (_) {
+      return null;
+    } finally {
+      _settledLottieInFlight.remove(cacheKey);
+    }
+  }
 
   /// Supported Telegram dice game emojis.
   static const Set<String> diceEmojis = {'🎲', '🎯', '🏀', '⚽', '🎳', '🎰'};
@@ -159,7 +308,7 @@ class EmojiUtils {
   /// Returns true if [text] is a single standalone dice game emoji.
   static bool isDiceEmoji(String text) {
     final trimmed = text.trim();
-    if (trimmed.isEmpty) return false;
+    if (trimmed.isEmpty || trimmed.length > 16) return false;
     return diceEmojis.contains(trimmed) ||
         diceEmojiToCodepointMap.values.contains(trimmed.toLowerCase());
   }
@@ -316,41 +465,77 @@ class EmojiUtils {
   }
 
   /// Builds a [TextSpan] where inline emojis use the local/compact Apple Emoji font.
-  static TextSpan buildEmojiTextSpan(String text, {required TextStyle style}) {
+  static TextSpan buildEmojiTextSpan(
+    String text, {
+    required TextStyle style,
+    GestureRecognizer? recognizer,
+  }) {
     if (text.isEmpty) {
-      return TextSpan(text: '', style: style);
+      return TextSpan(text: '', style: style, recognizer: recognizer);
     }
+    // Fast path: if text has no code units >= 0x2000 (and no ©/®), return a single TextSpan
+    // without allocating grapheme cluster iterators or child lists.
+    if (!hasPotentialEmoji(text)) {
+      return TextSpan(text: text, style: style, recognizer: recognizer);
+    }
+
+    final emojiStyle = style.copyWith(
+      fontFamily: effectiveFontFamily,
+      fontSize: (style.fontSize ?? 14.0),
+      height: 1.0,
+    );
     final List<InlineSpan> children = [];
     final buffer = StringBuffer();
 
     try {
       for (final cluster in text.characters) {
-        if (isEmojiGrapheme(cluster)) {
+        if (_isPotentialEmojiCodeUnit(cluster.codeUnitAt(0)) && isEmojiGrapheme(cluster)) {
           if (buffer.isNotEmpty) {
-            children.add(TextSpan(text: buffer.toString(), style: style));
+            children.add(TextSpan(
+              text: buffer.toString(),
+              style: style,
+              recognizer: recognizer,
+            ));
             buffer.clear();
           }
-          children.add(
-            TextSpan(
-              text: cluster,
-              style: style.copyWith(
-                fontFamily: effectiveFontFamily,
-                fontSize: (style.fontSize ?? 14.0),
-              ),
-            ),
-          );
+          children.add(TextSpan(
+            text: cluster,
+            style: emojiStyle,
+            recognizer: recognizer,
+          ));
+        } else if (cluster.length > 1 && isEmojiGrapheme(cluster)) {
+          if (buffer.isNotEmpty) {
+            children.add(TextSpan(
+              text: buffer.toString(),
+              style: style,
+              recognizer: recognizer,
+            ));
+            buffer.clear();
+          }
+          children.add(TextSpan(
+            text: cluster,
+            style: emojiStyle,
+            recognizer: recognizer,
+          ));
         } else {
           buffer.write(cluster);
         }
       }
+      if (children.isEmpty) {
+        return TextSpan(text: text, style: style, recognizer: recognizer);
+      }
       if (buffer.isNotEmpty) {
-        children.add(TextSpan(text: buffer.toString(), style: style));
+        children.add(TextSpan(
+          text: buffer.toString(),
+          style: style,
+          recognizer: recognizer,
+        ));
       }
     } catch (e) {
-      children.add(TextSpan(text: text, style: style));
+      return TextSpan(text: text, style: style, recognizer: recognizer);
     }
 
-    return TextSpan(style: style, children: children);
+    return TextSpan(style: style, children: children, recognizer: recognizer);
   }
 }
 
@@ -390,9 +575,47 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   late final AnimationController _controller;
   final LayerLink _layerLink = LayerLink();
   LottieComposition? _composition;
+  ui.Image? _settledFrame;
+  bool _isAnimating = false;
   bool _isLoadingAnimated = false;
   bool _hasTriggeredAutoPlay = false;
   bool _pendingTapPlay = false;
+
+  void _onAnimationStatusChanged(AnimationStatus status) {
+    final animating =
+        status == AnimationStatus.forward || status == AnimationStatus.reverse;
+    if (!animating) {
+      _hapticBinding?.dispose();
+      _hapticBinding = null;
+    }
+    if (_isAnimating != animating && mounted) {
+      setState(() {
+        _isAnimating = animating;
+      });
+    }
+  }
+
+  void _ensureSettledFrame(LottieComposition comp) {
+    final int targetPx = (widget.width * 2.0).round().clamp(64, 320);
+    final String cacheKey = 'emoji_${widget.emoji.trim()}_$targetPx';
+    final syncImg = EmojiUtils.getBakedLottieFrameSync(cacheKey);
+    if (syncImg != null) {
+      _settledFrame = syncImg;
+      return;
+    }
+    EmojiUtils.bakeLottieFrame(
+      cacheKey: cacheKey,
+      composition: comp,
+      progress: 0.0,
+      targetPx: targetPx,
+    ).then((img) {
+      if (mounted && img != null && _composition == comp) {
+        setState(() {
+          _settledFrame = img;
+        });
+      }
+    });
+  }
 
   bool _isVisibleOnScreen() {
     if (!mounted) return false;
@@ -401,8 +624,10 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
     final position = renderBox.localToGlobal(Offset.zero);
     final size = renderBox.size;
     final rect = Rect.fromLTWH(position.dx, position.dy, size.width, size.height);
-    final mediaQuery = MediaQuery.maybeOf(context);
-    final screenSize = mediaQuery?.size ?? const Size(1000, 2000);
+    final view = View.maybeOf(context);
+    final screenSize = view != null && view.devicePixelRatio > 0
+        ? (view.physicalSize / view.devicePixelRatio)
+        : (MediaQuery.maybeOf(context)?.size ?? const Size(1920, 1080));
     final screenRect = Rect.fromLTWH(0, 0, screenSize.width, screenSize.height);
     return rect.overlaps(screenRect);
   }
@@ -412,6 +637,7 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
     if (targetId != null && targetId.isNotEmpty) {
       EmojiInteractionManager.instance.registerPlayer(
         messageId: targetId,
+        owner: this,
         isVisible: _isVisibleOnScreen,
         play: () {
           if (_isLoadingAnimated && _composition == null) {
@@ -429,14 +655,15 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   void _unregisterPlayer([String? id]) {
     final targetId = id ?? widget.messageId ?? widget.autoPlayId;
     if (targetId != null && targetId.isNotEmpty) {
-      EmojiInteractionManager.instance.unregisterPlayer(targetId);
+      EmojiInteractionManager.instance.unregisterPlayer(targetId, owner: this);
     }
   }
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this);
+    _controller = AnimationController(vsync: this)
+      ..addStatusListener(_onAnimationStatusChanged);
     EmojiEffectCacheService.instance.prefetchEffect(widget.emoji);
     _registerPlayer();
     _initOrLoadComposition();
@@ -453,6 +680,8 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
     }
     if (oldWidget.emoji.trim() != widget.emoji.trim()) {
       _composition = null;
+      _settledFrame = null;
+      _isAnimating = false;
       _isLoadingAnimated = false;
       _pendingTapPlay = false;
       EmojiEffectCacheService.instance.prefetchEffect(widget.emoji);
@@ -475,6 +704,7 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
       _composition = syncComp;
       _controller.duration = syncComp.duration;
       _isLoadingAnimated = false;
+      _ensureSettledFrame(syncComp);
       _checkAutoPlay();
       return;
     }
@@ -490,6 +720,7 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
 
     if (comp != null) {
       _controller.duration = comp.duration;
+      _ensureSettledFrame(comp);
       setState(() {
         _composition = comp;
         _isLoadingAnimated = false;
@@ -553,6 +784,9 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
     _triggerEffect();
 
     if (_composition != null && !_controller.isAnimating) {
+      setState(() {
+        _isAnimating = true;
+      });
       _controller.forward(from: 0);
     }
   }
@@ -572,6 +806,9 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
   Widget build(BuildContext context) {
     final comp = _composition;
     final double staticSize = widget.width / 1.8;
+    final bool isAnimatedEmoji = comp != null ||
+        _isLoadingAnimated ||
+        EmojiEffectCacheService.instance.hasAnimatedEmoji(widget.emoji);
     final bool useFullBox = comp != null || _isLoadingAnimated;
 
     return CompositedTransformTarget(
@@ -580,44 +817,59 @@ class _LottieEmojiState extends State<LottieEmoji> with SingleTickerProviderStat
         width: useFullBox ? widget.width : staticSize + 12.0,
         height: useFullBox ? widget.height : staticSize + 12.0,
         child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            widget.onTap?.call();
-            if (_isLoadingAnimated && comp == null) {
-              _pendingTapPlay = true;
-              EmojiHapticService.instance.playInteractiveEmojiHaptic(widget.emoji);
-              _triggerEffect();
-            } else {
-              _playAnimation();
-            }
-          },
+          behavior: isAnimatedEmoji
+              ? HitTestBehavior.opaque
+              : HitTestBehavior.deferToChild,
+          onTap: isAnimatedEmoji
+              ? () {
+                  widget.onTap?.call();
+                  if (_isLoadingAnimated && comp == null) {
+                    _pendingTapPlay = true;
+                    EmojiHapticService.instance
+                        .playInteractiveEmojiHaptic(widget.emoji);
+                    _triggerEffect();
+                  } else {
+                    _playAnimation();
+                  }
+                }
+              : null,
           child: Center(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
               child: comp != null
-                  ? Lottie(
+                  ? KeyedSubtree(
                       key: const ValueKey('lottie_loaded'),
-                      composition: comp,
-                      controller: _controller,
-                      width: widget.width,
-                      height: widget.height,
-                      fit: BoxFit.contain,
-                      repeat: false,
-                      addRepaintBoundary: true,
-                    )
-                      : _isLoadingAnimated
-                          ? _EmojiSilhouetteShimmer(
-                              key: const ValueKey('lottie_shimmer'),
-                              emoji: widget.emoji,
-                              size: widget.width * 0.72,
-                              fallbackStyle: widget.style,
+                      child: (!_isAnimating && _settledFrame != null)
+                          ? RawImage(
+                              image: _settledFrame,
+                              width: widget.width,
+                              height: widget.height,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.low,
                             )
-                          : HighResStaticEmoji(
-                              key: const ValueKey('lottie_static_fallback'),
-                              emoji: widget.emoji,
-                              size: staticSize,
-                              fallbackStyle: widget.style,
+                          : Lottie(
+                              composition: comp,
+                              controller: _controller,
+                              width: widget.width,
+                              height: widget.height,
+                              fit: BoxFit.contain,
+                              repeat: false,
+                              addRepaintBoundary: true,
                             ),
+                    )
+                  : _isLoadingAnimated
+                      ? _EmojiSilhouetteShimmer(
+                          key: const ValueKey('lottie_shimmer'),
+                          emoji: widget.emoji,
+                          size: widget.width * 0.72,
+                          fallbackStyle: widget.style,
+                        )
+                      : HighResStaticEmoji(
+                          key: const ValueKey('lottie_static_fallback'),
+                          emoji: widget.emoji,
+                          size: staticSize,
+                          fallbackStyle: widget.style,
+                        ),
             ),
           ),
         ),

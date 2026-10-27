@@ -16,6 +16,7 @@ import '../../services/video_note_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
 import 'blurred_media_placeholder.dart';
 import 'message_status_widget.dart';
+import '../tiling/tile_viewport_scope.dart';
 
 /// Static LRU pool for caching active video note controllers to avoid re-initialization
 /// and loading spinners when scrolling back and forth.
@@ -727,7 +728,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   Widget build(BuildContext context) {
     super.build(context);
 
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = TileViewportScope.widthOf(context);
     // Passive size is slightly smaller (~188px), expands to ~260px on active sound playback
     final double passiveDiameter = math.min(192.0, screenWidth * 0.52);
     final double activeDiameter = math.min(265.0, screenWidth * 0.74);
@@ -810,16 +811,8 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                   curve: Curves.easeOutCubic,
                   width: effectiveDiameter,
                   height: effectiveDiameter,
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.28),
-                        blurRadius: 12,
-                        spreadRadius: 1,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
                   ),
                   child: Stack(
                     alignment: Alignment.center,
@@ -914,13 +907,6 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                               color: Colors.white.withValues(alpha: 0.25),
                               width: 1,
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.4),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
@@ -1217,11 +1203,6 @@ class _CircularProgressPainter extends CustomPainter {
       center.dx + radius * math.cos(thumbAngle),
       center.dy + radius * math.sin(thumbAngle),
     );
-
-    final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.45)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
-    canvas.drawCircle(thumbCenter, isScrubbing ? 6.5 : 5.0, shadowPaint);
 
     final thumbPaint = Paint()
       ..color = Colors.white

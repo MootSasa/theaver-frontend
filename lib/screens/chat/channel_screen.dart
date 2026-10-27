@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
@@ -23,6 +27,7 @@ import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/chat_input_bar.dart';
 import '../../widgets/chat/chat_messages_list_view.dart';
+import '../../widgets/message/message_bubble.dart';
 import '../../widgets/message/text_message_widget.dart';
 import '../../widgets/message/message_status_widget.dart';
 import '../../widgets/chat/message_reply_info.dart';
@@ -44,8 +49,11 @@ import '../../widgets/message/voice_message_widget.dart';
 import '../../widgets/message/poll_message_widget.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/message_context_menu_service.dart';
 import '../settings/profile_screen.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../widgets/tiling/tile_viewport_scope.dart';
 
 
 
@@ -96,6 +104,22 @@ class _ChannelScreenState extends State<ChannelScreen>
   final Map<String, GlobalKey> _messageKeys = {};
   final List<String> _jumpHistory = [];
 
+  // Multi-message selection & desktop LMB drag state
+  final Set<String> _selectedMessageIds = <String>{};
+  bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
+  int? _dragSelectStartIndex;
+  bool _dragSelectTargetState = true;
+  Set<String> _dragSelectBaselineIds = <String>{};
+  bool _isLmbDraggingMessages = false;
+  bool _isLmbDirectTextSelecting = false;
+  Offset? _lmbDownGlobalPos;
+  int? _lmbDownFeedIndex;
+  Message? _lmbDownMessage;
+  GlobalKey? _lmbDownKey;
+  bool _lmbDownIsMe = false;
+  bool _lmbDownInsideBubble = false;
+  bool _lmbDownInsideText = false;
+
   // Reply / Quote state
   Message? _replyToMessage;
   bool _isQuote = false;
@@ -106,6 +130,8 @@ class _ChannelScreenState extends State<ChannelScreen>
   // WebSocket & Realtime
   final WebSocketService _wsService = WebSocketService();
   ChatSubscription? _chatSubscription;
+  UnreadCountProvider? _unreadCountProvider;
+  String? _registeredTileId;
 
   @override
   void initState() {
@@ -128,10 +154,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     _messageController.addListener(_onInputTextChanged);
 
     // Connect continuous media playback with coordinator
-    MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.channelId;
-    MediaPlaybackCoordinator.instance.onScrollToMessageRequested = (id) => _scrollToMessage(id);
-    MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
-    MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
+    MediaPlaybackCoordinator.instance.registerChat(
+      widget.channelId,
+      ChatPlaybackCallbacks(
+        onScrollToMessage: (id) => _scrollToMessage(id),
+        onPlayNext: _playNextMediaNote,
+        onBuildPlaylist: (id) => _buildPlaylistFrom(id),
+      ),
+    );
+    NotificationService().addActiveChat(widget.channelId);
 
     _scrollController.addListener(() {
       if (!_scrollController.hasClients || _messages.isEmpty) return;
@@ -200,11 +231,54 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       try {
-        context.read<UnreadCountProvider>().setOpenChat(widget.channelId);
+        _unreadCountProvider = context.read<UnreadCountProvider>();
+        _unreadCountProvider?.openChat(widget.channelId);
       } catch (_) {}
       NotificationService().cancelChatNotifications(widget.channelId, chatTitle: widget.channelName);
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      _unreadCountProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+    final tileId = TileViewportScope.maybeTileIdOf(context);
+    if (tileId != _registeredTileId) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.unregisterTileBackHandler(
+          _registeredTileId!,
+          _handleTileBack,
+        );
+      }
+      _registeredTileId = tileId;
+      if (tileId != null) {
+        TilingLayoutController.instance.registerTileBackHandler(
+          tileId,
+          _handleTileBack,
+        );
+      }
+    }
+  }
+
+  bool _handleTileBack() {
+    if (!mounted) return false;
+    if (MessageContextMenuService().isShowing) {
+      MessageContextMenuService().dismiss();
+      return true;
+    }
+    if (_isSelectionMode) {
+      _clearSelection();
+      return true;
+    }
+    if (_replyToMessage != null) {
+      _cancelReply();
+      return true;
+    }
+    return false;
   }
 
   void _initWebSocket() {
@@ -225,9 +299,6 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _onAppResumed() {
-    try {
-      context.read<UnreadCountProvider>().setOpenChat(widget.channelId);
-    } catch (_) {}
     if (!_wsService.isConnected) {
       _wsService.connect();
     }
@@ -382,10 +453,15 @@ class _ChannelScreenState extends State<ChannelScreen>
       // Сообщение уже в списке (отправлено с этого устройства). Обновляем id, статус и обогащенный replyInfo от сервера
       if (mounted) {
         setState(() {
+          final existing = _messages[existingIndex];
           _messages[existingIndex] = message.copyWith(
-            localId: _messages[existingIndex].localId ?? message.localId,
+            localId: existing.localId ?? message.localId,
             sendStatus: 1,
-            replyInfo: message.replyInfo ?? _messages[existingIndex].replyInfo,
+            replyInfo: message.replyInfo ?? existing.replyInfo,
+            isQuote: message.isQuote || existing.isQuote,
+            quoteText: message.quoteText ?? existing.quoteText,
+            quoteOffset: message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
+            quoteLength: message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
           );
         });
       }
@@ -509,32 +585,46 @@ class _ChannelScreenState extends State<ChannelScreen>
                 )
                 .toList();
 
-            final Map<String, Message> merged = {};
+            final Map<String, Message> mergedById = {};
+            final Map<String, Message> existingByLocalId = {};
             for (final m in _messages) {
-              merged[m.id] = m;
+              mergedById[m.id] = m;
               if (m.localId != null && m.localId!.isNotEmpty) {
-                merged[m.localId!] = m;
+                existingByLocalId[m.localId!] = m;
               }
             }
             for (final m in serverMessages) {
-              merged[m.id] = m;
-              if (m.localId != null && m.localId!.isNotEmpty) {
-                merged[m.localId!] = m;
+              final existing = mergedById[m.id] ??
+                  (m.localId != null && m.localId!.isNotEmpty
+                      ? existingByLocalId[m.localId!]
+                      : null);
+              if (existing != null) {
+                mergedById[m.id] = m.copyWith(
+                  localId: m.localId ?? existing.localId,
+                  isQuote: m.isQuote || existing.isQuote,
+                  quoteText: m.quoteText ?? existing.quoteText,
+                  quoteOffset: m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+                  quoteLength: m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+                );
+              } else {
+                mergedById[m.id] = m;
               }
             }
+            final Set<String> serverLocalIds = mergedById.values
+                .map((m) => m.localId)
+                .whereType<String>()
+                .where((id) => id.isNotEmpty)
+                .toSet();
             for (final pending in pendingMessages) {
-              final key = pending.localId ?? pending.id;
-              if (!merged.containsKey(key)) {
-                merged[key] = pending;
+              final lId = pending.localId;
+              if (!mergedById.containsKey(pending.id) &&
+                  (lId == null || !serverLocalIds.contains(lId))) {
+                mergedById[pending.id] = pending;
               }
             }
 
             _messages.clear();
-            final Map<String, Message> dedupedById = {};
-            for (final m in merged.values) {
-              dedupedById[m.id] = m;
-            }
-            _messages.addAll(dedupedById.values);
+            _messages.addAll(mergedById.values);
 
             // Сортировка по createdAt по убыванию
             _messages.sort((a, b) {
@@ -952,10 +1042,19 @@ class _ChannelScreenState extends State<ChannelScreen>
                     _messages.indexWhere((m) => m.localId == pendingLocalId);
                 if (idx != -1) {
                   if (sentMessage is Message) {
+                    final existing = _messages[idx];
                     _messages[idx] = sentMessage.copyWith(
                       localId: pendingLocalId,
                       sendStatus: 1, // sent
-                      replyInfo: sentMessage.replyInfo ?? _messages[idx].replyInfo,
+                      replyInfo: sentMessage.replyInfo ?? existing.replyInfo,
+                      isQuote: sentMessage.isQuote || existing.isQuote || replyIsQuote,
+                      quoteText: sentMessage.quoteText ?? existing.quoteText ?? replyQuoteText,
+                      quoteOffset: sentMessage.quoteOffset != 0
+                          ? sentMessage.quoteOffset
+                          : (existing.quoteOffset != 0 ? existing.quoteOffset : replyQuoteOffset),
+                      quoteLength: sentMessage.quoteLength != 0
+                          ? sentMessage.quoteLength
+                          : (existing.quoteLength != 0 ? existing.quoteLength : replyQuoteLength),
                     );
                   } else {
                     _messages[idx] = _messages[idx].copyWith(
@@ -1147,19 +1246,22 @@ class _ChannelScreenState extends State<ChannelScreen>
     _scrollController.dispose();
     _chatSubscription?.cancel();
 
-    if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.channelId) {
-      MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
-      MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
-      MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
-      MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
+    if (_registeredTileId != null) {
+      TilingLayoutController.instance.unregisterTileBackHandler(
+        _registeredTileId!,
+        _handleTileBack,
+      );
     }
+
+    MediaPlaybackCoordinator.instance.unregisterChat(widget.channelId);
 
     _updateInputHeight();
 
     // Clear the open chat indicator in the provider
     try {
-      context.read<UnreadCountProvider>().setOpenChat(null);
+      _unreadCountProvider?.closeChat(widget.channelId);
     } catch (_) {}
+    NotificationService().removeActiveChat(widget.channelId);
 
     super.dispose();
   }
@@ -1250,10 +1352,14 @@ class _ChannelScreenState extends State<ChannelScreen>
         .replaceAll('{count}', _subscriberCount.toString());
 
     return ChatScaffold(
-      canPop: !isKeyboardVisible,
+      canPop: !isKeyboardVisible && !_isSelectionMode,
       onPopInvoked: (didPop, _) {
-        if (!didPop && isKeyboardVisible) {
-          FocusScope.of(context).unfocus();
+        if (!didPop) {
+          if (_isSelectionMode) {
+            _clearSelection();
+          } else if (isKeyboardVisible) {
+            FocusScope.of(context).unfocus();
+          }
         }
       },
       appBar: FloatingGlassAppBar(
@@ -1263,7 +1369,22 @@ class _ChannelScreenState extends State<ChannelScreen>
         statusText: subscriberText,
         isChannel: true, // Calls hidden in channel
         isMuted: _isMuted,
-        onBack: () => Navigator.pop(context),
+        heroTag: displayName,
+        isSelectionMode: _isSelectionMode,
+        selectedCount: _selectedMessageIds.length,
+        onCancelSelection: _clearSelection,
+        onCopySelected: _copySelectedMessages,
+        onForwardSelected: _forwardSelectedMessages,
+        onDeleteSelected: _isAdmin ? _deleteSelectedMessages : null,
+        profileScreenBuilder: (_) => ProfileScreen(
+          entityType: ProfileEntityType.channel,
+          chatId: widget.channelId,
+          initialName: displayName,
+          initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
+          heroTag: displayName,
+          onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
+        ),
+        onBack: () => TilingLayoutController.popOrCloseChatTile(context),
         onTitleTap: () {
           Navigator.push(
             context,
@@ -1343,24 +1464,30 @@ class _ChannelScreenState extends State<ChannelScreen>
       ),
       body: Stack(
         children: [
-          ChatMessagesListView(
-            isLoading: _isLoading,
-            isLoadingMore: _isLoadingMore,
-            itemCount: _messages.length,
-            scrollController: _scrollController,
-            topPadding: topPadding,
-            bottomPadding: _isAdmin ? _inputHeight + 8 : 16,
-            emptyTitle: 'No posts yet',
-            itemBuilder: (context, index) {
-              final message = _messages[index];
-              return _buildChannelMessage(message);
-            },
+          Listener(
+            onPointerMove: _handleChatPointerMove,
+            onPointerUp: _handleChatPointerUp,
+            onPointerCancel: _handleChatPointerCancel,
+            child: ChatMessagesListView(
+              isLoading: _isLoading,
+              isLoadingMore: _isLoadingMore,
+              itemCount: _messages.length,
+              scrollController: _scrollController,
+              topPadding: topPadding,
+              bottomPadding: _isAdmin ? _inputHeight + 8 : 16,
+              emptyTitle: 'No posts yet',
+              itemBuilder: (context, index) {
+                final message = _messages[index];
+                return _buildChannelMessage(message, index);
+              },
+            ),
           ),
           Positioned(
             top: topPadding + 4.0,
             left: 0,
             right: 0,
             child: MediaNotePlayerHeader(
+              chatId: widget.channelId,
               onScrollToActive: () {
                 final activeId = VoicePlaybackService().activeMessageId ??
                     VideoNotePlaybackService().activeMessageId;
@@ -1381,18 +1508,25 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
-  Widget _buildChannelMessage(Message message) {
+  Widget _buildChannelMessage(Message message, int feedIndex) {
     final GlobalKey key;
-    if (message.localId != null && _messageKeys.containsKey(message.localId!)) {
+    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
+    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
       key = _messageKeys[message.localId!]!;
       _messageKeys[message.id] = key;
     } else {
       key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (message.localId != null) {
+      if (hasLocalId) {
         _messageKeys[message.localId!] = key;
       }
     }
     final isHighlighted = message.id == _highlightMessageId;
+    final isSelected = _selectedMessageIds.contains(message.id);
+    final bool useSelectedStyle = isSelected || isHighlighted;
+    final TheavPalette? palette =
+        Theme.of(context).extension<TheavThemeExtension>()?.palette;
+    final Color rowHighlightColor = palette?.messageSelectionOverlay ??
+        Theme.of(context).colorScheme.primary.withValues(alpha: 0.16);
     final bool hasNoMedia = message.fileUrl == null || message.fileUrl!.trim().isEmpty;
     final int emojiCount = (message.messageType == 'text' &&
             hasNoMedia &&
@@ -1401,16 +1535,9 @@ class _ChannelScreenState extends State<ChannelScreen>
         ? EmojiUtils.countEmojiOnly(message.content)
         : 0;
     final bool isBigEmoji = emojiCount > 0;
+    final bool isMe = message.senderId == _currentUserId || _isAdmin;
 
-    Widget messageWidget = AnimatedContainer(
-      key: key,
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeInOut,
-      width: double.infinity,
-      color: isHighlighted
-          ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.15)
-          : Colors.transparent,
-      child: isBigEmoji
+    Widget postBody = isBigEmoji
           ? Padding(
               padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
               child: Align(
@@ -1455,40 +1582,51 @@ class _ChannelScreenState extends State<ChannelScreen>
                       ),
                     );
 
-                    return Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        if (emojiCount == 1)
-                          LottieEmoji(
-                            key: ValueKey('lottie_$stableKey'),
-                            emoji: message.content,
-                            width: emojiFontSize * 1.8,
-                            height: emojiFontSize * 1.8,
-                            isMe: false, // In channels usually left-aligned effects
-                            autoPlay: shouldAutoPlay,
-                            autoPlayId: stableKey,
-                          )
-                        else
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4.0, bottom: 20.0, right: 16.0),
-                            child: EmojiUtils.emojiOnlyText(
-                              message.content,
-                              fontSize: emojiCount <= 3 ? 44.0 : 32.0,
+                    return MetaData(
+                      metaData: 'message_bubble_box',
+                      behavior: HitTestBehavior.translucent,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          if (emojiCount == 1)
+                            LottieEmoji(
+                              key: ValueKey('lottie_$stableKey'),
+                              emoji: message.content,
+                              width: emojiFontSize * 1.8,
+                              height: emojiFontSize * 1.8,
+                              isMe: false, // In channels usually left-aligned effects
+                              autoPlay: shouldAutoPlay,
+                              autoPlayId: stableKey,
+                            )
+                          else
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4.0, bottom: 20.0, right: 16.0),
+                              child: EmojiUtils.emojiOnlyText(
+                                message.content,
+                                fontSize: emojiCount <= 3 ? 44.0 : 32.0,
+                              ),
                             ),
+                          Positioned(
+                            bottom: emojiCount == 1 ? 12 : 0,
+                            right: emojiCount == 1 ? -16 : 0,
+                            child: metadataRow,
                           ),
-                        Positioned(
-                          bottom: emojiCount == 1 ? 12 : 0,
-                          right: emojiCount == 1 ? -16 : 0,
-                          child: metadataRow,
-                        ),
-                      ],
+                        ],
+                      ),
                     );
                   },
                 ),
               ),
             )
-          : Card(
-              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+          : MetaData(
+              metaData: 'message_bubble_box',
+              behavior: HitTestBehavior.translucent,
+              child: Card(
+                color: useSelectedStyle
+                    ? (palette?.chatBubbleIncomingSelected ??
+                        Theme.of(context).cardColor)
+                    : null,
+                margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -1740,9 +1878,13 @@ class _ChannelScreenState extends State<ChannelScreen>
                               currentUserId: _currentUserId ?? '',
                             )
                           else
-                            TextMessageWidget(
-                              text: message.content,
-                              isMe: false,
+                            MetaData(
+                              metaData: 'message_selectable_content',
+                              behavior: HitTestBehavior.translucent,
+                              child: TextMessageWidget(
+                                text: message.content,
+                                isMe: false,
+                              ),
                             ),
                           if (fitsInline)
                             Opacity(
@@ -1782,30 +1924,105 @@ class _ChannelScreenState extends State<ChannelScreen>
       ),
     );
 
-    // Wrap with SwipeToReplyWrapper for swipe-to-reply gesture
-    messageWidget = SwipeToReplyWrapper(
-      onReply: () => _startReply(message),
-      enabled: _isAdmin, // Users can only reply if they can post (simple rule for now)
-      child: messageWidget,
-    );
-
-    messageWidget = GestureDetector(
-      onTap: () {
-        _showContextMenu(message, message.senderId == _currentUserId || _isAdmin, key);
-      },
-      onLongPress: () {
-        _showContextMenu(message, message.senderId == _currentUserId || _isAdmin, key, forceOpen: true);
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: messageWidget,
+    Widget messageWidget = AnimatedContainer(
+      key: key,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeInOut,
+      width: double.infinity,
+      color: useSelectedStyle ? rowHighlightColor : Colors.transparent,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            child: _isSelectionMode
+                ? Padding(
+                    padding: const EdgeInsets.only(left: 12.0, right: 4.0),
+                    child: MessageSelectionCheckbox(isSelected: isSelected),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          Expanded(child: postBody),
+        ],
       ),
     );
 
-    return messageWidget;
+    // Wrap with SwipeToReplyWrapper for swipe-to-reply gesture
+    messageWidget = SwipeToReplyWrapper(
+      onReply: () => _startReply(message),
+      enabled: _isAdmin && !_isSelectionMode,
+      child: messageWidget,
+    );
+
+    final platform = Theme.of(context).platform;
+    final bool isDesktop = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS;
+
+    messageWidget = Listener(
+      onPointerDown: (event) => _handleMessagePointerDown(
+        event: event,
+        feedIndex: feedIndex,
+        message: message,
+        key: key,
+        isMe: isMe,
+      ),
+      child: GestureDetector(
+        onTap: () {
+          if (_isSelectionMode) {
+            if (_isLmbDraggingMessages) return;
+            _toggleMessageSelection(message);
+            return;
+          }
+          if (!isDesktop) {
+            _showContextMenu(message, isMe, key, enableBlur: true);
+          }
+        },
+        onLongPress: isDesktop
+            ? null
+            : () {
+                _enterSelectionMode(message);
+              },
+        onSecondaryTapUp: (details) {
+          final bool clickedOnBubble = MessageBubble.isGlobalPointInsideBubble(
+            key.currentContext,
+            details.globalPosition,
+          );
+          _showContextMenu(
+            message,
+            isMe,
+            key,
+            forceOpen: true,
+            enableBlur: clickedOnBubble,
+          );
+        },
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: double.infinity,
+          color: Colors.transparent,
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: messageWidget,
+        ),
+      ),
+    );
+
+    return ValueListenableBuilder<String?>(
+      valueListenable: MessageContextMenuService().activeBlurMessageId,
+      builder: (context, activeBlurId, child) {
+        final isSeparatedForBlur = activeBlurId != null &&
+            (activeBlurId == message.id ||
+                (hasLocalId && activeBlurId == message.localId));
+        return Visibility(
+          visible: !isSeparatedForBlur,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: child!,
+        );
+      },
+      child: messageWidget,
+    );
   }
 
   void _confirmDeleteMessage(Message message) {
@@ -1846,13 +2063,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
-  void _showContextMenu(Message message, bool isMe, GlobalKey key, {bool forceOpen = false}) {
-    if (!forceOpen && message.messageType == 'text' && _isSingleEmoji(message.content)) {
-      if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
-        return;
-      }
-    }
-
+  void _showContextMenu(
+    Message message,
+    bool isMe,
+    GlobalKey key, {
+    bool forceOpen = false,
+    bool enableBlur = true,
+    Offset? initialDragStartGlobalPosition,
+    Offset? initialDragCurrentGlobalPosition,
+  }) {
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
     final bool isPoll = message.messageType == 'poll';
@@ -1862,6 +2081,9 @@ class _ChannelScreenState extends State<ChannelScreen>
       message: message,
       messageKey: key,
       isMe: isMe,
+      enableBlur: enableBlur,
+      initialDragStartGlobalPosition: initialDragStartGlobalPosition,
+      initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
       currentUserId: _currentUserId,
       canManagePoll: isMe || _isAdmin,
       onPollUpdated: (updatedPoll) {
@@ -1875,10 +2097,261 @@ class _ChannelScreenState extends State<ChannelScreen>
       },
       onReply: () => _startReply(message),
       onQuote: (!isVideoNote && !isVoiceNote && !isPoll) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
+      onQuotePartial: (!isVideoNote && !isVoiceNote && !isPoll)
+          ? (selectedText, offset, length) =>
+              _startQuote(message, selectedText, offset, length)
+          : null,
+      onSelect: () => _enterSelectionMode(message),
       onPin: () {},
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) {},
     );
+  }
+
+  void _enterSelectionMode(Message message) {
+    HapticUtils.selection();
+    setState(() {
+      _selectedMessageIds.add(message.id);
+    });
+  }
+
+  void _toggleMessageSelection(Message message) {
+    HapticUtils.selection();
+    setState(() {
+      if (_selectedMessageIds.contains(message.id)) {
+        _selectedMessageIds.remove(message.id);
+      } else {
+        _selectedMessageIds.add(message.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(() {
+      _selectedMessageIds.clear();
+      _dragSelectStartIndex = null;
+      _dragSelectBaselineIds.clear();
+      _isLmbDraggingMessages = false;
+    });
+  }
+
+  List<Message> _getOrderedSelectedMessages() {
+    final selected = _messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+    selected.sort((a, b) {
+      final ta = DateTime.tryParse(a.createdAt);
+      final tb = DateTime.tryParse(b.createdAt);
+      if (ta != null && tb != null) {
+        final cmp = ta.compareTo(tb);
+        if (cmp != 0) return cmp;
+      }
+      return (int.tryParse(a.id) ?? 0).compareTo(int.tryParse(b.id) ?? 0);
+    });
+    return selected;
+  }
+
+  void _copySelectedMessages() {
+    final selected = _getOrderedSelectedMessages();
+    if (selected.isEmpty) return;
+    final text = selected
+        .map((m) => m.content.trim())
+        .where((s) => s.isNotEmpty)
+        .join('\n\n');
+    if (text.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: text));
+      GlassToastService().show(
+        context,
+        context.l10n.translate('copied_to_clipboard'),
+        icon: Icons.check,
+      );
+    }
+    _clearSelection();
+  }
+
+  void _forwardSelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    GlassToastService().show(
+      context,
+      'Пересылка скоро появится',
+      icon: Icons.forward,
+    );
+    _clearSelection();
+  }
+
+  void _deleteSelectedMessages() {
+    final selected = _getOrderedSelectedMessages();
+    if (selected.isEmpty) return;
+    _clearSelection();
+    for (final msg in selected) {
+      _confirmDeleteMessage(msg);
+    }
+  }
+
+  void _handleMessagePointerDown({
+    required PointerDownEvent event,
+    required int feedIndex,
+    required Message message,
+    required GlobalKey key,
+    required bool isMe,
+  }) {
+    if (event.kind != PointerDeviceKind.mouse ||
+        (event.buttons & kPrimaryMouseButton) == 0) {
+      return;
+    }
+    _lmbDownGlobalPos = event.position;
+    _lmbDownFeedIndex = feedIndex;
+    _lmbDownMessage = message;
+    _lmbDownKey = key;
+    _lmbDownIsMe = isMe;
+    _lmbDownInsideBubble = MessageBubble.isGlobalPointInsideBubble(
+      key.currentContext,
+      event.position,
+    );
+    _lmbDownInsideText = _lmbDownInsideBubble &&
+        !_isSelectionMode &&
+        message.content.trim().isNotEmpty &&
+        message.messageType != 'voice' &&
+        message.messageType != 'poll' &&
+        !message.isRound &&
+        MessageBubble.isGlobalPointInsideSelectableText(
+          key.currentContext,
+          event.position,
+        );
+    _isLmbDraggingMessages = false;
+    _isLmbDirectTextSelecting = false;
+  }
+
+  void _handleChatPointerMove(PointerMoveEvent event) {
+    if (event.kind != PointerDeviceKind.mouse ||
+        (event.buttons & kPrimaryMouseButton) == 0) {
+      return;
+    }
+    final downPos = _lmbDownGlobalPos;
+    if (downPos == null) return;
+
+    final distance = (event.position - downPos).distance;
+    if (distance < 5.0 &&
+        !_isLmbDraggingMessages &&
+        !_isLmbDirectTextSelecting) {
+      return;
+    }
+
+    if (_isLmbDirectTextSelecting) {
+      MessageContextMenuService().updateExternalDragSelection(event.position);
+      return;
+    }
+
+    if (!_isLmbDraggingMessages &&
+        !_isSelectionMode &&
+        _lmbDownInsideText &&
+        _lmbDownMessage != null &&
+        _lmbDownKey != null) {
+      _isLmbDirectTextSelecting = true;
+      _showContextMenu(
+        _lmbDownMessage!,
+        _lmbDownIsMe,
+        _lmbDownKey!,
+        forceOpen: true,
+        enableBlur: true,
+        initialDragStartGlobalPosition: downPos,
+        initialDragCurrentGlobalPosition: event.position,
+      );
+      return;
+    }
+
+    if (!_isLmbDraggingMessages) {
+      if (!_isSelectionMode && _lmbDownInsideBubble) {
+        return;
+      }
+      final startIdx = _lmbDownFeedIndex;
+      final startMsg = _lmbDownMessage;
+      if (startIdx == null || startMsg == null) return;
+      _isLmbDraggingMessages = true;
+      _dragSelectStartIndex = startIdx;
+      _dragSelectBaselineIds = Set<String>.from(_selectedMessageIds);
+      _dragSelectTargetState = !_dragSelectBaselineIds.contains(startMsg.id);
+      _applyDragSelectionUpTo(startIdx);
+    }
+
+    final hoveredIdx = _findFeedIndexAtGlobalY(event.position.dy);
+    if (hoveredIdx != null) {
+      _applyDragSelectionUpTo(hoveredIdx);
+    }
+  }
+
+  void _handleChatPointerUp(PointerUpEvent event) {
+    if (_isLmbDirectTextSelecting) {
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _handleChatPointerCancel(PointerCancelEvent event) {
+    if (_isLmbDirectTextSelecting) {
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _resetLmbDragState() {
+    _lmbDownGlobalPos = null;
+    _lmbDownFeedIndex = null;
+    _lmbDownMessage = null;
+    _lmbDownKey = null;
+    _lmbDownInsideBubble = false;
+    _lmbDownInsideText = false;
+    _dragSelectStartIndex = null;
+    _dragSelectBaselineIds.clear();
+    _isLmbDirectTextSelecting = false;
+    Future.microtask(() {
+      _isLmbDraggingMessages = false;
+    });
+  }
+
+  int? _findFeedIndexAtGlobalY(double globalY) {
+    for (int i = 0; i < _messages.length; i++) {
+      final msg = _messages[i];
+      final key = _messageKeys[msg.id] ??
+          (msg.localId != null ? _messageKeys[msg.localId!] : null);
+      final ctx = key?.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final topLeft = box.localToGlobal(Offset.zero);
+      final bottom = topLeft.dy + box.size.height;
+      if (globalY >= topLeft.dy && globalY <= bottom) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  void _applyDragSelectionUpTo(int currentIndex) {
+    final startIdx = _dragSelectStartIndex;
+    if (startIdx == null) return;
+    final int low = math.min(startIdx, currentIndex);
+    final int high = math.max(startIdx, currentIndex);
+    final nextIds = Set<String>.from(_dragSelectBaselineIds);
+    for (int i = low; i <= high; i++) {
+      if (i < 0 || i >= _messages.length) continue;
+      final id = _messages[i].id;
+      if (_dragSelectTargetState) {
+        nextIds.add(id);
+      } else {
+        nextIds.remove(id);
+      }
+    }
+    if (nextIds.length != _selectedMessageIds.length ||
+        !nextIds.containsAll(_selectedMessageIds)) {
+      HapticUtils.selection();
+      setState(() {
+        _selectedMessageIds
+          ..clear()
+          ..addAll(nextIds);
+      });
+    }
   }
 
   Widget _buildMessageInput() {
@@ -1888,6 +2361,8 @@ class _ChannelScreenState extends State<ChannelScreen>
       replyToMessage: _replyToMessage,
       isQuote: _isQuote,
       quoteText: _quoteText,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
       onCancelReply: _cancelReply,
       onTapReply: _replyToMessage != null ? () => _scrollToMessage(_replyToMessage!.id) : null,
       onSend: _sendMessage,
@@ -1903,7 +2378,4 @@ class _ChannelScreenState extends State<ChannelScreen>
       isSending: _isSending,
     );
   }
-
-  /// Helper to check if string is exactly one emoji
-  bool _isSingleEmoji(String text) => EmojiUtils.isSingleEmoji(text);
 }

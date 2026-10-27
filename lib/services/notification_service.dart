@@ -22,6 +22,7 @@ import 'notification_service_hms.dart';
 import 'push_service_detector.dart';
 import 'settings_service.dart';
 import 'deep_link_service.dart';
+import 'tiling_layout_controller.dart';
 import '../config/app_config.dart';
 import '../utils/image_utils.dart';
 import '../screens/chat/private_chat_screen.dart';
@@ -306,9 +307,23 @@ class NotificationService {
   /// Флаг готовности MainScreen для безопасной навигации при тапе на уведомление
   bool isMainScreenReady = false;
 
-  /// ID чата, открытого прямо сейчас на экране пользователя (для подавления уведомлений)
-  String? currentActiveChatId;
-  String? _lastActiveChatId;
+  /// Множество ID чатов, открытых прямо сейчас в видимых тайлах (для подавления уведомлений)
+  final Set<String> _activeChatIds = {};
+  Set<String> _pausedActiveChatIds = {};
+
+  /// Последний активный чат (для обратной совместимости и отправки по WebSocket)
+  String? get currentActiveChatId => _activeChatIds.isNotEmpty ? _activeChatIds.last : null;
+  set currentActiveChatId(String? value) {
+    setActiveChat(value);
+  }
+
+  /// Проверяет, открыт ли чат хотя бы в одном из видимых тайлов
+  bool isChatActive(String chatId) {
+    if (chatId.isEmpty) return false;
+    return _activeChatIds.contains(chatId) ||
+        TilingLayoutController.instance.isChatOpenInAnyTile(chatId);
+  }
+
   final Map<String, List<int>> _chatNotificationIds = {};
   final Map<String, List<LocalNotification>> _desktopNotifications = {};
 
@@ -324,28 +339,51 @@ class NotificationService {
     }
   }
 
+  /// Добавляет открытый в тайле чат в список активных
+  void addActiveChat(String chatId) {
+    if (chatId.isEmpty) return;
+    _activeChatIds.remove(chatId);
+    _activeChatIds.add(chatId);
+    _pausedActiveChatIds.clear();
+    cancelChatNotifications(chatId);
+    WebSocketService().sendActiveChat(currentActiveChatId);
+  }
+
+  /// Удаляет закрытый тайл чата из списка активных
+  void removeActiveChat(String chatId) {
+    if (chatId.isEmpty) return;
+    _activeChatIds.remove(chatId);
+    WebSocketService().sendActiveChat(currentActiveChatId);
+  }
+
   /// Устанавливает текущий открытый чат на этом устройстве,
   /// синхронизирует его с бэкендом через WebSocket для подавления push-уведомлений,
   /// и удаляет уже висящие уведомления для этого чата из шторки.
-  void setActiveChat(String? chatId) {
-    currentActiveChatId = (chatId != null && chatId.isNotEmpty) ? chatId : null;
-    _lastActiveChatId = null;
-
-    if (currentActiveChatId != null) {
-      cancelChatNotifications(currentActiveChatId!);
+  void setActiveChat(String? chatId, {String? previousChatId}) {
+    if (chatId != null && chatId.isNotEmpty) {
+      addActiveChat(chatId);
+    } else if (previousChatId != null && previousChatId.isNotEmpty) {
+      removeActiveChat(previousChatId);
+    } else if (!TilingLayoutController.instance.isWorkspaceMounted) {
+      _activeChatIds.clear();
+      WebSocketService().sendActiveChat(null);
+    } else {
+      // Синхронизируем с открытыми тайлами
+      final openIds = TilingLayoutController.instance.chatTiles.map((t) => t.chatId).toSet();
+      _activeChatIds.retainAll(openIds);
+      WebSocketService().sendActiveChat(currentActiveChatId);
     }
-    WebSocketService().sendActiveChat(currentActiveChatId);
   }
 
   bool _isAppInForeground = true;
   bool get isAppInForeground => _isAppInForeground;
 
   /// Вызывается при сворачивании приложения в фон:
-  /// пользователь больше не смотрит в экран чата, поэтому сервер должен слать push-уведомления.
+  /// пользователь больше не смотрит в экран чата, поэтому сервер должен слать push-уведомлений.
   void onAppPause() {
     _isAppInForeground = false;
-    _lastActiveChatId = currentActiveChatId;
-    currentActiveChatId = null;
+    _pausedActiveChatIds = Set<String>.from(_activeChatIds);
+    _activeChatIds.clear();
     WebSocketService().sendActiveChat(null);
   }
 
@@ -353,12 +391,12 @@ class NotificationService {
   /// если пользователь оставался на экране чата, восстанавливаем активный статус и очищаем уведомления.
   void onAppResume() {
     _isAppInForeground = true;
-    if (_lastActiveChatId != null) {
-      currentActiveChatId = _lastActiveChatId;
-      _lastActiveChatId = null;
+    if (_pausedActiveChatIds.isNotEmpty) {
+      _activeChatIds.addAll(_pausedActiveChatIds);
+      _pausedActiveChatIds.clear();
       WebSocketService().sendActiveChat(currentActiveChatId);
-      if (currentActiveChatId != null) {
-        cancelChatNotifications(currentActiveChatId!);
+      for (final id in _activeChatIds) {
+        cancelChatNotifications(id);
       }
     }
   }
@@ -1074,8 +1112,33 @@ class NotificationService {
     // Dismiss active notifications for this chat immediately upon navigation
     cancelChatNotifications(chatId);
 
+    final chatName = data['chat_name']?.toString() ?? data['sender_name']?.toString() ?? '';
+    final avatarUrl = data['avatar_url']?.toString() ?? data['avatar']?.toString();
+    final messageId = data['id']?.toString() ?? data['message_id']?.toString();
+    final isGroup = data['is_group'] == true || data['is_group'] == 'true';
+    final isChannel = data['is_channel'] == true || data['is_channel'] == 'true' || data['chat_type'] == 'channel';
+
+    if (TilingLayoutController.instance.isWorkspaceMounted) {
+      // Pop any root overlays (such as fullscreen viewers) back to workspace
+      try {
+        navState.popUntil((route) => route.isFirst);
+      } catch (_) {}
+
+      final String resolvedChatType = isChannel
+          ? 'channel'
+          : (isGroup ? 'group' : 'private');
+      TilingLayoutController.instance.openChatInActiveTile(
+        chatId: chatId,
+        chatType: resolvedChatType,
+        chatName: chatName,
+        avatarUrl: avatarUrl,
+        initialMessageId: messageId,
+      );
+      return;
+    }
+
     // If already in this chat, don't push again
-    if (currentActiveChatId == chatId) {
+    if (isChatActive(chatId)) {
       debugPrint('NotificationService: chat $chatId is already active');
       return;
     }
@@ -1084,12 +1147,6 @@ class NotificationService {
     try {
       navState.popUntil((route) => route.isFirst);
     } catch (_) {}
-
-    final chatName = data['chat_name']?.toString() ?? data['sender_name']?.toString() ?? '';
-    final avatarUrl = data['avatar_url']?.toString() ?? data['avatar']?.toString();
-    final messageId = data['id']?.toString() ?? data['message_id']?.toString();
-    final isGroup = data['is_group'] == true || data['is_group'] == 'true';
-    final isChannel = data['is_channel'] == true || data['is_channel'] == 'true' || data['chat_type'] == 'channel';
 
     Widget screen;
     if (isChannel) {
@@ -1423,7 +1480,7 @@ class NotificationService {
   // ============ Logic ============
 
   bool shouldShowNotification(String chatId, {bool isMention = false}) {
-    if (chatId.isNotEmpty && currentActiveChatId == chatId) {
+    if (isChatActive(chatId)) {
       return false;
     }
     if (_settingsProvider == null) return true;

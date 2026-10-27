@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
 import '../../services/geo_language_service.dart';
-import '../main/main_screen.dart';
+import '../../widgets/tiling/tiling_workspace_scaffold.dart';
 import 'register_screen.dart';
 import 'recovery_screen.dart';
 import '../../l10n/app_localizations.dart';
@@ -93,9 +94,10 @@ class _LoginScreenState extends State<LoginScreen> {
         await wsService.updateUserId(result['userId'] as String?);
         
         if (!mounted) return;
+        TilingLayoutController.instance.closeAllChats();
         // Navigate to home screen and clear back stack
-        Navigator.of(context).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const MainScreen()),
+        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+          SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
           (route) => false,
         );
       } else {
@@ -145,9 +147,10 @@ class _LoginScreenState extends State<LoginScreen> {
         await wsService.updateUserId(result['userId'] as String?);
 
         if (!mounted) return;
+        TilingLayoutController.instance.closeAllChats();
         // Navigate to home screen and clear back stack
-        Navigator.of(context).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const MainScreen()),
+        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+          SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
           (route) => false,
         );
       } else {

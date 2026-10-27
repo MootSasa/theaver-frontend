@@ -6,6 +6,11 @@ class DateTimeUtils {
   /// Clock provider to allow test environments to mock current time.
   static DateTime Function() nowProvider = () => DateTime.now();
 
+  static final RegExp _tzOffsetRegex = RegExp(r'[+-]\d{2}(:?\d{2})?$');
+  static const int _kMaxDateCacheSize = 1024;
+  static final Map<String, DateTime> _parsedCache = <String, DateTime>{};
+  static final Map<String, String> _hhmmCache = <String, String>{};
+
   /// Safely parses an incoming timestamp (from JSON, DB, or WebSocket) into a local [DateTime].
   /// If the timestamp string has no timezone indicator, it is assumed to be in UTC (Greenwich)
   /// as sent by the server, and then converted to the local device timezone via [toLocal()].
@@ -14,19 +19,31 @@ class DateTimeUtils {
     if (raw is DateTime) {
       return raw.toLocal();
     }
+    if (raw is String) {
+      final cached = _parsedCache[raw];
+      if (cached != null) return cached;
+    }
     final str = raw.toString().trim();
     if (str.isEmpty) return null;
+    final cachedTrimmed = _parsedCache[str];
+    if (cachedTrimmed != null) return cachedTrimmed;
 
     String normalized = str;
     // If no timezone offset (+/-HH:MM) and no 'Z' suffix, append 'Z' so it is parsed as UTC (Greenwich)
     if (!normalized.endsWith('Z') &&
         !normalized.endsWith('z') &&
-        !RegExp(r'[+-]\d{2}(:?\d{2})?$').hasMatch(normalized)) {
+        !_tzOffsetRegex.hasMatch(normalized)) {
       normalized = '${normalized}Z';
     }
 
-    final parsed = DateTime.tryParse(normalized);
-    return parsed?.toLocal();
+    final parsed = DateTime.tryParse(normalized)?.toLocal();
+    if (parsed != null) {
+      if (_parsedCache.length >= _kMaxDateCacheSize) {
+        _parsedCache.remove(_parsedCache.keys.first);
+      }
+      _parsedCache[str] = parsed;
+    }
+    return parsed;
   }
 
   /// Returns midnight (00:00:00) of the given date in local device timezone.
@@ -108,11 +125,22 @@ class DateTimeUtils {
   /// Formats a time string (HH:mm) in the local device timezone from any UTC/local timestamp.
   static String formatTimeHHmm(dynamic timestamp) {
     if (timestamp == null) return '';
+    if (timestamp is String) {
+      final cached = _hhmmCache[timestamp];
+      if (cached != null) return cached;
+    }
     final dt = parseUtcDateTime(timestamp);
     if (dt == null) return '';
     final hour = dt.hour.toString().padLeft(2, '0');
     final minute = dt.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
+    final formatted = '$hour:$minute';
+    if (timestamp is String && timestamp.isNotEmpty) {
+      if (_hhmmCache.length >= _kMaxDateCacheSize) {
+        _hhmmCache.remove(_hhmmCache.keys.first);
+      }
+      _hhmmCache[timestamp] = formatted;
+    }
+    return formatted;
   }
 
   /// Formats date separator label ("Сегодня", "Вчера", "DD.MM.YYYY") in local device timezone,

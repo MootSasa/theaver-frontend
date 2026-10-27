@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
+import '../../services/tiling_layout_controller.dart';
 import 'channel_screen.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/swipe_back_route.dart';
@@ -55,6 +56,15 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       if (mounted) {
         if (result['success'] == true) {
           final chat = result['chat'] as Chat;
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            Navigator.of(context).pop();
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: chat.id,
+              chatType: 'channel',
+              chatName: chat.name,
+            );
+            return;
+          }
           Navigator.pushReplacement(
             context,
             SwipeBackPageRoute(

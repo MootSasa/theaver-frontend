@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
@@ -31,6 +32,8 @@ class ChatInputBar extends StatefulWidget {
   final Message? replyToMessage;
   final bool isQuote;
   final String? quoteText;
+  final int quoteOffset;
+  final int quoteLength;
   final VoidCallback? onCancelReply;
   final VoidCallback? onTapReply;
   final List<File> attachedFiles;
@@ -72,6 +75,8 @@ class ChatInputBar extends StatefulWidget {
     this.replyToMessage,
     this.isQuote = false,
     this.quoteText,
+    this.quoteOffset = 0,
+    this.quoteLength = 0,
     this.onCancelReply,
     this.onTapReply,
     this.attachedFiles = const [],
@@ -250,7 +255,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
 
-    return Column(
+    final Widget column = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -322,6 +327,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
             replyToMessage: widget.replyToMessage!,
             isQuote: widget.isQuote,
             quoteText: widget.quoteText,
+            quoteOffset: widget.quoteOffset,
+            quoteLength: widget.quoteLength,
             onClose: widget.onCancelReply ?? () {},
             onTap: widget.onTapReply,
             enabled: glassEnabled,
@@ -453,5 +460,23 @@ class _ChatInputBarState extends State<ChatInputBar> {
         ),
       ],
     );
+
+    if (glassEnabled &&
+        !isLite &&
+        glassProvider != null &&
+        widget.replyToMessage != null) {
+      return LiquidGlassBlender(
+        smoothness: 0,
+        style: glassProvider.createStyle(
+          context: context,
+          cornerRadius: 24,
+          refractionIndex: 1.1,
+          refractionWidth: 24,
+        ),
+        child: column,
+      );
+    }
+
+    return column;
   }
 }

@@ -177,8 +177,19 @@ class _SwipeToReplyWrapperState extends State<SwipeToReplyWrapper>
   }
 }
 
-/// Custom recognizer that ONLY accepts leftward swipes.
+/// Custom recognizer that ONLY accepts leftward swipes on touch/stylus/trackpad
+/// so mouse LMB dragging on PC/Web can select message text cleanly.
 class _ReplyGestureRecognizer extends HorizontalDragGestureRecognizer {
+  _ReplyGestureRecognizer()
+      : super(
+          supportedDevices: const <PointerDeviceKind>{
+            PointerDeviceKind.touch,
+            PointerDeviceKind.stylus,
+            PointerDeviceKind.invertedStylus,
+            PointerDeviceKind.trackpad,
+          },
+        );
+
   @override
   void handleEvent(PointerEvent event) {
     if (event is PointerMoveEvent) {
@@ -199,4 +210,5 @@ class _ReplyGestureRecognizer extends HorizontalDragGestureRecognizer {
     super.handleEvent(event);
   }
 }
+
 

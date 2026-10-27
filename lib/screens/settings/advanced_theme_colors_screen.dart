@@ -164,6 +164,13 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                   ),
                 ),
                 _buildColorTile(
+                  title: l10n.translate('theme_color_bubble_outgoing_selected'),
+                  color: _theme.palette.chatBubbleOutgoingSelected,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(chatBubbleOutgoingSelected: c)),
+                  ),
+                ),
+                _buildColorTile(
                   title: l10n.translate('theme_color_selection_overlay'),
                   color: _theme.palette.messageSelectionOverlay,
                   onChanged: (c) => _updateTheme(
@@ -207,6 +214,13 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
                   color: _theme.palette.chatBubbleIncomingLink,
                   onChanged: (c) => _updateTheme(
                     _theme.copyWith(palette: _theme.palette.copyWith(chatBubbleIncomingLink: c)),
+                  ),
+                ),
+                _buildColorTile(
+                  title: l10n.translate('theme_color_bubble_incoming_selected'),
+                  color: _theme.palette.chatBubbleIncomingSelected,
+                  onChanged: (c) => _updateTheme(
+                    _theme.copyWith(palette: _theme.palette.copyWith(chatBubbleIncomingSelected: c)),
                   ),
                 ),
                 _buildColorTile(

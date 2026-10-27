@@ -59,7 +59,7 @@ class AvatarGalleryViewer extends StatefulWidget {
   }) {
     if (avatarUrls.isEmpty) return Future.value();
 
-    return Navigator.of(context).push(
+    return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder(
         opaque: false,
         fullscreenDialog: true,

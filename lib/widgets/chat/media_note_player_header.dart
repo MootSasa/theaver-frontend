@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/media_playback_coordinator.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/voice_playback_service.dart';
 
@@ -10,9 +11,14 @@ import '../../services/voice_playback_service.dart';
 class MediaNotePlayerHeader extends StatefulWidget {
   final VoidCallback? onScrollToActive;
 
+  /// If non-null, this header belongs to a specific chat screen/tile.
+  /// When null, this header belongs to [MainScreen].
+  final String? chatId;
+
   const MediaNotePlayerHeader({
     Key? key,
     this.onScrollToActive,
+    this.chatId,
   }) : super(key: key);
 
   @override
@@ -23,10 +29,37 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
     with SingleTickerProviderStateMixin {
   final VoicePlaybackService _voiceService = VoicePlaybackService();
   final VideoNotePlaybackService _videoService = VideoNotePlaybackService();
+  final TilingLayoutController _tilingController = TilingLayoutController.instance;
 
   late AnimationController _slideController;
   late Animation<double> _slideAnimation;
   VideoPlayerController? _observedVideoController;
+
+  bool _shouldDisplayForCurrentContext() {
+    final hasActive = _voiceService.hasActiveAudio || _videoService.hasActiveVideo;
+    if (!hasActive) return false;
+
+    final activeChatId = MediaPlaybackCoordinator.instance.activeTrack?.chatId ??
+        _voiceService.activeChatId ??
+        _videoService.activeChatId;
+
+    if (activeChatId == null || activeChatId.isEmpty) {
+      return true;
+    }
+
+    if (widget.chatId != null) {
+      // Mounted inside a Chat tile: only show if the playing media belongs to this chat
+      return widget.chatId == activeChatId;
+    } else {
+      // Mounted inside MainScreen: only show if the playing chat is NOT already visible in a right-hand tile
+      final bool isMultiPaneMode =
+          _tilingController.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
+      if (isMultiPaneMode && _tilingController.isChatOpenInAnyTile(activeChatId)) {
+        return false;
+      }
+      return true;
+    }
+  }
 
   @override
   void initState() {
@@ -42,10 +75,10 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
 
     _voiceService.addListener(_onServiceChange);
     _videoService.addListener(_onServiceChange);
+    _tilingController.addListener(_onServiceChange);
     _attachVideoController();
 
-    final hasActive = _voiceService.hasActiveAudio || _videoService.hasActiveVideo;
-    if (hasActive) {
+    if (_shouldDisplayForCurrentContext()) {
       _slideController.value = 1.0;
     }
   }
@@ -55,6 +88,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
     _observedVideoController?.removeListener(_onVideoTick);
     _voiceService.removeListener(_onServiceChange);
     _videoService.removeListener(_onServiceChange);
+    _tilingController.removeListener(_onServiceChange);
     _slideController.dispose();
     super.dispose();
   }
@@ -76,8 +110,8 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
   void _onServiceChange() {
     if (!mounted) return;
     _attachVideoController();
-    final hasActive = _voiceService.hasActiveAudio || _videoService.hasActiveVideo;
-    if (hasActive) {
+    final shouldDisplay = _shouldDisplayForCurrentContext();
+    if (shouldDisplay) {
       if (_slideController.status != AnimationStatus.forward &&
           _slideController.status != AnimationStatus.completed) {
         _slideController.forward();
@@ -99,10 +133,15 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
 
   @override
   Widget build(BuildContext context) {
+    final shouldDisplay = _shouldDisplayForCurrentContext();
+
+    if (!shouldDisplay && _slideController.value == 0.0) {
+      return const SizedBox.shrink();
+    }
+
     final hasVoice = _voiceService.hasActiveAudio;
     final hasVideo = _videoService.hasActiveVideo;
-
-    if (!hasVoice && !hasVideo && _slideController.value == 0.0) {
+    if (!hasVoice && !hasVideo) {
       return const SizedBox.shrink();
     }
 
@@ -181,13 +220,6 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
               color: isDark ? Colors.white12 : Colors.black12,
               width: 0.5,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.12),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
           ),
           child: Stack(
             children: [

@@ -361,6 +361,8 @@ class TheavPalette {
   final Color? _chatReplyTitle;
   final Color? _chatReplyText;
   final Color? _messageSelectionOverlay;
+  final Color? _chatBubbleOutgoingSelected;
+  final Color? _chatBubbleIncomingSelected;
   final Color? _reactionActiveBackground;
   final Color? _reactionInactiveBackground;
   final Color? _reactionActiveText;
@@ -387,7 +389,15 @@ class TheavPalette {
   Color get chatReplyLine => _chatReplyLine ?? primary;
   Color get chatReplyTitle => _chatReplyTitle ?? primary;
   Color get chatReplyText => _chatReplyText ?? onSurface;
+  bool get hasCustomChatReplyTitle => _chatReplyTitle != null;
+  bool get hasCustomChatReplyText => _chatReplyText != null;
   Color get messageSelectionOverlay => _messageSelectionOverlay ?? primary.withValues(alpha: 0.18);
+  Color get chatBubbleOutgoingSelected =>
+      _chatBubbleOutgoingSelected ??
+      Color.alphaBlend(primary.withValues(alpha: 0.28), chatBubbleOutgoing);
+  Color get chatBubbleIncomingSelected =>
+      _chatBubbleIncomingSelected ??
+      Color.alphaBlend(primary.withValues(alpha: 0.22), chatBubbleIncoming);
   Color get reactionActiveBackground => _reactionActiveBackground ?? primary.withValues(alpha: 0.18);
   Color get reactionInactiveBackground => _reactionInactiveBackground ?? surface;
   Color get reactionActiveText => _reactionActiveText ?? primary;
@@ -396,6 +406,15 @@ class TheavPalette {
   /// (viewport-anchored continuous mask). If null or < 2 colors, solid
   /// [chatBubbleOutgoing] is used.
   final List<Color>? chatBubbleOutgoingGradient;
+
+  /// Optional multi-color vertical gradient for incoming message bubbles.
+  final List<Color>? chatBubbleIncomingGradient;
+
+  /// Optional multi-color vertical gradient for selected outgoing message bubbles.
+  final List<Color>? chatBubbleOutgoingSelectedGradient;
+
+  /// Optional multi-color vertical gradient for selected incoming message bubbles.
+  final List<Color>? chatBubbleIncomingSelectedGradient;
 
   const TheavPalette({
     required this.primary,
@@ -414,6 +433,9 @@ class TheavPalette {
     required this.chatDateBadge,
     required this.chatDateBadgeText,
     this.chatBubbleOutgoingGradient,
+    this.chatBubbleIncomingGradient,
+    this.chatBubbleOutgoingSelectedGradient,
+    this.chatBubbleIncomingSelectedGradient,
     Color? chatBubbleOutgoingLink,
     Color? chatBubbleIncomingLink,
     Color? chatInputBackground,
@@ -433,6 +455,8 @@ class TheavPalette {
     Color? chatReplyTitle,
     Color? chatReplyText,
     Color? messageSelectionOverlay,
+    Color? chatBubbleOutgoingSelected,
+    Color? chatBubbleIncomingSelected,
     Color? reactionActiveBackground,
     Color? reactionInactiveBackground,
     Color? reactionActiveText,
@@ -455,6 +479,8 @@ class TheavPalette {
         _chatReplyTitle = chatReplyTitle,
         _chatReplyText = chatReplyText,
         _messageSelectionOverlay = messageSelectionOverlay,
+        _chatBubbleOutgoingSelected = chatBubbleOutgoingSelected,
+        _chatBubbleIncomingSelected = chatBubbleIncomingSelected,
         _reactionActiveBackground = reactionActiveBackground,
         _reactionInactiveBackground = reactionInactiveBackground,
         _reactionActiveText = reactionActiveText;
@@ -477,6 +503,12 @@ class TheavPalette {
     Color? chatDateBadgeText,
     List<Color>? chatBubbleOutgoingGradient,
     bool clearOutgoingGradient = false,
+    List<Color>? chatBubbleIncomingGradient,
+    bool clearIncomingGradient = false,
+    List<Color>? chatBubbleOutgoingSelectedGradient,
+    bool clearOutgoingSelectedGradient = false,
+    List<Color>? chatBubbleIncomingSelectedGradient,
+    bool clearIncomingSelectedGradient = false,
     Color? chatBubbleOutgoingLink,
     Color? chatBubbleIncomingLink,
     Color? chatInputBackground,
@@ -496,6 +528,8 @@ class TheavPalette {
     Color? chatReplyTitle,
     Color? chatReplyText,
     Color? messageSelectionOverlay,
+    Color? chatBubbleOutgoingSelected,
+    Color? chatBubbleIncomingSelected,
     Color? reactionActiveBackground,
     Color? reactionInactiveBackground,
     Color? reactionActiveText,
@@ -519,6 +553,15 @@ class TheavPalette {
       chatBubbleOutgoingGradient: clearOutgoingGradient
           ? null
           : (chatBubbleOutgoingGradient ?? this.chatBubbleOutgoingGradient),
+      chatBubbleIncomingGradient: clearIncomingGradient
+          ? null
+          : (chatBubbleIncomingGradient ?? this.chatBubbleIncomingGradient),
+      chatBubbleOutgoingSelectedGradient: clearOutgoingSelectedGradient
+          ? null
+          : (chatBubbleOutgoingSelectedGradient ?? this.chatBubbleOutgoingSelectedGradient),
+      chatBubbleIncomingSelectedGradient: clearIncomingSelectedGradient
+          ? null
+          : (chatBubbleIncomingSelectedGradient ?? this.chatBubbleIncomingSelectedGradient),
       chatBubbleOutgoingLink: chatBubbleOutgoingLink ?? _chatBubbleOutgoingLink,
       chatBubbleIncomingLink: chatBubbleIncomingLink ?? _chatBubbleIncomingLink,
       chatInputBackground: chatInputBackground ?? _chatInputBackground,
@@ -538,6 +581,8 @@ class TheavPalette {
       chatReplyTitle: chatReplyTitle ?? _chatReplyTitle,
       chatReplyText: chatReplyText ?? _chatReplyText,
       messageSelectionOverlay: messageSelectionOverlay ?? _messageSelectionOverlay,
+      chatBubbleOutgoingSelected: chatBubbleOutgoingSelected ?? _chatBubbleOutgoingSelected,
+      chatBubbleIncomingSelected: chatBubbleIncomingSelected ?? _chatBubbleIncomingSelected,
       reactionActiveBackground: reactionActiveBackground ?? _reactionActiveBackground,
       reactionInactiveBackground: reactionInactiveBackground ?? _reactionInactiveBackground,
       reactionActiveText: reactionActiveText ?? _reactionActiveText,
@@ -563,6 +608,15 @@ class TheavPalette {
         if (chatBubbleOutgoingGradient != null && chatBubbleOutgoingGradient!.isNotEmpty)
           'chatBubbleOutgoingGradient':
               chatBubbleOutgoingGradient!.map((c) => TheavColorUtils.toHex(c)).toList(),
+        if (chatBubbleIncomingGradient != null && chatBubbleIncomingGradient!.isNotEmpty)
+          'chatBubbleIncomingGradient':
+              chatBubbleIncomingGradient!.map((c) => TheavColorUtils.toHex(c)).toList(),
+        if (chatBubbleOutgoingSelectedGradient != null && chatBubbleOutgoingSelectedGradient!.isNotEmpty)
+          'chatBubbleOutgoingSelectedGradient':
+              chatBubbleOutgoingSelectedGradient!.map((c) => TheavColorUtils.toHex(c)).toList(),
+        if (chatBubbleIncomingSelectedGradient != null && chatBubbleIncomingSelectedGradient!.isNotEmpty)
+          'chatBubbleIncomingSelectedGradient':
+              chatBubbleIncomingSelectedGradient!.map((c) => TheavColorUtils.toHex(c)).toList(),
         if (_chatBubbleOutgoingLink != null)
           'chatBubbleOutgoingLink': TheavColorUtils.toHex(_chatBubbleOutgoingLink!),
         if (_chatBubbleIncomingLink != null)
@@ -601,6 +655,10 @@ class TheavPalette {
           'chatReplyText': TheavColorUtils.toHex(_chatReplyText!),
         if (_messageSelectionOverlay != null)
           'messageSelectionOverlay': TheavColorUtils.toHex(_messageSelectionOverlay!),
+        if (_chatBubbleOutgoingSelected != null)
+          'chatBubbleOutgoingSelected': TheavColorUtils.toHex(_chatBubbleOutgoingSelected!),
+        if (_chatBubbleIncomingSelected != null)
+          'chatBubbleIncomingSelected': TheavColorUtils.toHex(_chatBubbleIncomingSelected!),
         if (_reactionActiveBackground != null)
           'reactionActiveBackground': TheavColorUtils.toHex(_reactionActiveBackground!),
         if (_reactionInactiveBackground != null)
@@ -630,6 +688,21 @@ class TheavPalette {
       chatDateBadgeText: TheavColorUtils.fromHex(json['chatDateBadgeText'] ?? '#FFFFFF'),
       chatBubbleOutgoingGradient: json['chatBubbleOutgoingGradient'] != null
           ? (json['chatBubbleOutgoingGradient'] as List)
+              .map((c) => TheavColorUtils.fromHex(c.toString()))
+              .toList()
+          : null,
+      chatBubbleIncomingGradient: json['chatBubbleIncomingGradient'] != null
+          ? (json['chatBubbleIncomingGradient'] as List)
+              .map((c) => TheavColorUtils.fromHex(c.toString()))
+              .toList()
+          : null,
+      chatBubbleOutgoingSelectedGradient: json['chatBubbleOutgoingSelectedGradient'] != null
+          ? (json['chatBubbleOutgoingSelectedGradient'] as List)
+              .map((c) => TheavColorUtils.fromHex(c.toString()))
+              .toList()
+          : null,
+      chatBubbleIncomingSelectedGradient: json['chatBubbleIncomingSelectedGradient'] != null
+          ? (json['chatBubbleIncomingSelectedGradient'] as List)
               .map((c) => TheavColorUtils.fromHex(c.toString()))
               .toList()
           : null,
@@ -683,6 +756,12 @@ class TheavPalette {
           : null,
       messageSelectionOverlay: json['messageSelectionOverlay'] != null
           ? TheavColorUtils.fromHex(json['messageSelectionOverlay'])
+          : null,
+      chatBubbleOutgoingSelected: json['chatBubbleOutgoingSelected'] != null
+          ? TheavColorUtils.fromHex(json['chatBubbleOutgoingSelected'])
+          : null,
+      chatBubbleIncomingSelected: json['chatBubbleIncomingSelected'] != null
+          ? TheavColorUtils.fromHex(json['chatBubbleIncomingSelected'])
           : null,
       reactionActiveBackground: json['reactionActiveBackground'] != null
           ? TheavColorUtils.fromHex(json['reactionActiveBackground'])

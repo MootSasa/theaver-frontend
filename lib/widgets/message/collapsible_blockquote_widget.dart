@@ -6,8 +6,10 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../profile/reply_strip_painter.dart';
+import 'message_interactive_state.dart';
 
 /// Interactive Collapsible Blockquote Widget.
 ///
@@ -22,6 +24,7 @@ class CollapsibleBlockquoteWidget extends StatefulWidget {
   final bool isMe;
   final NameColorPreset? preset;
   final ReplyStripStyle? stripStyle;
+  final String? stateKey;
 
   const CollapsibleBlockquoteWidget({
     Key? key,
@@ -33,6 +36,7 @@ class CollapsibleBlockquoteWidget extends StatefulWidget {
     required this.isMe,
     this.preset,
     this.stripStyle,
+    this.stateKey,
   }) : super(key: key);
 
   @override
@@ -45,6 +49,10 @@ class _CollapsibleBlockquoteWidgetState
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _curvedAnimation;
+  MessageInteractiveEntry? _interactiveEntry;
+
+  String get _effectiveStateKey =>
+      widget.stateKey ?? 'blockquote_${widget.text.hashCode}';
 
   @override
   void initState() {
@@ -53,25 +61,91 @@ class _CollapsibleBlockquoteWidgetState
       vsync: this,
       duration: const Duration(milliseconds: 320),
       value: widget.initialExpanded ? 1.0 : 0.0,
-    );
+    )..addListener(_onControllerTick);
     _curvedAnimation = CurvedAnimation(
       parent: _controller,
       curve: Curves.easeInOutCubic,
     );
   }
 
+  void _onControllerTick() {
+    _interactiveEntry?.updateBlockquoteProgress(
+      _effectiveStateKey,
+      _controller.value,
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final newEntry = MessageInteractiveScope.maybeOf(context);
+    if (_interactiveEntry != newEntry) {
+      _interactiveEntry?.removeListener(_onInteractiveEntryChanged);
+      _interactiveEntry = newEntry;
+      _interactiveEntry?.addListener(_onInteractiveEntryChanged);
+
+      if (newEntry != null) {
+        final savedExpanded =
+            newEntry.getBlockquoteExpanded(_effectiveStateKey);
+        final savedProgress =
+            newEntry.getBlockquoteProgress(_effectiveStateKey);
+        if (savedProgress != null) {
+          _controller.value = savedProgress.clamp(0.0, 1.0);
+        } else if (savedExpanded != null) {
+          _controller.value = savedExpanded ? 1.0 : 0.0;
+        }
+        if (savedExpanded != null) {
+          if (savedExpanded && _controller.value < 1.0) {
+            _controller.forward();
+          } else if (!savedExpanded && _controller.value > 0.0) {
+            _controller.reverse();
+          }
+        }
+      }
+    }
+  }
+
+  void _onInteractiveEntryChanged() {
+    if (!mounted) return;
+    final entry = _interactiveEntry;
+    if (entry == null) return;
+    final targetExpanded = entry.getBlockquoteExpanded(_effectiveStateKey);
+    if (targetExpanded == null) return;
+    final bool currentlyExpanded = _controller.value > 0.5;
+    if (targetExpanded != currentlyExpanded && !_controller.isAnimating) {
+      _controller.value = targetExpanded ? 1.0 : 0.0;
+    }
+  }
+
   @override
   void dispose() {
+    if (_controller.isAnimating) {
+      final targetExpanded =
+          _interactiveEntry?.getBlockquoteExpanded(_effectiveStateKey) ??
+              (_controller.value > 0.5);
+      _interactiveEntry?.updateBlockquoteProgress(
+        _effectiveStateKey,
+        targetExpanded ? 1.0 : 0.0,
+      );
+    }
+    _interactiveEntry?.removeListener(_onInteractiveEntryChanged);
+    _controller.removeListener(_onControllerTick);
     _controller.dispose();
     super.dispose();
   }
 
   void _toggleExpand() {
     HapticUtils.tap();
-    if (_controller.value > 0.5) {
-      _controller.reverse();
-    } else {
+    final bool nextExpanded = _controller.value <= 0.5;
+    _interactiveEntry?.setBlockquoteExpanded(
+      _effectiveStateKey,
+      nextExpanded,
+      progress: _controller.value,
+    );
+    if (nextExpanded) {
       _controller.forward();
+    } else {
+      _controller.reverse();
     }
   }
 
@@ -82,14 +156,16 @@ class _CollapsibleBlockquoteWidgetState
     final effectiveStripStyle = widget.stripStyle ?? profileTheme.currentStripStyle;
 
     final cardBgColor = effectivePreset.getOpaqueCardBackgroundColor(widget.isDark);
-    final primaryColor = effectivePreset.primaryColor;
+    final primaryColor = NameColorPreset.resolveReadableAccentColor(
+      cardBgColor,
+      effectivePreset.primaryColor,
+    );
+    final readableTextColor = NameColorPreset.resolveReadableTextColor(cardBgColor);
 
     final quoteTextStyle = TextStyle(
       fontSize: 14,
-      color: widget.isDark
-          ? const Color(0xFFE2E8F0)
-          : const Color(0xFF1C2530),
-      height: 1.35,
+      color: readableTextColor,
+      height: 1.22,
     );
 
     return LayoutBuilder(
@@ -160,11 +236,16 @@ class _CollapsibleBlockquoteWidgetState
 
                 final bool isExpanded = progress > 0.5;
 
-                final Widget quoteBody = widget.child ??
-                    Text(
-                      widget.text,
-                      style: quoteTextStyle,
-                    );
+                final Widget quoteBody = DefaultTextStyle.merge(
+                  style: quoteTextStyle,
+                  child: widget.child ??
+                      (EmojiUtils.hasPotentialEmoji(widget.text)
+                          ? Text.rich(EmojiUtils.buildEmojiTextSpan(widget.text, style: quoteTextStyle))
+                          : Text(
+                              widget.text,
+                              style: quoteTextStyle,
+                            )),
+                );
 
                 return Column(
                   mainAxisSize: MainAxisSize.min,
@@ -283,14 +364,22 @@ class _CollapsibleBlockquoteWidgetState
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Text(
-                                    isExpanded
-                                        ? context.l10n.translate('format_collapsed_state')
-                                        : context.l10n.translate('format_expand'),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: primaryColor,
+                                  Flexible(
+                                    child: Text(
+                                      isExpanded
+                                          ? context.l10n.translate(
+                                              'format_collapsed_state',
+                                            )
+                                          : context.l10n.translate(
+                                              'format_expand',
+                                            ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: primaryColor,
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(width: 4),

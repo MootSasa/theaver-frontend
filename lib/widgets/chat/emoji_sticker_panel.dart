@@ -1,12 +1,12 @@
 import 'dart:math' as math;
 import 'dart:convert';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/emoji_utils.dart';
 
@@ -36,6 +36,7 @@ class EmojiStickerPanel extends StatefulWidget {
   final VoidCallback onBackspace;
   final VoidCallback onClose;
   final double height;
+  final bool isVisible;
 
   const EmojiStickerPanel({
     Key? key,
@@ -43,6 +44,7 @@ class EmojiStickerPanel extends StatefulWidget {
     required this.onBackspace,
     required this.onClose,
     this.height = _kPanelHeight,
+    this.isVisible = true,
   }) : super(key: key);
 
   @override
@@ -70,14 +72,15 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   String _gifSearchQuery = '';
   String _stickerSearchQuery = '';
   List<Emoji> _recentEmojis = [];
+  List<Emoji> _displayedRecentEmojis = [];
   
   List<CustomEmojiPack> _customPacks = [];
   Map<String, int> _packUsageStats = {};
+  Map<String, int> _displayedPackUsageStats = {};
   final Map<String, GlobalKey> _sectionKeys = {};
   double? _lastHapticPixels;
 
-  // Lazy loading state
-  int _visibleEmojiCategories = 4;
+  // Lazy loading state for GIFs / Stickers
   int _loadedGifsCount = 14;
   int _loadedStickersCount = 24;
   bool _isLoadingMoreGifs = false;
@@ -98,20 +101,24 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     _loadPackUsageStats();
   }
 
+  @override
+  void didUpdateWidget(covariant EmojiStickerPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Refresh displayed recent emojis and pack usage order only when reopening the panel,
+    // preventing the emoji grid from jumping under the user's finger on tap.
+    if (!oldWidget.isVisible && widget.isVisible) {
+      _displayedRecentEmojis = List<Emoji>.from(_recentEmojis);
+      _displayedPackUsageStats = Map<String, int>.from(_packUsageStats);
+    }
+  }
+
   void _onScroll() {
-    if (_currentTab == PanelTab.emoji) {
+    if (_currentTab == PanelTab.emoji && _gridScrollController.hasClients) {
       final double offset = _gridScrollController.offset;
       // Collapse exactly by the search bar height (48px)
-      _searchCollapseController.value = (offset / 48.0).clamp(0.0, 1.0);
-
-      // Lazy load more emoji categories when scrolling near the bottom
-      if (_gridScrollController.hasClients && 
-          offset > _gridScrollController.position.maxScrollExtent - 400) {
-        if (_visibleEmojiCategories < defaultEmojiSet.length + 5) {
-          setState(() {
-            _visibleEmojiCategories += 2;
-          });
-        }
+      final double targetCollapse = (offset / 48.0).clamp(0.0, 1.0);
+      if ((_searchCollapseController.value - targetCollapse).abs() > 0.001) {
+        _searchCollapseController.value = targetCollapse;
       }
 
       // Haptic feedback logic: trigger slightly before reaching boundaries (3px threshold)
@@ -240,11 +247,14 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
 
   @override
   Widget build(BuildContext context) {
+    final displayHeight = widget.height;
+    if (!widget.isVisible || displayHeight <= 0) {
+      return const SizedBox.shrink();
+    }
+
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final glassProvider = context.watch<LiquidGlassProvider>();
-
-    final displayHeight = widget.height;
 
     return SizedBox(
       height: displayHeight,
@@ -252,37 +262,31 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         children: [
           // 1. Background layer
           Positioned.fill(
-            child: Offstage(
-              offstage: displayHeight <= 0,
-              child: glassProvider.enabled
-                  ? LiquidGlassLens(
-                      style: glassProvider.createStyle(
-                        context: context,
-                        cornerRadius: 0,
-                        borderWidth: 0,
-                        refractionIndex: 1.02,
-                        refractionWidth: 24,
-                      ),
-                      child: const SizedBox.expand(),
-                    )
-                  : ClipRect(
-                      child: BackdropFilter(
-                        filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-                        child: Container(
-                          color: isDark
-                              ? Colors.black.withValues(alpha: 0.65)
-                              : Colors.white.withValues(alpha: 0.65),
-                        ),
+            child: glassProvider.enabled
+                ? LiquidGlassLens(
+                    style: glassProvider.createStyle(
+                      context: context,
+                      cornerRadius: 0,
+                      borderWidth: 0,
+                      refractionIndex: 1.02,
+                      refractionWidth: 24,
+                    ),
+                    child: const SizedBox.expand(),
+                  )
+                : ClipRect(
+                    child: BackdropFilter(
+                      filter: BlurUtils.createDownsampledBlur(15),
+                      child: Container(
+                        color: isDark
+                            ? Colors.black.withValues(alpha: 0.65)
+                            : Colors.white.withValues(alpha: 0.65),
                       ),
                     ),
-            ),
+                  ),
           ),
           // 2. Content layer
           Positioned.fill(
-            child: Offstage(
-              offstage: displayHeight <= 0,
-              child: _buildPanelContent(false),
-            ),
+            child: _buildPanelContent(false),
           ),
         ],
       ),
@@ -293,7 +297,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onVerticalDragEnd: (details) {
-        if (details.primaryVelocity! > 300) {
+        if ((details.primaryVelocity ?? 0) > 300) {
           widget.onClose();
         }
       },
@@ -396,13 +400,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       color: isDark
           ? const Color(0xFF2C2C2E).withOpacity(0.7 * opacity)
           : Colors.white.withOpacity(0.7 * opacity),
-      boxShadow: glassProvider.enabled ? null : [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.15 * opacity),
-          blurRadius: 12,
-          offset: const Offset(0, 4),
-        ),
-      ],
     );
 
     final searchStyle = glassProvider.createStyle(
@@ -425,7 +422,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           : ClipRRect(
               borderRadius: BorderRadius.circular(24),
               child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                filter: BlurUtils.createDownsampledBlur(15),
                 child: Container(
                   height: 40,
                   decoration: boxDecoration,
@@ -454,22 +451,44 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         // Tab 1: Emoji
         Stack(
           children: [
-            Positioned.fill(child: _buildVerticalEmojiList()),
-            _buildEmojiTopControls(),
+            Positioned.fill(
+              child: RepaintBoundary(child: _buildVerticalEmojiList()),
+            ),
+            RepaintBoundary(child: _buildEmojiTopControls()),
           ],
         ),
         // Tab 2: GIF
         Stack(
           children: [
-            Positioned.fill(child: _buildGifGrid()),
-            _buildSearch('Поиск GIF', _gifSearchController, _gifSearchQuery, (v) => setState(() => _gifSearchQuery = v), _gifSearchFocusNode),
+            Positioned.fill(
+              child: RepaintBoundary(child: _buildGifGrid()),
+            ),
+            RepaintBoundary(
+              child: _buildSearch(
+                'Поиск GIF',
+                _gifSearchController,
+                _gifSearchQuery,
+                (v) => setState(() => _gifSearchQuery = v),
+                _gifSearchFocusNode,
+              ),
+            ),
           ],
         ),
         // Tab 3: Stickers
         Stack(
           children: [
-            Positioned.fill(child: _buildStickerGrid()),
-            _buildSearch('Поиск стикеров', _stickerSearchController, _stickerSearchQuery, (v) => setState(() => _stickerSearchQuery = v), _stickerSearchFocusNode),
+            Positioned.fill(
+              child: RepaintBoundary(child: _buildStickerGrid()),
+            ),
+            RepaintBoundary(
+              child: _buildSearch(
+                'Поиск стикеров',
+                _stickerSearchController,
+                _stickerSearchQuery,
+                (v) => setState(() => _stickerSearchQuery = v),
+                _stickerSearchFocusNode,
+              ),
+            ),
           ],
         ),
       ],
@@ -478,10 +497,18 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
 
   Widget _buildEmojiTopControls() {
     final glassProvider = context.watch<LiquidGlassProvider>();
+    final sharedStyle = glassProvider.enabled
+        ? glassProvider.createStyle(
+            context: context,
+            cornerRadius: 24,
+            refractionWidth: 24,
+          )
+        : null;
 
     return AnimatedBuilder(
       animation: _searchCollapseController,
-      builder: (context, child) {
+      child: _buildEmojiSetSelector(isGrouped: true),
+      builder: (context, selectorWidget) {
         final collapse = _searchCollapseController.value;
         final textOpacity = Curves.easeOut.transform((1.0 - collapse * 1.5).clamp(0.0, 1.0));
         final fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
@@ -496,10 +523,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
             child: Transform.scale(
               scale: 1.0 - (collapse * 0.15),
               child: _buildSearch(
-                'Поиск эмодзи', 
+                'Поиск эмодзи',
                 _emojiSearchController,
-                _emojiSearchQuery, 
-                (v) => setState(() => _emojiSearchQuery = v), 
+                _emojiSearchQuery,
+                (v) => setState(() => _emojiSearchQuery = v),
                 _emojiSearchFocusNode,
                 isGrouped: true,
                 opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
@@ -508,15 +535,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           ),
         );
 
-        final selectorWidget = _buildEmojiSetSelector(isGrouped: true);
-
-        if (glassProvider.enabled) {
-          final sharedStyle = glassProvider.createStyle(
-            context: context,
-            cornerRadius: 24,
-            refractionWidth: 24,
-          );
-
+        if (glassProvider.enabled && sharedStyle != null) {
           return SizedBox(
             height: _kEmojiSelectorHeight + _kSearchHeight,
             child: LiquidGlassBlender(
@@ -525,7 +544,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
               child: Stack(
                 children: [
                   searchWidget,
-                  selectorWidget,
+                  selectorWidget!,
                 ],
               ),
             ),
@@ -537,7 +556,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           child: Stack(
             children: [
               searchWidget,
-              selectorWidget,
+              selectorWidget!,
             ],
           ),
         );
@@ -571,8 +590,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   Widget _buildVerticalEmojiList() {
     List<CategoryEmoji> categories = [...defaultEmojiSet];
 
-    if (_recentEmojis.isNotEmpty) {
-      categories.insert(0, CategoryEmoji(Category.RECENT, _recentEmojis));
+    if (_displayedRecentEmojis.isNotEmpty) {
+      categories.insert(0, CategoryEmoji(Category.RECENT, _displayedRecentEmojis));
     }
 
     final bool isSearching = _emojiSearchQuery.isNotEmpty;
@@ -586,30 +605,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       }).where((cat) => cat.emoji.isNotEmpty).toList();
     }
 
-    // Lazy section loading logic
-    final displayCategories = isSearching 
-        ? categories 
-        : categories.sublist(0, math.min(_visibleEmojiCategories, categories.length));
-
     return CustomScrollView(
       controller: _gridScrollController,
       physics: const _EmojiScrollPhysics(parent: ClampingScrollPhysics()),
-      cacheExtent: 500, // Reduced for memory efficiency
+      cacheExtent: 500,
       slivers: [
         const SliverToBoxAdapter(child: SizedBox(height: _kEmojiHeaderHeight)),
-          
-        for (var categoryEmoji in displayCategories)
+        for (var categoryEmoji in categories)
           ..._buildCategorySlivers(
-            categoryEmoji, 
+            categoryEmoji,
             _getSectionKeyForCategory(categoryEmoji.category),
-            skipFilter: isSearching, // Already filtered above
+            skipFilter: isSearching,
           ),
-
-        // Custom packs
-        if (!isSearching && _visibleEmojiCategories >= categories.length)
+        if (!isSearching)
           for (var pack in _customPacks)
             ..._buildCustomPackSlivers(pack),
-
         const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
       ],
     );
@@ -663,6 +673,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
             );
           },
           childCount: categoryEmoji.emoji.length,
+          addAutomaticKeepAlives: false,
         ),
       ),
     ];
@@ -703,6 +714,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
             );
           },
           childCount: pack.emojis.length,
+          addAutomaticKeepAlives: false,
         ),
       ),
     ];
@@ -715,8 +727,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
 
     final sortedPacks = List<CustomEmojiPack>.from(_customPacks)
       ..sort((a, b) {
-        int countA = _packUsageStats[a.id] ?? 0;
-        int countB = _packUsageStats[b.id] ?? 0;
+        int countA = _displayedPackUsageStats[a.id] ?? 0;
+        int countB = _displayedPackUsageStats[b.id] ?? 0;
         return countB.compareTo(countA);
       });
 
@@ -727,7 +739,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
         children: [
           const SizedBox(width: 4),
           // Recent
-          if (_recentEmojis.isNotEmpty)
+          if (_displayedRecentEmojis.isNotEmpty)
             _buildSelectorIcon(Icons.access_time_rounded, () => _scrollToSection(_sectionKeys['recent'])),
           
           // Standard
@@ -750,13 +762,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       color: isDark
           ? const Color(0xFF2C2C2E).withOpacity(0.7)
           : Colors.white.withOpacity(0.7),
-      boxShadow: glassProvider.enabled ? null : [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.15),
-          blurRadius: 12,
-          offset: const Offset(0, 4),
-        ),
-      ],
     );
 
     final selectorStyle = glassProvider.createStyle(
@@ -780,7 +785,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           : ClipRRect(
               borderRadius: BorderRadius.circular(24),
               child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                filter: BlurUtils.createDownsampledBlur(15),
                 child: Container(
                   height: 40,
                   width: double.infinity,
@@ -824,17 +829,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     // Total height of the floating clouds (Selector + Search)
     const double topOffset = _kEmojiSelectorHeight + _kSearchHeight;
 
-    // If section not yet loaded (lazy loading), load all and wait for next frame
-    if (key != null && key.currentContext == null) {
-      setState(() {
-        _visibleEmojiCategories = 99;
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollToSection(key);
-      });
-      return;
-    }
-
     if (key == _sectionKeys['recent']) {
       _gridScrollController.animateTo(
         0,
@@ -853,7 +847,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       // Fallback if context is not available (off-screen sliver)
       double offset = topOffset + 8.0; // Starting point (top padding)
       
-      if (_recentEmojis.isNotEmpty) {
+      if (_displayedRecentEmojis.isNotEmpty) {
         // Approx height of Recent section: header(40) + grid(6 rows * 40 approx)
         offset += 280.0; 
       }
@@ -904,9 +898,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
   void _updatePackUsage(String packId) {
-    setState(() {
-      _packUsageStats[packId] = (_packUsageStats[packId] ?? 0) + 1;
-    });
+    _packUsageStats[packId] = (_packUsageStats[packId] ?? 0) + 1;
     _savePackUsageStats();
   }
 
@@ -915,9 +907,13 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       final prefs = await SharedPreferences.getInstance();
       final String? statsJson = prefs.getString('pack_usage_stats');
       if (statsJson != null) {
-        setState(() {
-          _packUsageStats = Map<String, int>.from(jsonDecode(statsJson));
-        });
+        final loaded = Map<String, int>.from(jsonDecode(statsJson));
+        if (mounted) {
+          setState(() {
+            _packUsageStats = loaded;
+            _displayedPackUsageStats = Map<String, int>.from(loaded);
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error loading pack usage stats: $e');
@@ -1026,20 +1022,24 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       left: 0,
       right: 0,
       height: 40,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Centered Tabs
-          SizedBox(
-            width: 220,
-            child: _buildClassicNav(isDark, theme),
+      child: RepaintBoundary(
+        child: BackdropGroup(
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Centered Tabs
+              SizedBox(
+                width: 220,
+                child: _buildClassicNav(isDark, theme),
+              ),
+              // Backspace anchored to the right side
+              Positioned(
+                right: 16,
+                child: _buildBackspaceButton(isDark, theme),
+              ),
+            ],
           ),
-          // Backspace anchored to the right side
-          Positioned(
-            right: 16,
-            child: _buildBackspaceButton(isDark, theme),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1065,13 +1065,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
                     : Colors.black.withValues(alpha: 0.06),
                 width: 0.5,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.15),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
             ),
       child: Stack(
         children: [
@@ -1156,8 +1149,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(32),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+      child: BackdropFilter.grouped(
+        filter: BlurUtils.createDownsampledBlur(15),
         child: navContent,
       ),
     );
@@ -1190,13 +1183,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
                       : Colors.black.withValues(alpha: 0.06),
                   width: 0.5,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.15),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
               ),
         child: Icon(
           Icons.backspace_outlined,
@@ -1230,8 +1216,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(32),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+      child: BackdropFilter.grouped(
+        filter: BlurUtils.createDownsampledBlur(15),
         child: backspaceContent,
       ),
     );
@@ -1270,12 +1256,16 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       final prefs = await SharedPreferences.getInstance();
       final List<String>? recent = prefs.getStringList('recent_emojis');
       if (recent != null) {
-        setState(() {
-          _recentEmojis = recent.map((e) {
-            final data = jsonDecode(e);
-            return Emoji(data['emoji'], data['name']);
-          }).toList();
-        });
+        final loaded = recent.map((e) {
+          final data = jsonDecode(e);
+          return Emoji(data['emoji'], data['name']);
+        }).toList();
+        if (mounted) {
+          setState(() {
+            _recentEmojis = loaded;
+            _displayedRecentEmojis = List<Emoji>.from(loaded);
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error loading recent emojis: $e');
@@ -1283,13 +1273,11 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
   void _updateRecentEmojis(Emoji emoji) {
-    setState(() {
-      _recentEmojis.removeWhere((e) => e.emoji == emoji.emoji);
-      _recentEmojis.insert(0, emoji);
-      if (_recentEmojis.length > 45) {
-        _recentEmojis = _recentEmojis.sublist(0, 45);
-      }
-    });
+    _recentEmojis.removeWhere((e) => e.emoji == emoji.emoji);
+    _recentEmojis.insert(0, emoji);
+    if (_recentEmojis.length > 45) {
+      _recentEmojis = _recentEmojis.sublist(0, 45);
+    }
     _saveRecentEmojis();
   }
 
@@ -1316,26 +1304,37 @@ class _EmojiScrollPhysics extends ScrollPhysics {
 
   @override
   Simulation? createBallisticSimulation(ScrollMetrics position, double velocity) {
-    // Snap only if we are within the header collapse zone (0 to 48px)
+    // Snap only if the scroll would naturally come to rest inside the header collapse zone (0 to 48px)
     const double snapTarget = 48.0;
-    
-    if (position.pixels > 0 && position.pixels < snapTarget) {
-      double target = position.pixels > snapTarget / 2 ? snapTarget : 0.0;
-      
+    final Simulation? parentSim = super.createBallisticSimulation(position, velocity);
+    final double naturalEnd =
+        parentSim != null ? parentSim.x(double.infinity) : position.pixels;
+
+    if (naturalEnd >= snapTarget) {
+      return parentSim;
+    }
+
+    if (naturalEnd > 0.0 && naturalEnd < snapTarget) {
+      double target = naturalEnd > snapTarget / 2 ? snapTarget : 0.0;
+
       // If there's clear velocity, follow the direction regardless of half-way point
-      if (velocity < -100) target = 0.0;
-      else if (velocity > 100) target = snapTarget;
-      
-      if (target != position.pixels) {
+      if (velocity < -100) {
+        target = 0.0;
+      } else if (velocity > 100) {
+        target = snapTarget;
+      }
+
+      if ((target - position.pixels).abs() > 0.5) {
         return ScrollSpringSimulation(
           spring,
           position.pixels,
           target,
           velocity,
+          tolerance: toleranceFor(position),
         );
       }
     }
-    return super.createBallisticSimulation(position, velocity);
+    return parentSim;
   }
 }
 

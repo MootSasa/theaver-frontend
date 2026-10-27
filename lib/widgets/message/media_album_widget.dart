@@ -5,13 +5,17 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../config/app_config.dart';
 import '../../models/media_album.dart';
+import '../../models/theav_theme.dart';
 import '../../services/database/app_database.dart';
 import '../../services/media_cache_manager.dart';
 import 'blurred_media_placeholder.dart';
 import 'media_album_layout.dart';
 import 'media_album_viewer.dart';
 import 'media_download_button.dart';
+import 'message_bubble.dart';
+import 'message_interactive_state.dart';
 import 'text_message_widget.dart';
+import '../tiling/tile_viewport_scope.dart';
 
 /// Widget rendering a Telegram-style collage bubble for 2–10 media items.
 class MediaAlbumWidget extends StatelessWidget {
@@ -23,6 +27,8 @@ class MediaAlbumWidget extends StatelessWidget {
   final String Function(String)? formatTime;
   final Function(String url, String name, String type)? onFileTap;
   final bool isHighlighted;
+  final bool isSelected;
+  final bool isSelectionMode;
   final String? highlightItemId;
 
   const MediaAlbumWidget({
@@ -35,12 +41,32 @@ class MediaAlbumWidget extends StatelessWidget {
     this.formatTime,
     this.onFileTap,
     this.isHighlighted = false,
+    this.isSelected = false,
+    this.isSelectionMode = false,
     this.highlightItemId,
   }) : super(key: key);
 
+  MediaAlbumWidget copyWithKey(Key? newKey) {
+    return MediaAlbumWidget(
+      key: newKey,
+      album: album,
+      isMe: isMe,
+      currentUserId: currentUserId,
+      chatType: chatType,
+      senderName: senderName,
+      formatTime: formatTime,
+      onFileTap: onFileTap,
+      isHighlighted: false,
+      isSelected: false,
+      isSelectionMode: false,
+      highlightItemId: null,
+    );
+  }
+
   void _openViewer(BuildContext context, int index) {
-    Navigator.of(context).push(
+    Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
+        fullscreenDialog: true,
         builder: (_) => MediaAlbumViewer(
           album: album,
           initialIndex: index,
@@ -51,7 +77,7 @@ class MediaAlbumWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = TileViewportScope.widthOf(context);
     final albumWidth = (screenWidth * 0.76).clamp(240.0, 380.0);
     // Dynamic height based on count
     final albumHeight = album.items.length <= 2
@@ -66,140 +92,188 @@ class MediaAlbumWidget extends StatelessWidget {
     );
 
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final bool shouldHighlightAlbum = isSelected ||
+        isHighlighted ||
+        (highlightItemId != null && album.items.any((it) => it.id == highlightItemId));
+
     final showSender = !isMe && senderName != null && senderName!.isNotEmpty;
     final hasTextBubble = album.hasCaption || showSender;
-    final bubbleColor = hasTextBubble
-        ? (isMe ? theme.colorScheme.primary : theme.colorScheme.secondaryContainer)
+    final Color bubbleColor = hasTextBubble
+        ? (shouldHighlightAlbum
+            ? (isMe
+                ? (themeExt?.palette.chatBubbleOutgoingSelected ??
+                    theme.colorScheme.primary)
+                : (themeExt?.palette.chatBubbleIncomingSelected ??
+                    theme.colorScheme.secondaryContainer))
+            : (isMe
+                ? (themeExt?.palette.chatBubbleOutgoing ??
+                    theme.colorScheme.primary)
+                : (themeExt?.palette.chatBubbleIncoming ??
+                    theme.colorScheme.secondaryContainer)))
         : Colors.transparent;
-    final onBubbleColor = isMe
-        ? theme.colorScheme.onPrimary
-        : theme.colorScheme.onSecondaryContainer;
+    final Color onBubbleColor = isMe
+        ? (themeExt?.palette.chatBubbleOutgoingText ?? theme.colorScheme.onPrimary)
+        : (themeExt?.palette.chatBubbleIncomingText ??
+            theme.colorScheme.onSecondaryContainer);
 
-    final albumContent = Container(
-      width: albumWidth,
-      decoration: BoxDecoration(
-        color: bubbleColor,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!isMe && senderName != null && senderName!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
-              child: Text(
-                senderName!,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  color: theme.colorScheme.primary,
+    final Widget albumContent = MetaData(
+      metaData: 'message_bubble_box',
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
+        width: albumWidth,
+        decoration: BoxDecoration(
+          color: bubbleColor,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!isMe && senderName != null && senderName!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
+                child: Text(
+                  senderName!,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: theme.colorScheme.primary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-          // 1. Mosaic Collage Container
-          SizedBox(
-            width: albumWidth,
-            height: albumHeight,
-            child: Stack(
-              children: [
-                for (int i = 0; i < positions.length; i++)
-                  _buildTile(context, album.items[i], positions[i], i),
-
-                // Floating time pill if captionless
-                if (!album.hasCaption)
-                  Positioned(
-                    bottom: 6,
-                    right: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.55),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _getTimeString(),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          if (isMe) ...[
-                            const SizedBox(width: 3),
-                            _buildStatusIcon(),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-
-          // 2. Caption Text & Meta (if present)
-          if (album.hasCaption)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            // 1. Mosaic Collage Container
+            SizedBox(
+              width: albumWidth,
+              height: albumHeight,
+              child: Stack(
                 children: [
-                  TextMessageWidget(
-                    text: album.caption!,
-                    entities: album.entities,
-                    isMe: isMe,
-                    style: TextStyle(
-                      color: onBubbleColor,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Text(
-                        _getTimeString(),
-                        style: TextStyle(
-                          color: onBubbleColor.withValues(alpha: 0.7),
-                          fontSize: 11,
+                  for (int i = 0; i < positions.length; i++)
+                    _buildTile(context, album.items[i], positions[i], i),
+
+                  // Floating time pill if captionless
+                  if (!album.hasCaption)
+                    Positioned(
+                      bottom: 6,
+                      right: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _getTimeString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            if (isMe) ...[
+                              const SizedBox(width: 3),
+                              _buildStatusIcon(),
+                            ],
+                          ],
                         ),
                       ),
-                      if (isMe) ...[
-                        const SizedBox(width: 4),
-                        _buildStatusIcon(color: onBubbleColor),
-                      ],
-                    ],
-                  ),
+                    ),
                 ],
               ),
             ),
-        ],
+
+            // 2. Caption Text & Meta (if present)
+            if (album.hasCaption)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    MetaData(
+                      metaData: 'message_selectable_content',
+                      child: TextMessageWidget(
+                        text: album.caption!,
+                        entities: album.entities,
+                        isMe: isMe,
+                        style: TextStyle(
+                          color: onBubbleColor,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          _getTimeString(),
+                          style: TextStyle(
+                            color: onBubbleColor.withValues(alpha: 0.7),
+                            fontSize: 11,
+                          ),
+                        ),
+                        if (isMe) ...[
+                          const SizedBox(width: 4),
+                          _buildStatusIcon(color: onBubbleColor),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
 
-    final bool shouldHighlightAlbum =
-        isHighlighted || (highlightItemId != null && album.items.any((it) => it.id == highlightItemId));
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeInOut,
-      padding: shouldHighlightAlbum ? const EdgeInsets.all(3) : EdgeInsets.zero,
-      decoration: BoxDecoration(
-        color: shouldHighlightAlbum
-            ? theme.colorScheme.primary.withValues(alpha: 0.18)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(19),
-      ),
+    final Widget alignedAlbum = Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: albumContent,
+    );
+
+    final Color rowHighlightColor = themeExt?.palette.messageSelectionOverlay ??
+        theme.colorScheme.primary.withValues(alpha: 0.18);
+
+    Widget rowContent = alignedAlbum;
+    if (isSelectionMode) {
+      rowContent = Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 10.0, right: 2.0),
+            child: MessageSelectionCheckbox(isSelected: isSelected),
+          ),
+          Expanded(child: alignedAlbum),
+        ],
+      );
+    }
+
+    final primaryMsg = album.primaryMessage;
+    final String interactiveAlbumKey =
+        (primaryMsg.localId != null && primaryMsg.localId!.isNotEmpty)
+            ? primaryMsg.localId!
+            : (primaryMsg.id.isNotEmpty
+                ? primaryMsg.id
+                : 'album_${primaryMsg.createdAt}');
+
+    return MessageInteractiveScope(
+      messageKey: interactiveAlbumKey,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        width: double.infinity,
+        color: shouldHighlightAlbum ? rowHighlightColor : Colors.transparent,
+        child: rowContent,
+      ),
     );
   }
 
@@ -274,6 +348,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
   @override
   void initState() {
     super.initState();
+    _syncCacheImmediate();
     _checkCache();
   }
 
@@ -283,7 +358,24 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
     if (oldWidget.item.fileUrl != widget.item.fileUrl) {
       _cachedFile = null;
       _cachedFirstFrame = null;
+      _syncCacheImmediate();
       _checkCache();
+    }
+  }
+
+  void _syncCacheImmediate() {
+    final rawUrl = widget.item.fileUrl ?? '';
+    final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+    if (resolvedUrl.isEmpty) return;
+    final syncFile =
+        MediaCacheManager.instance.getCachedFileSync(resolvedUrl) ??
+            MediaCacheManager.instance.getCachedFileSync(rawUrl);
+    if (syncFile != null) {
+      _cachedFile = syncFile;
+      if (widget.item.isVideo) {
+        _cachedFirstFrame = MediaCacheManager.instance
+            .getCachedVideoThumbnailSync(syncFile.path);
+      }
     }
   }
 
@@ -293,9 +385,17 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
     if (resolvedUrl.isNotEmpty) {
       final f = await MediaCacheManager.instance.getCachedFile(resolvedUrl);
       if (mounted && f != null) {
-        setState(() => _cachedFile = f);
+        if (_cachedFile?.path != f.path) {
+          setState(() => _cachedFile = f);
+        }
         if (widget.item.isVideo && _cachedFirstFrame == null) {
-          _extractLocalFirstFrame(f.path);
+          final syncThumb =
+              MediaCacheManager.instance.getCachedVideoThumbnailSync(f.path);
+          if (syncThumb != null) {
+            setState(() => _cachedFirstFrame = syncThumb);
+          } else {
+            _extractLocalFirstFrame(f.path);
+          }
         }
       }
     }
@@ -309,10 +409,14 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
         'getVideoThumbnail',
         {'videoPath': filePath},
       );
-      if (res != null && res['thumbnail'] != null && mounted) {
-        setState(() {
-          _cachedFirstFrame = res['thumbnail'] as Uint8List?;
-        });
+      final bytes = res != null ? res['thumbnail'] as Uint8List? : null;
+      if (bytes != null) {
+        MediaCacheManager.instance.cacheVideoThumbnail(filePath, bytes);
+        if (mounted) {
+          setState(() {
+            _cachedFirstFrame = bytes;
+          });
+        }
       }
     } catch (_) {}
   }
@@ -359,11 +463,13 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // 1. Blurred placeholder (always shown until media is downloaded)
-                BlurredMediaPlaceholder(
-                  thumbBase64: item.thumbBase64,
-                  aspectRatio: item.aspectRatio,
-                ),
+                // 1. Blurred placeholder (only mounted until opaque media is ready)
+                if (!((!item.isVideo && _cachedFile != null) ||
+                    (item.isVideo && isCached && _cachedFirstFrame != null)))
+                  BlurredMediaPlaceholder(
+                    thumbBase64: item.thumbBase64,
+                    aspectRatio: item.aspectRatio,
+                  ),
 
                 // 2. Real first frame for video ONLY after video is cached locally
                 if (item.isVideo && isCached) ...[
@@ -371,6 +477,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
                     Image.memory(
                       _cachedFirstFrame!,
                       fit: BoxFit.cover,
+                      filterQuality: FilterQuality.low,
                       gaplessPlayback: true,
                     )
                   else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
@@ -378,6 +485,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
                       resolvedThumbUrl,
                       fit: BoxFit.cover,
                       cacheWidth: 600,
+                      filterQuality: FilterQuality.low,
                       loadingBuilder: (context, child, progress) {
                         if (progress == null) return child;
                         return const SizedBox.shrink();
@@ -390,6 +498,10 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
                 if (!item.isVideo && _cachedFile != null)
                   Image.file(
                     _cachedFile!,
+                    cacheWidth: (pos.width * MediaQuery.devicePixelRatioOf(context))
+                        .round()
+                        .clamp(180, 960),
+                    filterQuality: FilterQuality.low,
                     fit: BoxFit.cover,
                     gaplessPlayback: true,
                   ),

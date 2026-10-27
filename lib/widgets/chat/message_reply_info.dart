@@ -81,6 +81,9 @@ class MessageReplyInfo extends StatelessWidget {
     );
   }
 
+  static const int _kMaxPreviewCacheSize = 256;
+  static final Map<int, TextSpan> _previewSpanCache = <int, TextSpan>{};
+
   /// Builds a single-line truncated [TextSpan] preserving the original message's
   /// formatting entities (bold, italic, underline, strikethrough, code, spoiler, link)
   /// as well as custom emojis.
@@ -97,6 +100,23 @@ class MessageReplyInfo extends StatelessWidget {
     String? prefix,
     int maxLen = 60,
   }) {
+    final int cacheKey = Object.hash(
+      rawText,
+      entities.length,
+      isQuote,
+      quoteText,
+      quoteOffset,
+      quoteLength,
+      baseStyle.color,
+      baseStyle.fontSize,
+      accentColor,
+      isDark,
+      prefix,
+      maxLen,
+    );
+    final cached = _previewSpanCache[cacheKey];
+    if (cached != null) return cached;
+
     String sourceText;
     List<MessageEntity> sourceEntities;
 
@@ -127,7 +147,7 @@ class MessageReplyInfo extends StatelessWidget {
         }
       }
 
-      if (sliceStart != -1 && sliceEnd > sliceStart && origEntities.isNotEmpty) {
+      if (sliceStart != -1 && sliceEnd > sliceStart) {
         sourceText = origText.substring(sliceStart, sliceEnd);
         sourceEntities = <MessageEntity>[];
         for (final e in origEntities) {
@@ -163,30 +183,41 @@ class MessageReplyInfo extends StatelessWidget {
           .replaceAll(RegExp(r'(?:^|\n)\s*(?:\*\*)?>\s?'), ' ');
     }
 
-    // Collapse newlines and consecutive whitespace into single spaces while mapping entity indices
+    final int effectiveMaxLen = isQuote ? math.max(maxLen, 220) : maxLen;
+
+    // Collapse consecutive whitespace (preserving single newlines when isQuote is true) while mapping entity indices
     final indexMap = List<int>.filled(sourceText.length + 1, 0);
     final sb = StringBuffer();
     bool lastWasSpace = true; // skip leading whitespace
+    bool lastWasNewline = false;
     for (int i = 0; i < sourceText.length; i++) {
       indexMap[i] = sb.length;
       final ch = sourceText[i];
       if (ch == '\r') continue;
-      if (ch == '\n' || ch == ' ' || ch == '\t') {
+      if (ch == '\n' && isQuote) {
+        if (!lastWasNewline && sb.isNotEmpty) {
+          sb.write('\n');
+          lastWasNewline = true;
+          lastWasSpace = true;
+        }
+      } else if (ch == '\n' || ch == ' ' || ch == '\t') {
         if (!lastWasSpace) {
           sb.write(' ');
           lastWasSpace = true;
+          lastWasNewline = false;
         }
       } else {
         sb.write(ch);
         lastWasSpace = false;
+        lastWasNewline = false;
       }
     }
     indexMap[sourceText.length] = sb.length;
 
     String singleLine = sb.toString().trimRight();
-    final bool isTruncated = singleLine.length > maxLen;
+    final bool isTruncated = singleLine.length > effectiveMaxLen;
     if (isTruncated) {
-      singleLine = singleLine.substring(0, maxLen);
+      singleLine = singleLine.substring(0, effectiveMaxLen);
     }
     for (int i = 0; i <= sourceText.length; i++) {
       if (indexMap[i] > singleLine.length) {
@@ -239,10 +270,11 @@ class MessageReplyInfo extends StatelessWidget {
         segStyle = segStyle.copyWith(color: accentColor);
       }
       if (hasSpoiler) {
+        final bool isLightText = (baseStyle.color?.computeLuminance() ?? 0.0) > 0.5;
         segStyle = segStyle.copyWith(
           backgroundColor:
-              isDark ? const Color(0x38FFFFFF) : const Color(0x22000000),
-          color: isDark ? Colors.white54 : Colors.black45,
+              isLightText ? const Color(0x38FFFFFF) : const Color(0x22000000),
+          color: isLightText ? Colors.white54 : Colors.black45,
         );
       }
 
@@ -285,7 +317,12 @@ class MessageReplyInfo extends StatelessWidget {
       children.add(TextSpan(text: '...', style: baseStyle));
     }
 
-    return TextSpan(style: baseStyle, children: children);
+    final result = TextSpan(style: baseStyle, children: children);
+    if (_previewSpanCache.length >= _kMaxPreviewCacheSize) {
+      _previewSpanCache.remove(_previewSpanCache.keys.first);
+    }
+    _previewSpanCache[cacheKey] = result;
+    return result;
   }
 
   Widget _buildMessageTypeIcon(String messageType, Color color, double size) {
@@ -353,9 +390,16 @@ class MessageReplyInfo extends StatelessWidget {
     // Accent and vibrant opaque background color derived from preset and theme palette
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final p = themeExt?.palette;
-    final accentColor = isReplyingToMe ? (p?.chatReplyTitle ?? preset.primaryColor) : preset.primaryColor;
     final bgColor = preset.getOpaqueCardBackgroundColor(isDark);
-    final textColor = p?.chatReplyText ?? (isDark ? Colors.white70 : const Color(0xFF1C2530));
+    final rawAccent = isReplyingToMe
+        ? ((p?.hasCustomChatReplyTitle ?? false) ? p!.chatReplyTitle : preset.primaryColor)
+        : preset.primaryColor;
+    final accentColor = NameColorPreset.resolveReadableAccentColor(bgColor, rawAccent);
+    final textColor = NameColorPreset.resolveReadableTextColor(
+      bgColor,
+      configuredColor: p?.chatReplyText,
+      isExplicitCustom: p?.hasCustomChatReplyText ?? false,
+    );
 
     final effectiveEntities = entitiesOverride.isNotEmpty
         ? entitiesOverride
@@ -489,71 +533,82 @@ class MessageReplyInfo extends StatelessWidget {
           color: bgColor,
           borderRadius: BorderRadius.circular(6),
         ),
-        child: IntrinsicHeight(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Accent strip with strip style (solid, dualColor, candyCane, segmented)
-              ReplyStripWidget(
+        child: Stack(
+          children: [
+            Positioned(
+              top: 0,
+              bottom: 0,
+              left: 0,
+              child: ReplyStripWidget(
                 preset: preset,
                 style: stripStyle,
                 width: 3.5,
                 borderRadius: 2,
               ),
-              const SizedBox(width: 8),
-
-              // Quoted content
-              Flexible(
-                fit: FlexFit.loose,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Sender name / Title
-                    if (!isDeleted && title.isNotEmpty)
-                      Text(
-                        title,
-                        style: TextStyle(
-                          color: accentColor,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    if (!isDeleted && title.isNotEmpty && hasPreview)
-                      const SizedBox(height: 2),
-                    // Preview text
-                    if (hasPreview)
-                      if (isQuote && !isDeleted)
-                        RichText(
-                          text: previewSpan,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      else
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (!isDeleted && replyInfo != null && replyInfo!.messageType != 'text')
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: _buildMessageTypeIcon(replyInfo!.messageType, textColor, 12),
-                              ),
-                            Flexible(
-                              child: RichText(
-                                text: previewSpan,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                  ],
+            ),
+            if (isQuote && !isDeleted)
+              Positioned(
+                top: 2,
+                right: 0,
+                child: iconoir.QuoteSolid(
+                  width: 14,
+                  height: 14,
+                  color: accentColor.withValues(alpha: 0.45),
                 ),
               ),
-            ],
-          ),
+            Padding(
+              padding: EdgeInsets.only(
+                left: 11.5,
+                right: (isQuote && !isDeleted) ? 16.0 : 0.0,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Sender name / Title
+                  if (!isDeleted && title.isNotEmpty)
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: accentColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  if (!isDeleted && title.isNotEmpty && hasPreview)
+                    const SizedBox(height: 2),
+                  // Preview text
+                  if (hasPreview)
+                    if (isQuote && !isDeleted)
+                      RichText(
+                        text: previewSpan,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    else
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (!isDeleted && replyInfo != null && replyInfo!.messageType != 'text')
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: _buildMessageTypeIcon(replyInfo!.messageType, textColor, 12),
+                            ),
+                          Flexible(
+                            child: RichText(
+                              text: previewSpan,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

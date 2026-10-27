@@ -16,14 +16,21 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Map of chatId -> unreadCount
   final Map<String, int> _counts = {};
 
-  /// Currently open chat ID — messages in this chat should NOT increment unread
-  String? _currentlyOpenChatId;
+  /// Map of chatId -> reference count of mounted chat tiles showing this chat.
+  /// Messages in any open chat should NOT increment unread badges.
+  final Map<String, int> _openChatCounts = {};
+
+  /// Legacy single-chat tracker fallback when setOpenChat(null) is called without chatId
+  String? _lastSetOpenChatId;
 
   /// Stream subscription for WebSocket events
   StreamSubscription<WebSocketEvent>? _wsSubscription;
 
   /// Get unread count for a specific chat
   int getCount(String chatId) => _counts[chatId] ?? 0;
+
+  /// Check whether a chat is currently open in any tile
+  bool isChatOpen(String chatId) => (_openChatCounts[chatId] ?? 0) > 0;
 
   /// Check whether a chat is manually marked as unread
   bool isMarkedUnread(String chatId) => _counts[chatId] == -1;
@@ -47,10 +54,39 @@ class UnreadCountProvider extends ChangeNotifier {
     return count;
   }
 
-  /// Set currently open chat (called when navigating into a chat screen)
-  void setOpenChat(String? chatId) {
-    _currentlyOpenChatId = chatId;
-    NotificationService().setActiveChat(chatId);
+  /// Register a chat as open in a tile/screen
+  void openChat(String chatId) {
+    if (chatId.isEmpty) return;
+    _openChatCounts[chatId] = (_openChatCounts[chatId] ?? 0) + 1;
+    _lastSetOpenChatId = chatId;
+    NotificationService().addActiveChat(chatId);
+  }
+
+  /// Unregister a chat when its tile/screen is closed or disposed
+  void closeChat(String chatId) {
+    if (chatId.isEmpty) return;
+    final current = _openChatCounts[chatId] ?? 0;
+    if (current <= 1) {
+      _openChatCounts.remove(chatId);
+      NotificationService().removeActiveChat(chatId);
+    } else {
+      _openChatCounts[chatId] = current - 1;
+    }
+    if (_lastSetOpenChatId == chatId && !_openChatCounts.containsKey(chatId)) {
+      _lastSetOpenChatId = _openChatCounts.keys.lastOrNull;
+    }
+  }
+
+  /// Set currently open chat (compatible with both single-screen and multi-tile callers)
+  void setOpenChat(String? chatId, {String? previousChatId}) {
+    if (chatId != null && chatId.isNotEmpty) {
+      openChat(chatId);
+    } else {
+      final toClose = previousChatId ?? _lastSetOpenChatId;
+      if (toClose != null) {
+        closeChat(toClose);
+      }
+    }
   }
 
   /// Initialize: load counts from server and subscribe to WebSocket
@@ -84,8 +120,8 @@ class UnreadCountProvider extends ChangeNotifier {
 
   /// Optimistically increment unread count for a chat (when new message arrives)
   void increment(String chatId) {
-    // Don't increment if user is currently in this chat
-    if (_currentlyOpenChatId == chatId) return;
+    // Don't increment if user has this chat open in any tile
+    if (isChatOpen(chatId)) return;
     final current = _counts[chatId] ?? 0;
     _counts[chatId] = current == -1 ? 1 : current + 1;
     notifyListeners();

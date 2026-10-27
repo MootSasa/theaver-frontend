@@ -365,18 +365,21 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
             ),
 
             _buildSectionHeader(l10n.translate('theme_section_outgoing')),
-            _buildBubbleFillTypeToggle(l10n),
-            if (_isOutgoingGradient) ...[
-              _buildGradientEditor(l10n),
-            ] else ...[
-              _buildColorTile(
-                title: l10n.translate('theme_color_bubble_outgoing'),
-                color: _currentTheme.palette.chatBubbleOutgoing,
-                onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
-                      palette: _currentTheme.palette.copyWith(chatBubbleOutgoing: c),
-                    )),
-              ),
-            ],
+            _buildConfigurableBubbleFillSection(
+              l10n: l10n,
+              solidTitle: l10n.translate('theme_color_bubble_outgoing'),
+              solidColor: _currentTheme.palette.chatBubbleOutgoing,
+              gradientColors: _currentTheme.palette.chatBubbleOutgoingGradient,
+              onSolidChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoing: c),
+                  )),
+              onGradientChanged: (colors) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(
+                      chatBubbleOutgoingGradient: colors,
+                      clearOutgoingGradient: colors == null,
+                    ),
+                  )),
+            ),
             _buildColorTile(
               title: l10n.translate('theme_color_bubble_outgoing_text'),
               color: _currentTheme.palette.chatBubbleOutgoingText,
@@ -398,13 +401,45 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                     palette: _currentTheme.palette.copyWith(chatBubbleOutgoingLink: c),
                   )),
             ),
+            const SizedBox(height: 6),
+            _buildConfigurableBubbleFillSection(
+              l10n: l10n,
+              solidTitle: l10n.translate('theme_color_bubble_outgoing_selected'),
+              solidColor: _currentTheme.palette.chatBubbleOutgoingSelected,
+              gradientColors: _currentTheme.palette.chatBubbleOutgoingSelectedGradient,
+              onSolidChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoingSelected: c),
+                  )),
+              onGradientChanged: (colors) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(
+                      chatBubbleOutgoingSelectedGradient: colors,
+                      clearOutgoingSelectedGradient: colors == null,
+                    ),
+                  )),
+            ),
+            _buildColorTile(
+              title: l10n.translate('theme_color_selection_overlay'),
+              color: _currentTheme.palette.messageSelectionOverlay,
+              allowOpacity: true,
+              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(messageSelectionOverlay: c),
+                  )),
+            ),
 
             _buildSectionHeader(l10n.translate('theme_section_incoming')),
-            _buildColorTile(
-              title: l10n.translate('theme_color_bubble_incoming'),
-              color: _currentTheme.palette.chatBubbleIncoming,
-              onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+            _buildConfigurableBubbleFillSection(
+              l10n: l10n,
+              solidTitle: l10n.translate('theme_color_bubble_incoming'),
+              solidColor: _currentTheme.palette.chatBubbleIncoming,
+              gradientColors: _currentTheme.palette.chatBubbleIncomingGradient,
+              onSolidChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
                     palette: _currentTheme.palette.copyWith(chatBubbleIncoming: c),
+                  )),
+              onGradientChanged: (colors) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(
+                      chatBubbleIncomingGradient: colors,
+                      clearIncomingGradient: colors == null,
+                    ),
                   )),
             ),
             _buildColorTile(
@@ -426,6 +461,22 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
               color: _currentTheme.palette.chatBubbleIncomingLink,
               onChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
                     palette: _currentTheme.palette.copyWith(chatBubbleIncomingLink: c),
+                  )),
+            ),
+            const SizedBox(height: 6),
+            _buildConfigurableBubbleFillSection(
+              l10n: l10n,
+              solidTitle: l10n.translate('theme_color_bubble_incoming_selected'),
+              solidColor: _currentTheme.palette.chatBubbleIncomingSelected,
+              gradientColors: _currentTheme.palette.chatBubbleIncomingSelectedGradient,
+              onSolidChanged: (c) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(chatBubbleIncomingSelected: c),
+                  )),
+              onGradientChanged: (colors) => setState(() => _currentTheme = _currentTheme.copyWith(
+                    palette: _currentTheme.palette.copyWith(
+                      chatBubbleIncomingSelectedGradient: colors,
+                      clearIncomingSelectedGradient: colors == null,
+                    ),
                   )),
             ),
 
@@ -618,97 +669,116 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     );
   }
 
-  bool get _isOutgoingGradient =>
-      _currentTheme.palette.chatBubbleOutgoingGradient != null &&
-      _currentTheme.palette.chatBubbleOutgoingGradient!.length >= 2;
-
-  Widget _buildBubbleFillTypeToggle(AppLocalizations l10n) {
-    final isGrad = _isOutgoingGradient;
+  Widget _buildConfigurableBubbleFillSection({
+    required AppLocalizations l10n,
+    required String solidTitle,
+    required Color solidColor,
+    required List<Color>? gradientColors,
+    required ValueChanged<Color> onSolidChanged,
+    required ValueChanged<List<Color>?> onGradientChanged,
+  }) {
+    final bool isGrad = gradientColors != null && gradientColors.length >= 2;
     final primary = _currentTheme.palette.primary;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        padding: const EdgeInsets.all(4),
-        child: Row(
-          children: [
-            Expanded(
-              child: GestureDetector(
-                onTap: () {
-                  if (isGrad) {
-                    setState(() {
-                      _currentTheme = _currentTheme.copyWith(
-                        palette: _currentTheme.palette.copyWith(clearOutgoingGradient: true),
-                      );
-                    });
-                  }
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 9),
-                  decoration: BoxDecoration(
-                    color: !isGrad ? primary : Colors.transparent,
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    l10n.translate('theme_bubble_fill_solid'),
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: !isGrad ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
-                    ),
-                  ),
-                ),
-              ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 16, right: 16, top: 4, bottom: 2),
+          child: Text(
+            solidTitle,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.78),
             ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: GestureDetector(
-                onTap: () {
-                  if (!isGrad) {
-                    setState(() {
-                      final currentSolid = _currentTheme.palette.chatBubbleOutgoing;
-                      final baseColor = currentSolid;
-                      final targetColor = baseColor.withValues(alpha: (baseColor.a * 0.85).clamp(0.2, 1.0));
-                      _currentTheme = _currentTheme.copyWith(
-                        palette: _currentTheme.palette.copyWith(
-                          chatBubbleOutgoingGradient: [baseColor, targetColor],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.all(4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      if (isGrad) {
+                        onGradientChanged(null);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: !isGrad ? primary : Colors.transparent,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        l10n.translate('theme_bubble_fill_solid'),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: !isGrad ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
                         ),
-                      );
-                    });
-                  }
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 9),
-                  decoration: BoxDecoration(
-                    color: isGrad ? primary : Colors.transparent,
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    l10n.translate('theme_bubble_fill_gradient'),
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isGrad ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
+                      ),
                     ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      if (!isGrad) {
+                        final baseColor = solidColor;
+                        final targetColor = baseColor.withValues(alpha: (baseColor.a * 0.85).clamp(0.2, 1.0));
+                        onGradientChanged([baseColor, targetColor]);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: isGrad ? primary : Colors.transparent,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        l10n.translate('theme_bubble_fill_gradient'),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isGrad ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
+        if (isGrad)
+          _buildGradientEditorForColors(l10n, gradientColors, onGradientChanged)
+        else
+          _buildColorTile(
+            title: solidTitle,
+            color: solidColor,
+            allowOpacity: true,
+            onChanged: onSolidChanged,
+          ),
+      ],
     );
   }
 
-  Widget _buildGradientEditor(AppLocalizations l10n) {
-    final colors = _currentTheme.palette.chatBubbleOutgoingGradient ?? [];
-
+  Widget _buildGradientEditorForColors(
+    AppLocalizations l10n,
+    List<Color> colors,
+    ValueChanged<List<Color>?> onGradientChanged,
+  ) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Column(
@@ -740,19 +810,19 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                _buildPresetPill('Синий океан', const [Color(0xFF2A75D3), Color(0xFF00C6FF)]),
-                _buildPresetPill('Закат', const [Color(0xFFFF5E36), Color(0xFF9013FE), Color(0xFF2C3E50)]),
-                _buildPresetPill('Киберпанк', const [Color(0xFFFF007F), Color(0xFF7928CA), Color(0xFF00DFD8)]),
-                _buildPresetPill('Изумруд', const [Color(0xFF0BA360), Color(0xFF3CBA92)]),
-                _buildPresetPill('Стекло 80%', const [Color(0xCC0088CC), Color(0x995CB8E6)]),
-                _buildPresetPill('Фиолет', const [Color(0xFF8E2DE2), Color(0xFF4A00E0)]),
-                _buildPresetPill('Пастель', const [Color(0xFFFFAFBD), Color(0xFFFFC3A0)]),
+                _buildPresetPillForColors('Синий океан', const [Color(0xFF2A75D3), Color(0xFF00C6FF)], onGradientChanged),
+                _buildPresetPillForColors('Закат', const [Color(0xFFFF5E36), Color(0xFF9013FE), Color(0xFF2C3E50)], onGradientChanged),
+                _buildPresetPillForColors('Киберпанк', const [Color(0xFFFF007F), Color(0xFF7928CA), Color(0xFF00DFD8)], onGradientChanged),
+                _buildPresetPillForColors('Изумруд', const [Color(0xFF0BA360), Color(0xFF3CBA92)], onGradientChanged),
+                _buildPresetPillForColors('Стекло 80%', const [Color(0xCC0088CC), Color(0x995CB8E6)], onGradientChanged),
+                _buildPresetPillForColors('Фиолет', const [Color(0xFF8E2DE2), Color(0xFF4A00E0)], onGradientChanged),
+                _buildPresetPillForColors('Пастель', const [Color(0xFFFFAFBD), Color(0xFFFFC3A0)], onGradientChanged),
               ],
             ),
           ),
           const SizedBox(height: 10),
           for (int i = 0; i < colors.length; i++)
-            _buildGradientStopTile(i, colors[i], colors),
+            _buildGradientStopTileForColors(i, colors[i], colors, onGradientChanged),
           if (colors.length < 4)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -767,13 +837,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                     final newColors = List<Color>.from(colors);
                     final last = newColors.last;
                     newColors.add(last.withValues(alpha: (last.a * 0.85).clamp(0.2, 1.0)));
-                    setState(() {
-                      _currentTheme = _currentTheme.copyWith(
-                        palette: _currentTheme.palette.copyWith(
-                          chatBubbleOutgoingGradient: newColors,
-                        ),
-                      );
-                    });
+                    onGradientChanged(newColors);
                   },
                   icon: const iconoir.Plus(width: 18, height: 18),
                   label: Text(l10n.translate('theme_gradient_add_point'), style: const TextStyle(fontSize: 12.5)),
@@ -786,20 +850,16 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     );
   }
 
-  Widget _buildPresetPill(String name, List<Color> presetColors) {
+  Widget _buildPresetPillForColors(
+    String name,
+    List<Color> presetColors,
+    ValueChanged<List<Color>?> onGradientChanged,
+  ) {
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          setState(() {
-            _currentTheme = _currentTheme.copyWith(
-              palette: _currentTheme.palette.copyWith(
-                chatBubbleOutgoingGradient: presetColors,
-              ),
-            );
-          });
-        },
+        onTap: () => onGradientChanged(presetColors),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
@@ -834,7 +894,12 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     );
   }
 
-  Widget _buildGradientStopTile(int index, Color stopColor, List<Color> allColors) {
+  Widget _buildGradientStopTileForColors(
+    int index,
+    Color stopColor,
+    List<Color> allColors,
+    ValueChanged<List<Color>?> onGradientChanged,
+  ) {
     final String label = 'Цвет ${index + 1}';
     final int opacityPercent = (stopColor.a * 100).round();
 
@@ -860,11 +925,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
               onTap: () => _pickColor(context, label, stopColor, (c) {
                 final newColors = List<Color>.from(allColors);
                 newColors[index] = c;
-                setState(() {
-                  _currentTheme = _currentTheme.copyWith(
-                    palette: _currentTheme.palette.copyWith(chatBubbleOutgoingGradient: newColors),
-                  );
-                });
+                onGradientChanged(newColors);
               }, allowOpacity: true),
               child: Container(
                 width: 32,
@@ -885,24 +946,14 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                     onPressed: () {
                       final newColors = List<Color>.from(allColors);
                       newColors.removeAt(index);
-                      setState(() {
-                        _currentTheme = _currentTheme.copyWith(
-                          palette: _currentTheme.palette.copyWith(
-                            chatBubbleOutgoingGradient: newColors,
-                          ),
-                        );
-                      });
+                      onGradientChanged(newColors);
                     },
                   )
                 : null,
             onTap: () => _pickColor(context, label, stopColor, (c) {
               final newColors = List<Color>.from(allColors);
               newColors[index] = c;
-              setState(() {
-                _currentTheme = _currentTheme.copyWith(
-                  palette: _currentTheme.palette.copyWith(chatBubbleOutgoingGradient: newColors),
-                );
-              });
+              onGradientChanged(newColors);
             }, allowOpacity: true),
           ),
           Padding(
@@ -924,13 +975,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                       onChanged: (val) {
                         final newColors = List<Color>.from(allColors);
                         newColors[index] = stopColor.withValues(alpha: val);
-                        setState(() {
-                          _currentTheme = _currentTheme.copyWith(
-                            palette: _currentTheme.palette.copyWith(
-                              chatBubbleOutgoingGradient: newColors,
-                            ),
-                          );
-                        });
+                        onGradientChanged(newColors);
                       },
                     ),
                   ),

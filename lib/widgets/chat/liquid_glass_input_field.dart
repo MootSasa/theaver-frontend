@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -12,6 +11,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
 import '../message/spoiler_text_widget.dart';
@@ -160,7 +160,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       vsync: this,
       duration: const Duration(milliseconds: 530),
     );
-    if (widget.focusNode?.hasFocus == true) {
+    if (_lastShowItalic) {
       _blinkController.repeat(reverse: true);
     }
 
@@ -253,9 +253,15 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   void _onControllerChanged() {
-    _blinkController.value = 1.0;
-    if (widget.focusNode?.hasFocus == true && !_blinkController.isAnimating) {
-      _blinkController.repeat(reverse: true);
+    final showItalic = _computeShowItalic();
+    if (showItalic) {
+      _blinkController.value = 1.0;
+      if (!_blinkController.isAnimating) {
+        _blinkController.repeat(reverse: true);
+      }
+    } else if (_blinkController.isAnimating) {
+      _blinkController.stop();
+      _blinkController.value = 1.0;
     }
     final hasSpoilers = _hasSpoilers();
     if (hasSpoilers && !_spoilerController.isAnimating) {
@@ -265,7 +271,6 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       _spoilerController.stop();
     }
 
-    final showItalic = _computeShowItalic();
     final hasQuotes = _hasQuotes();
     if (widget.controller.text != _lastRecordedText ||
         showItalic != _lastShowItalic ||
@@ -280,7 +285,8 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   void _onFocusChanged() {
-    if (widget.focusNode?.hasFocus == true) {
+    final showItalic = _computeShowItalic();
+    if (showItalic) {
       if (!_blinkController.isAnimating) {
         _blinkController.repeat(reverse: true);
       }
@@ -290,7 +296,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       }
       _blinkController.value = 1.0;
     }
-    _lastShowItalic = _computeShowItalic();
+    _lastShowItalic = showItalic;
     if (mounted) setState(() {});
   }
 
@@ -324,8 +330,8 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
           child: Container(
             decoration: BoxDecoration(
               color: inputBg,
@@ -360,7 +366,9 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       ),
       child: LiquidGlassLens(
         style: style,
-        child: _buildInputRow(context),
+        child: RepaintBoundary(
+          child: _buildInputRow(context),
+        ),
       ),
     );
   }
@@ -936,6 +944,8 @@ class InputSpoilerOverlayPainter extends CustomPainter {
   final Color color;
   final List<SpoilerParticle> particles;
 
+  static final List<List<SpoilerParticle>> _rectParticles = [];
+
   InputSpoilerOverlayPainter({
     required this.fieldKey,
     required this.controller,
@@ -946,7 +956,7 @@ class InputSpoilerOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0 || particles.isEmpty) return;
+    if (size.width <= 0 || size.height <= 0) return;
 
     final renderBox = fieldKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox == null || !renderBox.hasSize) return;
@@ -958,9 +968,7 @@ class InputSpoilerOverlayPainter extends CustomPainter {
     final spoilerSpans = controller.spans.where((s) => s.type == 'spoiler').toList();
     if (spoilerSpans.isEmpty) return;
 
-    canvas.save();
-    canvas.clipRect(Offset.zero & size);
-
+    final rects = <Rect>[];
     for (final span in spoilerSpans) {
       final start = span.start.clamp(0, text.length);
       final end = span.end.clamp(start, text.length);
@@ -970,6 +978,7 @@ class InputSpoilerOverlayPainter extends CustomPainter {
         TextSelection(baseOffset: start, extentOffset: end),
       );
 
+      final spanRects = <Rect>[];
       for (final box in boxes) {
         final rawRect = box.toRect();
         final globalTopLeft = renderEditable.localToGlobal(rawRect.topLeft);
@@ -980,60 +989,34 @@ class InputSpoilerOverlayPainter extends CustomPainter {
           rawRect.width,
           rawRect.height,
         );
-
-        if (rect.width <= 0 || rect.height <= 0) continue;
-
-        // Clip strictly to this text box with slight rounded corners
-        canvas.save();
-        final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(3));
-        canvas.clipRRect(rrect);
-
-        // Subtle underlay
-        canvas.drawRRect(
-          rrect,
-          Paint()..color = color.withValues(alpha: 0.18),
-        );
-
-        // Render shimmering particles inside this box
-        final brightPoints = <Offset>[];
-        final dimPoints = <Offset>[];
-
-        for (final p in particles) {
-          final px = (p.x % rect.width);
-          final py = (p.y % rect.height);
-          final pt = Offset(rect.left + px, rect.top + py);
-          if (p.alpha > 0.5) {
-            brightPoints.add(pt);
-          } else {
-            dimPoints.add(pt);
-          }
+        if (rect.width > 0 && rect.height > 0) {
+          spanRects.add(rect);
         }
-
-        if (dimPoints.isNotEmpty) {
-          canvas.drawPoints(
-            ui.PointMode.points,
-            dimPoints,
-            Paint()
-              ..color = color.withValues(alpha: 0.45)
-              ..strokeWidth = 2.0
-              ..strokeCap = StrokeCap.round,
-          );
-        }
-
-        if (brightPoints.isNotEmpty) {
-          canvas.drawPoints(
-            ui.PointMode.points,
-            brightPoints,
-            Paint()
-              ..color = color.withValues(alpha: 0.85)
-              ..strokeWidth = 2.2
-              ..strokeCap = StrokeCap.round,
-          );
-        }
-
-        canvas.restore();
       }
+      rects.addAll(
+        TelegramSpoilerPainterUtils.normalizeAndMergeLineRects(spanRects),
+      );
     }
+
+    if (rects.isEmpty) return;
+
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+
+    TelegramSpoilerPainterUtils.syncParticlesForRects(
+      rects,
+      _rectParticles,
+      isMedia: false,
+    );
+
+    TelegramSpoilerPainterUtils.paintSpoilerRects(
+      canvas: canvas,
+      rects: rects,
+      rectParticles: _rectParticles,
+      color: color,
+      isMedia: false,
+      revealProgress: 0.0,
+    );
 
     canvas.restore();
   }

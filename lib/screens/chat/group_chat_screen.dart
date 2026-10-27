@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
 import 'dart:async';
@@ -6,6 +7,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
+import '../../services/glass_toast_service.dart';
+import '../../utils/haptic_utils.dart';
 import '../../services/chat_service.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
@@ -35,7 +38,6 @@ import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
 import '../../widgets/chat/media_note_player_header.dart';
-import '../../utils/emoji_utils.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
@@ -65,6 +67,8 @@ import 'package:path/path.dart' as p;
 import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../widgets/tiling/tile_viewport_scope.dart';
 
 class GroupChatScreen extends StatefulWidget {
   static const String routeName = '/group_chat';
@@ -254,6 +258,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     });
   }
 
+  UnreadCountProvider? _unreadCountProvider;
+  String? _registeredTileId;
+
   @override
   void initState() {
     super.initState();
@@ -274,10 +281,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     // Connect continuous media playback with coordinator
-    MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
-    MediaPlaybackCoordinator.instance.onScrollToMessageRequested = (id) => _scrollToMessage(id);
-    MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
-    MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
+    MediaPlaybackCoordinator.instance.registerChat(
+      widget.chatId,
+      ChatPlaybackCallbacks(
+        onScrollToMessage: (id) => _scrollToMessage(id),
+        onPlayNext: _playNextMediaNote,
+        onBuildPlaylist: (id) => _buildPlaylistFrom(id),
+      ),
+    );
+    NotificationService().addActiveChat(widget.chatId);
 
     _scrollController.addListener(() {
       if (!_scrollController.hasClients || _messages.isEmpty) return;
@@ -348,11 +360,83 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       try {
-        context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
+        _unreadCountProvider = context.read<UnreadCountProvider>();
+        _unreadCountProvider?.openChat(widget.chatId);
       } catch (_) {}
       NotificationService().cancelChatNotifications(widget.chatId, chatTitle: widget.groupName);
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      _unreadCountProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+    final tileId = TileViewportScope.maybeTileIdOf(context);
+    if (tileId != _registeredTileId) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.unregisterTileBackHandler(
+          _registeredTileId!,
+          _handleTileBack,
+        );
+      }
+      _registeredTileId = tileId;
+      if (tileId != null) {
+        TilingLayoutController.instance.registerTileBackHandler(
+          tileId,
+          _handleTileBack,
+        );
+      }
+    }
+  }
+
+  // Multi-message selection & desktop LMB drag state
+  final Set<String> _selectedMessageIds = {};
+  bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
+  int? _dragSelectStartIndex;
+  bool _dragSelectTargetState = true;
+  Set<String> _dragSelectBaselineIds = {};
+  bool _isLmbDraggingMessages = false;
+  bool _isLmbDirectTextSelecting = false;
+  Offset? _lmbDownGlobalPos;
+  int? _lmbDownFeedIndex;
+  Message? _lmbDownMessage;
+  GlobalKey? _lmbDownKey;
+  bool _lmbDownIsMe = false;
+  bool _lmbDownInsideBubble = false;
+  bool _lmbDownInsideText = false;
+
+  bool _handleTileBack() {
+    if (!mounted) return false;
+    if (MessageContextMenuService().isShowing) {
+      MessageContextMenuService().dismiss();
+      return true;
+    }
+    if (_isSelectionMode) {
+      _clearSelection();
+      return true;
+    }
+    if (_isVideoRecording) {
+      _onVideoRecordingCancelled();
+      return true;
+    }
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+      setState(() => _isVoiceRecording = false);
+      return true;
+    }
+    if (_isEditing) {
+      _cancelEditing();
+      return true;
+    }
+    if (_replyToMessage != null) {
+      _cancelReply();
+      return true;
+    }
+    return false;
   }
 
   void _initWebSocket() {
@@ -380,9 +464,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onAppResumed() {
-    try {
-      context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
-    } catch (_) {}
     if (!_wsService.isConnected) {
       _wsService.connect();
     }
@@ -677,11 +758,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       // Сообщение уже в списке (отправлено с этого устройства). Обновляем id, статус и обогащенный replyInfo от сервера
       if (mounted) {
         setState(() {
+          final existing = _messages[existingIndex];
           _messages[existingIndex] = message.copyWith(
-            localId: _messages[existingIndex].localId ?? message.localId,
+            localId: existing.localId ?? message.localId,
             sendStatus: 1,
-            replyInfo: message.replyInfo ?? _messages[existingIndex].replyInfo,
-            groupedId: message.groupedId ?? _messages[existingIndex].groupedId,
+            replyInfo: message.replyInfo ?? existing.replyInfo,
+            groupedId: message.groupedId ?? existing.groupedId,
+            isQuote: message.isQuote || existing.isQuote,
+            quoteText: message.quoteText ?? existing.quoteText,
+            quoteOffset: message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
+            quoteLength: message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
           );
           _updateFeedItems();
         });
@@ -968,34 +1054,48 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 )
                 .toList();
 
-            final Map<String, Message> merged = {};
+            final Map<String, Message> mergedById = {};
+            final Map<String, Message> existingByLocalId = {};
             for (final m in _messages) {
-              merged[m.id] = m;
+              mergedById[m.id] = m;
               if (m.localId != null && m.localId!.isNotEmpty) {
-                merged[m.localId!] = m;
+                existingByLocalId[m.localId!] = m;
               }
             }
             for (final m in serverMessages) {
-              merged[m.id] = m;
-              if (m.localId != null && m.localId!.isNotEmpty) {
-                merged[m.localId!] = m;
+              final existing = mergedById[m.id] ??
+                  (m.localId != null && m.localId!.isNotEmpty
+                      ? existingByLocalId[m.localId!]
+                      : null);
+              if (existing != null) {
+                mergedById[m.id] = m.copyWith(
+                  localId: m.localId ?? existing.localId,
+                  isQuote: m.isQuote || existing.isQuote,
+                  quoteText: m.quoteText ?? existing.quoteText,
+                  quoteOffset: m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+                  quoteLength: m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+                );
+              } else {
+                mergedById[m.id] = m;
               }
             }
+            final Set<String> serverLocalIds = mergedById.values
+                .map((m) => m.localId)
+                .whereType<String>()
+                .where((id) => id.isNotEmpty)
+                .toSet();
             for (final pending in pendingMessages) {
-              final key = pending.localId ?? pending.id;
-              if (!merged.containsKey(key)) {
-                merged[key] = pending;
+              final lId = pending.localId;
+              if (!mergedById.containsKey(pending.id) &&
+                  (lId == null || !serverLocalIds.contains(lId))) {
+                mergedById[pending.id] = pending;
               }
             }
 
             _messages.clear();
             _messageReactions.clear();
             _myReactions.clear();
-            final Map<String, Message> dedupedById = {};
-            for (final m in merged.values) {
-              dedupedById[m.id] = m;
-            }
-            _messages.addAll(dedupedById.values);
+            _messages.addAll(mergedById.values);
 
             for (final m in _messages) {
               if (m.reactions.isNotEmpty) {
@@ -1638,6 +1738,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   await AppDatabase().saveMessage(_messageToCompanion(sentMessage.copyWith(
                     localId: pendingLocalId,
                     sendStatus: 1,
+                    isQuote: sentMessage.isQuote || replyIsQuote,
+                    quoteText: sentMessage.quoteText ?? replyQuoteText,
+                    quoteOffset: sentMessage.quoteOffset != 0 ? sentMessage.quoteOffset : replyQuoteOffset,
+                    quoteLength: sentMessage.quoteLength != 0 ? sentMessage.quoteLength : replyQuoteLength,
                   )));
                 } catch (_) {}
               }
@@ -1647,11 +1751,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                       _messages.indexWhere((m) => m.localId == pendingLocalId);
                   if (idx != -1) {
                     if (sentMessage is Message) {
+                      final existing = _messages[idx];
                       _messages[idx] = sentMessage.copyWith(
                         localId: pendingLocalId,
                         sendStatus: 1, // sent
-                        replyInfo: sentMessage.replyInfo ??
-                            _messages[idx].replyInfo,
+                        replyInfo: sentMessage.replyInfo ?? existing.replyInfo,
+                        isQuote: sentMessage.isQuote || existing.isQuote || replyIsQuote,
+                        quoteText: sentMessage.quoteText ?? existing.quoteText ?? replyQuoteText,
+                        quoteOffset: sentMessage.quoteOffset != 0
+                            ? sentMessage.quoteOffset
+                            : (existing.quoteOffset != 0 ? existing.quoteOffset : replyQuoteOffset),
+                        quoteLength: sentMessage.quoteLength != 0
+                            ? sentMessage.quoteLength
+                            : (existing.quoteLength != 0 ? existing.quoteLength : replyQuoteLength),
                       );
                     } else {
                       _messages[idx] = _messages[idx].copyWith(
@@ -2396,10 +2508,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _chatSubscription?.cancel();
     _typingTimer?.cancel();
 
+    if (_registeredTileId != null) {
+      TilingLayoutController.instance.unregisterTileBackHandler(
+        _registeredTileId!,
+        _handleTileBack,
+      );
+    }
+
     // Clear the open chat indicator in the provider
     try {
-      context.read<UnreadCountProvider>().setOpenChat(null);
+      _unreadCountProvider?.closeChat(widget.chatId);
     } catch (_) {}
+    NotificationService().removeActiveChat(widget.chatId);
 
     if (_isVoiceRecording) {
       _voiceRecorderService.cancelRecording();
@@ -2410,12 +2530,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 
-    if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.chatId) {
-      MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
-      MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
-      MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
-      MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
-    }
+    MediaPlaybackCoordinator.instance.unregisterChat(widget.chatId);
 
     super.dispose();
   }
@@ -2474,14 +2589,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     MediaPlaybackCoordinator.instance.stopAll();
   }
 
+  bool _inputHeightCheckScheduled = false;
+
   void _updateInputHeight() {
+    if (_inputHeightCheckScheduled) return;
+    _inputHeightCheckScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _inputHeightCheckScheduled = false;
       if (!mounted) return;
       final RenderBox? renderBox =
           _inputKey.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null) {
+      if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
-        if (newHeight != _inputHeight && newHeight > 0) {
+        if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
           setState(() {
             _inputHeight = newHeight;
           });
@@ -2532,10 +2652,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     return ChatScaffold(
-      canPop: !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
+      canPop: !_isSelectionMode && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
       onPopInvoked: (didPop, _) {
         if (!didPop) {
-          if (isKeyboardVisible) {
+          if (_isSelectionMode) {
+            _clearSelection();
+          } else if (isKeyboardVisible) {
             FocusScope.of(context).unfocus();
           } else if (_isVideoRecording) {
             _onVideoRecordingCancelled();
@@ -2559,23 +2681,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     : null,
                 isChannel: false,
                 isMuted: _isMuted,
-                onBack: () => Navigator.pop(context),
+                heroTag: displayName,
+                profileScreenBuilder: (_) => GroupInfoScreen(
+                  chatId: widget.chatId,
+                  groupName: displayName,
+                  groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                  heroTag: displayName,
+                ),
+                onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: () => Navigator.push(
                     context,
-                    MaterialPageRoute(
+                    SwipeBackPageRoute(
                       builder: (_) => GroupInfoScreen(
                         chatId: widget.chatId,
                         groupName: displayName,
                         groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                        heroTag: displayName,
                       ),
                     )),
                 onViewProfile: () => Navigator.push(
                     context,
-                    MaterialPageRoute(
+                    SwipeBackPageRoute(
                       builder: (_) => GroupInfoScreen(
                         chatId: widget.chatId,
                         groupName: displayName,
                         groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                        heroTag: displayName,
                       ),
                     )),
                 onVoiceCall: () {
@@ -2615,6 +2746,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 onReport: () {
                   // TODO: Report dialog
                 },
+                isSelectionMode: _isSelectionMode,
+                selectedCount: _selectedMessageIds.length,
+                onCancelSelection: _clearSelection,
+                onCopySelected: _copySelectedMessages,
+                onForwardSelected: _forwardSelectedMessages,
+                onDeleteSelected: _deleteSelectedMessages,
               );
         },
       ),
@@ -2629,6 +2766,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 MediaNotePlayerHeader(
+                  chatId: widget.chatId,
                   onScrollToActive: () {
                     final activeId = VoicePlaybackService().activeMessageId ??
                         VideoNotePlaybackService().activeMessageId;
@@ -2731,7 +2869,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     return Stack(
       fit: StackFit.expand,
       children: [
-        Positioned.fill(child: messageList),
+        Positioned.fill(
+          child: Listener(
+            onPointerMove: _handleChatPointerMove,
+            onPointerUp: _handleChatPointerUp,
+            onPointerCancel: _handleChatPointerCancel,
+            behavior: HitTestBehavior.translucent,
+            child: messageList,
+          ),
+        ),
         // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
         ChatBottomScrollEdge(
           height: math.max(safeBottom + 52.0, 52.0),
@@ -2897,6 +3043,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
+    final bool isSelected = _selectedMessageIds.contains(message.id);
 
     Widget albumWidget = MediaAlbumWidget(
       key: key,
@@ -2908,16 +3055,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onFileTap: (url, name, type) => _openFile(url, name, type),
       isHighlighted: isAlbumTargeted,
       highlightItemId: _highlightMessageId,
-    );
-
-    albumWidget = Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: albumWidget,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
     );
 
     albumWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: true,
+      enabled: !_isSelectionMode,
       child: albumWidget,
     );
 
@@ -2935,17 +3079,65 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
     }
 
-    albumWidget = GestureDetector(
-      onTap: () {
-        _showContextMenu(message, isMe, key);
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 4),
+    final platform = Theme.of(context).platform;
+    final bool isDesktop = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS;
+
+    albumWidget = Listener(
+      onPointerDown: (event) =>
+          _handleRowPointerDown(event, index, message, isMe, key),
+      behavior: HitTestBehavior.translucent,
+      child: GestureDetector(
+        onTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : (isDesktop
+                ? null
+                : () {
+                    _showContextMenu(message, isMe, key, enableBlur: true);
+                  }),
+        onLongPress: isDesktop
+            ? null
+            : () {
+                _enterSelectionMode(message);
+              },
+        onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleMessageSelection(message);
+            return;
+          }
+          final insideBubble = MessageBubble.isGlobalPointInsideBubble(
+            key.currentContext,
+            details.globalPosition,
+          );
+          _showContextMenu(
+            message,
+            isMe,
+            key,
+            forceOpen: true,
+            enableBlur: insideBubble,
+          );
+        },
+        behavior: HitTestBehavior.opaque,
         child: albumWidget,
       ),
+    );
+
+    albumWidget = ValueListenableBuilder<String?>(
+      valueListenable: MessageContextMenuService().activeBlurMessageId,
+      builder: (context, activeBlurId, child) {
+        final isSeparatedForBlur = activeBlurId != null &&
+            (activeBlurId == message.id ||
+                album.items.any((ai) => ai.id == activeBlurId));
+        return Visibility(
+          visible: !isSeparatedForBlur,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: child!,
+        );
+      },
+      child: albumWidget,
     );
 
     final prevItem =
@@ -2965,16 +3157,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Widget _buildMessageItem(Message message, int index) {
     final bool isMe = message.senderId == _currentUserId;
     final GlobalKey key;
-    if (message.localId != null && _messageKeys.containsKey(message.localId!)) {
+    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
+    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
       key = _messageKeys[message.localId!]!;
       _messageKeys[message.id] = key;
     } else {
       key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (message.localId != null) {
+      if (hasLocalId) {
         _messageKeys[message.localId!] = key;
       }
     }
     final isHighlighted = _highlightMessageId == message.id;
+    final bool isSelected = _selectedMessageIds.contains(message.id);
 
     Widget messageWidget = MessageBubble(
       key: key,
@@ -2985,6 +3179,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       chatType: 'group',
       chatTitle: widget.groupName,
       isHighlighted: isHighlighted,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
       reactions: _messageReactions[message.id] ??
           (message.reactions.isNotEmpty ? message.reactions : null),
       myReactions: _myReactions[message.id] ??
@@ -3012,24 +3208,69 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     messageWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: true,
+      enabled: !_isSelectionMode,
       child: messageWidget,
     );
 
-    messageWidget = GestureDetector(
-      onTap: () {
-        _showContextMenu(message, isMe, key);
-      },
-      onLongPress: () {
-        _showContextMenu(message, isMe, key, forceOpen: true);
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 4),
+    final platform = Theme.of(context).platform;
+    final bool isDesktop = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS;
+
+    messageWidget = Listener(
+      onPointerDown: (event) =>
+          _handleRowPointerDown(event, index, message, isMe, key),
+      behavior: HitTestBehavior.translucent,
+      child: GestureDetector(
+        onTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : (isDesktop
+                ? null
+                : () {
+                    _showContextMenu(message, isMe, key, enableBlur: true);
+                  }),
+        onLongPress: isDesktop
+            ? null
+            : () {
+                _enterSelectionMode(message);
+              },
+        onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleMessageSelection(message);
+            return;
+          }
+          final insideBubble = MessageBubble.isGlobalPointInsideBubble(
+            key.currentContext,
+            details.globalPosition,
+          );
+          _showContextMenu(
+            message,
+            isMe,
+            key,
+            forceOpen: true,
+            enableBlur: insideBubble,
+          );
+        },
+        behavior: HitTestBehavior.opaque,
         child: messageWidget,
       ),
+    );
+
+    messageWidget = ValueListenableBuilder<String?>(
+      valueListenable: MessageContextMenuService().activeBlurMessageId,
+      builder: (context, activeBlurId, child) {
+        final isSeparatedForBlur = activeBlurId != null &&
+            (activeBlurId == message.id ||
+                (hasLocalId && activeBlurId == message.localId));
+        return Visibility(
+          visible: !isSeparatedForBlur,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: child!,
+        );
+      },
+      child: messageWidget,
     );
 
     final prevItem =
@@ -3055,6 +3296,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       replyToMessage: _replyToMessage,
       isQuote: _isQuote,
       quoteText: _quoteText,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
       onCancelReply: _cancelReply,
       onTapReply: _replyToMessage != null
           ? () => _scrollToMessage(_replyToMessage!.id)
@@ -3706,13 +3949,242 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (_) {}
   }
 
-  void _showContextMenu(Message message, bool isMe, GlobalKey key, {bool forceOpen = false}) {
-    if (!forceOpen && message.messageType == 'text' && _isSingleEmoji(message.content)) {
-      if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
-        return;
+  void _enterSelectionMode(Message message) {
+    HapticUtils.selection();
+    setState(() {
+      _selectedMessageIds.add(message.id);
+    });
+  }
+
+  void _toggleMessageSelection(Message message) {
+    HapticUtils.selection();
+    setState(() {
+      if (!_selectedMessageIds.remove(message.id)) {
+        _selectedMessageIds.add(message.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(() {
+      _selectedMessageIds.clear();
+      _isLmbDraggingMessages = false;
+      _dragSelectStartIndex = null;
+      _dragSelectBaselineIds.clear();
+    });
+  }
+
+  void _copySelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    final selected = _messages
+        .where((m) => _selectedMessageIds.contains(m.id) && m.content.trim().isNotEmpty)
+        .toList()
+        .reversed
+        .map((m) => m.content.trim())
+        .toList();
+    if (selected.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: selected.join('\n\n')));
+      GlassToastService().show(
+        context,
+        context.l10n.translate('copied_to_clipboard'),
+        icon: Icons.check,
+      );
+    }
+    _clearSelection();
+  }
+
+  void _forwardSelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    GlassToastService().show(
+      context,
+      'Пересылка скоро появится',
+      icon: Icons.forward,
+    );
+    _clearSelection();
+  }
+
+  void _deleteSelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    final toDelete = _messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+    _clearSelection();
+    if (toDelete.isEmpty) return;
+    for (final msg in toDelete) {
+      _confirmDeleteMessage(msg);
+    }
+  }
+
+  void _handleRowPointerDown(
+    PointerDownEvent event,
+    int feedIndex,
+    Message message,
+    bool isMe,
+    GlobalKey key,
+  ) {
+    if (event.kind != PointerDeviceKind.mouse ||
+        (event.buttons & kPrimaryMouseButton) == 0) {
+      return;
+    }
+    _lmbDownGlobalPos = event.position;
+    _lmbDownFeedIndex = feedIndex;
+    _lmbDownMessage = message;
+    _lmbDownKey = key;
+    _lmbDownIsMe = isMe;
+    _lmbDownInsideBubble = MessageBubble.isGlobalPointInsideBubble(
+      key.currentContext,
+      event.position,
+    );
+    _lmbDownInsideText = MessageBubble.isGlobalPointInsideSelectableText(
+      key.currentContext,
+      event.position,
+    );
+    _isLmbDraggingMessages = false;
+    _isLmbDirectTextSelecting = false;
+  }
+
+  int? _findFeedIndexAtGlobalPosition(Offset globalPos) {
+    int? closestIndex;
+    double closestDist = double.infinity;
+    for (int i = 0; i < _feedItems.length; i++) {
+      final item = _feedItems[i];
+      final key = _messageKeys[item.id];
+      final box = key?.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final topLeft = box.localToGlobal(Offset.zero);
+      final top = topLeft.dy;
+      final bottom = top + box.size.height;
+      if (globalPos.dy >= top && globalPos.dy <= bottom) {
+        return i;
+      }
+      final dist = globalPos.dy < top ? (top - globalPos.dy) : (globalPos.dy - bottom);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIndex = i;
       }
     }
+    return closestIndex;
+  }
 
+  String _feedItemPrimaryId(int index) {
+    final item = _feedItems[index];
+    if (item is FeedAlbumItem) {
+      return item.album.primaryMessage.id;
+    } else if (item is FeedSingleItem) {
+      return item.message.id;
+    }
+    return item.id;
+  }
+
+  void _handleChatPointerMove(PointerMoveEvent event) {
+    if (_lmbDownGlobalPos == null) return;
+    if ((event.buttons & kPrimaryMouseButton) == 0) {
+      _resetLmbDragState();
+      return;
+    }
+
+    final dist = (event.position - _lmbDownGlobalPos!).distance;
+
+    // 1. Direct text selection with blur when LMB drag starts on message text
+    if (_lmbDownInsideText && !_isSelectionMode) {
+      if (dist > 4.0) {
+        if (!_isLmbDirectTextSelecting &&
+            _lmbDownMessage != null &&
+            _lmbDownKey != null) {
+          _isLmbDirectTextSelecting = true;
+          _showContextMenu(
+            _lmbDownMessage!,
+            _lmbDownIsMe,
+            _lmbDownKey!,
+            forceOpen: true,
+            enableBlur: true,
+            initialDragStartGlobalPosition: _lmbDownGlobalPos,
+            initialDragCurrentGlobalPosition: event.position,
+          );
+        } else if (_isLmbDirectTextSelecting) {
+          MessageContextMenuService().updateExternalDragSelection(event.position);
+        }
+      }
+      return;
+    }
+
+    // 2. Consecutive message drag-selection when LMB drag starts beside the bubble (or in selection mode)
+    if ((!_lmbDownInsideBubble || _isSelectionMode) &&
+        _lmbDownFeedIndex != null &&
+        _lmbDownMessage != null) {
+      if (dist > 6.0) {
+        if (!_isLmbDraggingMessages) {
+          _isLmbDraggingMessages = true;
+          _dragSelectStartIndex = _lmbDownFeedIndex;
+          _dragSelectBaselineIds = Set<String>.from(_selectedMessageIds);
+          _dragSelectTargetState =
+              !_dragSelectBaselineIds.contains(_lmbDownMessage!.id);
+          HapticUtils.selection();
+        }
+        final currentIndex =
+            _findFeedIndexAtGlobalPosition(event.position) ?? _lmbDownFeedIndex!;
+        final startIdx = math.min(_dragSelectStartIndex!, currentIndex);
+        final endIdx = math.max(_dragSelectStartIndex!, currentIndex);
+
+        final updated = Set<String>.from(_dragSelectBaselineIds);
+        for (int i = startIdx; i <= endIdx; i++) {
+          if (i >= 0 && i < _feedItems.length) {
+            final msgId = _feedItemPrimaryId(i);
+            if (_dragSelectTargetState) {
+              updated.add(msgId);
+            } else {
+              updated.remove(msgId);
+            }
+          }
+        }
+        if (updated.length != _selectedMessageIds.length ||
+            !updated.containsAll(_selectedMessageIds)) {
+          HapticUtils.selection();
+          setState(() {
+            _selectedMessageIds
+              ..clear()
+              ..addAll(updated);
+          });
+        }
+      }
+    }
+  }
+
+  void _handleChatPointerUp(PointerUpEvent event) {
+    if (_isLmbDirectTextSelecting) {
+      _isLmbDirectTextSelecting = false;
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _handleChatPointerCancel(PointerCancelEvent event) {
+    if (_isLmbDirectTextSelecting) {
+      _isLmbDirectTextSelecting = false;
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _resetLmbDragState() {
+    _lmbDownGlobalPos = null;
+    _lmbDownFeedIndex = null;
+    _lmbDownMessage = null;
+    _lmbDownKey = null;
+    _isLmbDraggingMessages = false;
+    _dragSelectStartIndex = null;
+  }
+
+  void _showContextMenu(
+    Message message,
+    bool isMe,
+    GlobalKey key, {
+    bool forceOpen = false,
+    bool enableBlur = true,
+    Offset? initialDragStartGlobalPosition,
+    Offset? initialDragCurrentGlobalPosition,
+  }) {
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
     final bool isPoll = message.messageType == 'poll';
@@ -3727,6 +4199,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       isMe: isMe,
       currentUserId: _currentUserId,
       canManagePoll: isMe || isGroupAdmin,
+      enableBlur: enableBlur,
+      initialDragStartGlobalPosition: initialDragStartGlobalPosition,
+      initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
       onPollUpdated: (updatedPoll) {
         if (!mounted) return;
         setState(() {
@@ -3739,6 +4214,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       },
       onReply: () => _startReply(message),
       onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuotePartial: (isVideoNote || isVoiceNote || isPoll)
+          ? null
+          : (selectedText, offset, length) =>
+              _startQuote(message, selectedText, offset, length),
       onPin: () {},
       onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
         setState(() {
@@ -3748,6 +4227,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _editingMessageId = message.id;
         });
       },
+      onSelect: () => _enterSelectionMode(message),
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
@@ -3842,7 +4322,4 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     }
   }
-
-  /// Helper to check if string is exactly one emoji
-  bool _isSingleEmoji(String text) => EmojiUtils.isSingleEmoji(text);
 }

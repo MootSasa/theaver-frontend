@@ -1,17 +1,23 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 
 /// A swipeable chat item wrapper that tracks the user's finger in real time,
 /// limits movement to a bounded distance (never sliding across the entire screen),
 /// requires a minimum drag threshold to trigger the configured swipe action,
 /// and springs back smoothly on finger release.
+/// Also supports dragging a chat into the right tiling workspace on wide screens.
 class SwipeableChatTile extends StatefulWidget {
   final Widget child;
   final Chat chat;
   final Future<void> Function(ChatSwipeAction action) onAction;
+  final DraggingChatPayload Function(Rect initialRect, Offset globalPosition)?
+      onCreateDragPayload;
+  final GestureTapUpCallback? onSecondaryTapUp;
   final bool enabled;
 
   const SwipeableChatTile({
@@ -19,6 +25,8 @@ class SwipeableChatTile extends StatefulWidget {
     required this.child,
     required this.chat,
     required this.onAction,
+    this.onCreateDragPayload,
+    this.onSecondaryTapUp,
     this.enabled = true,
   });
 
@@ -33,6 +41,8 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
   double _dragOffset = 0.0;
   double _rawDragOffset = 0.0;
   bool _thresholdCrossed = false;
+  bool _isWorkspaceDrag = false;
+  PointerDeviceKind? _lastPointerKind;
 
   /// Minimum threshold in logical pixels required to trigger the swipe action.
   /// If released below this threshold, the tile simply snaps back without executing the action.
@@ -82,17 +92,78 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
     _controller.forward(from: 0.0);
   }
 
+  bool _canDragToWorkspace() {
+    if (widget.onCreateDragPayload == null) return false;
+    final tiling = TilingLayoutController.instance;
+    return tiling.isWorkspaceMounted &&
+        tiling.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
+  }
+
+  void _promoteToWorkspaceDrag(Offset globalPosition, Offset delta) {
+    final createPayload = widget.onCreateDragPayload;
+    if (createPayload == null) return;
+
+    Rect initialRect = Rect.fromCenter(
+      center: globalPosition,
+      width: 320,
+      height: 72,
+    );
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox != null && renderBox.hasSize) {
+      final topLeft = renderBox.localToGlobal(Offset.zero);
+      initialRect = topLeft & renderBox.size;
+    }
+
+    _isWorkspaceDrag = true;
+    _animateBack(from: _dragOffset);
+    HapticUtils.selection();
+
+    final payload = createPayload(initialRect, globalPosition);
+    TilingLayoutController.instance.startDraggingChat(payload);
+    TilingLayoutController.instance.updateDraggingChat(
+      globalPosition,
+      velocity: delta,
+    );
+  }
+
   void _onHorizontalDragStart(DragStartDetails details) {
     if (!widget.enabled) return;
     _controller.stop();
     _rawDragOffset = _dragOffset;
     _thresholdCrossed = _dragOffset.abs() >= _threshold;
+    _isWorkspaceDrag = false;
+    _lastPointerKind = details.kind;
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
     if (!widget.enabled) return;
+
+    if (_isWorkspaceDrag) {
+      TilingLayoutController.instance.updateDraggingChat(
+        details.globalPosition,
+        velocity: details.delta,
+      );
+      return;
+    }
+
     final delta = details.primaryDelta ?? 0.0;
     _rawDragOffset += delta;
+
+    // On wide desktop screens, dragging a chat item rightward with a mouse or
+    // dragging it across the right boundary of the left tile detaches it into a workspace tile drag.
+    if (_canDragToWorkspace() && _rawDragOffset > 0) {
+      final tiling = TilingLayoutController.instance;
+      final isMouseDragRight =
+          _lastPointerKind == PointerDeviceKind.mouse && _rawDragOffset > 20.0;
+      final crossedTileBoundary =
+          details.globalPosition.dx >= tiling.leftTileWidth - 28.0 &&
+              _rawDragOffset > 16.0;
+      if (isMouseDragRight || crossedTileBoundary) {
+        _promoteToWorkspaceDrag(details.globalPosition, details.delta);
+        return;
+      }
+    }
+
     final sign = _rawDragOffset >= 0 ? 1.0 : -1.0;
     final abs = _rawDragOffset.abs();
 
@@ -122,6 +193,11 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
 
   void _onHorizontalDragEnd(DragEndDetails details) {
     if (!widget.enabled) return;
+    if (_isWorkspaceDrag) {
+      _isWorkspaceDrag = false;
+      TilingLayoutController.instance.endDraggingChat();
+      return;
+    }
     final bool shouldTrigger = _dragOffset.abs() >= _threshold;
     final fromOffset = _dragOffset;
     _animateBack(from: fromOffset);
@@ -135,6 +211,11 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
 
   void _onHorizontalDragCancel() {
     if (!widget.enabled) return;
+    if (_isWorkspaceDrag) {
+      _isWorkspaceDrag = false;
+      TilingLayoutController.instance.cancelDraggingChat();
+      return;
+    }
     _animateBack(from: _dragOffset);
   }
 
@@ -228,6 +309,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
 
         // Foreground tile moving with finger
         GestureDetector(
+          onSecondaryTapUp: widget.onSecondaryTapUp,
           onHorizontalDragStart: _onHorizontalDragStart,
           onHorizontalDragUpdate: _onHorizontalDragUpdate,
           onHorizontalDragEnd: _onHorizontalDragEnd,
