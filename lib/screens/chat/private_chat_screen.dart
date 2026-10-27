@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import '../../utils/haptic_utils.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -27,7 +29,6 @@ import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/emoji_effect_cache_service.dart';
 import '../../services/emoji_interaction_manager.dart';
-import '../../utils/emoji_utils.dart';
 import '../../services/database/app_database.dart';
 import '../../l10n/app_localizations.dart';
 import 'package:drift/drift.dart' show Value;
@@ -67,6 +68,8 @@ import 'package:path/path.dart' as p;
 import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../widgets/tiling/tile_viewport_scope.dart';
 
 class PrivateChatScreen extends StatefulWidget {
   final String chatId;
@@ -93,7 +96,7 @@ class PrivateChatScreen extends StatefulWidget {
 }
 
 class _PrivateChatScreenState extends State<PrivateChatScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final List<Message> _messages = [];
   final MarkdownTextEditingController _textController = MarkdownTextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -115,6 +118,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   double _keyboardHeight = 280.0; // Better default height for most devices
   double _lastBottomInset = 0;
   Timer? _transitionTimer;
+  late final AnimationController _emojiPanelController;
+  late final Animation<double> _emojiPanelAnimation;
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
   final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
@@ -217,6 +222,31 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   bool _isEditing = false;
   String? _editingMessageId;
 
+  // Multi-message selection & desktop LMB drag state
+  final Set<String> _selectedMessageIds = {};
+  bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
+  int? _dragSelectStartIndex;
+  bool _dragSelectTargetState = true;
+  Set<String> _dragSelectBaselineIds = {};
+  bool _isLmbDraggingMessages = false;
+  bool _isLmbDirectTextSelecting = false;
+  Offset? _lmbDownGlobalPos;
+  int? _lmbDownFeedIndex;
+  Message? _lmbDownMessage;
+  GlobalKey? _lmbDownKey;
+  bool _lmbDownIsMe = false;
+  bool _lmbDownInsideBubble = false;
+  bool _lmbDownInsideText = false;
+
+  // Mobile touch fast-scroll & tap-outside dismissal state
+  Offset? _touchDownPos;
+  Duration? _touchDownTime;
+  Offset? _lastTouchPos;
+  Duration? _lastTouchTime;
+  double _touchVelocityY = 0.0;
+  bool _dismissedOnCurrentTouch = false;
+  bool _touchDownInsideBubble = false;
+
   // GlobalKeys for messages to allow precise scrolling
   final Map<String, GlobalKey> _messageKeys = {};
   final GlobalKey _inputKey = GlobalKey();
@@ -235,10 +265,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   // Пагинация
   bool _hasMoreMessages = true;
   bool _isLoadingMore = false;
+  UnreadCountProvider? _unreadCountProvider;
+  String? _registeredTileId;
+  String? _lastActiveTileId;
 
   @override
   void initState() {
     super.initState();
+    _emojiPanelController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      reverseDuration: const Duration(milliseconds: 200),
+    );
+    _emojiPanelAnimation = CurvedAnimation(
+      parent: _emojiPanelController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
     if (widget.otherUserOnline != null) {
       _isOtherUserOnline = widget.otherUserOnline!;
     }
@@ -260,6 +303,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _initWebSocket();
     _scrollController.addListener(_onScroll);
     _inputFocusNode.addListener(_onFocusChanged);
+    TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
+    HardwareKeyboard.instance.addHandler(_handleGlobalDesktopKeyEvent);
 
     // Restore draft if exists
     final draft = DraftService().getDraft(widget.chatId);
@@ -272,18 +317,191 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
 
     // Connect continuous media playback (voice + video notes) with coordinator
-    MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
-    MediaPlaybackCoordinator.instance.onScrollToMessageRequested = (id) => _scrollToMessage(id);
-    MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
-    MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
+    MediaPlaybackCoordinator.instance.registerChat(
+      widget.chatId,
+      ChatPlaybackCallbacks(
+        onScrollToMessage: (id) => _scrollToMessage(id),
+        onPlayNext: _playNextMediaNote,
+        onBuildPlaylist: (id) => _buildPlaylistFrom(id),
+      ),
+    );
+    NotificationService().addActiveChat(widget.chatId);
 
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       try {
-        context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
+        _unreadCountProvider = context.read<UnreadCountProvider>();
+        _unreadCountProvider?.openChat(widget.chatId);
       } catch (_) {}
       NotificationService().cancelChatNotifications(widget.chatId, chatTitle: widget.otherUserName);
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        final activeTileId = TilingLayoutController.instance.activeTileId;
+        if (_registeredTileId == null || activeTileId == _registeredTileId) {
+          _inputFocusNode.requestFocus();
+          final len = _textController.text.length;
+          _textController.selection = TextSelection.collapsed(offset: len);
+        }
+      }
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      _unreadCountProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+    final tileId = TileViewportScope.maybeTileIdOf(context);
+    if (tileId != _registeredTileId) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.unregisterTileBackHandler(
+          _registeredTileId!,
+          _handleTileBack,
+        );
+      }
+      _registeredTileId = tileId;
+      _lastActiveTileId = TilingLayoutController.instance.activeTileId;
+      if (tileId != null) {
+        TilingLayoutController.instance.registerTileBackHandler(
+          tileId,
+          _handleTileBack,
+        );
+      }
+    }
+  }
+
+  void _onTilingLayoutChanged() {
+    if (!mounted) return;
+    final activeId = TilingLayoutController.instance.activeTileId;
+    if (activeId != _lastActiveTileId) {
+      final wasActive = _lastActiveTileId == _registeredTileId;
+      _lastActiveTileId = activeId;
+      if (!wasActive &&
+          _registeredTileId != null &&
+          activeId == _registeredTileId &&
+          !Platform.isAndroid &&
+          !Platform.isIOS) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted &&
+              !_isSelectionMode &&
+              !_isVoiceRecording &&
+              !_isVideoRecording &&
+              !MessageContextMenuService().isShowing) {
+            _inputFocusNode.requestFocus();
+          }
+        });
+      }
+    }
+  }
+
+  bool _handleGlobalDesktopKeyEvent(KeyEvent event) {
+    if (Platform.isAndroid || Platform.isIOS) return false;
+    if (!mounted || event is! KeyDownEvent) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+    if (_registeredTileId != null) {
+      final activeTileId = TilingLayoutController.instance.activeTileId;
+      if (activeTileId != _registeredTileId) {
+        return false;
+      }
+    }
+    if (_inputFocusNode.hasFocus) return false;
+    if (_isSelectionMode ||
+        _isVoiceRecording ||
+        _isVideoRecording ||
+        MessageContextMenuService().isShowing) {
+      return false;
+    }
+
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    final focusCtx = primaryFocus?.context;
+    if (focusCtx != null) {
+      if (focusCtx.widget is EditableText ||
+          focusCtx.findAncestorWidgetOfExactType<EditableText>() != null ||
+          focusCtx.findAncestorWidgetOfExactType<TextField>() != null) {
+        return false;
+      }
+    }
+
+    final hw = HardwareKeyboard.instance;
+    final isCtrlOrMeta = hw.isControlPressed || hw.isMetaPressed;
+    final isAlt = hw.isAltPressed;
+
+    if (isCtrlOrMeta &&
+        !isAlt &&
+        (event.logicalKey == LogicalKeyboardKey.keyV ||
+            event.physicalKey == PhysicalKeyboardKey.keyV)) {
+      _inputFocusNode.requestFocus();
+      Clipboard.getData(Clipboard.kTextPlain).then((data) {
+        if (!mounted || data?.text == null || data!.text!.isEmpty) return;
+        final text = _textController.text;
+        final sel = _textController.selection;
+        final start = sel.isValid ? sel.start : text.length;
+        final end = sel.isValid ? sel.end : text.length;
+        final newText = text.replaceRange(start, end, data.text!);
+        _textController.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(offset: start + data.text!.length),
+        );
+      });
+      return true;
+    }
+
+    if (!isCtrlOrMeta && !isAlt) {
+      final char = event.character;
+      if (char != null &&
+          char.isNotEmpty &&
+          char.codeUnitAt(0) >= 32 &&
+          char != '\x7f') {
+        _inputFocusNode.requestFocus();
+        final text = _textController.text;
+        final sel = _textController.selection;
+        final start = sel.isValid ? sel.start : text.length;
+        final end = sel.isValid ? sel.end : text.length;
+        final newText = text.replaceRange(start, end, char);
+        _textController.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(offset: start + char.length),
+        );
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  bool _handleTileBack() {
+    if (!mounted) return false;
+    if (MessageContextMenuService().isShowing) {
+      MessageContextMenuService().dismiss();
+      return true;
+    }
+    if (_isSelectionMode) {
+      _clearSelection();
+      return true;
+    }
+    if (_isVideoRecording) {
+      _onVideoRecordingCancelled();
+      return true;
+    }
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+      setState(() => _isVoiceRecording = false);
+      return true;
+    }
+    if (_showEmojiPanel) {
+      _closeEmojiPanel();
+      return true;
+    }
+    if (_isEditing) {
+      _cancelEditing();
+      return true;
+    }
+    if (_replyToMessage != null) {
+      _cancelReply();
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -296,9 +514,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onAppResumed() {
-    try {
-      context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
-    } catch (_) {}
     if (!_wsService.isConnected) {
       _wsService.connect();
     }
@@ -440,10 +655,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onFocusChanged() {
-    if (_inputFocusNode.hasFocus && _showEmojiPanel) {
-      setState(() {
-        _isKeyboardRising = true;
-      });
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -703,11 +916,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       // Сообщение уже в списке (отправлено с этого устройства). Обновляем id, статус и обогащенный replyInfo от сервера
       if (mounted) {
         setState(() {
+          final existing = _messages[existingIndex];
           _messages[existingIndex] = message.copyWith(
-            localId: _messages[existingIndex].localId ?? message.localId,
+            localId: existing.localId ?? message.localId,
             sendStatus: 1,
-            replyInfo: message.replyInfo ?? _messages[existingIndex].replyInfo,
-            groupedId: message.groupedId ?? _messages[existingIndex].groupedId,
+            replyInfo: message.replyInfo ?? existing.replyInfo,
+            groupedId: message.groupedId ?? existing.groupedId,
+            isQuote: message.isQuote || existing.isQuote,
+            quoteText: message.quoteText ?? existing.quoteText,
+            quoteOffset: message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
+            quoteLength: message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
           );
           _updateFeedItems();
         });
@@ -822,6 +1040,72 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  void _dismissKeyboardAndEmoji() {
+    if (_showEmojiPanel || _isKeyboardRising) {
+      _closeEmojiPanel();
+    }
+    if (_inputFocusNode.hasFocus) {
+      _inputFocusNode.unfocus();
+    }
+    if (Platform.isAndroid || Platform.isIOS) {
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
+    }
+  }
+
+  void _focusInputField() {
+    if (!mounted) return;
+    if (_showEmojiPanel && (Platform.isAndroid || Platform.isIOS)) {
+      _onEmojiToggle();
+      return;
+    }
+    _inputFocusNode.requestFocus();
+    if (Platform.isAndroid || Platform.isIOS) {
+      SystemChannels.textInput.invokeMethod('TextInput.show');
+    }
+    final len = _textController.text.length;
+    _textController.selection = TextSelection.collapsed(offset: len);
+  }
+
+  void _editLastOwnMessage() {
+    if (_isEditing || _currentUserId == null) return;
+    for (final m in _messages) {
+      if (m.senderId == _currentUserId &&
+          !m.isRound &&
+          m.messageType != 'voice' &&
+          m.messageType != 'poll' &&
+          m.content.trim().isNotEmpty) {
+        setState(() {
+          _cancelReply();
+          _textController.loadMessage(m.content, m.entities);
+          _isEditing = true;
+          _editingMessageId = m.id;
+        });
+        _focusInputField();
+        break;
+      }
+    }
+  }
+
+  void _closeEmojiPanel() {
+    if (!_showEmojiPanel && !_isKeyboardRising && _emojiPanelController.value == 0.0) {
+      return;
+    }
+    _transitionTimer?.cancel();
+    final wasKeyboardRising = _isKeyboardRising;
+    setState(() {
+      _showEmojiPanel = false;
+      _isKeyboardRising = false;
+      _isKeyboardFalling = false;
+    });
+    _emojiPanelController.reverse();
+    if (!wasKeyboardRising && (Platform.isAndroid || Platform.isIOS)) {
+      final bottomInset = MediaQuery.maybeOf(context)?.viewInsets.bottom ?? 0;
+      if (bottomInset == 0 && _inputFocusNode.hasFocus) {
+        _inputFocusNode.unfocus();
+      }
+    }
+  }
+
   void _onEmojiToggle() {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     _transitionTimer?.cancel();
@@ -829,16 +1113,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (_showEmojiPanel || _isKeyboardRising) {
       if (_isKeyboardRising && !_showEmojiPanel) {
         // User clicked while transitioning, force close panel
-        setState(() {
-          _isKeyboardRising = false;
-          _showEmojiPanel = false;
-        });
+        _closeEmojiPanel();
         _inputFocusNode.unfocus();
         SystemChannels.textInput.invokeMethod('TextInput.hide');
         return;
       }
 
       // Panel is open, switch to keyboard
+      _emojiPanelController.value = 1.0;
       setState(() {
         _isKeyboardRising = true;
         // Keep _showEmojiPanel = true to prevent jump, will be hidden in build()
@@ -846,17 +1128,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _inputFocusNode.requestFocus();
       SystemChannels.textInput.invokeMethod('TextInput.show');
 
-      // Safety for floating windows: if no inset change in 600ms, hide panel
+      // Safety for floating windows: if no inset change in 600ms, hide panel smoothly
       _transitionTimer = Timer(const Duration(milliseconds: 600), () {
         if (mounted && _isKeyboardRising && _showEmojiPanel) {
-          setState(() {
-            _showEmojiPanel = false;
-            _isKeyboardRising = false;
-          });
+          _closeEmojiPanel();
         }
       });
     } else {
-      // Switch to panel: (Panel renders UNDER keyboard first)
+      // Switch to panel:
+      // If keyboard is already open, lock panel at full height underneath keyboard first
+      // so there is zero jump while the keyboard slides down.
+      // If closed (bottomInset == 0), animate the panel smoothly from 0 -> 1.
+      if (bottomInset > 0) {
+        _emojiPanelController.value = 1.0;
+      } else {
+        _emojiPanelController.forward();
+      }
       setState(() {
         _showEmojiPanel = true;
         _isKeyboardRising = false;
@@ -864,10 +1151,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _isKeyboardFalling = true;
         }
       });
-      // Now hide keyboard - it will slide down and reveal the panel
-      if (bottomInset > 0 || _inputFocusNode.hasFocus) {
+      if (!_textController.selection.isValid) {
+        _textController.selection = TextSelection.collapsed(
+          offset: _textController.text.length,
+        );
+      }
+      if (!_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+      if (Platform.isAndroid || Platform.isIOS) {
         SystemChannels.textInput.invokeMethod('TextInput.hide');
-        _inputFocusNode.unfocus();
       }
     }
   }
@@ -1094,10 +1387,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       replyToMessageId: message.id,
       isQuote: false,
     );
-    // Focus the input field
-    _textController.selection = TextSelection.collapsed(
-      offset: _textController.text.length,
-    );
+    _focusInputField();
   }
 
   /// Start a quote reply (partial text)
@@ -1121,10 +1411,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       quoteText: selectedText,
       isQuote: true,
     );
-    // Focus the input field
-    _textController.selection = TextSelection.collapsed(
-      offset: _textController.text.length,
-    );
+    _focusInputField();
   }
 
   /// Cancel the current reply/quote
@@ -1525,34 +1812,48 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               .toList();
 
           // Merge server messages without truncating older messages already loaded into _messages
-          final Map<String, Message> merged = {};
+          final Map<String, Message> mergedById = {};
+          final Map<String, Message> existingByLocalId = {};
           for (final m in _messages) {
-            merged[m.id] = m;
+            mergedById[m.id] = m;
             if (m.localId != null && m.localId!.isNotEmpty) {
-              merged[m.localId!] = m;
+              existingByLocalId[m.localId!] = m;
             }
           }
           for (final m in serverMessages) {
-            merged[m.id] = m;
-            if (m.localId != null && m.localId!.isNotEmpty) {
-              merged[m.localId!] = m;
+            final existing = mergedById[m.id] ??
+                (m.localId != null && m.localId!.isNotEmpty
+                    ? existingByLocalId[m.localId!]
+                    : null);
+            if (existing != null) {
+              mergedById[m.id] = m.copyWith(
+                localId: m.localId ?? existing.localId,
+                isQuote: m.isQuote || existing.isQuote,
+                quoteText: m.quoteText ?? existing.quoteText,
+                quoteOffset: m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+                quoteLength: m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+              );
+            } else {
+              mergedById[m.id] = m;
             }
           }
+          final Set<String> serverLocalIds = mergedById.values
+              .map((m) => m.localId)
+              .whereType<String>()
+              .where((id) => id.isNotEmpty)
+              .toSet();
           for (final pending in pendingMessages) {
-            final key = pending.localId ?? pending.id;
-            if (!merged.containsKey(key)) {
-              merged[key] = pending;
+            final lId = pending.localId;
+            if (!mergedById.containsKey(pending.id) &&
+                (lId == null || !serverLocalIds.contains(lId))) {
+              mergedById[pending.id] = pending;
             }
           }
 
           _messages.clear();
           _messageReactions.clear();
           _myReactions.clear();
-          final Map<String, Message> dedupedById = {};
-          for (final m in merged.values) {
-            dedupedById[m.id] = m;
-          }
-          _messages.addAll(dedupedById.values);
+          _messages.addAll(mergedById.values);
 
           for (final m in _messages) {
             if (m.reactions.isNotEmpty) {
@@ -1959,6 +2260,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    _scrollToBottom();
 
     try {
       final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
@@ -2300,6 +2602,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                   await AppDatabase().saveMessage(_messageToCompanion(sentMessage.copyWith(
                     localId: pendingLocalId,
                     sendStatus: 1,
+                    isQuote: sentMessage.isQuote || replyIsQuote,
+                    quoteText: sentMessage.quoteText ?? replyQuoteText,
+                    quoteOffset: sentMessage.quoteOffset != 0 ? sentMessage.quoteOffset : replyQuoteOffset,
+                    quoteLength: sentMessage.quoteLength != 0 ? sentMessage.quoteLength : replyQuoteLength,
                   )));
                 } catch (_) {}
               }
@@ -2310,10 +2616,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                       _messages.indexWhere((m) => m.localId == pendingLocalId);
                   if (idx != -1) {
                     if (sentMessage is Message) {
+                      final existing = _messages[idx];
                       _messages[idx] = sentMessage.copyWith(
                         localId: pendingLocalId,
                         sendStatus: 1, // sent
-                        replyInfo: sentMessage.replyInfo ?? _messages[idx].replyInfo,
+                        replyInfo: sentMessage.replyInfo ?? existing.replyInfo,
+                        isQuote: sentMessage.isQuote || existing.isQuote || replyIsQuote,
+                        quoteText: sentMessage.quoteText ?? existing.quoteText ?? replyQuoteText,
+                        quoteOffset: sentMessage.quoteOffset != 0
+                            ? sentMessage.quoteOffset
+                            : (existing.quoteOffset != 0 ? existing.quoteOffset : replyQuoteOffset),
+                        quoteLength: sentMessage.quoteLength != 0
+                            ? sentMessage.quoteLength
+                            : (existing.quoteLength != 0 ? existing.quoteLength : replyQuoteLength),
                       );
                     } else {
                       _messages[idx] = _messages[idx].copyWith(
@@ -2503,10 +2818,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         final glassEnabled = glassProvider.enabled;
 
         return ChatScaffold(
-          canPop: !_showEmojiPanel && MediaQuery.of(context).viewInsets.bottom == 0,
+          canPop: !_isSelectionMode && !_showEmojiPanel && MediaQuery.of(context).viewInsets.bottom == 0,
           onPopInvoked: (didPop, _) {
             if (!didPop) {
-              if (_showEmojiPanel) {
+              if (_isSelectionMode) {
+                _clearSelection();
+              } else if (_showEmojiPanel) {
                 setState(() => _showEmojiPanel = false);
               } else if (MediaQuery.of(context).viewInsets.bottom > 0) {
                 FocusScope.of(context).unfocus();
@@ -2531,7 +2848,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 isChannel: false,
                 isMuted: _isMuted,
                 heroTag: heroTag,
-                onBack: () => Navigator.pop(context),
+                onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: _viewUserProfile,
                 onViewProfile: _viewUserProfile,
                 profileScreenBuilder: (routeContext) => UserProfileScreen(
@@ -2553,6 +2870,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 onToggleMute: _toggleMuteNotifications,
                 onClearHistory: _showClearHistoryDialog,
                 onReport: _showBlockUserDialog,
+                isSelectionMode: _isSelectionMode,
+                selectedCount: _selectedMessageIds.length,
+                onCancelSelection: _clearSelection,
+                onCopySelected: _copySelectedMessages,
+                onForwardSelected: _forwardSelectedMessages,
+                onDeleteSelected: _deleteSelectedMessages,
               );
             },
           ),
@@ -2565,7 +2888,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   // Выделен метод для построения контента чата (сообщения + поле ввода)
   Widget _buildChatContent(bool glassEnabled) {
     final mediaQuery = MediaQuery.of(context);
-    final screenHeight = mediaQuery.size.height;
+    final screenHeight = TileViewportScope.heightOf(context);
 
     // В glass-режиме Scaffold без appBar, поэтому нужно учесть
     // высоту статус-бара + AppBar для верхнего отступа контента
@@ -2596,6 +2919,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       });
     }
 
+    if (_lastBottomInset > 0 &&
+        bottomInset == 0 &&
+        !_showEmojiPanel &&
+        !_isKeyboardRising &&
+        (Platform.isAndroid || Platform.isIOS)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            !_showEmojiPanel &&
+            !_isKeyboardRising &&
+            MediaQuery.of(context).viewInsets.bottom == 0 &&
+            _inputFocusNode.hasFocus) {
+          _inputFocusNode.unfocus();
+        }
+      });
+    }
+
     if (_isKeyboardRising && _showEmojiPanel) {
       // Hide panel only when keyboard is high enough or stable
       final bool keyboardCoveredPanel = bottomInset >= targetPanelHeight - 5;
@@ -2605,6 +2944,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _isKeyboardRising) {
             _transitionTimer?.cancel();
+            _emojiPanelController.value = 0.0;
             setState(() {
               // Crucial: Update height to actual current inset to prevent any jump 
               // at the moment of switching shouldShowPanel from true to false.
@@ -2627,16 +2967,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final bool isSearchingInPanel = _showEmojiPanel && bottomInset > 0 && !_isKeyboardRising && !_isKeyboardFalling;
 
     final double safeBottom = MediaQuery.paddingOf(context).bottom;
-
-    // Total stable offset for message list and input field.
-    final double bottomOffset = isSearchingInPanel
+    final double closedBottom = bottomInset > 0 ? bottomInset : safeBottom;
+    final double openBottom = isSearchingInPanel
         ? (targetPanelHeight + bottomInset)
-        : (shouldShowPanel 
-            ? math.max(targetPanelHeight, bottomInset) 
-            : (bottomInset > 0 ? bottomInset : safeBottom));
-
-    // The actual height of the emoji panel container.
-    final double effectivePanelHeight = shouldShowPanel ? targetPanelHeight : 0;
+        : math.max(targetPanelHeight, bottomInset);
 
     final typingIndicator = _isTyping
         ? Container(
@@ -2662,101 +2996,103 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           )
         : const SizedBox.shrink();
 
-    final messageList = _isLoading
-        ? const Center(child: CircularProgressIndicator())
-        : _messages.isEmpty
-            ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.chat_bubble_outline,
-                      size: 64,
-                      color: Colors.grey[400],
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'No messages yet',
-                      style: TextStyle(
-                        fontSize: 18,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Start the conversation!',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[500],
-                      ),
-                    ),
-                  ],
+    Widget buildMessageList(double bottomOffset) {
+      if (_isLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      if (_messages.isEmpty) {
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.chat_bubble_outline,
+                size: 64,
+                color: Colors.grey[400],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'No messages yet',
+                style: TextStyle(
+                  fontSize: 18,
+                  color: Colors.grey[600],
                 ),
-              )
-            : Builder(
-                builder: (context) {
-                  final int dividerOffset =
-                      (_showUnreadDivider && _firstUnreadFeedIndex != -1) ? 1 : 0;
-                  final int baseCount = _feedItems.length + dividerOffset;
-                  final int totalItemCount = baseCount + (_isLoadingMore ? 1 : 0);
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Start the conversation!',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[500],
+                ),
+              ),
+            ],
+          ),
+        );
+      }
 
-                  return ListView.builder(
-                    controller: _scrollController,
-                    reverse: true,
-                    cacheExtent: 600.0,
-                    // В glass-режиме добавляем верхний отступ,
-                    // чтобы сообщения не прятались за glass AppBar
-                    padding: EdgeInsets.only(
-                      top: topPadding,
-                      bottom: _inputHeight + bottomOffset,
-                    ),
-                    itemCount: totalItemCount,
-                    itemBuilder: (context, index) {
-                      // Older messages loading spinner at the top of the reversed list
-                      if (_isLoadingMore && index == baseCount) {
-                        return const Padding(
-                          padding: EdgeInsets.all(12.0),
-                          child: Center(
-                            child: SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          ),
-                        );
-                      }
+      final int dividerOffset =
+          (_showUnreadDivider && _firstUnreadFeedIndex != -1) ? 1 : 0;
+      final int baseCount = _feedItems.length + dividerOffset;
+      final int totalItemCount = baseCount + (_isLoadingMore ? 1 : 0);
 
-                      // Insert unread divider between unread and read messages.
-                      if (_showUnreadDivider && _firstUnreadFeedIndex != -1) {
-                        final dividerPosition = _firstUnreadFeedIndex + 1;
+      return ListView.builder(
+        controller: _scrollController,
+        reverse: true,
+        cacheExtent: 600.0,
+        addRepaintBoundaries: false,
+        // В glass-режиме добавляем верхний отступ,
+        // чтобы сообщения не прятались за glass AppBar
+        padding: EdgeInsets.only(
+          top: topPadding,
+          bottom: _inputHeight + bottomOffset,
+        ),
+        itemCount: totalItemCount,
+        itemBuilder: (context, index) {
+          // Older messages loading spinner at the top of the reversed list
+          if (_isLoadingMore && index == baseCount) {
+            return const Padding(
+              padding: EdgeInsets.all(12.0),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            );
+          }
 
-                        if (index == dividerPosition) {
-                          return UnreadSeparator(
-                            key: _unreadSeparatorKey,
-                            count: _dividerUnreadCount,
-                            onTap: () {},
-                          );
-                        }
-                        if (index < dividerPosition) {
-                          return _buildFeedItem(index);
-                        }
-                        final adjustedIndex = index - 1;
-                        if (adjustedIndex >= 0 &&
-                            adjustedIndex < _feedItems.length) {
-                          return _buildFeedItem(adjustedIndex);
-                        }
-                        return const SizedBox.shrink();
-                      }
+          // Insert unread divider between unread and read messages.
+          if (_showUnreadDivider && _firstUnreadFeedIndex != -1) {
+            final dividerPosition = _firstUnreadFeedIndex + 1;
 
-                      if (index < 0 || index >= _feedItems.length) {
-                        return const SizedBox.shrink();
-                      }
-
-                      return _buildFeedItem(index);
-                    },
-                  );
-                },
+            if (index == dividerPosition) {
+              return UnreadSeparator(
+                key: _unreadSeparatorKey,
+                count: _dividerUnreadCount,
+                onTap: () {},
               );
+            }
+            if (index < dividerPosition) {
+              return _buildFeedItem(index);
+            }
+            final adjustedIndex = index - 1;
+            if (adjustedIndex >= 0 &&
+                adjustedIndex < _feedItems.length) {
+              return _buildFeedItem(adjustedIndex);
+            }
+            return const SizedBox.shrink();
+          }
+
+          if (index < 0 || index >= _feedItems.length) {
+            return const SizedBox.shrink();
+          }
+
+          return _buildFeedItem(index);
+        },
+      );
+    }
 
     final messageInput = _buildMessageInput();
 
@@ -2764,11 +3100,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     // Use PopScope to handle back button for closing emoji panel or cancelling active recordings
     return PopScope(
-      canPop: !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
+      canPop: !_isSelectionMode && !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
-          if (_showEmojiPanel) {
-            setState(() => _showEmojiPanel = false);
+          if (_isSelectionMode) {
+            _clearSelection();
+          } else if (_showEmojiPanel) {
+            _closeEmojiPanel();
           } else if (isKeyboardVisible) {
             FocusScope.of(context).unfocus();
           } else if (_isVideoRecording) {
@@ -2782,136 +3120,166 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       child: Column(
         children: [
           Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Сообщения на весь экран (с верхним отступом через ListView.padding)
-                Positioned.fill(
-                  child: Column(
-                    children: [
-                      typingIndicator,
-                      Expanded(child: messageList),
-                    ],
-                  ),
-                ),
-                // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
-                ChatBottomScrollEdge(
-                  height: math.max(safeBottom + 52.0, 52.0),
-                ),
-                // Плеер видео/аудио (помещаем в корневой Stack, чтобы hitTest работал)
-                Positioned(
-                  top: MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight,
-                  left: 0,
-                  right: 0,
-                  child: MediaNotePlayerHeader(
-                    onScrollToActive: () {
-                      final activeId = VoicePlaybackService().activeMessageId ??
-                          VideoNotePlaybackService().activeMessageId;
-                      if (activeId != null) {
-                        _scrollToMessage(activeId);
-                      }
-                    },
-                  ),
-                ),
-                // Кнопка прокрутки вниз (теперь здесь, в главном Stack чата)
-                Positioned(
-                  right: 14,
-                  bottom: _inputHeight + 10 + bottomOffset,
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: _showScrollDownFabNotifier,
-                    builder: (context, showFab, _) => ScrollDownFab(
-                      visible: showFab,
-                      unreadCount: _unreadCount,
-                      onPressed: () {
-                        if (_jumpHistory.isNotEmpty) {
-                          final lastId = _jumpHistory.removeLast();
-                          _scrollToMessage(lastId);
-                        } else {
-                          _scrollController.animateTo(
-                            0,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeOut,
-                          );
-                        }
-                      },
+            child: AnimatedBuilder(
+              animation: _emojiPanelAnimation,
+              builder: (context, _) {
+                final double panelProgress = shouldShowPanel && !_emojiPanelController.isAnimating
+                    ? 1.0
+                    : _emojiPanelAnimation.value;
+                final bool isPanelRendered = shouldShowPanel ||
+                    _emojiPanelController.isAnimating ||
+                    panelProgress > 0.0;
+
+                // Total synchronized offset for message list, FAB, and input field.
+                final double bottomOffset =
+                    closedBottom + (openBottom - closedBottom) * panelProgress;
+
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Сообщения на весь экран (с верхним отступом через ListView.padding)
+                    Positioned.fill(
+                      child: Listener(
+                        onPointerDown: _handleChatPointerDown,
+                        onPointerMove: _handleChatPointerMove,
+                        onPointerUp: _handleChatPointerUp,
+                        onPointerCancel: _handleChatPointerCancel,
+                        behavior: HitTestBehavior.translucent,
+                        child: Column(
+                          children: [
+                            typingIndicator,
+                            Expanded(child: buildMessageList(bottomOffset)),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                // Поле ввода внизу (внутри Stack над сообщениями)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: bottomOffset,
-                  child: Container(
-                    key: _inputKey,
-                    child: messageInput,
-                  ),
-                ),
-                // Панель эмодзи/стикеров ВНУТРИ Stack
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: isSearchingInPanel ? bottomInset : 0,
-                  child: AnimatedContainer(
-                    duration: Duration(
-                        milliseconds: (shouldShowPanel || bottomInset > 0) ? 0 : 200),
-                    curve: Curves.easeOutCubic,
-                    height: effectivePanelHeight,
-                    clipBehavior: Clip.hardEdge,
-                    decoration: const BoxDecoration(),
-                    child: EmojiStickerPanel(
-                      controller: _textController,
-                      onBackspace: _handleBackspace,
-                      onClose: () => setState(() => _showEmojiPanel = false),
-                      height: targetPanelHeight,
+                    // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
+                    ChatBottomScrollEdge(
+                      height: math.max(safeBottom + 52.0, 52.0),
                     ),
-                  ),
-                ),
-                // Полноэкранный Telegram-оверлей записи видеосообщения («кружочка»)
-                if (_isVideoRecording)
-                  Positioned.fill(
-                    child: RoundVideoRecordingOverlay(
-                      key: _videoOverlayKey,
-                      recorderService: _videoRecorderService,
-                      onCancel: _onVideoRecordingCancelled,
-                      onSend: _onVideoRecordingSend,
-                      onTooShort: _onVideoRecordingTooShort,
-                      replyToMessage: _replyToMessage,
-                      isQuote: _isQuote,
-                      quoteText: _quoteText,
-                      onCancelReply: _cancelReply,
+                    // Плеер видео/аудио (помещаем в корневой Stack, чтобы hitTest работал)
+                    Positioned(
+                      top: MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight,
+                      left: 0,
+                      right: 0,
+                      child: MediaNotePlayerHeader(
+                        chatId: widget.chatId,
+                        onScrollToActive: () {
+                          final activeId = VoicePlaybackService().activeMessageId ??
+                              VideoNotePlaybackService().activeMessageId;
+                          if (activeId != null) {
+                            _scrollToMessage(activeId);
+                          }
+                        },
+                      ),
                     ),
-                  ),
-                // Полноэкранный Telegram-оверлей записи голосового сообщения
-                if (_isVoiceRecording)
-                  Positioned.fill(
-                    child: VoiceRecordingOverlay(
-                      key: _voiceOverlayKey,
-                      recorderService: _voiceRecorderService,
-                      onCancel: () => setState(() => _isVoiceRecording = false),
-                      onSend: (res) async {
-                        setState(() => _isVoiceRecording = false);
-                        await _sendVoiceMessage(res);
-                      },
-                      onTooShort: () {
-                        setState(() => _isVoiceRecording = false);
-                        HapticFeedback.selectionClick();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              context.l10n.translate('chat_voice_too_short'),
+                    // Кнопка прокрутки вниз (теперь здесь, в главном Stack чата)
+                    Positioned(
+                      right: 14,
+                      bottom: _inputHeight + 10 + bottomOffset,
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _showScrollDownFabNotifier,
+                        builder: (context, showFab, _) => ScrollDownFab(
+                          visible: showFab,
+                          unreadCount: _unreadCount,
+                          onPressed: () {
+                            if (_jumpHistory.isNotEmpty) {
+                              final lastId = _jumpHistory.removeLast();
+                              _scrollToMessage(lastId);
+                            } else {
+                              _scrollController.animateTo(
+                                0,
+                                duration: const Duration(milliseconds: 300),
+                                curve: Curves.easeOut,
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                    // Поле ввода внизу (внутри Stack над сообщениями)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: bottomOffset,
+                      child: Container(
+                        key: _inputKey,
+                        child: messageInput,
+                      ),
+                    ),
+                    // Панель эмодзи/стикеров ВНУТРИ Stack (выезжает через Transform.translate с фиксированной высотой)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: isSearchingInPanel ? bottomInset : 0,
+                      child: IgnorePointer(
+                        ignoring: !shouldShowPanel,
+                        child: ClipRect(
+                          child: Transform.translate(
+                            offset: Offset(0, (1.0 - panelProgress) * targetPanelHeight),
+                            child: RepaintBoundary(
+                              child: SizedBox(
+                                height: isPanelRendered ? targetPanelHeight : 0,
+                                child: EmojiStickerPanel(
+                                  controller: _textController,
+                                  onBackspace: _handleBackspace,
+                                  onClose: _closeEmojiPanel,
+                                  height: targetPanelHeight,
+                                  isVisible: isPanelRendered,
+                                ),
+                              ),
                             ),
-                            duration: const Duration(seconds: 2),
                           ),
-                        );
-                      },
-                      replyToMessage: _replyToMessage,
-                      isQuote: _isQuote,
-                      quoteText: _quoteText,
-                      onCancelReply: _cancelReply,
+                        ),
+                      ),
                     ),
-                  ),
-              ],
+                    // Полноэкранный Telegram-оверлей записи видеосообщения («кружочка»)
+                    if (_isVideoRecording)
+                      Positioned.fill(
+                        child: RoundVideoRecordingOverlay(
+                          key: _videoOverlayKey,
+                          recorderService: _videoRecorderService,
+                          onCancel: _onVideoRecordingCancelled,
+                          onSend: _onVideoRecordingSend,
+                          onTooShort: _onVideoRecordingTooShort,
+                          replyToMessage: _replyToMessage,
+                          isQuote: _isQuote,
+                          quoteText: _quoteText,
+                          onCancelReply: _cancelReply,
+                        ),
+                      ),
+                    // Полноэкранный Telegram-оверлей записи голосового сообщения
+                    if (_isVoiceRecording)
+                      Positioned.fill(
+                        child: VoiceRecordingOverlay(
+                          key: _voiceOverlayKey,
+                          recorderService: _voiceRecorderService,
+                          onCancel: () => setState(() => _isVoiceRecording = false),
+                          onSend: (res) async {
+                            setState(() => _isVoiceRecording = false);
+                            await _sendVoiceMessage(res);
+                          },
+                          onTooShort: () {
+                            setState(() => _isVoiceRecording = false);
+                            HapticFeedback.selectionClick();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  context.l10n.translate('chat_voice_too_short'),
+                                ),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          },
+                          replyToMessage: _replyToMessage,
+                          isQuote: _isQuote,
+                          quoteText: _quoteText,
+                          onCancelReply: _cancelReply,
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -2946,6 +3314,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
+    final bool isSelected = _selectedMessageIds.contains(message.id);
 
     Widget albumWidget = MediaAlbumWidget(
       key: key,
@@ -2957,16 +3326,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onFileTap: (url, name, type) => _openFile(url, name, type),
       isHighlighted: isAlbumTargeted,
       highlightItemId: _highlightMessageId,
-    );
-
-    albumWidget = Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: albumWidget,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
     );
 
     albumWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: true,
+      enabled: !_isSelectionMode,
       child: albumWidget,
     );
 
@@ -2984,17 +3350,65 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       );
     }
 
-    albumWidget = GestureDetector(
-      onTap: () {
-        _showContextMenu(message, isMe, key);
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 4),
+    final platform = Theme.of(context).platform;
+    final bool isDesktop = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS;
+
+    albumWidget = Listener(
+      onPointerDown: (event) =>
+          _handleRowPointerDown(event, index, message, isMe, key),
+      behavior: HitTestBehavior.translucent,
+      child: GestureDetector(
+        onTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : (isDesktop
+                ? null
+                : () {
+                    _showContextMenu(message, isMe, key, enableBlur: true);
+                  }),
+        onLongPress: isDesktop
+            ? null
+            : () {
+                _enterSelectionMode(message);
+              },
+        onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleMessageSelection(message);
+            return;
+          }
+          final insideBubble = MessageBubble.isGlobalPointInsideBubble(
+            key.currentContext,
+            details.globalPosition,
+          );
+          _showContextMenu(
+            message,
+            isMe,
+            key,
+            forceOpen: true,
+            enableBlur: insideBubble,
+          );
+        },
+        behavior: HitTestBehavior.opaque,
         child: albumWidget,
       ),
+    );
+
+    albumWidget = ValueListenableBuilder<String?>(
+      valueListenable: MessageContextMenuService().activeBlurMessageId,
+      builder: (context, activeBlurId, child) {
+        final isSeparatedForBlur = activeBlurId != null &&
+            (activeBlurId == message.id ||
+                album.items.any((ai) => ai.id == activeBlurId));
+        return Visibility(
+          visible: !isSeparatedForBlur,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: child!,
+        );
+      },
+      child: albumWidget,
     );
 
     final prevItem =
@@ -3019,17 +3433,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   Widget _buildMessageItem(Message message, int index) {
     final GlobalKey key;
-    if (message.localId != null && _messageKeys.containsKey(message.localId!)) {
+    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
+    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
       key = _messageKeys[message.localId!]!;
       _messageKeys[message.id] = key;
     } else {
       key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (message.localId != null) {
+      if (hasLocalId) {
         _messageKeys[message.localId!] = key;
       }
     }
     final bool isMe = message.senderId == _currentUserId;
     final isHighlighted = _highlightMessageId == message.id;
+    final bool isSelected = _selectedMessageIds.contains(message.id);
 
     Widget messageWidget = MessageBubble(
       key: key,
@@ -3039,6 +3455,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       chatType: _chatType,
       chatTitle: widget.otherUserName,
       isHighlighted: isHighlighted,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
       reactions: _messageReactions[message.id] ?? (message.reactions.isNotEmpty ? message.reactions : null),
       myReactions: _myReactions[message.id] ?? (message.myReactions.isNotEmpty ? message.myReactions : null),
       onReactionTap: (emoji) => _toggleReaction(message.id, emoji),
@@ -3055,7 +3473,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     // Wrap with SwipeToReplyWrapper
     messageWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: true,
+      enabled: !_isSelectionMode,
       child: messageWidget,
     );
 
@@ -3070,22 +3488,66 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       );
     }
 
-    // Context menu trigger
-    messageWidget = GestureDetector(
-      onTap: () {
-        debugPrint('DEBUG: GestureDetector.onTap for message ${message.id}');
-        _showContextMenu(message, isMe, key);
-      },
-      onLongPress: () {
-        _showContextMenu(message, isMe, key, forceOpen: true);
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 4),
+    final platform = Theme.of(context).platform;
+    final bool isDesktop = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS;
+
+    // Context menu & selection triggers
+    messageWidget = Listener(
+      onPointerDown: (event) =>
+          _handleRowPointerDown(event, index, message, isMe, key),
+      behavior: HitTestBehavior.translucent,
+      child: GestureDetector(
+        onTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : (isDesktop
+                ? null
+                : () {
+                    _showContextMenu(message, isMe, key, enableBlur: true);
+                  }),
+        onLongPress: isDesktop
+            ? null
+            : () {
+                _enterSelectionMode(message);
+              },
+        onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleMessageSelection(message);
+            return;
+          }
+          final insideBubble = MessageBubble.isGlobalPointInsideBubble(
+            key.currentContext,
+            details.globalPosition,
+          );
+          _showContextMenu(
+            message,
+            isMe,
+            key,
+            forceOpen: true,
+            enableBlur: insideBubble,
+          );
+        },
+        behavior: HitTestBehavior.opaque,
         child: messageWidget,
       ),
+    );
+
+    messageWidget = ValueListenableBuilder<String?>(
+      valueListenable: MessageContextMenuService().activeBlurMessageId,
+      builder: (context, activeBlurId, child) {
+        final isSeparatedForBlur = activeBlurId != null &&
+            (activeBlurId == message.id ||
+                (hasLocalId && activeBlurId == message.localId));
+        return Visibility(
+          visible: !isSeparatedForBlur,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: child!,
+        );
+      },
+      child: messageWidget,
     );
 
     // Add date separator if needed
@@ -3115,9 +3577,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       focusNode: _inputFocusNode,
       isEditing: _isEditing,
       onCancelEditing: _cancelEditing,
+      onEditLastMessage: _editLastOwnMessage,
+      isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
+      onTapInputWhenEmojiOpen: _onEmojiToggle,
       replyToMessage: _replyToMessage,
       isQuote: _isQuote,
       quoteText: _quoteText,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
       onCancelReply: _cancelReply,
       onTapReply: _replyToMessage != null
           ? () => _scrollToMessage(_replyToMessage!.id)
@@ -3154,6 +3621,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _onStartVideoRecord() async {
+    _dismissKeyboardAndEmoji();
     final hasPerms = await _videoRecorderService.hasPermissions();
     if (!hasPerms) {
       final permanentlyDenied =
@@ -3274,6 +3742,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _onStartVoiceRecord() async {
+    _dismissKeyboardAndEmoji();
     var hasPerm = await _voiceRecorderService.hasPermission();
     if (!hasPerm) {
       final isPermanentlyDenied = await _voiceRecorderService.isPermanentlyDenied();
@@ -3787,7 +4256,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('$_chatName has been blocked')),
         );
-        Navigator.pop(context); // Return to previous screen
+        TilingLayoutController.popOrCloseChatTile(context); // Return to previous screen
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(result['message'] ?? 'Failed to block user')),
@@ -3824,8 +4293,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       );
       return;
     }
-    Navigator.pushNamed(
-      context,
+    Navigator.of(context, rootNavigator: true).pushNamed(
       '/video-call',
       arguments: {
         'chatId': widget.chatId,
@@ -3844,8 +4312,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       );
       return;
     }
-    Navigator.pushNamed(
-      context,
+    Navigator.of(context, rootNavigator: true).pushNamed(
       '/voice-call',
       arguments: {
         'chatId': widget.chatId,
@@ -3858,6 +4325,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Show attachment picker bottom sheet
   void _showAttachmentPicker() async {
+    _dismissKeyboardAndEmoji();
     final result = await AttachmentPickerBottomSheet.show(context, allowPoll: true);
     if (result == null || !mounted) return;
 
@@ -4208,6 +4676,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
+    HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
     _syncDebounceTimer?.cancel();
 
     // Stop typing indicator if active
@@ -4223,6 +4693,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _textController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
+    _emojiPanelController.dispose();
+    _transitionTimer?.cancel();
     _showScrollDownFabNotifier.dispose();
     _uploadProgressNotifier.dispose();
     _chatSubscription?.cancel();
@@ -4230,10 +4702,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _watchingEmojiTimer?.cancel();
     _highlightTimer?.cancel();
 
+    if (_registeredTileId != null) {
+      TilingLayoutController.instance.unregisterTileBackHandler(
+        _registeredTileId!,
+        _handleTileBack,
+      );
+    }
+
     // Clear the open chat indicator in the provider
     try {
-      context.read<UnreadCountProvider>().setOpenChat(null);
+      _unreadCountProvider?.closeChat(widget.chatId);
     } catch (_) {}
+    NotificationService().removeActiveChat(widget.chatId);
 
     if (_isVoiceRecording) {
       _voiceRecorderService.cancelRecording();
@@ -4244,12 +4724,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 
-    if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.chatId) {
-      MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
-      MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
-      MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
-      MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
-    }
+    MediaPlaybackCoordinator.instance.unregisterChat(widget.chatId);
 
     super.dispose();
   }
@@ -4308,14 +4783,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     MediaPlaybackCoordinator.instance.stopAll();
   }
 
+  bool _inputHeightCheckScheduled = false;
+
   void _updateInputHeight() {
+    if (_inputHeightCheckScheduled) return;
+    _inputHeightCheckScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _inputHeightCheckScheduled = false;
       if (!mounted) return;
       final RenderBox? renderBox =
           _inputKey.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null) {
+      if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
-        if (newHeight != _inputHeight && newHeight > 0) {
+        if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
           setState(() {
             _inputHeight = newHeight;
           });
@@ -4455,17 +4935,325 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String _formatDateLabel(DateTime dt) =>
       DateTimeUtils.formatDateSeparator(dt, context: context);
 
-  /// Show enhanced context menu on single tap or long press
-  void _showContextMenu(Message message, bool isMe, GlobalKey key, {bool forceOpen = false}) {
-    debugPrint('DEBUG: _showContextMenu called for message ${message.id}');
-    
-    // Do not show context menu when single-tapping on a big animated emoji.
-    // Long-pressing (forceOpen: true) still opens the context menu.
-    if (!forceOpen && message.messageType == 'text' && _isSingleEmoji(message.content)) {
-      if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
-        return;
+  void _enterSelectionMode(Message message) {
+    _dismissKeyboardAndEmoji();
+    HapticUtils.selection();
+    setState(() {
+      _selectedMessageIds.add(message.id);
+    });
+  }
+
+  void _toggleMessageSelection(Message message) {
+    HapticUtils.selection();
+    setState(() {
+      if (!_selectedMessageIds.remove(message.id)) {
+        _selectedMessageIds.add(message.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(() {
+      _selectedMessageIds.clear();
+      _isLmbDraggingMessages = false;
+      _dragSelectStartIndex = null;
+      _dragSelectBaselineIds.clear();
+    });
+  }
+
+  void _copySelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    final selected = _messages
+        .where((m) => _selectedMessageIds.contains(m.id) && m.content.trim().isNotEmpty)
+        .toList()
+        .reversed
+        .map((m) => m.content.trim())
+        .toList();
+    if (selected.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: selected.join('\n\n')));
+      GlassToastService().show(
+        context,
+        context.l10n.translate('copied_to_clipboard'),
+        icon: Icons.check,
+      );
+    }
+    _clearSelection();
+  }
+
+  void _forwardSelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    GlassToastService().show(
+      context,
+      'Пересылка скоро появится',
+      icon: Icons.forward,
+    );
+    _clearSelection();
+  }
+
+  void _deleteSelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    final toDelete = _messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+    _clearSelection();
+    if (toDelete.isEmpty) return;
+    for (final msg in toDelete) {
+      _confirmDeleteMessage(msg);
+    }
+  }
+
+  void _handleChatPointerDown(PointerDownEvent event) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _touchDownPos = event.position;
+      _touchDownTime = event.timeStamp;
+      _lastTouchPos = event.position;
+      _lastTouchTime = event.timeStamp;
+      _touchVelocityY = 0.0;
+      _dismissedOnCurrentTouch = false;
+    }
+  }
+
+  void _handleRowPointerDown(
+    PointerDownEvent event,
+    int feedIndex,
+    Message message,
+    bool isMe,
+    GlobalKey key,
+  ) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _touchDownInsideBubble = MessageBubble.isGlobalPointInsideBubble(
+        key.currentContext,
+        event.position,
+      );
+      return;
+    }
+    if (event.kind != PointerDeviceKind.mouse ||
+        (event.buttons & kPrimaryMouseButton) == 0) {
+      return;
+    }
+    _lmbDownGlobalPos = event.position;
+    _lmbDownFeedIndex = feedIndex;
+    _lmbDownMessage = message;
+    _lmbDownKey = key;
+    _lmbDownIsMe = isMe;
+    _lmbDownInsideBubble = MessageBubble.isGlobalPointInsideBubble(
+      key.currentContext,
+      event.position,
+    );
+    _lmbDownInsideText = MessageBubble.isGlobalPointInsideSelectableText(
+      key.currentContext,
+      event.position,
+    );
+    _isLmbDraggingMessages = false;
+    _isLmbDirectTextSelecting = false;
+  }
+
+  int? _findFeedIndexAtGlobalPosition(Offset globalPos) {
+    int? closestIndex;
+    double closestDist = double.infinity;
+    for (int i = 0; i < _feedItems.length; i++) {
+      final item = _feedItems[i];
+      final key = _messageKeys[item.id];
+      final box = key?.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final topLeft = box.localToGlobal(Offset.zero);
+      final top = topLeft.dy;
+      final bottom = top + box.size.height;
+      if (globalPos.dy >= top && globalPos.dy <= bottom) {
+        return i;
+      }
+      final dist = globalPos.dy < top ? (top - globalPos.dy) : (globalPos.dy - bottom);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIndex = i;
       }
     }
+    return closestIndex;
+  }
+
+  String _feedItemPrimaryId(int index) {
+    final item = _feedItems[index];
+    if (item is FeedAlbumItem) {
+      return item.album.primaryMessage.id;
+    } else if (item is FeedSingleItem) {
+      return item.message.id;
+    }
+    return item.id;
+  }
+
+  void _handleChatPointerMove(PointerMoveEvent event) {
+    if (event.kind == PointerDeviceKind.touch &&
+        (Platform.isAndroid || Platform.isIOS) &&
+        !_dismissedOnCurrentTouch &&
+        _touchDownPos != null &&
+        _lastTouchPos != null &&
+        _lastTouchTime != null) {
+      final dtMicros = (event.timeStamp - _lastTouchTime!).inMicroseconds;
+      final dy = event.position.dy - _lastTouchPos!.dy;
+      _lastTouchPos = event.position;
+      _lastTouchTime = event.timeStamp;
+
+      if (dtMicros > 500 && dtMicros < 200000) {
+        final instantVy = (dy.abs() * 1000000.0) / dtMicros;
+        _touchVelocityY = _touchVelocityY * 0.35 + instantVy * 0.65;
+      }
+
+      final totalDy = (event.position.dy - _touchDownPos!.dy).abs();
+      final totalDx = (event.position.dx - _touchDownPos!.dx).abs();
+      final hasScrollableContent = _scrollController.hasClients &&
+          _scrollController.position.maxScrollExtent > 0;
+
+      if (hasScrollableContent &&
+          totalDy > 42.0 &&
+          totalDy > totalDx * 1.8 &&
+          _touchVelocityY > 1250.0) {
+        _dismissedOnCurrentTouch = true;
+        _dismissKeyboardAndEmoji();
+      }
+      return;
+    }
+
+    if (_lmbDownGlobalPos == null) return;
+    if ((event.buttons & kPrimaryMouseButton) == 0) {
+      _resetLmbDragState();
+      return;
+    }
+
+    final dist = (event.position - _lmbDownGlobalPos!).distance;
+
+    // 1. Direct text selection with blur when LMB drag starts on message text
+    if (_lmbDownInsideText && !_isSelectionMode) {
+      if (dist > 4.0) {
+        if (!_isLmbDirectTextSelecting &&
+            _lmbDownMessage != null &&
+            _lmbDownKey != null) {
+          _isLmbDirectTextSelecting = true;
+          _showContextMenu(
+            _lmbDownMessage!,
+            _lmbDownIsMe,
+            _lmbDownKey!,
+            forceOpen: true,
+            enableBlur: true,
+            initialDragStartGlobalPosition: _lmbDownGlobalPos,
+            initialDragCurrentGlobalPosition: event.position,
+          );
+        } else if (_isLmbDirectTextSelecting) {
+          MessageContextMenuService().updateExternalDragSelection(event.position);
+        }
+      }
+      return;
+    }
+
+    // 2. Consecutive message drag-selection when LMB drag starts beside the bubble (or in selection mode)
+    if ((!_lmbDownInsideBubble || _isSelectionMode) &&
+        _lmbDownFeedIndex != null &&
+        _lmbDownMessage != null) {
+      if (dist > 6.0) {
+        if (!_isLmbDraggingMessages) {
+          _isLmbDraggingMessages = true;
+          _dragSelectStartIndex = _lmbDownFeedIndex;
+          _dragSelectBaselineIds = Set<String>.from(_selectedMessageIds);
+          _dragSelectTargetState =
+              !_dragSelectBaselineIds.contains(_lmbDownMessage!.id);
+          HapticUtils.selection();
+        }
+        final currentIndex =
+            _findFeedIndexAtGlobalPosition(event.position) ?? _lmbDownFeedIndex!;
+        final startIdx = math.min(_dragSelectStartIndex!, currentIndex);
+        final endIdx = math.max(_dragSelectStartIndex!, currentIndex);
+
+        final updated = Set<String>.from(_dragSelectBaselineIds);
+        for (int i = startIdx; i <= endIdx; i++) {
+          if (i >= 0 && i < _feedItems.length) {
+            final msgId = _feedItemPrimaryId(i);
+            if (_dragSelectTargetState) {
+              updated.add(msgId);
+            } else {
+              updated.remove(msgId);
+            }
+          }
+        }
+        if (updated.length != _selectedMessageIds.length ||
+            !updated.containsAll(_selectedMessageIds)) {
+          HapticUtils.selection();
+          setState(() {
+            _selectedMessageIds
+              ..clear()
+              ..addAll(updated);
+          });
+        }
+      }
+    }
+  }
+
+  void _handleChatPointerUp(PointerUpEvent event) {
+    if (event.kind == PointerDeviceKind.touch &&
+        (Platform.isAndroid || Platform.isIOS)) {
+      if (_touchDownPos != null &&
+          !_dismissedOnCurrentTouch &&
+          !_touchDownInsideBubble) {
+        final dist = (event.position - _touchDownPos!).distance;
+        final dtMs = _touchDownTime != null
+            ? (event.timeStamp - _touchDownTime!).inMilliseconds
+            : 0;
+        if (dist < 10.0 && dtMs < 350) {
+          _dismissKeyboardAndEmoji();
+        }
+      }
+      _touchDownPos = null;
+      _touchDownInsideBubble = false;
+      return;
+    }
+
+    if (event.kind == PointerDeviceKind.mouse &&
+        _showEmojiPanel &&
+        !_isLmbDirectTextSelecting &&
+        !_isLmbDraggingMessages) {
+      if (_lmbDownGlobalPos == null ||
+          (event.position - _lmbDownGlobalPos!).distance < 6.0) {
+        _closeEmojiPanel();
+      }
+    }
+
+    if (_isLmbDirectTextSelecting) {
+      _isLmbDirectTextSelecting = false;
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _handleChatPointerCancel(PointerCancelEvent event) {
+    _touchDownPos = null;
+    _touchDownInsideBubble = false;
+    if (_isLmbDirectTextSelecting) {
+      _isLmbDirectTextSelecting = false;
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _resetLmbDragState() {
+    _lmbDownGlobalPos = null;
+    _lmbDownFeedIndex = null;
+    _lmbDownMessage = null;
+    _lmbDownKey = null;
+    _isLmbDraggingMessages = false;
+    _dragSelectStartIndex = null;
+  }
+
+  /// Show enhanced context menu on single tap or right-click
+  void _showContextMenu(
+    Message message,
+    bool isMe,
+    GlobalKey key, {
+    bool forceOpen = false,
+    bool enableBlur = true,
+    Offset? initialDragStartGlobalPosition,
+    Offset? initialDragCurrentGlobalPosition,
+  }) {
+    debugPrint('DEBUG: _showContextMenu called for message ${message.id}');
+    _dismissKeyboardAndEmoji();
 
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
@@ -4478,6 +5266,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       isMe: isMe,
       currentUserId: _currentUserId,
       canManagePoll: isMe,
+      enableBlur: enableBlur,
+      initialDragStartGlobalPosition: initialDragStartGlobalPosition,
+      initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
       onPollUpdated: (updatedPoll) {
         if (!mounted) return;
         setState(() {
@@ -4490,6 +5281,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       },
       onReply: () => _startReply(message),
       onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuotePartial: (isVideoNote || isVoiceNote || isPoll)
+          ? null
+          : (selectedText, offset, length) =>
+              _startQuote(message, selectedText, offset, length),
       onPin: () {
         // TODO: Pin message
         GlassToastService().show(
@@ -4508,9 +5303,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _textController.loadMessage(message.content, message.entities);
           _isEditing = true;
           _editingMessageId = message.id;
-          _inputFocusNode.requestFocus();
         });
+        _focusInputField();
       },
+      onSelect: () => _enterSelectionMode(message),
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
@@ -4556,7 +5352,4 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       },
     );
   }
-
-  /// Helper to check if string is exactly one emoji
-  bool _isSingleEmoji(String text) => EmojiUtils.isSingleEmoji(text);
 }

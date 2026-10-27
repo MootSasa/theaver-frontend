@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_cropper/image_cropper.dart';
@@ -7,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/settings_service.dart';
 import '../../widgets/common/adaptive_switch.dart';
 
 enum MediaQuality {
@@ -113,6 +115,7 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
   late List<File> _files;
   late PageController _pageController;
   late TextEditingController _captionController;
+  final FocusNode _captionFocusNode = FocusNode();
   int _currentIndex = 0;
   MediaQuality _selectedQuality = MediaQuality.hd;
   bool _asDocument = false;
@@ -127,6 +130,15 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
     _pageController = PageController(initialPage: 0);
     _captionController = TextEditingController(text: widget.initialCaption);
     _initVideoForIndex(0);
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _captionFocusNode.requestFocus();
+          final len = _captionController.text.length;
+          _captionController.selection = TextSelection.collapsed(offset: len);
+        }
+      });
+    }
   }
 
   @override
@@ -136,7 +148,54 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
     }
     _pageController.dispose();
     _captionController.dispose();
+    _captionFocusNode.dispose();
     super.dispose();
+  }
+
+  void _insertCaptionNewline() {
+    final value = _captionController.value;
+    final sel = value.selection;
+    final int start = sel.isValid ? sel.start : value.text.length;
+    final int end = sel.isValid ? sel.end : value.text.length;
+    final newText = value.text.replaceRange(start, end, '\n');
+    _captionController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + 1),
+    );
+  }
+
+  KeyEventResult _handleCaptionKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+      final hw = HardwareKeyboard.instance;
+      final isCtrlOrMeta = hw.isControlPressed || hw.isMetaPressed;
+      final isShift = hw.isShiftPressed;
+      final sendByEnter = SettingsService().sendByEnter;
+
+      if (sendByEnter) {
+        if (isShift || isCtrlOrMeta) {
+          _insertCaptionNewline();
+          return KeyEventResult.handled;
+        }
+        if (!_isCompressing) {
+          _handleSend();
+        }
+        return KeyEventResult.handled;
+      } else {
+        if (isCtrlOrMeta) {
+          if (!_isCompressing) {
+            _handleSend();
+          }
+          return KeyEventResult.handled;
+        }
+        _insertCaptionNewline();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
   }
 
   bool _isVideo(File file) {
@@ -524,13 +583,21 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                     );
                   }
 
-                  return InteractiveViewer(
-                    minScale: 0.8,
-                    maxScale: 3.5,
-                    child: Center(
-                      child: Image.file(
-                        file,
-                        fit: BoxFit.contain,
+                  return GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: () {
+                      if (Platform.isAndroid || Platform.isIOS) {
+                        _captionFocusNode.unfocus();
+                      }
+                    },
+                    child: InteractiveViewer(
+                      minScale: 0.8,
+                      maxScale: 3.5,
+                      child: Center(
+                        child: Image.file(
+                          file,
+                          fit: BoxFit.contain,
+                        ),
                       ),
                     ),
                   );
@@ -702,18 +769,24 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                               ),
                             ),
                             padding: const EdgeInsets.symmetric(horizontal: 14),
-                            child: TextField(
-                              controller: _captionController,
-                              maxLines: 4,
-                              minLines: 1,
-                              style: const TextStyle(color: Colors.white, fontSize: 15),
-                              cursorColor: const Color(0xFF33A9FF),
-                              decoration: const InputDecoration(
-                                hintText: 'Добавить подпись... / Add caption...',
-                                hintStyle: TextStyle(color: Colors.white38, fontSize: 14),
-                                border: InputBorder.none,
-                                isDense: true,
-                                contentPadding: EdgeInsets.symmetric(vertical: 10),
+                            child: Focus(
+                              canRequestFocus: false,
+                              skipTraversal: true,
+                              onKeyEvent: _handleCaptionKeyEvent,
+                              child: TextField(
+                                controller: _captionController,
+                                focusNode: _captionFocusNode,
+                                maxLines: 4,
+                                minLines: 1,
+                                style: const TextStyle(color: Colors.white, fontSize: 15),
+                                cursorColor: const Color(0xFF33A9FF),
+                                decoration: const InputDecoration(
+                                  hintText: 'Добавить подпись... / Add caption...',
+                                  hintStyle: TextStyle(color: Colors.white38, fontSize: 14),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(vertical: 10),
+                                ),
                               ),
                             ),
                           ),

@@ -1,6 +1,8 @@
+import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +14,8 @@ import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/settings_service.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
 import '../message/spoiler_text_widget.dart';
@@ -70,6 +74,9 @@ class LiquidGlassInputField extends StatefulWidget {
   final IconData attachIcon;
   final Widget? attachIconWidget;
   final bool hasAttachments;
+  final VoidCallback? onEditLastMessage;
+  final bool isEmojiPanelOpen;
+  final VoidCallback? onTapInputWhenEmojiOpen;
 
   const LiquidGlassInputField({
     Key? key,
@@ -95,6 +102,9 @@ class LiquidGlassInputField extends StatefulWidget {
     this.attachIcon = Icons.attach_file,
     this.attachIconWidget,
     this.hasAttachments = false,
+    this.onEditLastMessage,
+    this.isEmojiPanelOpen = false,
+    this.onTapInputWhenEmojiOpen,
   }) : super(key: key);
 
   @override
@@ -104,23 +114,33 @@ class LiquidGlassInputField extends StatefulWidget {
 class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     with TickerProviderStateMixin {
   final GlobalKey _fieldKey = GlobalKey();
+  late final FocusNode _internalFocusNode = FocusNode();
   late final AnimationController _blinkController;
   late final AnimationController _spoilerController;
   late final AnimationController _mediaFlipController;
   late final ScrollController _scrollController;
+  Timer? _italicBlinkResumeTimer;
   final List<SpoilerParticle> _spoilerParticles = [];
   String _lastRecordedText = '';
+  TextSelection _lastSelection = const TextSelection.collapsed(offset: -1);
   bool _lastShowItalic = false;
   bool _lastHasSpoilers = false;
   bool _lastHasQuotes = false;
   bool _isVideoMode = false;
 
+  FocusNode get _effectiveFocusNode => widget.focusNode ?? _internalFocusNode;
+
+  static bool get _isMobilePlatform =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
   bool _computeShowItalic() {
     final richCtrl = widget.controller is RichTextEditingController
         ? widget.controller as RichTextEditingController
         : null;
+    final hasCursorVisible =
+        _effectiveFocusNode.hasFocus || widget.isEmojiPanelOpen;
     return (richCtrl?.isCursorItalic ?? false) &&
-        (widget.focusNode?.hasFocus ?? false) &&
+        hasCursorVisible &&
         widget.controller.selection.isValid &&
         widget.controller.selection.isCollapsed;
   }
@@ -149,10 +169,26 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     }
   }
 
+  void _restartItalicBlink({bool pauseFirst = true}) {
+    _italicBlinkResumeTimer?.cancel();
+    _blinkController.stop();
+    _blinkController.value = 1.0;
+    if (pauseFirst) {
+      _italicBlinkResumeTimer = Timer(const Duration(milliseconds: 450), () {
+        if (mounted && _computeShowItalic()) {
+          _blinkController.repeat(reverse: true);
+        }
+      });
+    } else {
+      _blinkController.repeat(reverse: true);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _lastRecordedText = widget.controller.text;
+    _lastSelection = widget.controller.selection;
     _lastShowItalic = _computeShowItalic();
     _lastHasQuotes = _hasQuotes();
     _scrollController = ScrollController();
@@ -160,7 +196,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       vsync: this,
       duration: const Duration(milliseconds: 530),
     );
-    if (widget.focusNode?.hasFocus == true) {
+    if (_lastShowItalic) {
       _blinkController.repeat(reverse: true);
     }
 
@@ -175,7 +211,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     }
 
     widget.controller.addListener(_onControllerChanged);
-    widget.focusNode?.addListener(_onFocusChanged);
+    _effectiveFocusNode.addListener(_onFocusChanged);
     // Refresh text field when font loads
     EmojiUtils.isFontLoaded.addListener(_handleFontLoaded);
 
@@ -193,6 +229,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       oldWidget.controller.removeListener(_onControllerChanged);
       widget.controller.addListener(_onControllerChanged);
       _lastRecordedText = widget.controller.text;
+      _lastSelection = widget.controller.selection;
       _lastShowItalic = _computeShowItalic();
       _lastHasQuotes = _hasQuotes();
       final hasSpoilers = _hasSpoilers();
@@ -205,15 +242,21 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       _lastHasSpoilers = hasSpoilers;
     }
     if (oldWidget.focusNode != widget.focusNode) {
-      oldWidget.focusNode?.removeListener(_onFocusChanged);
-      widget.focusNode?.addListener(_onFocusChanged);
+      (oldWidget.focusNode ?? _internalFocusNode)
+          .removeListener(_onFocusChanged);
+      _effectiveFocusNode.addListener(_onFocusChanged);
+    }
+    if (oldWidget.isEmojiPanelOpen != widget.isEmojiPanelOpen) {
+      _onFocusChanged();
     }
   }
 
   @override
   void dispose() {
+    _italicBlinkResumeTimer?.cancel();
     widget.controller.removeListener(_onControllerChanged);
-    widget.focusNode?.removeListener(_onFocusChanged);
+    _effectiveFocusNode.removeListener(_onFocusChanged);
+    _internalFocusNode.dispose();
     _blinkController.dispose();
     _spoilerController.dispose();
     _mediaFlipController.dispose();
@@ -253,10 +296,26 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   void _onControllerChanged() {
-    _blinkController.value = 1.0;
-    if (widget.focusNode?.hasFocus == true && !_blinkController.isAnimating) {
-      _blinkController.repeat(reverse: true);
+    final showItalic = _computeShowItalic();
+    final textChanged = widget.controller.text != _lastRecordedText;
+    final selectionChanged = widget.controller.selection != _lastSelection;
+
+    if (showItalic) {
+      if (textChanged || selectionChanged || !_lastShowItalic) {
+        _restartItalicBlink(pauseFirst: true);
+      } else if (!_blinkController.isAnimating &&
+          (_italicBlinkResumeTimer == null ||
+              !_italicBlinkResumeTimer!.isActive)) {
+        _blinkController.repeat(reverse: true);
+      }
+    } else {
+      _italicBlinkResumeTimer?.cancel();
+      if (_blinkController.isAnimating) {
+        _blinkController.stop();
+      }
+      _blinkController.value = 1.0;
     }
+
     final hasSpoilers = _hasSpoilers();
     if (hasSpoilers && !_spoilerController.isAnimating) {
       _ensureInputSpoilerParticles();
@@ -265,13 +324,14 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       _spoilerController.stop();
     }
 
-    final showItalic = _computeShowItalic();
     final hasQuotes = _hasQuotes();
-    if (widget.controller.text != _lastRecordedText ||
+    if (textChanged ||
+        selectionChanged ||
         showItalic != _lastShowItalic ||
         hasSpoilers != _lastHasSpoilers ||
         hasQuotes != _lastHasQuotes) {
       _lastRecordedText = widget.controller.text;
+      _lastSelection = widget.controller.selection;
       _lastShowItalic = showItalic;
       _lastHasSpoilers = hasSpoilers;
       _lastHasQuotes = hasQuotes;
@@ -280,18 +340,143 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   void _onFocusChanged() {
-    if (widget.focusNode?.hasFocus == true) {
-      if (!_blinkController.isAnimating) {
-        _blinkController.repeat(reverse: true);
-      }
+    final showItalic = _computeShowItalic();
+    if (showItalic) {
+      _restartItalicBlink(pauseFirst: true);
     } else {
+      _italicBlinkResumeTimer?.cancel();
       if (_blinkController.isAnimating) {
         _blinkController.stop();
       }
       _blinkController.value = 1.0;
     }
-    _lastShowItalic = _computeShowItalic();
+    _lastShowItalic = showItalic;
     if (mounted) setState(() {});
+  }
+
+  void _insertNewline() {
+    final value = widget.controller.value;
+    final selection = value.selection;
+    final start =
+        selection.isValid ? math.min(selection.start, selection.end) : value.text.length;
+    final end =
+        selection.isValid ? math.max(selection.start, selection.end) : value.text.length;
+    final newText = value.text.replaceRange(start, end, '\n');
+    widget.controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + 1),
+    );
+    widget.onChanged?.call(newText);
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    final hw = HardwareKeyboard.instance;
+    final isShift = hw.isShiftPressed;
+    final isCtrl = hw.isControlPressed || hw.isMetaPressed;
+    final isAlt = hw.isAltPressed;
+    final key = event.logicalKey;
+    final physical = event.physicalKey;
+
+    // 1. Enter / NumpadEnter: Send message vs Insert newline
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      final sendByEnter = SettingsService().sendByEnter;
+      if (sendByEnter) {
+        if (!isShift && !isCtrl && !isAlt) {
+          if (event is KeyDownEvent && !widget.isSending) {
+            widget.onSend?.call();
+          }
+          return KeyEventResult.handled;
+        }
+        if ((isShift || isCtrl) && !isAlt) {
+          _insertNewline();
+          return KeyEventResult.handled;
+        }
+      } else {
+        if (isCtrl && !isShift && !isAlt) {
+          if (event is KeyDownEvent && !widget.isSending) {
+            widget.onSend?.call();
+          }
+          return KeyEventResult.handled;
+        }
+        if (!isCtrl && !isAlt) {
+          _insertNewline();
+          return KeyEventResult.handled;
+        }
+      }
+    }
+
+    // 2. ArrowUp in empty input field -> Edit last sent message
+    if (key == LogicalKeyboardKey.arrowUp &&
+        !isShift &&
+        !isCtrl &&
+        !isAlt &&
+        event is KeyDownEvent) {
+      if (widget.controller.text.isEmpty && widget.onEditLastMessage != null) {
+        widget.onEditLastMessage!();
+        return KeyEventResult.handled;
+      }
+    }
+
+    // 3. Formatting shortcuts (Ctrl/Cmd + Key, works across Latin and Cyrillic layouts)
+    if (isCtrl && !isAlt && event is KeyDownEvent) {
+      if (!isShift) {
+        if (key == LogicalKeyboardKey.keyB ||
+            physical == PhysicalKeyboardKey.keyB) {
+          TextFormattingUtils.applyFormatting(widget.controller, 'bold');
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyI ||
+            physical == PhysicalKeyboardKey.keyI) {
+          TextFormattingUtils.applyFormatting(widget.controller, 'italic');
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyU ||
+            physical == PhysicalKeyboardKey.keyU) {
+          TextFormattingUtils.applyFormatting(widget.controller, 'underline');
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyK ||
+            physical == PhysicalKeyboardKey.keyK) {
+          TextFormattingUtils.showLinkDialog(context, widget.controller);
+          return KeyEventResult.handled;
+        }
+      } else {
+        if (key == LogicalKeyboardKey.keyX ||
+            physical == PhysicalKeyboardKey.keyX) {
+          TextFormattingUtils.applyFormatting(
+              widget.controller, 'strikethrough');
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyM ||
+            physical == PhysicalKeyboardKey.keyM) {
+          TextFormattingUtils.applyFormatting(widget.controller, 'code');
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyP ||
+            physical == PhysicalKeyboardKey.keyP) {
+          TextFormattingUtils.applyFormatting(widget.controller, 'spoiler');
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.period ||
+            key == LogicalKeyboardKey.greater ||
+            physical == PhysicalKeyboardKey.period) {
+          TextFormattingUtils.applyFormatting(widget.controller, 'quote');
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyN ||
+            physical == PhysicalKeyboardKey.keyN) {
+          TextFormattingUtils.applyFormatting(widget.controller, 'clear');
+          return KeyEventResult.handled;
+        }
+      }
+    }
+
+    return KeyEventResult.ignored;
   }
 
   void _handleFontLoaded() {
@@ -324,8 +509,8 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
           child: Container(
             decoration: BoxDecoration(
               color: inputBg,
@@ -360,7 +545,9 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       ),
       child: LiquidGlassLens(
         style: style,
-        child: _buildInputRow(context),
+        child: RepaintBoundary(
+          child: _buildInputRow(context),
+        ),
       ),
     );
   }
@@ -444,7 +631,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
         ? widget.controller as RichTextEditingController
         : null;
     final isItalic = richCtrl?.isCursorItalic ?? false;
-    final isFocused = widget.focusNode?.hasFocus ?? false;
+    final isFocused = _effectiveFocusNode.hasFocus || widget.isEmojiPanelOpen;
     final hasCollapsedSelection = widget.controller.selection.isValid &&
         widget.controller.selection.isCollapsed;
     final showItalicCursor = isItalic && isFocused && hasCollapsedSelection;
@@ -507,67 +694,89 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                             fieldKey: _fieldKey,
                             controller: widget.controller,
                             color: cursorColor,
-                            repaint: Listenable.merge([_blinkController, _scrollController]),
+                            repaint: Listenable.merge([
+                              _blinkController,
+                              _scrollController,
+                              widget.controller,
+                            ]),
                             opacityAnimation: _blinkController,
                           )
                         : null,
-                    child: TextField(
-                    key: _fieldKey,
-                    controller: widget.controller,
-                    focusNode: widget.focusNode,
-                    scrollController: _scrollController,
-                    selectionControls: telegramTextSelectionControls,
-                    cursorColor: showItalicCursor ? Colors.transparent : cursorColor,
-                    cursorWidth: 2.0,
-                    cursorRadius: const Radius.circular(1.0),
-                    cursorOpacityAnimates: true,
-                    textCapitalization: TextCapitalization.sentences,
-                    maxLines: null,
-                    keyboardType: TextInputType.multiline,
-                    contextMenuBuilder: (context, editableTextState) {
-                      if (!editableTextState.textEditingValue.selection.isCollapsed) {
-                        return ScrollableTextSelectionToolbar(
-                          anchors: editableTextState.contextMenuAnchors,
-                          buttonItems: editableTextState.contextMenuButtonItems,
-                          controller: widget.controller,
-                          onHideToolbar: editableTextState.hideToolbar,
-                        );
-                      }
+                    child: Focus(
+                      canRequestFocus: false,
+                      skipTraversal: true,
+                      onKeyEvent: _handleKeyEvent,
+                      child: TextField(
+                        key: _fieldKey,
+                        controller: widget.controller,
+                        focusNode: _effectiveFocusNode,
+                        scrollController: _scrollController,
+                        selectionControls: telegramTextSelectionControls,
+                        readOnly: widget.isEmojiPanelOpen && _isMobilePlatform,
+                        showCursor: isFocused,
+                        cursorColor:
+                            showItalicCursor ? Colors.transparent : cursorColor,
+                        cursorWidth: 2.0,
+                        cursorRadius: const Radius.circular(1.0),
+                        cursorOpacityAnimates: true,
+                        textCapitalization: TextCapitalization.sentences,
+                        maxLines: null,
+                        keyboardType: TextInputType.multiline,
+                        onTap: () {
+                          if (widget.isEmojiPanelOpen) {
+                            widget.onTapInputWhenEmojiOpen?.call();
+                          }
+                        },
+                        contextMenuBuilder: (context, editableTextState) {
+                          if (!editableTextState
+                              .textEditingValue.selection.isCollapsed) {
+                            return ScrollableTextSelectionToolbar(
+                              anchors: editableTextState.contextMenuAnchors,
+                              buttonItems:
+                                  editableTextState.contextMenuButtonItems,
+                              controller: widget.controller,
+                              onHideToolbar: editableTextState.hideToolbar,
+                            );
+                          }
 
-                      return AdaptiveTextSelectionToolbar.buttonItems(
-                        anchors: editableTextState.contextMenuAnchors,
-                        buttonItems: editableTextState.contextMenuButtonItems,
-                      );
-                    },
-                    decoration: InputDecoration(
-                      hintText: widget.hintText,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      errorBorder: InputBorder.none,
-                      disabledBorder: InputBorder.none,
-                      focusedErrorBorder: InputBorder.none,
-                      filled: false,
-                      isDense: true,
-                      contentPadding:
-                          const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
-                      hintStyle: TextStyle(
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                          return AdaptiveTextSelectionToolbar.buttonItems(
+                            anchors: editableTextState.contextMenuAnchors,
+                            buttonItems:
+                                editableTextState.contextMenuButtonItems,
+                          );
+                        },
+                        decoration: InputDecoration(
+                          hintText: widget.hintText,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          focusedErrorBorder: InputBorder.none,
+                          filled: false,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              vertical: 9, horizontal: 4),
+                          hintStyle: TextStyle(
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.4),
+                          ),
+                        ),
+                        style: TextStyle(
+                          color: themeExt?.palette.chatInputText ??
+                              theme.colorScheme.onSurface,
+                          fontSize: _kInputFontSize,
+                          height: 1.2,
+                        ),
+                        onChanged: (text) {
+                          widget.onChanged?.call(text);
+                        },
+                        textAlignVertical: TextAlignVertical.center,
                       ),
                     ),
-                    style: TextStyle(
-                      color: themeExt?.palette.chatInputText ?? theme.colorScheme.onSurface,
-                      fontSize: _kInputFontSize,
-                      height: 1.2,
-                    ),
-                    onChanged: (text) {
-                      widget.onChanged?.call(text);
-                    },
-                    textAlignVertical: TextAlignVertical.center,
                   ),
-                ),
-              );
-            },
+                );
+              },
             ),
           ),
         ),
@@ -936,6 +1145,8 @@ class InputSpoilerOverlayPainter extends CustomPainter {
   final Color color;
   final List<SpoilerParticle> particles;
 
+  static final List<List<SpoilerParticle>> _rectParticles = [];
+
   InputSpoilerOverlayPainter({
     required this.fieldKey,
     required this.controller,
@@ -946,7 +1157,7 @@ class InputSpoilerOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0 || particles.isEmpty) return;
+    if (size.width <= 0 || size.height <= 0) return;
 
     final renderBox = fieldKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox == null || !renderBox.hasSize) return;
@@ -958,9 +1169,7 @@ class InputSpoilerOverlayPainter extends CustomPainter {
     final spoilerSpans = controller.spans.where((s) => s.type == 'spoiler').toList();
     if (spoilerSpans.isEmpty) return;
 
-    canvas.save();
-    canvas.clipRect(Offset.zero & size);
-
+    final rects = <Rect>[];
     for (final span in spoilerSpans) {
       final start = span.start.clamp(0, text.length);
       final end = span.end.clamp(start, text.length);
@@ -970,6 +1179,7 @@ class InputSpoilerOverlayPainter extends CustomPainter {
         TextSelection(baseOffset: start, extentOffset: end),
       );
 
+      final spanRects = <Rect>[];
       for (final box in boxes) {
         final rawRect = box.toRect();
         final globalTopLeft = renderEditable.localToGlobal(rawRect.topLeft);
@@ -980,60 +1190,34 @@ class InputSpoilerOverlayPainter extends CustomPainter {
           rawRect.width,
           rawRect.height,
         );
-
-        if (rect.width <= 0 || rect.height <= 0) continue;
-
-        // Clip strictly to this text box with slight rounded corners
-        canvas.save();
-        final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(3));
-        canvas.clipRRect(rrect);
-
-        // Subtle underlay
-        canvas.drawRRect(
-          rrect,
-          Paint()..color = color.withValues(alpha: 0.18),
-        );
-
-        // Render shimmering particles inside this box
-        final brightPoints = <Offset>[];
-        final dimPoints = <Offset>[];
-
-        for (final p in particles) {
-          final px = (p.x % rect.width);
-          final py = (p.y % rect.height);
-          final pt = Offset(rect.left + px, rect.top + py);
-          if (p.alpha > 0.5) {
-            brightPoints.add(pt);
-          } else {
-            dimPoints.add(pt);
-          }
+        if (rect.width > 0 && rect.height > 0) {
+          spanRects.add(rect);
         }
-
-        if (dimPoints.isNotEmpty) {
-          canvas.drawPoints(
-            ui.PointMode.points,
-            dimPoints,
-            Paint()
-              ..color = color.withValues(alpha: 0.45)
-              ..strokeWidth = 2.0
-              ..strokeCap = StrokeCap.round,
-          );
-        }
-
-        if (brightPoints.isNotEmpty) {
-          canvas.drawPoints(
-            ui.PointMode.points,
-            brightPoints,
-            Paint()
-              ..color = color.withValues(alpha: 0.85)
-              ..strokeWidth = 2.2
-              ..strokeCap = StrokeCap.round,
-          );
-        }
-
-        canvas.restore();
       }
+      rects.addAll(
+        TelegramSpoilerPainterUtils.normalizeAndMergeLineRects(spanRects),
+      );
     }
+
+    if (rects.isEmpty) return;
+
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+
+    TelegramSpoilerPainterUtils.syncParticlesForRects(
+      rects,
+      _rectParticles,
+      isMedia: false,
+    );
+
+    TelegramSpoilerPainterUtils.paintSpoilerRects(
+      canvas: canvas,
+      rects: rects,
+      rectParticles: _rectParticles,
+      color: color,
+      isMedia: false,
+      revealProgress: 0.0,
+    );
 
     canvas.restore();
   }
@@ -1585,55 +1769,62 @@ class TextFormattingUtils {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF1E2225) : null,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text(
-          'Создать блок кода',
-          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: langController,
-              autofocus: true,
-              style: TextStyle(color: isDark ? Colors.white : Colors.black),
-              decoration: const InputDecoration(
-                labelText: 'Язык программирования',
-                hintText: 'например: dart, python, js...',
-                border: OutlineInputBorder(),
+      builder: (ctx) {
+        void submitCode() {
+          final lang = langController.text.trim();
+          Navigator.of(ctx).pop();
+
+          final codeBlock = '```$lang\n$selectedText\n```';
+          final newText = controller.text.replaceRange(start, end, codeBlock);
+
+          final cursorOffset = selectedText.isEmpty
+              ? start + 4 + lang.length
+              : start + codeBlock.length;
+
+          controller.value = TextEditingValue(
+            text: newText,
+            selection: TextSelection.collapsed(offset: cursorOffset),
+          );
+        }
+
+        return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF1E2225) : null,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            'Создать блок кода',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: langController,
+                autofocus: true,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => submitCode(),
+                style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                decoration: const InputDecoration(
+                  labelText: 'Язык программирования',
+                  hintText: 'например: dart, python, js...',
+                  border: OutlineInputBorder(),
+                ),
               ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Отмена'),
+            ),
+            ElevatedButton(
+              onPressed: submitCode,
+              child: const Text('Создать'),
             ),
           ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Отмена'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final lang = langController.text.trim();
-              Navigator.of(ctx).pop();
-
-              final codeBlock = '```$lang\n$selectedText\n```';
-              final newText = controller.text.replaceRange(start, end, codeBlock);
-
-              final cursorOffset = selectedText.isEmpty
-                  ? start + 4 + lang.length
-                  : start + codeBlock.length;
-
-              controller.value = TextEditingValue(
-                text: newText,
-                selection: TextSelection.collapsed(offset: cursorOffset),
-              );
-            },
-            child: const Text('Создать'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1667,98 +1858,106 @@ class TextFormattingUtils {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF1E2225) : null,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          isEditingExisting
-              ? 'Редактировать ссылку'
-              : (AppLocalizations.of(ctx)?.translate('chat_action_link') ??
-                  'Ссылка'),
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (showTextField) ...[
-              TextField(
-                controller: textController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Текст ссылки',
-                  hintText: 'Название ссылки',
-                  border: OutlineInputBorder(),
+      builder: (ctx) {
+        void submitLink() {
+          final url = urlController.text.trim();
+          final label = textController.text.trim();
+          Navigator.pop(ctx);
+          if (url.isNotEmpty && url != 'https://') {
+            if (controller is RichTextEditingController) {
+              if (isEditingExisting) {
+                final targetLink = existingLink!;
+                controller.applyLinkToSelection(
+                  url,
+                  start: targetLink.start,
+                  end: targetLink.end,
+                );
+              } else if (showTextField && label.isNotEmpty) {
+                controller.applyLinkToSelection(
+                  url,
+                  replacementText: label,
+                );
+              } else {
+                controller.applyLinkToSelection(url);
+              }
+            } else {
+              applyFormatting(controller, 'link', url: url);
+            }
+          }
+        }
+
+        return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF1E2225) : null,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            isEditingExisting
+                ? 'Редактировать ссылку'
+                : (AppLocalizations.of(ctx)?.translate('chat_action_link') ??
+                    'Ссылка'),
+            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showTextField) ...[
+                TextField(
+                  controller: textController,
+                  autofocus: true,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Текст ссылки',
+                    hintText: 'Название ссылки',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                controller: urlController,
+                autofocus: !showTextField,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => submitLink(),
+                decoration: InputDecoration(
+                  labelText: isEditingExisting ? 'URL' : null,
+                  hintText: 'https://example.com',
+                  border: const OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.url,
               ),
-              const SizedBox(height: 12),
             ],
-            TextField(
-              controller: urlController,
-              autofocus: !showTextField,
-              decoration: InputDecoration(
-                labelText: isEditingExisting ? 'URL' : null,
-                hintText: 'https://example.com',
-                border: const OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.url,
+          ),
+          actions: [
+            if (isEditingExisting) ...[
+              Builder(builder: (c) {
+                final targetLink = existingLink!;
+                return TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    if (controller is RichTextEditingController) {
+                      controller.removeLinkFromSelection(
+                        start: targetLink.start,
+                        end: targetLink.end,
+                      );
+                    }
+                  },
+                  child: const Text('Удалить ссылку',
+                      style: TextStyle(color: Colors.redAccent)),
+                );
+              }),
+            ],
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(
+                  AppLocalizations.of(ctx)?.translate('cancel') ?? 'Отмена'),
+            ),
+            TextButton(
+              onPressed: submitLink,
+              child: Text(isEditingExisting ? 'Сохранить' : 'OK'),
             ),
           ],
-        ),
-        actions: [
-          if (isEditingExisting) ...[
-            Builder(builder: (c) {
-              final targetLink = existingLink!;
-              return TextButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  if (controller is RichTextEditingController) {
-                    controller.removeLinkFromSelection(
-                      start: targetLink.start,
-                      end: targetLink.end,
-                    );
-                  }
-                },
-                child: const Text('Удалить ссылку',
-                    style: TextStyle(color: Colors.redAccent)),
-              );
-            }),
-          ],
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(
-                AppLocalizations.of(ctx)?.translate('cancel') ?? 'Отмена'),
-          ),
-          TextButton(
-            onPressed: () {
-              final url = urlController.text.trim();
-              final label = textController.text.trim();
-              Navigator.pop(ctx);
-              if (url.isNotEmpty && url != 'https://') {
-                if (controller is RichTextEditingController) {
-                  if (isEditingExisting) {
-                    final targetLink = existingLink!;
-                    controller.applyLinkToSelection(
-                      url,
-                      start: targetLink.start,
-                      end: targetLink.end,
-                    );
-                  } else if (showTextField && label.isNotEmpty) {
-                    controller.applyLinkToSelection(
-                      url,
-                      replacementText: label,
-                    );
-                  } else {
-                    controller.applyLinkToSelection(url);
-                  }
-                } else {
-                  applyFormatting(controller, 'link', url: url);
-                }
-              }
-            },
-            child: Text(isEditingExisting ? 'Сохранить' : 'OK'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

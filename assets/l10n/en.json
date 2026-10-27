@@ -898,7 +898,11 @@
   "theme_color_reply_line": "Reply Strip",
   "theme_color_reply_title": "Reply Author Name",
   "theme_color_reply_text": "Reply Preview Text",
-  "theme_color_selection_overlay": "Selection Highlight",
+  "theme_color_selection_overlay": "Row Selection Highlight",
+  "theme_color_bubble_outgoing_selected": "Selected Outgoing Bubble",
+  "theme_color_bubble_incoming_selected": "Selected Incoming Bubble",
+  "chat_action_select": "Select",
+  "chat_selected_count": "Selected: {count}",
   "theme_color_reaction_active": "Active Reaction Background",
   "theme_color_reaction_inactive": "Inactive Reaction Background",
   "theme_color_error": "Error & Destructive Color",
@@ -1009,5 +1013,8 @@
   "message_unsupported_update_btn": "Update Theaver",
   "message_unsupported_preview": "Unsupported message",
   "app_up_to_date": "You have the latest version of Theaver",
-  "check_updates_error": "Failed to check for updates"
+  "check_updates_error": "Failed to check for updates",
+  "settings_send_by_enter_title": "Send by Enter",
+  "settings_send_by_enter_subtitle_on": "Enter — send message, Shift+Enter or Ctrl+Enter — new line",
+  "settings_send_by_enter_subtitle_off": "Ctrl+Enter — send message, Enter — new line"
 }

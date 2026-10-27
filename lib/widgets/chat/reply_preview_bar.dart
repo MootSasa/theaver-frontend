@@ -1,4 +1,3 @@
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -8,6 +7,7 @@ import '../../models/name_color_preset.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../profile/reply_strip_painter.dart';
 import 'message_reply_info.dart';
@@ -79,8 +79,8 @@ class ReplyPreviewBar extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
           child: Container(
             decoration: BoxDecoration(
               color: isDark
@@ -255,7 +255,7 @@ class ReplyPreviewBar extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             isQuote
-                                ? iconoir.Quote(
+                                ? iconoir.QuoteSolid(
                                     width: 14,
                                     height: 14,
                                     color: accentColor,
@@ -305,7 +305,7 @@ class ReplyPreviewBar extends StatelessWidget {
                             Flexible(
                               child: RichText(
                                 text: previewSpan,
-                                maxLines: 1,
+                                maxLines: isQuote ? 2 : 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -318,6 +318,14 @@ class ReplyPreviewBar extends StatelessWidget {
               ),
             ),
           ),
+          if (isQuote) ...[
+            const SizedBox(width: 6),
+            iconoir.QuoteSolid(
+              width: 14,
+              height: 14,
+              color: accentColor.withValues(alpha: 0.45),
+            ),
+          ],
           const SizedBox(width: 8),
           // Close button
           IconButton(

@@ -45,6 +45,51 @@ class NameColorPreset {
         .toColor();
   }
 
+  static double _contrastRatio(Color a, Color b) {
+    final l1 = a.computeLuminance();
+    final l2 = b.computeLuminance();
+    final bright = l1 > l2 ? l1 : l2;
+    final dark = l1 > l2 ? l2 : l1;
+    return (bright + 0.05) / (dark + 0.05);
+  }
+
+  /// Подбирает контрастный читаемый цвет текста для подложки [bgColor].
+  /// Если [configuredColor] задан явно пользователем и имеет достаточный контраст (>= 3.2),
+  /// используется он; иначе выбирается тёмный или светлый цвет в зависимости от яркости [bgColor].
+  static Color resolveReadableTextColor(
+    Color bgColor, {
+    Color? configuredColor,
+    bool isExplicitCustom = false,
+  }) {
+    final bool isLightBg = bgColor.computeLuminance() > 0.42;
+    if (isExplicitCustom && configuredColor != null) {
+      if (_contrastRatio(bgColor, configuredColor) >= 3.2) {
+        return configuredColor;
+      }
+    }
+    return isLightBg ? const Color(0xFF1C2530) : const Color(0xFFF1F5F9);
+  }
+
+  /// Подбирает контрастный акцентный цвет (имя отправителя, иконка, ссылка) на фоне [bgColor].
+  static Color resolveReadableAccentColor(Color bgColor, Color accentColor) {
+    if (_contrastRatio(bgColor, accentColor) >= 2.6) {
+      return accentColor;
+    }
+    final bool isLightBg = bgColor.computeLuminance() > 0.42;
+    final hsl = HSLColor.fromColor(accentColor.withValues(alpha: 1.0));
+    if (isLightBg) {
+      return hsl
+          .withLightness(hsl.lightness.clamp(0.18, 0.36))
+          .withSaturation(hsl.saturation.clamp(0.55, 0.95))
+          .toColor();
+    } else {
+      return hsl
+          .withLightness(hsl.lightness.clamp(0.68, 0.85))
+          .withSaturation(hsl.saturation.clamp(0.55, 0.95))
+          .toColor();
+    }
+  }
+
   factory NameColorPreset.fromCustomColor(Color color) {
     final opaque = color.withValues(alpha: 1.0);
     final hsl = HSLColor.fromColor(opaque);

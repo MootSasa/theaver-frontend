@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/image_utils.dart';
 import 'private_chat_screen.dart';
@@ -83,6 +84,17 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
       if (mounted) {
         if (result['success'] == true) {
           final chat = result['chat'] as Chat;
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            Navigator.of(context).pop();
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: chat.id,
+              chatType: 'private',
+              chatName: user.name,
+              avatarUrl: user.avatarUrl,
+              otherUserId: user.id,
+            );
+            return;
+          }
           Navigator.pushReplacement(
             context,
             SwipeBackPageRoute(

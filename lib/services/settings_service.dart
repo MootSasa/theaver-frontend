@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'glass_mode.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -21,6 +22,7 @@ class SettingsService {
   static const String _glassBlurKey = 'glass_blur';
   static const String _notificationSettingsKey = 'notification_settings';
   static const String _chatNotificationSettingsKey = 'chat_notification_settings';
+  static const String _sendByEnterKey = 'chat_send_by_enter';
 
   // Кэшированные данные
   UserProfile? _cachedProfile;
@@ -33,6 +35,7 @@ class SettingsService {
   double? _cachedGlassBlur;
   GlobalNotificationSettings? _cachedNotificationSettings;
   Map<String, ChatNotificationSettings>? _cachedChatNotificationSettings;
+  final ValueNotifier<bool> sendByEnterNotifier = ValueNotifier<bool>(true);
 
   /// Инициализация сервиса
   Future<void> init() async {
@@ -117,6 +120,8 @@ class SettingsService {
     } else {
       _cachedChatNotificationSettings = {};
     }
+
+    sendByEnterNotifier.value = _prefs.getBool(_sendByEnterKey) ?? true;
   }
 
   // ============ Профиль ============
@@ -381,6 +386,19 @@ class SettingsService {
     );
   }
 
+  // ============ Клавиатура и отправка (ПК) ============
+
+  /// Отправлять ли сообщение по нажатию Enter (иначе — по Ctrl+Enter)
+  bool get sendByEnter => sendByEnterNotifier.value;
+
+  /// Сохранить режим отправки по Enter / Ctrl+Enter
+  Future<void> setSendByEnter(bool value) async {
+    sendByEnterNotifier.value = value;
+    try {
+      await _prefs.setBool(_sendByEnterKey, value);
+    } catch (_) {}
+  }
+
   /// Очистить все настройки (при выходе из аккаунта)
   Future<void> clearAllSettings() async {
     _cachedProfile = null;
@@ -393,6 +411,7 @@ class SettingsService {
     _cachedGlassBlur = null;
     _cachedNotificationSettings = null;
     _cachedChatNotificationSettings = null;
+    sendByEnterNotifier.value = true;
     await _prefs.remove(_profileKey);
     await _prefs.remove(_foldersKey);
     await _prefs.remove(_storageSettingsKey);
@@ -403,6 +422,7 @@ class SettingsService {
     await _prefs.remove(_glassBlurKey);
     await _prefs.remove(_notificationSettingsKey);
     await _prefs.remove(_chatNotificationSettingsKey);
+    await _prefs.remove(_sendByEnterKey);
   }
 }
 

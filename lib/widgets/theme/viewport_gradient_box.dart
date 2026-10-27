@@ -22,6 +22,76 @@ class ChatViewportScope extends InheritedWidget {
       scopeKey != oldWidget.scopeKey;
 }
 
+/// Provides explicit global viewport gradient bounds for widgets rendered in an
+/// overlay (such as the separated focused message inside [MessageContextMenu])
+/// so their [ViewportGradientBox] shader matches the in-list message pixel-for-pixel.
+class ViewportGradientBoundsScope extends InheritedWidget {
+  final Rect globalBounds;
+
+  const ViewportGradientBoundsScope({
+    Key? key,
+    required this.globalBounds,
+    required Widget child,
+  }) : super(key: key, child: child);
+
+  static Rect? maybeOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<ViewportGradientBoundsScope>()
+        ?.globalBounds;
+  }
+
+  /// Resolves the exact global gradient bounds (`left`, `top`, `right`, `bottom`)
+  /// used by [RenderViewportGradientBox] for an in-list message [origin] render object.
+  static Rect? resolveFromRenderObject(RenderObject? origin) {
+    if (origin == null || !origin.attached) return null;
+    try {
+      final ancestorViewport = RenderAbstractViewport.maybeOf(origin);
+      final viewportBox =
+          ancestorViewport is RenderBox ? (ancestorViewport as RenderBox) : null;
+      if (viewportBox != null &&
+          viewportBox.attached &&
+          viewportBox.hasSize &&
+          viewportBox.size.height > 10.0) {
+        RenderSliverPadding? sliverPadding;
+        RenderObject? cur = origin.parent;
+        while (cur != null && cur != viewportBox) {
+          if (cur is RenderSliverPadding) {
+            sliverPadding = cur;
+            break;
+          }
+          cur = cur.parent;
+        }
+        double topPadding = 0.0;
+        double bottomPadding = 0.0;
+        final insets = sliverPadding?.resolvedPadding;
+        if (insets != null) {
+          topPadding = insets.top;
+          bottomPadding = insets.bottom;
+        }
+        final effectiveHeight =
+            viewportBox.size.height - topPadding - bottomPadding;
+        final double gradientStartInViewport = topPadding;
+        final double gradientEndInViewport = (effectiveHeight > 100.0)
+            ? (viewportBox.size.height - bottomPadding)
+            : viewportBox.size.height;
+
+        final viewportGlobalOrigin = viewportBox.localToGlobal(Offset.zero);
+        return Rect.fromLTRB(
+          viewportGlobalOrigin.dx,
+          viewportGlobalOrigin.dy + gradientStartInViewport,
+          viewportGlobalOrigin.dx + viewportBox.size.width,
+          viewportGlobalOrigin.dy + gradientEndInViewport,
+        );
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  @override
+  bool updateShouldNotify(covariant ViewportGradientBoundsScope oldWidget) =>
+      globalBounds != oldWidget.globalBounds;
+}
+
 /// A widget that renders a continuous, viewport-bound linear gradient
 /// behind its child clipped to the specified [borderRadius].
 ///
@@ -57,6 +127,16 @@ class ViewportGradientBox extends StatefulWidget {
 
 class _ViewportGradientBoxState extends State<ViewportGradientBox> {
   ScrollPosition? _scrollPosition;
+  double _lastScrollPixels = double.nan;
+
+  static bool _hasDistinctGradient(List<Color>? colors) {
+    if (colors == null || colors.length < 2) return false;
+    final first = colors.first;
+    for (int i = 1; i < colors.length; i++) {
+      if (colors[i] != first) return true;
+    }
+    return false;
+  }
 
   @override
   void didChangeDependencies() {
@@ -71,8 +151,7 @@ class _ViewportGradientBoxState extends State<ViewportGradientBox> {
   }
 
   void _updateScrollListener() {
-    final bool hasGradient =
-        widget.gradientColors != null && widget.gradientColors!.length >= 2;
+    final bool hasGradient = _hasDistinctGradient(widget.gradientColors);
     if (!hasGradient) {
       if (_scrollPosition != null) {
         _scrollPosition!.removeListener(_onScroll);
@@ -85,6 +164,7 @@ class _ViewportGradientBoxState extends State<ViewportGradientBox> {
     if (_scrollPosition != newPosition) {
       _scrollPosition?.removeListener(_onScroll);
       _scrollPosition = newPosition;
+      _lastScrollPixels = newPosition?.pixels ?? double.nan;
       _scrollPosition?.addListener(_onScroll);
     }
   }
@@ -97,9 +177,19 @@ class _ViewportGradientBoxState extends State<ViewportGradientBox> {
   }
 
   void _onScroll() {
+    final pos = _scrollPosition;
+    if (pos != null && pos.hasPixels) {
+      final pixels = pos.pixels;
+      if (!_lastScrollPixels.isNaN && (pixels - _lastScrollPixels).abs() < 10.0) {
+        return;
+      }
+      _lastScrollPixels = pixels;
+    }
     final ro = context.findRenderObject();
-    if (ro != null && ro.attached) {
-      ro.markNeedsPaint();
+    if (ro is RenderViewportGradientBox && ro.attached) {
+      if (ro.isVisibleInViewport) {
+        ro.markNeedsPaint();
+      }
     }
   }
 
@@ -107,16 +197,24 @@ class _ViewportGradientBoxState extends State<ViewportGradientBox> {
   Widget build(BuildContext context) {
     final effectiveScopeKey =
         widget.viewportScopeKey ?? ChatViewportScope.of(context);
+    final globalGradientBounds = ViewportGradientBoundsScope.maybeOf(context);
     final mediaQuerySize = MediaQuery.maybeSizeOf(context);
+    final bool hasGradient = _hasDistinctGradient(widget.gradientColors);
+    final Color? effectiveSolidColor = hasGradient
+        ? widget.solidColor
+        : ((widget.gradientColors != null && widget.gradientColors!.isNotEmpty)
+            ? widget.gradientColors!.first
+            : widget.solidColor);
 
     return _RawViewportGradientBox(
-      gradientColors: widget.gradientColors,
-      gradientStops: widget.gradientStops,
-      solidColor: widget.solidColor,
+      gradientColors: hasGradient ? widget.gradientColors : null,
+      gradientStops: hasGradient ? widget.gradientStops : null,
+      solidColor: effectiveSolidColor,
       borderRadius: widget.borderRadius,
       viewportScopeKey: effectiveScopeKey,
+      globalGradientBounds: globalGradientBounds,
       fallbackScreenSize: mediaQuerySize,
-      child: widget.child,
+      child: hasGradient ? RepaintBoundary(child: widget.child) : widget.child,
     );
   }
 }
@@ -127,6 +225,7 @@ class _RawViewportGradientBox extends SingleChildRenderObjectWidget {
   final Color? solidColor;
   final BorderRadius borderRadius;
   final GlobalKey? viewportScopeKey;
+  final Rect? globalGradientBounds;
   final Size? fallbackScreenSize;
 
   const _RawViewportGradientBox({
@@ -137,6 +236,7 @@ class _RawViewportGradientBox extends SingleChildRenderObjectWidget {
     this.solidColor,
     this.borderRadius = BorderRadius.zero,
     this.viewportScopeKey,
+    this.globalGradientBounds,
     this.fallbackScreenSize,
   }) : super(key: key, child: child);
 
@@ -148,6 +248,7 @@ class _RawViewportGradientBox extends SingleChildRenderObjectWidget {
       solidColor: solidColor,
       borderRadius: borderRadius,
       viewportScopeKey: viewportScopeKey,
+      globalGradientBounds: globalGradientBounds,
       fallbackScreenSize: fallbackScreenSize,
     );
   }
@@ -163,6 +264,7 @@ class _RawViewportGradientBox extends SingleChildRenderObjectWidget {
       ..solidColor = solidColor
       ..borderRadius = borderRadius
       ..viewportScopeKey = viewportScopeKey
+      ..globalGradientBounds = globalGradientBounds
       ..fallbackScreenSize = fallbackScreenSize;
   }
 }
@@ -174,6 +276,7 @@ class RenderViewportGradientBox extends RenderProxyBox {
   Color? _solidColor;
   BorderRadius _borderRadius;
   GlobalKey? _viewportScopeKey;
+  Rect? _globalGradientBounds;
   Size? _fallbackScreenSize;
 
   final Paint _gradientPaint = Paint()..isAntiAlias = true;
@@ -190,12 +293,14 @@ class RenderViewportGradientBox extends RenderProxyBox {
     Color? solidColor,
     BorderRadius borderRadius = BorderRadius.zero,
     GlobalKey? viewportScopeKey,
+    Rect? globalGradientBounds,
     Size? fallbackScreenSize,
   })  : _gradientColors = gradientColors,
         _gradientStops = gradientStops,
         _solidColor = solidColor,
         _borderRadius = borderRadius,
         _viewportScopeKey = viewportScopeKey,
+        _globalGradientBounds = globalGradientBounds,
         _fallbackScreenSize = fallbackScreenSize,
         super(child) {
     _updateEffectiveStops();
@@ -247,6 +352,18 @@ class RenderViewportGradientBox extends RenderProxyBox {
     }
   }
 
+  bool get isVisibleInViewport {
+    if (!hasSize) return false;
+    _resolveAncestors();
+    final viewportBox = _cachedViewportBox;
+    if (viewportBox != null && viewportBox.attached && viewportBox.hasSize) {
+      final pos = localToGlobal(Offset.zero, ancestor: viewportBox);
+      return pos.dy + size.height >= -16.0 &&
+          pos.dy <= viewportBox.size.height + 16.0;
+    }
+    return true;
+  }
+
   List<Color>? get gradientColors => _gradientColors;
   set gradientColors(List<Color>? val) {
     if (_gradientColors == val) return;
@@ -281,6 +398,13 @@ class RenderViewportGradientBox extends RenderProxyBox {
   set viewportScopeKey(GlobalKey? val) {
     if (_viewportScopeKey == val) return;
     _viewportScopeKey = val;
+    markNeedsPaint();
+  }
+
+  Rect? get globalGradientBounds => _globalGradientBounds;
+  set globalGradientBounds(Rect? val) {
+    if (_globalGradientBounds == val) return;
+    _globalGradientBounds = val;
     markNeedsPaint();
   }
 
@@ -345,6 +469,13 @@ class RenderViewportGradientBox extends RenderProxyBox {
             topInCanvas = offset.dy - (posInViewport.dy - gradientStartInViewport);
             bottomInCanvas = offset.dy + (gradientEndInViewport - posInViewport.dy);
             centerXInCanvas = offset.dx - posInViewport.dx + viewportBox.size.width * 0.5;
+          } else if (_globalGradientBounds != null && _globalGradientBounds!.height > 10.0) {
+            // 2b. Overlay widget anchored to an in-list message's resolved viewport gradient bounds
+            final globalPos = localToGlobal(Offset.zero);
+            final bounds = _globalGradientBounds!;
+            topInCanvas = offset.dy - (globalPos.dy - bounds.top);
+            bottomInCanvas = offset.dy + (bounds.bottom - globalPos.dy);
+            centerXInCanvas = offset.dx - (globalPos.dx - bounds.center.dx);
           } else {
             // 3. Fallback: Full screen dimensions
             final globalPos = localToGlobal(Offset.zero);

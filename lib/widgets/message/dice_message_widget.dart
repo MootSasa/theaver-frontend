@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 import '../../services/dice_cache_service.dart';
@@ -33,13 +34,54 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
   late AnimationController _controller;
   LottieComposition? _rollComposition;
   LottieComposition? _outcomeComposition;
+  ui.Image? _settledOutcomeFrame;
   bool _isRolling = false;
+  bool _isAnimating = false;
   bool _hasPlayedOnce = false;
+
+  void _onControllerStatusChanged(AnimationStatus status) {
+    final animating =
+        status == AnimationStatus.forward || status == AnimationStatus.reverse;
+    if (!animating && !_isRolling) {
+      _hapticBinding?.dispose();
+      _hapticBinding = null;
+    }
+    if (_isAnimating != animating && mounted) {
+      setState(() {
+        _isAnimating = animating;
+      });
+    }
+  }
+
+  void _ensureSettledOutcomeFrame(LottieComposition comp) {
+    final int targetPx = (widget.size * 2.0).round().clamp(128, 320);
+    final String cp = EmojiUtils.diceCodepoint(widget.emoji) ?? widget.emoji.trim();
+    final int val = widget.value ?? 1;
+    final String cacheKey = 'dice_${cp}_${val}_$targetPx';
+    final syncImg = EmojiUtils.getBakedLottieFrameSync(cacheKey);
+    if (syncImg != null) {
+      _settledOutcomeFrame = syncImg;
+      return;
+    }
+    EmojiUtils.bakeLottieFrame(
+      cacheKey: cacheKey,
+      composition: comp,
+      progress: 1.0,
+      targetPx: targetPx,
+    ).then((img) {
+      if (mounted && img != null && _outcomeComposition == comp) {
+        setState(() {
+          _settledOutcomeFrame = img;
+        });
+      }
+    });
+  }
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this);
+    _controller = AnimationController(vsync: this)
+      ..addStatusListener(_onControllerStatusChanged);
     if (!widget.autoPlay) {
       _controller.value = 1.0;
     }
@@ -52,6 +94,7 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
   void didUpdateWidget(covariant DiceMessageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.emoji != widget.emoji || oldWidget.value != widget.value) {
+      _settledOutcomeFrame = null;
       _loadCompositions();
     }
   }
@@ -78,6 +121,9 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
     if (!widget.autoPlay) {
       final outcomeComp = await DiceCacheService.instance.getDiceComposition(emoji, outcomeIdx);
       if (!mounted) return;
+      if (outcomeComp != null) {
+        _ensureSettledOutcomeFrame(outcomeComp);
+      }
       setState(() {
         _outcomeComposition = outcomeComp;
         _isRolling = false;
@@ -98,6 +144,9 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
     final outcomeComp = await DiceCacheService.instance.getDiceComposition(emoji, outcomeIdx);
 
     if (!mounted) return;
+    if (outcomeComp != null) {
+      _ensureSettledOutcomeFrame(outcomeComp);
+    }
 
     setState(() {
       _rollComposition = rollComp;
@@ -123,6 +172,7 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
       setState(() {
         _rollComposition = rollComp;
         _isRolling = true;
+        _isAnimating = true;
       });
       _hapticBinding?.dispose();
       final rollFrames = (rollComp.endFrame - rollComp.startFrame).round();
@@ -146,9 +196,11 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
     if (!mounted) return;
 
     if (outcomeComp != null) {
+      _ensureSettledOutcomeFrame(outcomeComp);
       setState(() {
         _outcomeComposition = outcomeComp;
         _isRolling = false;
+        _isAnimating = true;
       });
       _hapticBinding?.dispose();
       final totalFrames = (outcomeComp.endFrame - outcomeComp.startFrame).round();
@@ -161,8 +213,20 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
       _controller.duration = outcomeComp.duration;
       _controller.reset();
       await _controller.forward();
+      _hapticBinding?.dispose();
+      _hapticBinding = null;
+      if (mounted) {
+        setState(() {
+          _isAnimating = false;
+        });
+      }
     } else {
-      setState(() => _isRolling = false);
+      _hapticBinding?.dispose();
+      _hapticBinding = null;
+      setState(() {
+        _isRolling = false;
+        _isAnimating = false;
+      });
     }
   }
 
@@ -183,7 +247,15 @@ class _DiceMessageWidgetState extends State<DiceMessageWidget>
         : (_outcomeComposition ?? (widget.autoPlay ? _rollComposition : null));
 
     Widget content;
-    if (currentComp != null) {
+    if (!_isRolling && !_isAnimating && _settledOutcomeFrame != null) {
+      content = RawImage(
+        image: _settledOutcomeFrame,
+        width: widget.size,
+        height: widget.size,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.low,
+      );
+    } else if (currentComp != null) {
       content = Lottie(
         composition: currentComp,
         controller: _controller,

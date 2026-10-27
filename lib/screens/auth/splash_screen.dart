@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
-import '../main/main_screen.dart';
+import '../../widgets/tiling/tiling_workspace_scaffold.dart';
 import 'login_screen.dart';
 import '../../utils/swipe_back_route.dart';
 
 /// Splash screen that checks authentication status on app launch.
-/// Automatically navigates to MainScreen if user is logged in,
+/// Automatically navigates to TilingWorkspaceScaffold if user is logged in,
 /// or to LoginScreen if no saved account found.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({Key? key}) : super(key: key);
@@ -50,7 +50,7 @@ class _SplashScreenState extends State<SplashScreen> {
     _hasNavigated = true;
     
     Navigator.of(context).pushAndRemoveUntil(
-      SwipeBackPageRoute(builder: (_) => const MainScreen()),
+      SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
       (route) => false,
     );
 

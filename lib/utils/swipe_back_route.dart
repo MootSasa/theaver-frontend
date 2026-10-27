@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
+import '../widgets/tiling/tile_viewport_scope.dart';
 import 'haptic_utils.dart';
 
 /// PageRoute с интерактивным жестом свайпа слева направо для возврата
@@ -48,6 +49,9 @@ class SwipeBackPageRoute<T> extends MaterialPageRoute<T> {
   Widget buildTransitions(BuildContext context, Animation<double> animation,
       Animation<double> secondaryAnimation, Widget child) {
     final bool isInteractive = popGestureInProgress;
+    final bool isIdle = animation.isCompleted &&
+        secondaryAnimation.isDismissed &&
+        !isInteractive;
 
     // === Primary animation: current route entering/leaving ===
     final slideTransition = Tween<Offset>(
@@ -82,6 +86,7 @@ class SwipeBackPageRoute<T> extends MaterialPageRoute<T> {
     ));
 
     return Stack(
+      fit: StackFit.passthrough,
       children: [
         // Dimming overlay for the screen BELOW
         if (secondaryAnimation.value > 0)
@@ -89,22 +94,25 @@ class SwipeBackPageRoute<T> extends MaterialPageRoute<T> {
             opacity: secondaryDim,
             child: Container(color: Colors.black),
           ),
-        
+
         SlideTransition(
           position: slideTransition,
           child: _SwipeBackGestureDetector(
             animationController: _animationController,
             animation: animation,
-            child: Container(
+            child: DecoratedBox(
               decoration: BoxDecoration(
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.15 * shadowAnimation.value),
-                    blurRadius: 20,
-                    spreadRadius: 2,
-                    offset: const Offset(-5, 0),
-                  ),
-                ],
+                boxShadow: isIdle
+                    ? const []
+                    : [
+                        BoxShadow(
+                          color: Colors.black.withValues(
+                              alpha: 0.15 * shadowAnimation.value),
+                          blurRadius: 20,
+                          spreadRadius: 2,
+                          offset: const Offset(-5, 0),
+                        ),
+                      ],
               ),
               child: SlideTransition(
                 position: secondarySlide,
@@ -142,11 +150,16 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
   static const double _kPopThreshold = 0.35;
   static const double _kMinFlingVelocity = 500.0;
 
-  double get _screenWidth => MediaQuery.of(context).size.width;
+  double get _screenWidth => TileViewportScope.widthOf(context);
 
   bool _canPop() {
-    final navigator = Navigator.of(context);
-    if (!navigator.canPop()) return false;
+    if (!mounted) return false;
+    if (_isActive) return true;
+    final modalRoute = ModalRoute.of(context);
+    if (modalRoute?.isCurrent != true) return false;
+    if (!widget.animation.isCompleted) return false;
+    final navigator = Navigator.maybeOf(context);
+    if (navigator == null || !navigator.canPop()) return false;
 
     // We allow swipe back even if PopScope(canPop: false) is active,
     // because we want iOS-style "always back" gesture in chats.
@@ -154,12 +167,14 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
     return true;
   }
 
+  bool _isPopBlocked() {
+    if (!mounted) return false;
+    final modalRoute = ModalRoute.of(context);
+    return modalRoute?.popDisposition == RoutePopDisposition.doNotPop;
+  }
+
   void _onHorizontalDragStart(DragStartDetails details) {
     if (!_canPop()) return;
-
-    final modalRoute = ModalRoute.of(context);
-    if (modalRoute?.isCurrent != true) return;
-    if (!widget.animation.isCompleted) return;
 
     Navigator.of(context).didStartUserGesture();
 
@@ -251,29 +266,193 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
 
   @override
   Widget build(BuildContext context) {
-    final modalRoute = ModalRoute.of(context);
-    final isPopBlocked = modalRoute?.popDisposition == RoutePopDisposition.doNotPop;
-    final mediaQuery = MediaQuery.of(context);
-    final screenHeight = mediaQuery.size.height;
-    final screenWidth = mediaQuery.size.width;
-    final bottomInset = mediaQuery.viewInsets.bottom;
+    final tileSize = TileViewportScope.sizeOf(context);
+    final screenHeight = tileSize.height;
+    final screenWidth = tileSize.width;
+    final bottomInset = TileViewportScope.viewInsetsOf(context).bottom;
 
     return RawGestureDetector(
       gestures: <Type, GestureRecognizerFactory>{
         _BackGestureRecognizer: GestureRecognizerFactoryWithHandlers<_BackGestureRecognizer>(
           () => _BackGestureRecognizer(
-            canPop: modalRoute?.canPop ?? false,
+            canPopGetter: _canPop,
+            isPopBlockedGetter: _isPopBlocked,
             screenHeight: screenHeight,
             screenWidth: screenWidth,
             bottomInset: bottomInset,
-            isPopBlocked: isPopBlocked,
           ),
           (_BackGestureRecognizer instance) {
-            instance.canPop = modalRoute?.canPop ?? false;
+            instance.canPopGetter = _canPop;
+            instance.isPopBlockedGetter = _isPopBlocked;
             instance.screenHeight = screenHeight;
             instance.screenWidth = screenWidth;
             instance.bottomInset = bottomInset;
-            instance.isPopBlocked = isPopBlocked;
+            instance.onStart = _onHorizontalDragStart;
+            instance.onUpdate = _onHorizontalDragUpdate;
+            instance.onEnd = _onHorizontalDragEnd;
+            instance.onCancel = _onHorizontalDragCancel;
+          },
+        ),
+      },
+      behavior: HitTestBehavior.translucent,
+      child: widget.child,
+    );
+  }
+}
+
+/// Переиспользуемый детектор интерактивного свайпа назад (1:1 с пальцем + пружинная физика),
+/// используемый для закрытия корневого экрана чата в однооконном режиме тайлинговой архитектуры.
+class InteractiveSwipeBackGestureDetector extends StatefulWidget {
+  final Widget child;
+  final AnimationController animationController;
+  final bool Function() canSwipeBack;
+  final bool Function()? isPopBlocked;
+  final VoidCallback? onDragStart;
+  final VoidCallback onDismissed;
+  final VoidCallback? onRestored;
+  final Size? viewportSizeOverride;
+
+  const InteractiveSwipeBackGestureDetector({
+    super.key,
+    required this.child,
+    required this.animationController,
+    required this.canSwipeBack,
+    required this.onDismissed,
+    this.isPopBlocked,
+    this.onDragStart,
+    this.onRestored,
+    this.viewportSizeOverride,
+  });
+
+  @override
+  State<InteractiveSwipeBackGestureDetector> createState() =>
+      _InteractiveSwipeBackGestureDetectorState();
+}
+
+class _InteractiveSwipeBackGestureDetectorState
+    extends State<InteractiveSwipeBackGestureDetector> {
+  bool _isActive = false;
+  double _dragOffset = 0.0;
+
+  static const double _kPopThreshold = 0.35;
+  static const double _kMinFlingVelocity = 500.0;
+
+  Size get _effectiveSize =>
+      widget.viewportSizeOverride ?? TileViewportScope.sizeOf(context);
+
+  double get _screenWidth {
+    final w = _effectiveSize.width;
+    return w > 0 ? w : 1.0;
+  }
+
+  bool _canSwipe() {
+    if (!mounted) return false;
+    if (_isActive) return true;
+    return widget.canSwipeBack();
+  }
+
+  bool _isBlocked() {
+    if (!mounted) return false;
+    return widget.isPopBlocked?.call() ?? false;
+  }
+
+  void _onHorizontalDragStart(DragStartDetails details) {
+    if (!_canSwipe()) return;
+    _isActive = true;
+    _dragOffset = 0.0;
+    widget.onDragStart?.call();
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails details) {
+    if (!_isActive) return;
+
+    _dragOffset += details.delta.dx;
+    final offset = math.max(0.0, _dragOffset);
+    final progress = (offset / _screenWidth).clamp(0.0, 1.0);
+
+    widget.animationController.value = 1.0 - progress;
+  }
+
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    if (!_isActive) return;
+    _isActive = false;
+
+    final progress =
+        (math.max(0.0, _dragOffset) / _screenWidth).clamp(0.0, 1.0);
+    final velocity = details.primaryVelocity ?? 0.0;
+
+    final shouldDismiss =
+        progress > _kPopThreshold || velocity > _kMinFlingVelocity;
+
+    if (shouldDismiss) {
+      HapticUtils.impact();
+      final simulation = SpringSimulation(
+        const SpringDescription(mass: 1.0, stiffness: 400, damping: 28),
+        widget.animationController.value,
+        0.0,
+        -velocity / _screenWidth,
+      );
+      widget.animationController.animateWith(simulation).then((_) {
+        if (mounted) {
+          widget.onDismissed();
+        }
+      });
+    } else {
+      final simulation = SpringSimulation(
+        const SpringDescription(mass: 1.0, stiffness: 400, damping: 28),
+        widget.animationController.value,
+        1.0,
+        -velocity / _screenWidth,
+      );
+      widget.animationController.animateWith(simulation).then((_) {
+        if (mounted) {
+          widget.onRestored?.call();
+        }
+      });
+    }
+  }
+
+  void _onHorizontalDragCancel() {
+    if (!_isActive) return;
+    _isActive = false;
+
+    final simulation = SpringSimulation(
+      const SpringDescription(mass: 1.0, stiffness: 400, damping: 28),
+      widget.animationController.value,
+      1.0,
+      0.0,
+    );
+    widget.animationController.animateWith(simulation).then((_) {
+      if (mounted) {
+        widget.onRestored?.call();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tileSize = _effectiveSize;
+    final screenHeight = tileSize.height;
+    final screenWidth = tileSize.width;
+    final bottomInset = TileViewportScope.viewInsetsOf(context).bottom;
+
+    return RawGestureDetector(
+      gestures: <Type, GestureRecognizerFactory>{
+        _BackGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<_BackGestureRecognizer>(
+          () => _BackGestureRecognizer(
+            canPopGetter: _canSwipe,
+            isPopBlockedGetter: _isBlocked,
+            screenHeight: screenHeight,
+            screenWidth: screenWidth,
+            bottomInset: bottomInset,
+          ),
+          (_BackGestureRecognizer instance) {
+            instance.canPopGetter = _canSwipe;
+            instance.isPopBlockedGetter = _isBlocked;
+            instance.screenHeight = screenHeight;
+            instance.screenWidth = screenWidth;
+            instance.bottomInset = bottomInset;
             instance.onStart = _onHorizontalDragStart;
             instance.onUpdate = _onHorizontalDragUpdate;
             instance.onEnd = _onHorizontalDragEnd;
@@ -291,74 +470,108 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
 /// Работает по всей площади экрана за исключением нижней зоны ввода/клавиатуры,
 /// и уступает арену жестов внутренним скроллируемым виджетам (PageView, Slider и т.д.).
 class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
-  bool canPop;
+  bool Function() canPopGetter;
+  bool Function() isPopBlockedGetter;
   double screenHeight;
   double screenWidth;
   double bottomInset;
-  bool isPopBlocked;
+  bool _gestureAccepted = false;
 
   _BackGestureRecognizer({
-    required this.canPop,
+    required this.canPopGetter,
+    required this.isPopBlockedGetter,
     required this.screenHeight,
     required this.screenWidth,
     required this.bottomInset,
-    required this.isPopBlocked,
   });
 
-  bool _isPointInExcludedArea(Offset position) {
+  bool _isAllowedDeviceKind(PointerDeviceKind kind) {
+    // Only allow touch and stylus for 1:1 finger slide-back.
+    // On desktop, mouse drags must NOT trigger slide-back (prevents text selection / accidental pops),
+    // and trackpad two-finger swipe is handled by TrackpadBackGestureWrapper.
+    return kind == PointerDeviceKind.touch ||
+        kind == PointerDeviceKind.stylus ||
+        kind == PointerDeviceKind.invertedStylus;
+  }
+
+  bool _isPointInExcludedArea(Offset localPosition) {
     // Top app bar / header area (status bar + floating glass bar) is reserved for buttons
-    if (position.dy < 110.0) return true;
+    if (localPosition.dy < 110.0) return true;
 
     // When keyboard is open, exclude the keyboard + input field area.
     // When keyboard is closed, exclude the bottom 120px where the input field is located.
     final double bottomThreshold =
         screenHeight - (bottomInset > 0 ? bottomInset + 100.0 : 120.0);
-    return position.dy > bottomThreshold;
+    return localPosition.dy > bottomThreshold;
   }
 
   @override
   bool isPointerAllowed(PointerEvent event) {
-    if (!canPop) return false;
-    if (_isPointInExcludedArea(event.position)) return false;
+    if (!canPopGetter()) return false;
+    if (!_isAllowedDeviceKind(event.kind)) return false;
+    if (_isPointInExcludedArea(event.localPosition)) return false;
+    if (isPopBlockedGetter() && event.localPosition.dy > screenHeight * 0.5) {
+      return false;
+    }
     return super.isPointerAllowed(event);
   }
 
   @override
   void addAllowedPointer(PointerDownEvent event) {
-    if (_isPointInExcludedArea(event.position)) {
+    if (!_isAllowedDeviceKind(event.kind)) {
       return;
     }
+    if (_isPointInExcludedArea(event.localPosition)) {
+      return;
+    }
+    _gestureAccepted = false;
     super.addAllowedPointer(event);
   }
 
   @override
+  void acceptGesture(int pointer) {
+    _gestureAccepted = true;
+    super.acceptGesture(pointer);
+  }
+
+  @override
+  void rejectGesture(int pointer) {
+    _gestureAccepted = false;
+    super.rejectGesture(pointer);
+  }
+
+  @override
   void handleEvent(PointerEvent event) {
-    if (!canPop || _isPointInExcludedArea(event.position)) {
-      resolve(GestureDisposition.rejected);
-      stopTrackingPointer(event.pointer);
-      return;
-    }
-
-    if (isPopBlocked && event.position.dy > screenHeight * 0.5) {
-      resolve(GestureDisposition.rejected);
-      stopTrackingPointer(event.pointer);
-      return;
-    }
-
-    if (event is PointerMoveEvent) {
-      final double dx = event.delta.dx;
-      final double dy = event.delta.dy;
-
-      // Отклоняем при движении влево или диагональном/вертикальном свайпе
-      if (dx < -0.1 || dy.abs() > dx.abs() * 0.8) {
+    if (!_gestureAccepted) {
+      if (!canPopGetter() ||
+          !_isAllowedDeviceKind(event.kind) ||
+          _isPointInExcludedArea(event.localPosition)) {
         resolve(GestureDisposition.rejected);
         stopTrackingPointer(event.pointer);
         return;
       }
-      // При движении вправо НЕ вызываем принудительный resolve(accepted),
-      // чтобы дать внутренним виджетам (PageView) возможность обработать свой скролл.
-      // Если внутренний виджет не может скроллиться (или достиг границы),
-      // Flutter естественным образом отдаёт победу в арене жестов _BackGestureRecognizer.
+
+      if (isPopBlockedGetter() && event.localPosition.dy > screenHeight * 0.5) {
+        resolve(GestureDisposition.rejected);
+        stopTrackingPointer(event.pointer);
+        return;
+      }
+
+      if (event is PointerMoveEvent) {
+        final double dx = event.delta.dx;
+        final double dy = event.delta.dy;
+
+        // Отклоняем при движении влево или диагональном/вертикальном свайпе
+        if (dx < -0.1 || dy.abs() > dx.abs() * 0.8) {
+          resolve(GestureDisposition.rejected);
+          stopTrackingPointer(event.pointer);
+          return;
+        }
+        // При движении вправо НЕ вызываем принудительный resolve(accepted),
+        // чтобы дать внутренним виджетам (PageView) возможность обработать свой скролл.
+        // Если внутренний виджет не может скроллиться (или достиг границы),
+        // Flutter естественным образом отдаёт победу в арене жестов _BackGestureRecognizer.
+      }
     }
     super.handleEvent(event);
   }

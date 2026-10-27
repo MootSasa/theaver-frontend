@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +10,9 @@ import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_recorder_service.dart';
+import '../tiling/static_tile_cache_boundary.dart';
+import '../tiling/tile_viewport_scope.dart';
+import 'message_context_menu.dart';
 
 /// Full-screen Telegram-style overlay for recording circular video notes («кружочки»).
 /// Features:
@@ -55,6 +57,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   late AnimationController _pulseController;
   late AnimationController _trashController;
   late AnimationController _flipController;
+  VoidCallback? _releaseBackdropIsolation;
 
   bool _isLocked = false;
   bool _isSending = false;
@@ -110,12 +113,21 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
     widget.recorderService.addListener(_onRecorderUpdate);
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _releaseBackdropIsolation ??=
+        StaticTileCacheBoundary.acquireLiveBackdropIsolation(context);
+  }
+
   void _onRecorderUpdate() {
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _releaseBackdropIsolation?.call();
+    _releaseBackdropIsolation = null;
     widget.recorderService.removeListener(_onRecorderUpdate);
     if (!_isSending && (widget.recorderService.isRecording || widget.recorderService.isInitialized)) {
       widget.recorderService.cancelRecording();
@@ -230,7 +242,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    final size = MediaQuery.of(context).size;
+    final size = TileViewportScope.sizeOf(context);
     final diameter = math.min(size.width * 0.68, _kCircleDiameter);
 
     return FadeTransition(
@@ -241,10 +253,12 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
           children: [
           // 1. Cinematic Telegram Backdrop Blur
           Positioned.fill(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.42),
+            child: ClipRect(
+              child: BackdropFilter(
+                filter: MessageContextMenu.buildOpaqueBackdropBlurFilter(16.0),
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.42),
+                ),
               ),
             ),
           ),
@@ -439,13 +453,6 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
             color: isZoomed ? const Color(0xFF2EA6FF) : Colors.white.withValues(alpha: 0.25),
             width: 1.2,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
         ),
         child: Text(
           label,
@@ -483,14 +490,6 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
           height: diameter,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.45),
-                blurRadius: 20,
-                spreadRadius: 2,
-                offset: const Offset(0, 6),
-              ),
-            ],
             border: Border.all(
               color: Colors.white.withValues(alpha: 0.25),
               width: 2.0,

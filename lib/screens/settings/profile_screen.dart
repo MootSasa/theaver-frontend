@@ -29,12 +29,14 @@ import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../utils/avatar_crop_utils.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../widgets/notifications/in_app_notification_banner.dart';
+import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../widgets/profile/avatar_gallery_viewer.dart';
 import '../../widgets/profile/expandable_avatar.dart';
 import '../../widgets/profile/liquid_glass_info_panel.dart';
@@ -255,8 +257,6 @@ class ProfileScreenState extends State<ProfileScreen>
   final FocusNode _keyboardFocusNode = FocusNode();
   Timer? _wheelSnapTimer;
   double _lastWheelDy = 0.0;
-  double _horizontalWheelAccum = 0.0;
-  DateTime? _lastHorizontalSwitchTime;
 
   bool get _canEditGroupOrChannel =>
       (_isGroup || _isChannel) && (_myRole == 'owner' || _myRole == 'admin');
@@ -500,6 +500,39 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  String? _boundTileId;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final newTileId = TileViewportScope.maybeTileIdOf(context);
+    if (newTileId != _boundTileId) {
+      if (_boundTileId != null) {
+        TilingLayoutController.instance.unregisterTileBackHandler(
+          _boundTileId!,
+          _handleTileBack,
+        );
+      }
+      _boundTileId = newTileId;
+      if (_boundTileId != null) {
+        TilingLayoutController.instance.registerTileBackHandler(
+          _boundTileId!,
+          _handleTileBack,
+        );
+      }
+    }
+  }
+
+  bool _handleTileBack() {
+    if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+    if (_isAnyMenuOpen) {
+      _closeAllMenus();
+      return true;
+    }
+    return false;
+  }
+
   void _onScroll() {
     if (mounted) {
       setState(() {});
@@ -508,6 +541,12 @@ class ProfileScreenState extends State<ProfileScreen>
 
   @override
   void dispose() {
+    if (_boundTileId != null) {
+      TilingLayoutController.instance.unregisterTileBackHandler(
+        _boundTileId!,
+        _handleTileBack,
+      );
+    }
     _wheelSnapTimer?.cancel();
     _keyboardFocusNode.dispose();
     if (_isSelf) {
@@ -1385,6 +1424,37 @@ class ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  void _pushOrOpenChatInWorkspace({
+    required String chatId,
+    required String chatType,
+    required String title,
+    String? avatarUrl,
+    String? otherUserId,
+    bool? otherUserOnline,
+    String? initialMessageId,
+    required Widget Function(BuildContext) builder,
+  }) {
+    final tiling = TilingLayoutController.instance;
+    final tileId = TileViewportScope.maybeTileIdOf(context);
+    if (tiling.isWorkspaceMounted &&
+        (tileId == TilingLayoutController.kLeftTileId || tileId == null)) {
+      tiling.openChatInActiveTile(
+        chatId: chatId,
+        chatType: chatType,
+        title: title,
+        avatarUrl: avatarUrl,
+        otherUserId: otherUserId,
+        otherUserOnline: otherUserOnline,
+        initialMessageId: initialMessageId,
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(builder: builder),
+    );
+  }
+
   Future<void> _openOrReturnToChat() async {
     HapticUtils.tap();
     if (widget.chatId != null && widget.chatId!.isNotEmpty) {
@@ -1392,16 +1462,20 @@ class ProfileScreenState extends State<ProfileScreen>
       return;
     }
     if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) {
-      Navigator.push(
-        context,
-        SwipeBackPageRoute(
-          builder: (_) => PrivateChatScreen(
-            chatId: _resolvedChatId!,
-            otherUserId: widget.userId,
-            otherUserName: _getDisplayName(),
-            otherUserAvatar: _avatarUrl,
-            otherUserOnline: _isOnline,
-          ),
+      final cid = _resolvedChatId!;
+      _pushOrOpenChatInWorkspace(
+        chatId: cid,
+        chatType: 'private',
+        title: _getDisplayName(),
+        avatarUrl: _avatarUrl,
+        otherUserId: widget.userId,
+        otherUserOnline: _isOnline,
+        builder: (_) => PrivateChatScreen(
+          chatId: cid,
+          otherUserId: widget.userId,
+          otherUserName: _getDisplayName(),
+          otherUserAvatar: _avatarUrl,
+          otherUserOnline: _isOnline,
         ),
       );
       return;
@@ -1414,16 +1488,19 @@ class ProfileScreenState extends State<ProfileScreen>
       if (res['success'] == true && res['chat'] is Chat && mounted) {
         final cid = (res['chat'] as Chat).id;
         _resolvedChatId = cid;
-        Navigator.push(
-          context,
-          SwipeBackPageRoute(
-            builder: (_) => PrivateChatScreen(
-              chatId: cid,
-              otherUserId: widget.userId,
-              otherUserName: _getDisplayName(),
-              otherUserAvatar: _avatarUrl,
-              otherUserOnline: _isOnline,
-            ),
+        _pushOrOpenChatInWorkspace(
+          chatId: cid,
+          chatType: 'private',
+          title: _getDisplayName(),
+          avatarUrl: _avatarUrl,
+          otherUserId: widget.userId,
+          otherUserOnline: _isOnline,
+          builder: (_) => PrivateChatScreen(
+            chatId: cid,
+            otherUserId: widget.userId,
+            otherUserName: _getDisplayName(),
+            otherUserAvatar: _avatarUrl,
+            otherUserOnline: _isOnline,
           ),
         );
       }
@@ -1792,42 +1869,53 @@ class ProfileScreenState extends State<ProfileScreen>
 
     final cid = msg.chatId;
     if (_isGroup) {
-      Navigator.push(
-        context,
-        SwipeBackPageRoute(
-          builder: (_) => GroupChatScreen(
-            chatId: cid,
-            groupName: _getDisplayName(),
-            initialMessageId: targetMsgId,
-          ),
+      final groupTitle = _getDisplayName();
+      _pushOrOpenChatInWorkspace(
+        chatId: cid,
+        chatType: 'group',
+        title: groupTitle,
+        avatarUrl: _avatarUrl,
+        initialMessageId: targetMsgId,
+        builder: (_) => GroupChatScreen(
+          chatId: cid,
+          groupName: groupTitle,
+          initialMessageId: targetMsgId,
         ),
       );
     } else if (_isChannel) {
-      Navigator.push(
-        context,
-        SwipeBackPageRoute(
-          builder: (_) => ChannelScreen(
-            channelId: cid,
-            channelName: _getDisplayName(),
-            channelAvatar: _avatarUrl,
-            highlightMessageId: targetMsgId,
-          ),
+      final channelTitle = _getDisplayName();
+      _pushOrOpenChatInWorkspace(
+        chatId: cid,
+        chatType: 'channel',
+        title: channelTitle,
+        avatarUrl: _avatarUrl,
+        initialMessageId: targetMsgId,
+        builder: (_) => ChannelScreen(
+          channelId: cid,
+          channelName: channelTitle,
+          channelAvatar: _avatarUrl,
+          highlightMessageId: targetMsgId,
         ),
       );
     } else {
       final l10n = context.l10n;
-      Navigator.push(
-        context,
-        SwipeBackPageRoute(
-          builder: (_) => PrivateChatScreen(
-            chatId: cid,
-            otherUserId: _isSelf ? null : widget.userId,
-            otherUserName: _isSelf
-                ? _tr(l10n, 'profile_saved_messages', 'Избранное')
-                : _getDisplayName(),
-            otherUserAvatar: _avatarUrl,
-            initialMessageId: targetMsgId,
-          ),
+      final peerTitle = _isSelf
+          ? _tr(l10n, 'profile_saved_messages', 'Избранное')
+          : _getDisplayName();
+      _pushOrOpenChatInWorkspace(
+        chatId: cid,
+        chatType: 'private',
+        title: peerTitle,
+        avatarUrl: _avatarUrl,
+        otherUserId: _isSelf ? null : widget.userId,
+        otherUserOnline: _isSelf ? true : _isOnline,
+        initialMessageId: targetMsgId,
+        builder: (_) => PrivateChatScreen(
+          chatId: cid,
+          otherUserId: _isSelf ? null : widget.userId,
+          otherUserName: peerTitle,
+          otherUserAvatar: _avatarUrl,
+          initialMessageId: targetMsgId,
         ),
       );
     }
@@ -2504,7 +2592,6 @@ class ProfileScreenState extends State<ProfileScreen>
         : event.scrollDelta.dy;
 
     if (dx.abs() > dy.abs() && dx.abs() > 0.5) {
-      _handleHorizontalWheelDelta(dx);
       return;
     }
 
@@ -2520,7 +2607,6 @@ class ProfileScreenState extends State<ProfileScreen>
     final dx = -event.panDelta.dx;
     final dy = -event.panDelta.dy;
     if (dx.abs() > dy.abs() * 1.3 && dx.abs() > 1.0) {
-      _handleHorizontalWheelDelta(dx);
       return;
     }
     if (dy != 0.0) {
@@ -2744,35 +2830,6 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  void _handleHorizontalWheelDelta(double dx) {
-    final now = DateTime.now();
-    if (_lastHorizontalSwitchTime != null &&
-        now.difference(_lastHorizontalSwitchTime!).inMilliseconds < 280) {
-      return;
-    }
-    if ((_horizontalWheelAccum > 0 && dx < 0) ||
-        (_horizontalWheelAccum < 0 && dx > 0)) {
-      _horizontalWheelAccum = 0.0;
-    }
-    _horizontalWheelAccum += dx;
-    if (_horizontalWheelAccum.abs() >= 36.0) {
-      final sections = _buildSections(context.l10n);
-      final safeIdx = _selectedSectionIndex.clamp(
-          0, math.max<int>(0, sections.length - 1));
-      if (_horizontalWheelAccum > 0 && safeIdx < sections.length - 1) {
-        _lastHorizontalSwitchTime = now;
-        _horizontalWheelAccum = 0.0;
-        HapticUtils.selection();
-        _selectSection(safeIdx + 1);
-      } else if (_horizontalWheelAccum < 0 && safeIdx > 0) {
-        _lastHorizontalSwitchTime = now;
-        _horizontalWheelAccum = 0.0;
-        HapticUtils.selection();
-        _selectSection(safeIdx - 1);
-      }
-    }
-  }
-
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (ModalRoute.of(context)?.isCurrent != true) {
@@ -2844,7 +2901,7 @@ class ProfileScreenState extends State<ProfileScreen>
     final dy = details.delta.dy;
     if (dy == 0.0) return;
 
-    final screenHeight = MediaQuery.of(context).size.height;
+    final screenHeight = TileViewportScope.heightOf(context);
     final currentScroll =
         _scrollController.hasClients ? _scrollController.offset : 0.0;
 
@@ -2933,7 +2990,7 @@ class ProfileScreenState extends State<ProfileScreen>
           if (_didTriggerFullscreenOnOverPull) return;
           _overExpandController.stop();
 
-          final screenWidth = MediaQuery.of(context).size.width;
+          final screenWidth = TileViewportScope.widthOf(context);
           final maxPullDistance =
               math.max(120.0, (screenHeight - screenWidth) / 2.0);
           final overDelta = remainingDy / maxPullDistance;
@@ -2992,7 +3049,7 @@ class ProfileScreenState extends State<ProfileScreen>
     //   при дальнейшем движении пальца вверх анимация завершается полностью (`0.38 -> 0.0`),
     //   а при отпускании пальца — сама доводится до конца (`0.0`).
     if (_overExpandProgress > 0.0 && !_didTriggerFullscreenOnOverPull) {
-      final screenWidth = MediaQuery.of(context).size.width;
+      final screenWidth = TileViewportScope.widthOf(context);
       final maxPullDistance =
           math.max(120.0, (screenHeight - screenWidth) / 2.0);
       final overDelta = dy / maxPullDistance;
@@ -3380,8 +3437,8 @@ class ProfileScreenState extends State<ProfileScreen>
         ? Colors.white
         : (isDark ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E));
 
-    final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
+    final screenWidth = TileViewportScope.widthOf(context);
+    final screenHeight = TileViewportScope.heightOf(context);
     final statusBarHeight = MediaQuery.of(context).padding.top;
 
     // Шапка расположена ниже полосок-индикаторов фотографий (которые находятся на statusBarHeight + 6.0)
@@ -3529,12 +3586,15 @@ class ProfileScreenState extends State<ProfileScreen>
                     behavior: HitTestBehavior.translucent,
                     onPointerSignal: _handlePointerSignal,
                     onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onVerticalDragStart: _handleVerticalDragStart,
-                      onVerticalDragUpdate: _handleVerticalDragUpdate,
-                      onVerticalDragEnd: _handleVerticalDragEnd,
-                      child: Stack(
+                    child: LiquidGlassBatch(
+                      enabled: isGlass &&
+                          LiquidGlassBatch.backdropIdOf(context) == null,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onVerticalDragStart: _handleVerticalDragStart,
+                        onVerticalDragUpdate: _handleVerticalDragUpdate,
+                        onVerticalDragEnd: _handleVerticalDragEnd,
+                        child: Stack(
                     key: _profileStackKey,
                     children: [
                       // 1. Основной адаптивный фон экрана
@@ -3753,101 +3813,81 @@ class ProfileScreenState extends State<ProfileScreen>
                                   const SizedBox(height: 12),
 
                                   // Контент выбранной вкладки естественной высоты (без искусственного ограничения SizedBox/PageView)
-                                  GestureDetector(
-                                    behavior: HitTestBehavior.translucent,
-                                    onHorizontalDragEnd: (details) {
-                                      final vx = details.primaryVelocity ?? 0.0;
-                                      if (vx < -280 &&
-                                          safeSectionIdx <
-                                              sections.length - 1) {
-                                        _selectSection(safeSectionIdx + 1);
-                                      } else if (vx > 280 &&
-                                          safeSectionIdx > 0) {
-                                        _selectSection(safeSectionIdx - 1);
-                                      }
-                                    },
-                                    child: ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        minHeight: math.max(
-                                          340.0,
-                                          screenHeight - headerTopY - 56.0,
-                                        ),
+                                  ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      minHeight: math.max(
+                                        340.0,
+                                        screenHeight - headerTopY - 56.0,
                                       ),
-                                      child: Padding(
-                                        padding:
-                                            const EdgeInsets.only(bottom: 48),
-                                        child: AnimatedSwitcher(
-                                          duration: const Duration(
-                                              milliseconds: 220),
-                                          switchInCurve: Curves.easeOutCubic,
-                                          switchOutCurve: Curves.easeInCubic,
-                                          layoutBuilder: (currentChild,
-                                              previousChildren) {
-                                            return Stack(
-                                              alignment: Alignment.topCenter,
-                                              children: <Widget>[
-                                                ...previousChildren,
-                                                if (currentChild != null)
-                                                  currentChild,
-                                              ],
-                                            );
-                                          },
-                                          child: KeyedSubtree(
-                                            key: ValueKey<ProfileSectionType>(
-                                              sections[safeSectionIdx].type,
-                                            ),
-                                            child: ProfileSectionPageContent(
-                                              sectionType:
-                                                  sections[safeSectionIdx].type,
-                                              glassEnabled: isGlass,
-                                              isLite: isLite,
-                                              chatId: _resolvedChatId ?? '',
-                                              chatType: _isGroup
-                                                  ? 'group'
-                                                  : (_isChannel
-                                                      ? 'channel'
-                                                      : 'private'),
-                                              chatTitle: _getDisplayName(),
-                                              currentUserId: _accountManager
-                                                  .currentAccount?.userId,
-                                              members: _members,
-                                              mediaMessages: _mediaMessages,
-                                              fileMessages: _fileMessages,
-                                              linkMessages: _linkMessages,
-                                              voiceMessages: _voiceMessages,
-                                              canAddMembers:
-                                                  _canAddGroupMembers,
-                                              canManageMembers:
-                                                  _canEditGroupOrChannel,
-                                              onAddMemberTap:
-                                                  _showAddMemberDialog,
-                                              onMemberTap: (m) {
-                                                Navigator.push(
-                                                  context,
-                                                  SwipeBackPageRoute(
-                                                    builder: (_) =>
-                                                        ProfileScreen(
-                                                      entityType:
-                                                          ProfileEntityType
-                                                              .user,
-                                                      userId: m.userId,
-                                                      initialName:
-                                                          m.displayName,
-                                                      initialAvatarUrl:
-                                                          m.avatarUrl,
-                                                      initialIsOnline:
-                                                          m.isOnline,
-                                                    ),
+                                    ),
+                                    child: Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 48),
+                                      child: AnimatedSwitcher(
+                                        duration:
+                                            const Duration(milliseconds: 220),
+                                        switchInCurve: Curves.easeOutCubic,
+                                        switchOutCurve: Curves.easeInCubic,
+                                        layoutBuilder:
+                                            (currentChild, previousChildren) {
+                                          return Stack(
+                                            alignment: Alignment.topCenter,
+                                            children: <Widget>[
+                                              ...previousChildren,
+                                              if (currentChild != null)
+                                                currentChild,
+                                            ],
+                                          );
+                                        },
+                                        child: KeyedSubtree(
+                                          key: ValueKey<ProfileSectionType>(
+                                            sections[safeSectionIdx].type,
+                                          ),
+                                          child: ProfileSectionPageContent(
+                                            sectionType:
+                                                sections[safeSectionIdx].type,
+                                            glassEnabled: isGlass,
+                                            isLite: isLite,
+                                            chatId: _resolvedChatId ?? '',
+                                            chatType: _isGroup
+                                                ? 'group'
+                                                : (_isChannel
+                                                    ? 'channel'
+                                                    : 'private'),
+                                            chatTitle: _getDisplayName(),
+                                            currentUserId: _accountManager
+                                                .currentAccount?.userId,
+                                            members: _members,
+                                            mediaMessages: _mediaMessages,
+                                            fileMessages: _fileMessages,
+                                            linkMessages: _linkMessages,
+                                            voiceMessages: _voiceMessages,
+                                            canAddMembers: _canAddGroupMembers,
+                                            canManageMembers:
+                                                _canEditGroupOrChannel,
+                                            onAddMemberTap:
+                                                _showAddMemberDialog,
+                                            onMemberTap: (m) {
+                                              Navigator.push(
+                                                context,
+                                                SwipeBackPageRoute(
+                                                  builder: (_) => ProfileScreen(
+                                                    entityType:
+                                                        ProfileEntityType.user,
+                                                    userId: m.userId,
+                                                    initialName: m.displayName,
+                                                    initialAvatarUrl:
+                                                        m.avatarUrl,
+                                                    initialIsOnline: m.isOnline,
                                                   ),
-                                                );
-                                              },
-                                              onToggleAdminRole:
-                                                  _handleToggleMemberRole,
-                                              onRemoveMember:
-                                                  _handleRemoveMember,
-                                              onJumpToMessage:
-                                                  _handleJumpToMessage,
-                                            ),
+                                                ),
+                                              );
+                                            },
+                                            onToggleAdminRole:
+                                                _handleToggleMemberRole,
+                                            onRemoveMember: _handleRemoveMember,
+                                            onJumpToMessage:
+                                                _handleJumpToMessage,
                                           ),
                                         ),
                                       ),
@@ -3910,11 +3950,13 @@ class ProfileScreenState extends State<ProfileScreen>
                           left: 0,
                           right: 0,
                           height: dissolveOverlayHeight,
-                          child: LiquidGlassScrollEdge(
-                            edge: LiquidGlassEdge.bottom,
-                            style: LiquidGlassScrollEdgeStyle.soft,
-                            blur: 6.0 * blurFactor,
-                            color: Colors.transparent,
+                          child: LiquidGlassBatch.exclude(
+                            child: LiquidGlassScrollEdge(
+                              edge: LiquidGlassEdge.bottom,
+                              style: LiquidGlassScrollEdgeStyle.soft,
+                              blur: 6.0 * blurFactor,
+                              color: Colors.transparent,
+                            ),
                           ),
                         ),
 
@@ -3926,17 +3968,19 @@ class ProfileScreenState extends State<ProfileScreen>
                           left: 0,
                           right: 0,
                           height: statusBarHeight + 12.0 * statusBarEdgeProgress,
-                          child: LiquidGlassScrollEdge(
-                            edge: LiquidGlassEdge.top,
-                            style: LiquidGlassScrollEdgeStyle.soft,
-                            blur: math.max(
-                                  context.read<LiquidGlassProvider>().blur,
-                                  10.0,
-                                ) *
-                                statusBarEdgeProgress,
-                            color: Colors.black.withValues(
-                              alpha: (effectiveIsDark ? 0.36 : 0.20) *
+                          child: LiquidGlassBatch.exclude(
+                            child: LiquidGlassScrollEdge(
+                              edge: LiquidGlassEdge.top,
+                              style: LiquidGlassScrollEdgeStyle.soft,
+                              blur: math.max(
+                                    context.read<LiquidGlassProvider>().blur,
+                                    10.0,
+                                  ) *
                                   statusBarEdgeProgress,
+                              color: Colors.black.withValues(
+                                alpha: (effectiveIsDark ? 0.36 : 0.20) *
+                                    statusBarEdgeProgress,
+                              ),
                             ),
                           ),
                         ),
@@ -4016,6 +4060,7 @@ class ProfileScreenState extends State<ProfileScreen>
                 ),
               ),
             ),
+          ),
         ),
       ),
     );
@@ -4664,26 +4709,29 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
       final Widget morphChild = SizedBox(
         width: _menuWidth,
         height: openHeight,
-        child: LiquidGlassMorph(
-          key: const ValueKey<String>('profile_header_menu_morph'),
-          alignment: Alignment.topRight,
-          motion: LiquidGlassMorphMotion.fluid,
-          smoothness: 28,
-          style: glassStyle,
-          child: _isOpen
-              ? _TopMorphMenu(
-                  key: const ValueKey<String>('profile_menu'),
-                  width: _menuWidth,
-                  isDark: widget.isDark,
-                  items: widget.items,
-                  onItemTap: _handleAction,
-                )
-              : _ThreeDotsGlyph(
-                  key: const ValueKey<String>('profile_glyph'),
-                  size: _ctrlSize,
-                  color: widget.iconColor,
-                  onTap: _toggleMenu,
-                ),
+        child: LiquidGlassBatch(
+          enabled: !_isOpen,
+          child: LiquidGlassMorph(
+            key: const ValueKey<String>('profile_header_menu_morph'),
+            alignment: Alignment.topRight,
+            motion: LiquidGlassMorphMotion.fluid,
+            smoothness: 28,
+            style: glassStyle,
+            child: _isOpen
+                ? _TopMorphMenu(
+                    key: const ValueKey<String>('profile_menu'),
+                    width: _menuWidth,
+                    isDark: widget.isDark,
+                    items: widget.items,
+                    onItemTap: _handleAction,
+                  )
+                : _ThreeDotsGlyph(
+                    key: const ValueKey<String>('profile_glyph'),
+                    size: _ctrlSize,
+                    color: widget.iconColor,
+                    onTap: _toggleMenu,
+                  ),
+          ),
         ),
       );
 

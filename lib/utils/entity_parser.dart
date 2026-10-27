@@ -90,13 +90,22 @@ class EntityParser {
     return cleaned;
   }
 
+  static final RegExp _mdLinkRegex =
+      RegExp(r'\[(?:[^\]]*)\]\(((?:https?:\/\/|www\.)?[^\s\)]+)\)');
+  static const int _kMaxUrlCacheSize = 256;
+  static final Map<String, List<String>> _extractUrlsCache =
+      <String, List<String>>{};
+
   /// Extract all URLs found in the text.
   static List<String> extractUrls(String text) {
+    if (text.isEmpty) return const <String>[];
+    final cached = _extractUrlsCache[text];
+    if (cached != null) return cached;
+
     final urls = <String>[];
 
     // 1. Explicit markdown links: [label](url)
-    final mdLinkRegex = RegExp(r'\[(?:[^\]]*)\]\(((?:https?:\/\/|www\.)?[^\s\)]+)\)');
-    for (final match in mdLinkRegex.allMatches(text)) {
+    for (final match in _mdLinkRegex.allMatches(text)) {
       final u = normalizeUrl(match.group(1)!);
       if (u.isNotEmpty && !urls.contains(u)) {
         urls.add(u);
@@ -111,7 +120,12 @@ class EntityParser {
       }
     }
 
-    return urls;
+    final result = urls.isEmpty ? const <String>[] : List<String>.unmodifiable(urls);
+    if (_extractUrlsCache.length >= _kMaxUrlCacheSize) {
+      _extractUrlsCache.remove(_extractUrlsCache.keys.first);
+    }
+    _extractUrlsCache[text] = result;
+    return result;
   }
 
   static final RegExp _latexRegex = RegExp(
@@ -1223,5 +1237,196 @@ class EntityParser {
         extentOffset: newSelectionEnd,
       ),
     );
+  }
+
+  static final RegExp _formattingSyntaxCheck = RegExp(
+    r'(\*\*|\*[^\s*]|__|_[^\s_]|~~|`|\|\||\[[^\]]*\]\(|^>\s?|\n>\s?|\*\*>\s?|\$\$|\\\[|\\\(|(?<!\\)\$(?!\s)|<u>|<\/u>)',
+  );
+
+  static const int _kMaxResolvedCacheSize = 512;
+  static final Map<int, ParsedMessage> _resolvedMessageCache =
+      <int, ParsedMessage>{};
+
+  static int _snapUtf16Offset(String text, int index) {
+    final clamped = index.clamp(0, text.length);
+    if (clamped > 0 && clamped < text.length) {
+      final cu = text.codeUnitAt(clamped);
+      if (cu >= 0xDC00 && cu <= 0xDFFF) {
+        return clamped - 1;
+      }
+    }
+    return clamped;
+  }
+
+  /// Resolves a message's [rawText] and optional [existingEntities] directly into
+  /// a normalized [ParsedMessage] without converting back to Markdown.
+  static ParsedMessage resolveMessageEntities(
+    String rawText,
+    List<MessageEntity>? existingEntities,
+  ) {
+    if (rawText.isEmpty) {
+      return const ParsedMessage(cleanText: '', entities: []);
+    }
+
+    final bool hasExisting =
+        existingEntities != null && existingEntities.isNotEmpty;
+    final int entitiesHash = hasExisting
+        ? Object.hashAll(
+            existingEntities.map(
+              (e) => Object.hash(
+                e.type,
+                e.offset,
+                e.length,
+                e.url,
+                e.language,
+                e.collapsed,
+              ),
+            ),
+          )
+        : 0;
+    final int cacheKey = Object.hash(rawText, entitiesHash);
+    final cached = _resolvedMessageCache[cacheKey];
+    if (cached != null) return cached;
+
+    String cleanText;
+    List<MessageEntity> baseEntities;
+
+    if (hasExisting) {
+      String candidateText = rawText.replaceAll('\r\n', '\n');
+      // Guard against edge-case callers that passed Markdown-serialized text
+      // alongside cleanText entity offsets.
+      final bool looksLikeUnstrippedMarkdown = existingEntities.any((e) {
+        if (e.offset < 0 || e.offset >= candidateText.length) return false;
+        final tail = candidateText.substring(e.offset);
+        if (_isQuoteType(e.type) &&
+            (tail.startsWith('> ') || tail.startsWith('**>'))) {
+          return true;
+        }
+        if (e.type == 'spoiler' && tail.startsWith('||')) {
+          return true;
+        }
+        return false;
+      });
+
+      if (looksLikeUnstrippedMarkdown) {
+        candidateText = parseMarkdown(candidateText).cleanText;
+      }
+      cleanText = candidateText.trimRight();
+      baseEntities = <MessageEntity>[];
+
+      for (final e in existingEntities) {
+        int start = _snapUtf16Offset(cleanText, e.offset);
+        int end = _snapUtf16Offset(cleanText, e.offset + e.length);
+        if (start >= end) continue;
+
+        if (_isQuoteType(e.type) || e.type == 'pre') {
+          while (start < end &&
+              (cleanText.codeUnitAt(start) == 0x0A ||
+                  cleanText.codeUnitAt(start) == 0x0D)) {
+            start++;
+          }
+          while (end > start &&
+              (cleanText.codeUnitAt(end - 1) == 0x0A ||
+                  cleanText.codeUnitAt(end - 1) == 0x0D)) {
+            end--;
+          }
+          if (start >= end) continue;
+        }
+
+        baseEntities.add(e.copyWith(offset: start, length: end - start));
+      }
+
+      // Auto-detect bare URLs not already covered by link/code/pre entities
+      for (final match in _urlRegex.allMatches(cleanText)) {
+        final rawUrl = match.group(0)!;
+        final url = cleanUrl(rawUrl);
+        if (url.isEmpty) continue;
+        final start = match.start;
+        final len = url.length;
+        final end = start + len;
+
+        final covered = baseEntities.any((e) {
+          final eEnd = e.offset + e.length;
+          if (e.type == 'pre' || e.type == 'code') {
+            return start < eEnd && end > e.offset;
+          }
+          if (e.type == 'text_link' || e.type == 'link' || e.type == 'url') {
+            return start < eEnd && end > e.offset;
+          }
+          return false;
+        });
+
+        if (!covered) {
+          baseEntities.add(MessageEntity(
+            type: 'url',
+            offset: start,
+            length: len,
+            url: url,
+          ));
+        }
+      }
+    } else {
+      final normalized = rawText.replaceAll('\r\n', '\n').trimRight();
+      if (!_formattingSyntaxCheck.hasMatch(normalized) &&
+          !_urlRegex.hasMatch(normalized)) {
+        final plainRes = ParsedMessage(cleanText: normalized, entities: const []);
+        if (_resolvedMessageCache.length >= _kMaxResolvedCacheSize) {
+          _resolvedMessageCache.remove(_resolvedMessageCache.keys.first);
+        }
+        _resolvedMessageCache[cacheKey] = plainRes;
+        return plainRes;
+      }
+      final parsed = parseMarkdown(normalized);
+      cleanText = parsed.cleanText.trimRight();
+      baseEntities = <MessageEntity>[];
+      for (final e in parsed.entities) {
+        final start = _snapUtf16Offset(cleanText, e.offset);
+        final end = _snapUtf16Offset(cleanText, e.offset + e.length);
+        if (start < end) {
+          baseEntities.add(e.copyWith(offset: start, length: end - start));
+        }
+      }
+    }
+
+    // Detect LaTeX formulas outside pre/code blocks
+    if (cleanText.contains(r'$') || cleanText.contains(r'\')) {
+      for (final m in _latexRegex.allMatches(cleanText)) {
+        final start = m.start;
+        final end = m.end;
+        final insideCode = baseEntities.any((e) {
+          if (e.type != 'pre' && e.type != 'code') return false;
+          final eEnd = e.offset + e.length;
+          return start < eEnd && end > e.offset;
+        });
+        if (insideCode) continue;
+
+        final rawFormula = m.group(0)!.trim();
+        final bool isDisplay = (rawFormula.startsWith(r'$$') &&
+                rawFormula.endsWith(r'$$')) ||
+            (rawFormula.startsWith(r'\[') && rawFormula.endsWith(r'\]'));
+        baseEntities.add(MessageEntity(
+          type: isDisplay ? 'latex_block' : 'latex_inline',
+          offset: start,
+          length: end - start,
+          language: rawFormula,
+        ));
+      }
+    }
+
+    baseEntities.sort((a, b) {
+      if (a.offset != b.offset) return a.offset.compareTo(b.offset);
+      if (a.length != b.length) return b.length.compareTo(a.length);
+      return _entityPriority(a.type).compareTo(_entityPriority(b.type));
+    });
+
+    final result = ParsedMessage(
+      cleanText: cleanText,
+      entities: List<MessageEntity>.unmodifiable(baseEntities),
+    );
+    if (_resolvedMessageCache.length >= _kMaxResolvedCacheSize) {
+      _resolvedMessageCache.remove(_resolvedMessageCache.keys.first);
+    }
+    _resolvedMessageCache[cacheKey] = result;
+    return result;
   }
 }

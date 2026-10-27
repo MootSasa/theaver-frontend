@@ -134,12 +134,6 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
       ),
       color: isDark ? const Color(0x33202025) : const Color(0x66FFFFFF),
       blur: 5.0,
-      shadow: isDark
-          ? null
-          : const LiquidGlassShadow(
-              blur: 6.0,
-              opacity: 0.12,
-            ),
       specular: LiquidGlassLight.specular(
         thickness: 5.0,
         sharpness: 0.5,
@@ -151,7 +145,7 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
       ),
       refractionIndex: 1.1,
       refractionWidth: 24,
-      dispersion: 1.32,
+      dispersion: 0.0,
       saturation: 1.2,
       adaptivity: const LiquidGlassAdaptivity(
         glassColorOnDark: Color(0x33202025),

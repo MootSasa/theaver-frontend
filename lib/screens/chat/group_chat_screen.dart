@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
 import 'dart:async';
@@ -6,6 +7,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
+import '../../services/glass_toast_service.dart';
+import '../../utils/haptic_utils.dart';
 import '../../services/chat_service.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
@@ -35,7 +38,6 @@ import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
 import '../../widgets/chat/media_note_player_header.dart';
-import '../../utils/emoji_utils.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
@@ -62,9 +64,13 @@ import 'channel_screen.dart';
 import '../../utils/date_time_utils.dart';
 import 'group_info_screen.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
+import '../../widgets/chat/emoji_sticker_panel.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../widgets/tiling/tile_viewport_scope.dart';
 
 class GroupChatScreen extends StatefulWidget {
   static const String routeName = '/group_chat';
@@ -87,11 +93,29 @@ class GroupChatScreen extends StatefulWidget {
 }
 
 class _GroupChatScreenState extends State<GroupChatScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
   final List<Message> _messages = [];
   final MarkdownTextEditingController _messageController = MarkdownTextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _inputFocusNode = FocusNode();
+
+  // Emoji panel & keyboard state
+  bool _showEmojiPanel = false;
+  bool _isKeyboardRising = false;
+  bool _isKeyboardFalling = false;
+  double _keyboardHeight = 270.0;
+  double _lastBottomInset = 0.0;
+  Timer? _transitionTimer;
+  late AnimationController _emojiPanelController;
+  late Animation<double> _emojiPanelAnimation;
+  String? _lastActiveTileId;
+
+  bool get _isDesktopPlatform =>
+      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
+  bool get _isMobilePlatform =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   bool _isLoading = true;
   bool _isSyncing = false;
@@ -254,14 +278,35 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     });
   }
 
+  UnreadCountProvider? _unreadCountProvider;
+  String? _registeredTileId;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addObserver(this);
     ProfileInstantCache.instance.prefetchGroupOrChannel(widget.chatId);
+
+    _emojiPanelController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _emojiPanelAnimation = CurvedAnimation(
+      parent: _emojiPanelController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+
     _loadData();
+    _loadCachedKeyboardHeight();
     _initWebSocket();
+    _inputFocusNode.addListener(_onFocusChanged);
+    _lastActiveTileId = TilingLayoutController.instance.activeTileId;
+    TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
+    if (_isDesktopPlatform) {
+      HardwareKeyboard.instance.addHandler(_handleGlobalDesktopKeyEvent);
+    }
 
     // Restore draft if exists
     final draft = DraftService().getDraft(widget.chatId);
@@ -274,10 +319,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     // Connect continuous media playback with coordinator
-    MediaPlaybackCoordinator.instance.currentForegroundChatId = widget.chatId;
-    MediaPlaybackCoordinator.instance.onScrollToMessageRequested = (id) => _scrollToMessage(id);
-    MediaPlaybackCoordinator.instance.onPlayNextRequested = _playNextMediaNote;
-    MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = (id) => _buildPlaylistFrom(id);
+    MediaPlaybackCoordinator.instance.registerChat(
+      widget.chatId,
+      ChatPlaybackCallbacks(
+        onScrollToMessage: (id) => _scrollToMessage(id),
+        onPlayNext: _playNextMediaNote,
+        onBuildPlaylist: (id) => _buildPlaylistFrom(id),
+      ),
+    );
+    NotificationService().addActiveChat(widget.chatId);
 
     _scrollController.addListener(() {
       if (!_scrollController.hasClients || _messages.isEmpty) return;
@@ -348,11 +398,368 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       try {
-        context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
+        _unreadCountProvider = context.read<UnreadCountProvider>();
+        _unreadCountProvider?.openChat(widget.chatId);
       } catch (_) {}
       NotificationService().cancelChatNotifications(widget.chatId, chatTitle: widget.groupName);
+      if (_isDesktopPlatform && _isMyTileActive()) {
+        _inputFocusNode.requestFocus();
+      }
     });
+  }
+
+  bool _isMyTileActive() {
+    if (!mounted) return false;
+    final tileId = _registeredTileId ?? TileViewportScope.maybeTileIdOf(context);
+    if (tileId == null) return true;
+    return TilingLayoutController.instance.activeTileId == tileId;
+  }
+
+  void _onTilingLayoutChanged() {
+    if (!mounted || !_isDesktopPlatform) return;
+    final currentActive = TilingLayoutController.instance.activeTileId;
+    if (currentActive != _lastActiveTileId) {
+      _lastActiveTileId = currentActive;
+      final myTileId = _registeredTileId ?? TileViewportScope.maybeTileIdOf(context);
+      if (myTileId != null && currentActive == myTileId) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_isSelectionMode && _tabController.index == 0) {
+            _inputFocusNode.requestFocus();
+          }
+        });
+      }
+    }
+  }
+
+  bool _handleGlobalDesktopKeyEvent(KeyEvent event) {
+    if (!mounted || !_isDesktopPlatform) return false;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
+    if (_tabController.index != 0) return false;
+    if (_inputFocusNode.hasFocus) return false;
+    if (!_isMyTileActive()) return false;
+    if (_isSelectionMode || _isVoiceRecording || _isVideoRecording) return false;
+    if (MessageContextMenuService().isShowing) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus != null && primaryFocus != _inputFocusNode) {
+      final ctx = primaryFocus.context;
+      if (ctx != null) {
+        bool insideEditable = false;
+        ctx.visitAncestorElements((el) {
+          if (el.widget is EditableText) {
+            insideEditable = true;
+            return false;
+          }
+          return true;
+        });
+        if (insideEditable) return false;
+      }
+    }
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    final isAlt = HardwareKeyboard.instance.isAltPressed;
+
+    // Handle Ctrl+V paste into input field
+    if (isCtrl && !isAlt && event.logicalKey == LogicalKeyboardKey.keyV) {
+      _inputFocusNode.requestFocus();
+      Clipboard.getData(Clipboard.kTextPlain).then((data) {
+        if (!mounted || data?.text == null || data!.text!.isEmpty) return;
+        final text = _messageController.text;
+        final sel = _messageController.selection;
+        final start = sel.isValid ? sel.start : text.length;
+        final end = sel.isValid ? sel.end : text.length;
+        final newText = text.replaceRange(start, end, data.text!);
+        _messageController.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(offset: start + data.text!.length),
+        );
+        _onInputTextChanged(newText);
+      });
+      return true;
+    }
+
+    if (isCtrl || isAlt) return false;
+
+    final char = event.character;
+    if (char != null &&
+        char.isNotEmpty &&
+        char.codeUnitAt(0) >= 32 &&
+        char.codeUnitAt(0) != 127) {
+      _inputFocusNode.requestFocus();
+      final text = _messageController.text;
+      final sel = _messageController.selection;
+      final start = sel.isValid ? sel.start : text.length;
+      final end = sel.isValid ? sel.end : text.length;
+      final newText = text.replaceRange(start, end, char);
+      _messageController.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: start + char.length),
+      );
+      _onInputTextChanged(newText);
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _loadCachedKeyboardHeight() async {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getDouble('cached_keyboard_height');
+    if (cached != null && cached > 150) {
+      if (mounted) setState(() => _keyboardHeight = cached);
+    }
+  }
+
+  Future<void> _saveKeyboardHeight(double height) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('cached_keyboard_height', height);
+  }
+
+  void _onFocusChanged() {
+    if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
+      _closeEmojiPanel();
+    }
+  }
+
+  void _closeEmojiPanel() {
+    if (!_showEmojiPanel) return;
+    _transitionTimer?.cancel();
+    _emojiPanelController.reverse().then((_) {
+      if (mounted) {
+        setState(() {
+          _showEmojiPanel = false;
+          _isKeyboardRising = false;
+          _isKeyboardFalling = false;
+        });
+      }
+    });
+  }
+
+  void _dismissKeyboardAndEmoji() {
+    if (_showEmojiPanel) {
+      _closeEmojiPanel();
+    }
+    if (_inputFocusNode.hasFocus) {
+      _inputFocusNode.unfocus();
+    } else {
+      FocusScope.of(context).unfocus();
+    }
+  }
+
+  void _focusInputField() {
+    if (_showEmojiPanel) {
+      _closeEmojiPanel();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _inputFocusNode.requestFocus();
+      if (_isMobilePlatform) {
+        SystemChannels.textInput.invokeMethod('TextInput.show');
+      }
+    });
+  }
+
+  void _editLastOwnMessage() {
+    if (_currentUserId == null) return;
+    for (final msg in _messages) {
+      if (msg.senderId == _currentUserId &&
+          msg.messageType == 'text' &&
+          !msg.isRound &&
+          msg.content.trim().isNotEmpty) {
+        setState(() {
+          _cancelReply();
+          _messageController.loadMessage(msg.content, msg.entities);
+          _isEditing = true;
+          _editingMessageId = msg.id;
+        });
+        _focusInputField();
+        return;
+      }
+    }
+  }
+
+  void _onEmojiToggle() {
+    _transitionTimer?.cancel();
+    final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+
+    if (!_showEmojiPanel) {
+      if (kbOpen) {
+        _emojiPanelController.value = 1.0;
+        setState(() {
+          _showEmojiPanel = true;
+          _isKeyboardFalling = true;
+          _isKeyboardRising = false;
+        });
+        if (_isMobilePlatform) {
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+          if (!_inputFocusNode.hasFocus) {
+            _inputFocusNode.requestFocus();
+          }
+        } else {
+          _inputFocusNode.unfocus();
+        }
+        _transitionTimer = Timer(const Duration(milliseconds: 600), () {
+          if (mounted && _isKeyboardFalling) {
+            setState(() => _isKeyboardFalling = false);
+          }
+        });
+      } else {
+        setState(() {
+          _showEmojiPanel = true;
+          _isKeyboardFalling = false;
+          _isKeyboardRising = false;
+        });
+        if (_isMobilePlatform && !_inputFocusNode.hasFocus) {
+          _inputFocusNode.requestFocus();
+        }
+        _emojiPanelController.forward(from: 0.0);
+      }
+    } else {
+      if (!_isMobilePlatform) {
+        _closeEmojiPanel();
+        _inputFocusNode.requestFocus();
+      } else {
+        setState(() {
+          _isKeyboardRising = true;
+          _isKeyboardFalling = false;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (!_inputFocusNode.hasFocus) {
+            _inputFocusNode.requestFocus();
+          }
+          SystemChannels.textInput.invokeMethod('TextInput.show');
+        });
+        _transitionTimer = Timer(const Duration(milliseconds: 600), () {
+          if (mounted && _isKeyboardRising) {
+            _emojiPanelController.value = 0.0;
+            setState(() {
+              _showEmojiPanel = false;
+              _isKeyboardRising = false;
+            });
+          }
+        });
+      }
+    }
+  }
+
+  void _handleBackspace() {
+    final text = _messageController.text;
+    final selection = _messageController.selection;
+    if (text.isEmpty) return;
+
+    if (selection.isValid && !selection.isCollapsed) {
+      final newText = text.replaceRange(selection.start, selection.end, '');
+      _messageController.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: selection.start),
+      );
+      _onInputTextChanged(newText);
+      return;
+    }
+
+    final cursorPos =
+        (selection.isValid && selection.baseOffset >= 0) ? selection.baseOffset : text.length;
+    if (cursorPos <= 0) return;
+
+    final beforeCursor = text.substring(0, cursorPos);
+    final afterCursor = text.substring(cursorPos);
+    final chars = beforeCursor.characters;
+    if (chars.isEmpty) return;
+
+    final newBefore = chars.skipLast(1).toString();
+    final newText = newBefore + afterCursor;
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newBefore.length),
+    );
+    _onInputTextChanged(newText);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      _unreadCountProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+    final tileId = TileViewportScope.maybeTileIdOf(context);
+    if (tileId != _registeredTileId) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.unregisterTileBackHandler(
+          _registeredTileId!,
+          _handleTileBack,
+        );
+      }
+      _registeredTileId = tileId;
+      if (tileId != null) {
+        TilingLayoutController.instance.registerTileBackHandler(
+          tileId,
+          _handleTileBack,
+        );
+      }
+    }
+  }
+
+  // Multi-message selection & desktop LMB drag state
+  final Set<String> _selectedMessageIds = {};
+  bool get _isSelectionMode => _selectedMessageIds.isNotEmpty;
+  int? _dragSelectStartIndex;
+  bool _dragSelectTargetState = true;
+  Set<String> _dragSelectBaselineIds = {};
+  bool _isLmbDraggingMessages = false;
+  bool _isLmbDirectTextSelecting = false;
+  Offset? _lmbDownGlobalPos;
+  int? _lmbDownFeedIndex;
+  Message? _lmbDownMessage;
+  GlobalKey? _lmbDownKey;
+  bool _lmbDownIsMe = false;
+  bool _lmbDownInsideBubble = false;
+  bool _lmbDownInsideText = false;
+
+  // Touch & pointer tracking for keyboard/emoji dismissal (fast scroll + tap outside)
+  Offset? _touchDownPos;
+  Duration? _touchDownTime;
+  Offset? _lastTouchPos;
+  Duration? _lastTouchTime;
+  double _touchVelocityY = 0.0;
+  bool _dismissedOnCurrentTouch = false;
+  bool _touchDownInsideBubble = false;
+
+  bool _handleTileBack() {
+    if (!mounted) return false;
+    if (MessageContextMenuService().isShowing) {
+      MessageContextMenuService().dismiss();
+      return true;
+    }
+    if (_isSelectionMode) {
+      _clearSelection();
+      return true;
+    }
+    if (_showEmojiPanel) {
+      _closeEmojiPanel();
+      return true;
+    }
+    if (_isVideoRecording) {
+      _onVideoRecordingCancelled();
+      return true;
+    }
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+      setState(() => _isVoiceRecording = false);
+      return true;
+    }
+    if (_isEditing) {
+      _cancelEditing();
+      return true;
+    }
+    if (_replyToMessage != null) {
+      _cancelReply();
+      return true;
+    }
+    return false;
   }
 
   void _initWebSocket() {
@@ -380,9 +787,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onAppResumed() {
-    try {
-      context.read<UnreadCountProvider>().setOpenChat(widget.chatId);
-    } catch (_) {}
     if (!_wsService.isConnected) {
       _wsService.connect();
     }
@@ -677,11 +1081,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       // Сообщение уже в списке (отправлено с этого устройства). Обновляем id, статус и обогащенный replyInfo от сервера
       if (mounted) {
         setState(() {
+          final existing = _messages[existingIndex];
           _messages[existingIndex] = message.copyWith(
-            localId: _messages[existingIndex].localId ?? message.localId,
+            localId: existing.localId ?? message.localId,
             sendStatus: 1,
-            replyInfo: message.replyInfo ?? _messages[existingIndex].replyInfo,
-            groupedId: message.groupedId ?? _messages[existingIndex].groupedId,
+            replyInfo: message.replyInfo ?? existing.replyInfo,
+            groupedId: message.groupedId ?? existing.groupedId,
+            isQuote: message.isQuote || existing.isQuote,
+            quoteText: message.quoteText ?? existing.quoteText,
+            quoteOffset: message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
+            quoteLength: message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
           );
           _updateFeedItems();
         });
@@ -968,34 +1377,48 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 )
                 .toList();
 
-            final Map<String, Message> merged = {};
+            final Map<String, Message> mergedById = {};
+            final Map<String, Message> existingByLocalId = {};
             for (final m in _messages) {
-              merged[m.id] = m;
+              mergedById[m.id] = m;
               if (m.localId != null && m.localId!.isNotEmpty) {
-                merged[m.localId!] = m;
+                existingByLocalId[m.localId!] = m;
               }
             }
             for (final m in serverMessages) {
-              merged[m.id] = m;
-              if (m.localId != null && m.localId!.isNotEmpty) {
-                merged[m.localId!] = m;
+              final existing = mergedById[m.id] ??
+                  (m.localId != null && m.localId!.isNotEmpty
+                      ? existingByLocalId[m.localId!]
+                      : null);
+              if (existing != null) {
+                mergedById[m.id] = m.copyWith(
+                  localId: m.localId ?? existing.localId,
+                  isQuote: m.isQuote || existing.isQuote,
+                  quoteText: m.quoteText ?? existing.quoteText,
+                  quoteOffset: m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+                  quoteLength: m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+                );
+              } else {
+                mergedById[m.id] = m;
               }
             }
+            final Set<String> serverLocalIds = mergedById.values
+                .map((m) => m.localId)
+                .whereType<String>()
+                .where((id) => id.isNotEmpty)
+                .toSet();
             for (final pending in pendingMessages) {
-              final key = pending.localId ?? pending.id;
-              if (!merged.containsKey(key)) {
-                merged[key] = pending;
+              final lId = pending.localId;
+              if (!mergedById.containsKey(pending.id) &&
+                  (lId == null || !serverLocalIds.contains(lId))) {
+                mergedById[pending.id] = pending;
               }
             }
 
             _messages.clear();
             _messageReactions.clear();
             _myReactions.clear();
-            final Map<String, Message> dedupedById = {};
-            for (final m in merged.values) {
-              dedupedById[m.id] = m;
-            }
-            _messages.addAll(dedupedById.values);
+            _messages.addAll(mergedById.values);
 
             for (final m in _messages) {
               if (m.reactions.isNotEmpty) {
@@ -1293,6 +1716,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    _scrollToBottom();
 
     try {
       final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
@@ -1638,6 +2062,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   await AppDatabase().saveMessage(_messageToCompanion(sentMessage.copyWith(
                     localId: pendingLocalId,
                     sendStatus: 1,
+                    isQuote: sentMessage.isQuote || replyIsQuote,
+                    quoteText: sentMessage.quoteText ?? replyQuoteText,
+                    quoteOffset: sentMessage.quoteOffset != 0 ? sentMessage.quoteOffset : replyQuoteOffset,
+                    quoteLength: sentMessage.quoteLength != 0 ? sentMessage.quoteLength : replyQuoteLength,
                   )));
                 } catch (_) {}
               }
@@ -1647,11 +2075,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                       _messages.indexWhere((m) => m.localId == pendingLocalId);
                   if (idx != -1) {
                     if (sentMessage is Message) {
+                      final existing = _messages[idx];
                       _messages[idx] = sentMessage.copyWith(
                         localId: pendingLocalId,
                         sendStatus: 1, // sent
-                        replyInfo: sentMessage.replyInfo ??
-                            _messages[idx].replyInfo,
+                        replyInfo: sentMessage.replyInfo ?? existing.replyInfo,
+                        isQuote: sentMessage.isQuote || existing.isQuote || replyIsQuote,
+                        quoteText: sentMessage.quoteText ?? existing.quoteText ?? replyQuoteText,
+                        quoteOffset: sentMessage.quoteOffset != 0
+                            ? sentMessage.quoteOffset
+                            : (existing.quoteOffset != 0 ? existing.quoteOffset : replyQuoteOffset),
+                        quoteLength: sentMessage.quoteLength != 0
+                            ? sentMessage.quoteLength
+                            : (existing.quoteLength != 0 ? existing.quoteLength : replyQuoteLength),
                       );
                     } else {
                       _messages[idx] = _messages[idx].copyWith(
@@ -1757,6 +2193,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _showAttachmentPicker() async {
+    _dismissKeyboardAndEmoji();
     final result = await AttachmentPickerBottomSheet.show(context, allowPoll: true);
     if (result == null || !mounted) return;
 
@@ -2330,6 +2767,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       replyToMessageId: message.id,
       isQuote: false,
     );
+    _focusInputField();
   }
 
   void _startQuote(Message message, String selectedText, int offset, int length) {
@@ -2355,6 +2793,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _messageController.selection = TextSelection.collapsed(
       offset: _messageController.text.length,
     );
+    _focusInputField();
   }
 
   void _cancelReply() {
@@ -2379,6 +2818,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _syncDebounceTimer?.cancel();
+    _transitionTimer?.cancel();
+    _emojiPanelController.dispose();
+    _inputFocusNode.removeListener(_onFocusChanged);
+    TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
+    if (_isDesktopPlatform) {
+      HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
+    }
 
     // Flush any pending mark-as-read and draft before leaving
     _markReadTimer?.cancel();
@@ -2393,13 +2839,22 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _tabController.dispose();
     _messageController.dispose();
     _scrollController.dispose();
+    _inputFocusNode.dispose();
     _chatSubscription?.cancel();
     _typingTimer?.cancel();
 
+    if (_registeredTileId != null) {
+      TilingLayoutController.instance.unregisterTileBackHandler(
+        _registeredTileId!,
+        _handleTileBack,
+      );
+    }
+
     // Clear the open chat indicator in the provider
     try {
-      context.read<UnreadCountProvider>().setOpenChat(null);
+      _unreadCountProvider?.closeChat(widget.chatId);
     } catch (_) {}
+    NotificationService().removeActiveChat(widget.chatId);
 
     if (_isVoiceRecording) {
       _voiceRecorderService.cancelRecording();
@@ -2410,12 +2865,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _videoRecorderService.dispose();
     _voiceRecorderService.dispose();
 
-    if (MediaPlaybackCoordinator.instance.currentForegroundChatId == widget.chatId) {
-      MediaPlaybackCoordinator.instance.currentForegroundChatId = null;
-      MediaPlaybackCoordinator.instance.onScrollToMessageRequested = null;
-      MediaPlaybackCoordinator.instance.onPlayNextRequested = null;
-      MediaPlaybackCoordinator.instance.onBuildPlaylistRequested = null;
-    }
+    MediaPlaybackCoordinator.instance.unregisterChat(widget.chatId);
 
     super.dispose();
   }
@@ -2474,14 +2924,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     MediaPlaybackCoordinator.instance.stopAll();
   }
 
+  bool _inputHeightCheckScheduled = false;
+
   void _updateInputHeight() {
+    if (_inputHeightCheckScheduled) return;
+    _inputHeightCheckScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _inputHeightCheckScheduled = false;
       if (!mounted) return;
       final RenderBox? renderBox =
           _inputKey.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null) {
+      if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
-        if (newHeight != _inputHeight && newHeight > 0) {
+        if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
           setState(() {
             _inputHeight = newHeight;
           });
@@ -2532,10 +2987,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     return ChatScaffold(
-      canPop: !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
+      canPop: !_isSelectionMode && !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
       onPopInvoked: (didPop, _) {
         if (!didPop) {
-          if (isKeyboardVisible) {
+          if (_isSelectionMode) {
+            _clearSelection();
+          } else if (_showEmojiPanel) {
+            _closeEmojiPanel();
+          } else if (isKeyboardVisible) {
             FocusScope.of(context).unfocus();
           } else if (_isVideoRecording) {
             _onVideoRecordingCancelled();
@@ -2559,23 +3018,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     : null,
                 isChannel: false,
                 isMuted: _isMuted,
-                onBack: () => Navigator.pop(context),
+                heroTag: displayName,
+                profileScreenBuilder: (_) => GroupInfoScreen(
+                  chatId: widget.chatId,
+                  groupName: displayName,
+                  groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                  heroTag: displayName,
+                ),
+                onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: () => Navigator.push(
                     context,
-                    MaterialPageRoute(
+                    SwipeBackPageRoute(
                       builder: (_) => GroupInfoScreen(
                         chatId: widget.chatId,
                         groupName: displayName,
                         groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                        heroTag: displayName,
                       ),
                     )),
                 onViewProfile: () => Navigator.push(
                     context,
-                    MaterialPageRoute(
+                    SwipeBackPageRoute(
                       builder: (_) => GroupInfoScreen(
                         chatId: widget.chatId,
                         groupName: displayName,
                         groupAvatar: widget.groupAvatar ?? _groupAvatar,
+                        heroTag: displayName,
                       ),
                     )),
                 onVoiceCall: () {
@@ -2615,6 +3083,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 onReport: () {
                   // TODO: Report dialog
                 },
+                isSelectionMode: _isSelectionMode,
+                selectedCount: _selectedMessageIds.length,
+                onCancelSelection: _clearSelection,
+                onCopySelected: _copySelectedMessages,
+                onForwardSelected: _forwardSelectedMessages,
+                onDeleteSelected: _deleteSelectedMessages,
               );
         },
       ),
@@ -2629,6 +3103,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 MediaNotePlayerHeader(
+                  chatId: widget.chatId,
                   onScrollToActive: () {
                     final activeId = VoicePlaybackService().activeMessageId ??
                         VideoNotePlaybackService().activeMessageId;
@@ -2667,6 +3142,63 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         24.0;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
+    if (bottomInset > _keyboardHeight) {
+      _keyboardHeight = bottomInset;
+      _saveKeyboardHeight(bottomInset);
+    }
+
+    if (_isKeyboardRising && bottomInset >= _keyboardHeight - 10) {
+      _transitionTimer?.cancel();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _isKeyboardRising) {
+          _emojiPanelController.value = 0.0;
+          setState(() {
+            _showEmojiPanel = false;
+            _isKeyboardRising = false;
+          });
+        }
+      });
+    } else if (_isKeyboardFalling && bottomInset == 0) {
+      _transitionTimer?.cancel();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _isKeyboardFalling) {
+          setState(() => _isKeyboardFalling = false);
+        }
+      });
+    } else if (bottomInset > _lastBottomInset &&
+        bottomInset > 50 &&
+        _showEmojiPanel &&
+        !_isKeyboardFalling) {
+      if (!_isKeyboardRising) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_isKeyboardRising && _showEmojiPanel) {
+            setState(() => _isKeyboardRising = true);
+          }
+        });
+      }
+    }
+
+    // When system keyboard finishes closing on mobile and emoji panel is not open,
+    // remove focus from the input field so the blinking cursor does not stay stuck.
+    if (_isMobilePlatform &&
+        _lastBottomInset > 0 &&
+        bottomInset == 0 &&
+        !_showEmojiPanel &&
+        !_isKeyboardRising) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            !_showEmojiPanel &&
+            !_isKeyboardRising &&
+            MediaQuery.of(context).viewInsets.bottom == 0 &&
+            _inputFocusNode.hasFocus) {
+          _inputFocusNode.unfocus();
+        }
+      });
+    }
+
+    _lastBottomInset = bottomInset;
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+
     final typingWidget = _isTyping
         ? Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2691,126 +3223,168 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           )
         : null;
 
-    final safeBottom = MediaQuery.paddingOf(context).bottom;
-    final effectiveBottom = bottomInset > 0 ? bottomInset : safeBottom;
-
     final bool hasUnreadDivider = _showUnreadDivider && _firstUnreadFeedIndex != -1;
     final int totalCount = _feedItems.length + (hasUnreadDivider ? 1 : 0);
 
-    final messageList = ChatMessagesListView(
-      isLoading: _isLoading,
-      isLoadingMore: _isLoadingMore,
-      itemCount: totalCount,
-      scrollController: _scrollController,
-      topPadding: topPadding,
-      bottomPadding: _inputHeight + effectiveBottom + 8,
-      typingIndicator: typingWidget,
-      itemBuilder: (context, index) {
-        if (hasUnreadDivider) {
-          final dividerPosition = _firstUnreadFeedIndex + 1;
-          if (index == dividerPosition) {
-            return UnreadSeparator(
-              key: _unreadSeparatorKey,
-              count: _dividerUnreadCount,
-              onTap: () {},
-            );
-          }
-          if (index < dividerPosition) {
-            return _buildFeedItem(index);
-          }
-          final adjustedIndex = index - 1;
-          if (adjustedIndex >= 0 && adjustedIndex < _feedItems.length) {
-            return _buildFeedItem(adjustedIndex);
-          }
-          return const SizedBox.shrink();
+    return AnimatedBuilder(
+      animation: _emojiPanelAnimation,
+      builder: (context, _) {
+        final animVal = _emojiPanelAnimation.value;
+        final double effectiveBottom;
+        if (_showEmojiPanel) {
+          final targetPanelHeight = _keyboardHeight + safeBottom;
+          final currentPanelHeight = safeBottom + (targetPanelHeight - safeBottom) * animVal;
+          effectiveBottom = math.max(bottomInset, currentPanelHeight);
+        } else {
+          effectiveBottom = bottomInset > 0 ? bottomInset : safeBottom;
         }
-        return _buildFeedItem(index);
-      },
-    );
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Positioned.fill(child: messageList),
-        // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
-        ChatBottomScrollEdge(
-          height: math.max(safeBottom + 52.0, 52.0),
-        ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: effectiveBottom,
-          child: Container(
-            key: _inputKey,
-            child: _buildMessageInput(),
-          ),
-        ),
-        Positioned(
-          right: 14,
-          bottom: _inputHeight + 10 + effectiveBottom,
-          child: ValueListenableBuilder<bool>(
-            valueListenable: _showScrollDownFabNotifier,
-            builder: (context, showFab, _) => ScrollDownFab(
-              visible: showFab,
-              unreadCount: _unreadCount,
-              onPressed: () {
-                if (_jumpHistory.isNotEmpty) {
-                  final lastId = _jumpHistory.removeLast();
-                  _scrollToMessage(lastId);
-                } else {
-                  _scrollController.animateTo(
-                    0,
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOut,
-                  );
-                }
-              },
-            ),
-          ),
-        ),
-        if (_isVideoRecording)
-          Positioned.fill(
-            child: RoundVideoRecordingOverlay(
-              key: _videoOverlayKey,
-              recorderService: _videoRecorderService,
-              onCancel: _onVideoRecordingCancelled,
-              onSend: _onVideoRecordingSend,
-              onTooShort: _onVideoRecordingTooShort,
-              replyToMessage: _replyToMessage,
-              isQuote: _isQuote,
-              quoteText: _quoteText,
-              onCancelReply: _cancelReply,
-            ),
-          ),
-        if (_isVoiceRecording)
-          Positioned.fill(
-            child: VoiceRecordingOverlay(
-              key: _voiceOverlayKey,
-              recorderService: _voiceRecorderService,
-              onCancel: () => setState(() => _isVoiceRecording = false),
-              onSend: (res) async {
-                setState(() => _isVoiceRecording = false);
-                await _sendVoiceMessage(res);
-              },
-              onTooShort: () {
-                setState(() => _isVoiceRecording = false);
-                HapticFeedback.selectionClick();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      context.l10n.translate('chat_voice_too_short'),
-                    ),
-                    duration: const Duration(seconds: 2),
-                  ),
+        final messageList = ChatMessagesListView(
+          isLoading: _isLoading,
+          isLoadingMore: _isLoadingMore,
+          itemCount: totalCount,
+          scrollController: _scrollController,
+          topPadding: topPadding,
+          bottomPadding: _inputHeight + effectiveBottom + 8,
+          typingIndicator: typingWidget,
+          itemBuilder: (context, index) {
+            if (hasUnreadDivider) {
+              final dividerPosition = _firstUnreadFeedIndex + 1;
+              if (index == dividerPosition) {
+                return UnreadSeparator(
+                  key: _unreadSeparatorKey,
+                  count: _dividerUnreadCount,
+                  onTap: () {},
                 );
-              },
-              replyToMessage: _replyToMessage,
-              isQuote: _isQuote,
-              quoteText: _quoteText,
-              onCancelReply: _cancelReply,
+              }
+              if (index < dividerPosition) {
+                return _buildFeedItem(index);
+              }
+              final adjustedIndex = index - 1;
+              if (adjustedIndex >= 0 && adjustedIndex < _feedItems.length) {
+                return _buildFeedItem(adjustedIndex);
+              }
+              return const SizedBox.shrink();
+            }
+            return _buildFeedItem(index);
+          },
+        );
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(
+              child: Listener(
+                onPointerDown: _handleChatPointerDown,
+                onPointerMove: _handleChatPointerMove,
+                onPointerUp: _handleChatPointerUp,
+                onPointerCancel: _handleChatPointerCancel,
+                behavior: HitTestBehavior.translucent,
+                child: messageList,
+              ),
             ),
-          ),
-      ],
+            // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
+            ChatBottomScrollEdge(
+              height: math.max(safeBottom + 52.0, 52.0),
+            ),
+            if (_showEmojiPanel)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: (_keyboardHeight + safeBottom) * animVal,
+                child: ClipRect(
+                  child: OverflowBox(
+                    alignment: Alignment.topCenter,
+                    minHeight: _keyboardHeight + safeBottom,
+                    maxHeight: _keyboardHeight + safeBottom,
+                    child: EmojiStickerPanel(
+                      controller: _messageController,
+                      onBackspace: _handleBackspace,
+                      onClose: _closeEmojiPanel,
+                      height: _keyboardHeight + safeBottom,
+                      isVisible: _showEmojiPanel,
+                    ),
+                  ),
+                ),
+              ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: effectiveBottom,
+              child: Container(
+                key: _inputKey,
+                child: _buildMessageInput(),
+              ),
+            ),
+            Positioned(
+              right: 14,
+              bottom: _inputHeight + 10 + effectiveBottom,
+              child: ValueListenableBuilder<bool>(
+                valueListenable: _showScrollDownFabNotifier,
+                builder: (context, showFab, _) => ScrollDownFab(
+                  visible: showFab,
+                  unreadCount: _unreadCount,
+                  onPressed: () {
+                    if (_jumpHistory.isNotEmpty) {
+                      final lastId = _jumpHistory.removeLast();
+                      _scrollToMessage(lastId);
+                    } else {
+                      _scrollController.animateTo(
+                        0,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeOut,
+                      );
+                    }
+                  },
+                ),
+              ),
+            ),
+            if (_isVideoRecording)
+              Positioned.fill(
+                child: RoundVideoRecordingOverlay(
+                  key: _videoOverlayKey,
+                  recorderService: _videoRecorderService,
+                  onCancel: _onVideoRecordingCancelled,
+                  onSend: _onVideoRecordingSend,
+                  onTooShort: _onVideoRecordingTooShort,
+                  replyToMessage: _replyToMessage,
+                  isQuote: _isQuote,
+                  quoteText: _quoteText,
+                  onCancelReply: _cancelReply,
+                ),
+              ),
+            if (_isVoiceRecording)
+              Positioned.fill(
+                child: VoiceRecordingOverlay(
+                  key: _voiceOverlayKey,
+                  recorderService: _voiceRecorderService,
+                  onCancel: () => setState(() => _isVoiceRecording = false),
+                  onSend: (res) async {
+                    setState(() => _isVoiceRecording = false);
+                    await _sendVoiceMessage(res);
+                  },
+                  onTooShort: () {
+                    setState(() => _isVoiceRecording = false);
+                    HapticFeedback.selectionClick();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          context.l10n.translate('chat_voice_too_short'),
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  replyToMessage: _replyToMessage,
+                  isQuote: _isQuote,
+                  quoteText: _quoteText,
+                  onCancelReply: _cancelReply,
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -2897,6 +3471,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
+    final bool isSelected = _selectedMessageIds.contains(message.id);
 
     Widget albumWidget = MediaAlbumWidget(
       key: key,
@@ -2908,16 +3483,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onFileTap: (url, name, type) => _openFile(url, name, type),
       isHighlighted: isAlbumTargeted,
       highlightItemId: _highlightMessageId,
-    );
-
-    albumWidget = Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: albumWidget,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
     );
 
     albumWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: true,
+      enabled: !_isSelectionMode,
       child: albumWidget,
     );
 
@@ -2935,17 +3507,65 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
     }
 
-    albumWidget = GestureDetector(
-      onTap: () {
-        _showContextMenu(message, isMe, key);
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 4),
+    final platform = Theme.of(context).platform;
+    final bool isDesktop = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS;
+
+    albumWidget = Listener(
+      onPointerDown: (event) =>
+          _handleRowPointerDown(event, index, message, isMe, key),
+      behavior: HitTestBehavior.translucent,
+      child: GestureDetector(
+        onTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : (isDesktop
+                ? null
+                : () {
+                    _showContextMenu(message, isMe, key, enableBlur: true);
+                  }),
+        onLongPress: isDesktop
+            ? null
+            : () {
+                _enterSelectionMode(message);
+              },
+        onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleMessageSelection(message);
+            return;
+          }
+          final insideBubble = MessageBubble.isGlobalPointInsideBubble(
+            key.currentContext,
+            details.globalPosition,
+          );
+          _showContextMenu(
+            message,
+            isMe,
+            key,
+            forceOpen: true,
+            enableBlur: insideBubble,
+          );
+        },
+        behavior: HitTestBehavior.opaque,
         child: albumWidget,
       ),
+    );
+
+    albumWidget = ValueListenableBuilder<String?>(
+      valueListenable: MessageContextMenuService().activeBlurMessageId,
+      builder: (context, activeBlurId, child) {
+        final isSeparatedForBlur = activeBlurId != null &&
+            (activeBlurId == message.id ||
+                album.items.any((ai) => ai.id == activeBlurId));
+        return Visibility(
+          visible: !isSeparatedForBlur,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: child!,
+        );
+      },
+      child: albumWidget,
     );
 
     final prevItem =
@@ -2965,16 +3585,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Widget _buildMessageItem(Message message, int index) {
     final bool isMe = message.senderId == _currentUserId;
     final GlobalKey key;
-    if (message.localId != null && _messageKeys.containsKey(message.localId!)) {
+    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
+    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
       key = _messageKeys[message.localId!]!;
       _messageKeys[message.id] = key;
     } else {
       key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (message.localId != null) {
+      if (hasLocalId) {
         _messageKeys[message.localId!] = key;
       }
     }
     final isHighlighted = _highlightMessageId == message.id;
+    final bool isSelected = _selectedMessageIds.contains(message.id);
 
     Widget messageWidget = MessageBubble(
       key: key,
@@ -2985,6 +3607,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       chatType: 'group',
       chatTitle: widget.groupName,
       isHighlighted: isHighlighted,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
       reactions: _messageReactions[message.id] ??
           (message.reactions.isNotEmpty ? message.reactions : null),
       myReactions: _myReactions[message.id] ??
@@ -3012,24 +3636,69 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     messageWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: true,
+      enabled: !_isSelectionMode,
       child: messageWidget,
     );
 
-    messageWidget = GestureDetector(
-      onTap: () {
-        _showContextMenu(message, isMe, key);
-      },
-      onLongPress: () {
-        _showContextMenu(message, isMe, key, forceOpen: true);
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: double.infinity,
-        color: Colors.transparent,
-        padding: const EdgeInsets.symmetric(vertical: 4),
+    final platform = Theme.of(context).platform;
+    final bool isDesktop = platform == TargetPlatform.windows ||
+        platform == TargetPlatform.linux ||
+        platform == TargetPlatform.macOS;
+
+    messageWidget = Listener(
+      onPointerDown: (event) =>
+          _handleRowPointerDown(event, index, message, isMe, key),
+      behavior: HitTestBehavior.translucent,
+      child: GestureDetector(
+        onTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : (isDesktop
+                ? null
+                : () {
+                    _showContextMenu(message, isMe, key, enableBlur: true);
+                  }),
+        onLongPress: isDesktop
+            ? null
+            : () {
+                _enterSelectionMode(message);
+              },
+        onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleMessageSelection(message);
+            return;
+          }
+          final insideBubble = MessageBubble.isGlobalPointInsideBubble(
+            key.currentContext,
+            details.globalPosition,
+          );
+          _showContextMenu(
+            message,
+            isMe,
+            key,
+            forceOpen: true,
+            enableBlur: insideBubble,
+          );
+        },
+        behavior: HitTestBehavior.opaque,
         child: messageWidget,
       ),
+    );
+
+    messageWidget = ValueListenableBuilder<String?>(
+      valueListenable: MessageContextMenuService().activeBlurMessageId,
+      builder: (context, activeBlurId, child) {
+        final isSeparatedForBlur = activeBlurId != null &&
+            (activeBlurId == message.id ||
+                (hasLocalId && activeBlurId == message.localId));
+        return Visibility(
+          visible: !isSeparatedForBlur,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: child!,
+        );
+      },
+      child: messageWidget,
     );
 
     final prevItem =
@@ -3049,12 +3718,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Widget _buildMessageInput() {
     return ChatInputBar(
       controller: _messageController,
+      focusNode: _inputFocusNode,
       hintText: 'Type a message...',
       isEditing: _isEditing,
       onCancelEditing: _cancelEditing,
+      onEditLastMessage: _editLastOwnMessage,
+      isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
+      onTapInputWhenEmojiOpen: _onEmojiToggle,
       replyToMessage: _replyToMessage,
       isQuote: _isQuote,
       quoteText: _quoteText,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
       onCancelReply: _cancelReply,
       onTapReply: _replyToMessage != null
           ? () => _scrollToMessage(_replyToMessage!.id)
@@ -3066,6 +3741,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       uploadProgress: _uploadProgress,
       uploadProgressNotifier: _uploadProgressNotifier,
       onAttach: _showAttachmentPicker,
+      onEmoji: _onEmojiToggle,
       onChanged: _onInputTextChanged,
       onSend: _sendMessage,
       onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
@@ -3090,6 +3766,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _onStartVideoRecord() async {
+    _dismissKeyboardAndEmoji();
     final hasPerms = await _videoRecorderService.hasPermissions();
     if (!hasPerms) {
       final permanentlyDenied =
@@ -3210,6 +3887,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _onStartVoiceRecord() async {
+    _dismissKeyboardAndEmoji();
     var hasPerm = await _voiceRecorderService.hasPermission();
     if (!hasPerm) {
       final isPermanentlyDenied = await _voiceRecorderService.isPermanentlyDenied();
@@ -3706,13 +4384,316 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (_) {}
   }
 
-  void _showContextMenu(Message message, bool isMe, GlobalKey key, {bool forceOpen = false}) {
-    if (!forceOpen && message.messageType == 'text' && _isSingleEmoji(message.content)) {
-      if (EmojiUtils.getAnimatedEmojiPath(message.content) != null) {
-        return;
+  void _enterSelectionMode(Message message) {
+    _dismissKeyboardAndEmoji();
+    HapticUtils.selection();
+    setState(() {
+      _selectedMessageIds.add(message.id);
+    });
+  }
+
+  void _toggleMessageSelection(Message message) {
+    HapticUtils.selection();
+    setState(() {
+      if (!_selectedMessageIds.remove(message.id)) {
+        _selectedMessageIds.add(message.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(() {
+      _selectedMessageIds.clear();
+      _isLmbDraggingMessages = false;
+      _dragSelectStartIndex = null;
+      _dragSelectBaselineIds.clear();
+    });
+  }
+
+  void _copySelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    final selected = _messages
+        .where((m) => _selectedMessageIds.contains(m.id) && m.content.trim().isNotEmpty)
+        .toList()
+        .reversed
+        .map((m) => m.content.trim())
+        .toList();
+    if (selected.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: selected.join('\n\n')));
+      GlassToastService().show(
+        context,
+        context.l10n.translate('copied_to_clipboard'),
+        icon: Icons.check,
+      );
+    }
+    _clearSelection();
+  }
+
+  void _forwardSelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    GlassToastService().show(
+      context,
+      'Пересылка скоро появится',
+      icon: Icons.forward,
+    );
+    _clearSelection();
+  }
+
+  void _deleteSelectedMessages() {
+    if (_selectedMessageIds.isEmpty) return;
+    final toDelete = _messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+    _clearSelection();
+    if (toDelete.isEmpty) return;
+    for (final msg in toDelete) {
+      _confirmDeleteMessage(msg);
+    }
+  }
+
+  void _handleChatPointerDown(PointerDownEvent event) {
+    _touchDownPos = event.position;
+    _touchDownTime = event.timeStamp;
+    _lastTouchPos = event.position;
+    _lastTouchTime = event.timeStamp;
+    _touchVelocityY = 0.0;
+    _dismissedOnCurrentTouch = false;
+  }
+
+  void _handleRowPointerDown(
+    PointerDownEvent event,
+    int feedIndex,
+    Message message,
+    bool isMe,
+    GlobalKey key,
+  ) {
+    _touchDownInsideBubble = MessageBubble.isGlobalPointInsideBubble(
+      key.currentContext,
+      event.position,
+    );
+    if (event.kind != PointerDeviceKind.mouse ||
+        (event.buttons & kPrimaryMouseButton) == 0) {
+      return;
+    }
+    _lmbDownGlobalPos = event.position;
+    _lmbDownFeedIndex = feedIndex;
+    _lmbDownMessage = message;
+    _lmbDownKey = key;
+    _lmbDownIsMe = isMe;
+    _lmbDownInsideBubble = _touchDownInsideBubble;
+    _lmbDownInsideText = MessageBubble.isGlobalPointInsideSelectableText(
+      key.currentContext,
+      event.position,
+    );
+    _isLmbDraggingMessages = false;
+    _isLmbDirectTextSelecting = false;
+  }
+
+  int? _findFeedIndexAtGlobalPosition(Offset globalPos) {
+    int? closestIndex;
+    double closestDist = double.infinity;
+    for (int i = 0; i < _feedItems.length; i++) {
+      final item = _feedItems[i];
+      final key = _messageKeys[item.id];
+      final box = key?.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final topLeft = box.localToGlobal(Offset.zero);
+      final top = topLeft.dy;
+      final bottom = top + box.size.height;
+      if (globalPos.dy >= top && globalPos.dy <= bottom) {
+        return i;
+      }
+      final dist = globalPos.dy < top ? (top - globalPos.dy) : (globalPos.dy - bottom);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIndex = i;
+      }
+    }
+    return closestIndex;
+  }
+
+  String _feedItemPrimaryId(int index) {
+    final item = _feedItems[index];
+    if (item is FeedAlbumItem) {
+      return item.album.primaryMessage.id;
+    } else if (item is FeedSingleItem) {
+      return item.message.id;
+    }
+    return item.id;
+  }
+
+  void _handleChatPointerMove(PointerMoveEvent event) {
+    // Mobile fast-scroll detection: dismiss keyboard/emoji panel ONLY on fast vertical scroll
+    if (_isMobilePlatform &&
+        event.kind == PointerDeviceKind.touch &&
+        !_dismissedOnCurrentTouch &&
+        _touchDownPos != null &&
+        _lastTouchPos != null &&
+        _lastTouchTime != null) {
+      final dtMicros = (event.timeStamp - _lastTouchTime!).inMicroseconds;
+      if (dtMicros > 0) {
+        final dy = (event.position.dy - _lastTouchPos!.dy).abs();
+        final instVelY = (dy * 1000000.0) / dtMicros;
+        _touchVelocityY = _touchVelocityY * 0.35 + instVelY * 0.65;
+      }
+      _lastTouchPos = event.position;
+      _lastTouchTime = event.timeStamp;
+
+      final totalDy = (event.position.dy - _touchDownPos!.dy).abs();
+      final totalDx = (event.position.dx - _touchDownPos!.dx).abs();
+      if (totalDy > 42.0 &&
+          totalDy > totalDx * 1.8 &&
+          _touchVelocityY > 1250.0) {
+        final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+        if (kbOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
+          _dismissedOnCurrentTouch = true;
+          _dismissKeyboardAndEmoji();
+        }
       }
     }
 
+    if (_lmbDownGlobalPos == null) return;
+    if ((event.buttons & kPrimaryMouseButton) == 0) {
+      _resetLmbDragState();
+      return;
+    }
+
+    final dist = (event.position - _lmbDownGlobalPos!).distance;
+
+    // 1. Direct text selection with blur when LMB drag starts on message text
+    if (_lmbDownInsideText && !_isSelectionMode) {
+      if (dist > 4.0) {
+        if (!_isLmbDirectTextSelecting &&
+            _lmbDownMessage != null &&
+            _lmbDownKey != null) {
+          _isLmbDirectTextSelecting = true;
+          _showContextMenu(
+            _lmbDownMessage!,
+            _lmbDownIsMe,
+            _lmbDownKey!,
+            forceOpen: true,
+            enableBlur: true,
+            initialDragStartGlobalPosition: _lmbDownGlobalPos,
+            initialDragCurrentGlobalPosition: event.position,
+          );
+        } else if (_isLmbDirectTextSelecting) {
+          MessageContextMenuService().updateExternalDragSelection(event.position);
+        }
+      }
+      return;
+    }
+
+    // 2. Consecutive message drag-selection when LMB drag starts beside the bubble (or in selection mode)
+    if ((!_lmbDownInsideBubble || _isSelectionMode) &&
+        _lmbDownFeedIndex != null &&
+        _lmbDownMessage != null) {
+      if (dist > 6.0) {
+        if (!_isLmbDraggingMessages) {
+          _isLmbDraggingMessages = true;
+          _dragSelectStartIndex = _lmbDownFeedIndex;
+          _dragSelectBaselineIds = Set<String>.from(_selectedMessageIds);
+          _dragSelectTargetState =
+              !_dragSelectBaselineIds.contains(_lmbDownMessage!.id);
+          HapticUtils.selection();
+        }
+        final currentIndex =
+            _findFeedIndexAtGlobalPosition(event.position) ?? _lmbDownFeedIndex!;
+        final startIdx = math.min(_dragSelectStartIndex!, currentIndex);
+        final endIdx = math.max(_dragSelectStartIndex!, currentIndex);
+
+        final updated = Set<String>.from(_dragSelectBaselineIds);
+        for (int i = startIdx; i <= endIdx; i++) {
+          if (i >= 0 && i < _feedItems.length) {
+            final msgId = _feedItemPrimaryId(i);
+            if (_dragSelectTargetState) {
+              updated.add(msgId);
+            } else {
+              updated.remove(msgId);
+            }
+          }
+        }
+        if (updated.length != _selectedMessageIds.length ||
+            !updated.containsAll(_selectedMessageIds)) {
+          HapticUtils.selection();
+          setState(() {
+            _selectedMessageIds
+              ..clear()
+              ..addAll(updated);
+          });
+        }
+      }
+    }
+  }
+
+  void _handleChatPointerUp(PointerUpEvent event) {
+    if (_touchDownPos != null && _touchDownTime != null) {
+      final dist = (event.position - _touchDownPos!).distance;
+      final elapsedMs = (event.timeStamp - _touchDownTime!).inMilliseconds;
+      final isShortTap = dist < 12.0 && elapsedMs < 320;
+      if (isShortTap && !_isSelectionMode && !_isLmbDirectTextSelecting && !_isLmbDraggingMessages) {
+        if (_isMobilePlatform) {
+          if (!_touchDownInsideBubble) {
+            final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+            if (kbOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
+              _dismissKeyboardAndEmoji();
+            }
+          }
+        } else if (_showEmojiPanel) {
+          _closeEmojiPanel();
+        }
+      }
+    }
+    _touchDownPos = null;
+    _touchDownTime = null;
+    _lastTouchPos = null;
+    _lastTouchTime = null;
+    _touchVelocityY = 0.0;
+    _dismissedOnCurrentTouch = false;
+    _touchDownInsideBubble = false;
+
+    if (_isLmbDirectTextSelecting) {
+      _isLmbDirectTextSelecting = false;
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _handleChatPointerCancel(PointerCancelEvent event) {
+    _touchDownPos = null;
+    _touchDownTime = null;
+    _lastTouchPos = null;
+    _lastTouchTime = null;
+    _touchVelocityY = 0.0;
+    _dismissedOnCurrentTouch = false;
+    _touchDownInsideBubble = false;
+
+    if (_isLmbDirectTextSelecting) {
+      _isLmbDirectTextSelecting = false;
+      MessageContextMenuService().endExternalDragSelection();
+    }
+    _resetLmbDragState();
+  }
+
+  void _resetLmbDragState() {
+    _lmbDownGlobalPos = null;
+    _lmbDownFeedIndex = null;
+    _lmbDownMessage = null;
+    _lmbDownKey = null;
+    _isLmbDraggingMessages = false;
+    _dragSelectStartIndex = null;
+  }
+
+  void _showContextMenu(
+    Message message,
+    bool isMe,
+    GlobalKey key, {
+    bool forceOpen = false,
+    bool enableBlur = true,
+    Offset? initialDragStartGlobalPosition,
+    Offset? initialDragCurrentGlobalPosition,
+  }) {
+    _dismissKeyboardAndEmoji();
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
     final bool isPoll = message.messageType == 'poll';
@@ -3727,6 +4708,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       isMe: isMe,
       currentUserId: _currentUserId,
       canManagePoll: isMe || isGroupAdmin,
+      enableBlur: enableBlur,
+      initialDragStartGlobalPosition: initialDragStartGlobalPosition,
+      initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
       onPollUpdated: (updatedPoll) {
         if (!mounted) return;
         setState(() {
@@ -3739,6 +4723,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       },
       onReply: () => _startReply(message),
       onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuotePartial: (isVideoNote || isVoiceNote || isPoll)
+          ? null
+          : (selectedText, offset, length) =>
+              _startQuote(message, selectedText, offset, length),
       onPin: () {},
       onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
         setState(() {
@@ -3747,7 +4735,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _isEditing = true;
           _editingMessageId = message.id;
         });
+        _focusInputField();
       },
+      onSelect: () => _enterSelectionMode(message),
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
@@ -3842,7 +4832,4 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     }
   }
-
-  /// Helper to check if string is exactly one emoji
-  bool _isSingleEmoji(String text) => EmojiUtils.isSingleEmoji(text);
 }

@@ -13,6 +13,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../services/wallpaper_provider.dart';
 import '../../services/emoji_haptic_service.dart';
+import '../../services/settings_service.dart';
 import '../../theme/theme_provider.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/common/adaptive_switch.dart';
@@ -508,6 +509,35 @@ class ChatSettingsScreen extends StatelessWidget {
                   trailing: AdaptiveSwitch(
                     value: hapticService.isUniformHaptics,
                     onChanged: (val) => hapticService.setUniformHaptics(val),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 6),
+
+            // Send by Enter / Ctrl+Enter Setting
+            ValueListenableBuilder<bool>(
+              valueListenable: SettingsService().sendByEnterNotifier,
+              builder: (context, sendByEnter, _) {
+                return ListTile(
+                  leading: iconoir.SendDiagonal(
+                    color: sendByEnter ? activePrimary : Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(l10n.translate('settings_send_by_enter_title')),
+                  subtitle: Text(
+                    l10n.translate(
+                      sendByEnter
+                          ? 'settings_send_by_enter_subtitle_on'
+                          : 'settings_send_by_enter_subtitle_off',
+                    ),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: AdaptiveSwitch(
+                    value: sendByEnter,
+                    onChanged: (val) => SettingsService().setSendByEnter(val),
                   ),
                 );
               },

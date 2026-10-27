@@ -5,10 +5,12 @@ typedef EmojiPlayCallback = void Function();
 typedef EmojiVisibilityCheck = bool Function();
 
 class _RegisteredEmojiPlayer {
+  final Object? owner;
   final EmojiVisibilityCheck isVisible;
   final EmojiPlayCallback play;
 
   _RegisteredEmojiPlayer({
+    this.owner,
     required this.isVisible,
     required this.play,
   });
@@ -22,25 +24,42 @@ class EmojiInteractionManager {
   static final EmojiInteractionManager instance = EmojiInteractionManager._internal();
   EmojiInteractionManager._internal();
 
-  final Map<String, _RegisteredEmojiPlayer> _players = {};
+  final Map<String, List<_RegisteredEmojiPlayer>> _players = {};
 
   /// Registers a mounted emoji widget's playback and visibility callbacks.
   void registerPlayer({
     required String messageId,
     required EmojiVisibilityCheck isVisible,
     required EmojiPlayCallback play,
+    Object? owner,
   }) {
     if (messageId.isEmpty) return;
-    _players[messageId] = _RegisteredEmojiPlayer(
+    final list = _players.putIfAbsent(messageId, () => <_RegisteredEmojiPlayer>[]);
+    if (owner != null) {
+      list.removeWhere((p) => identical(p.owner, owner));
+    } else {
+      list.clear();
+    }
+    list.add(_RegisteredEmojiPlayer(
+      owner: owner,
       isVisible: isVisible,
       play: play,
-    );
+    ));
   }
 
   /// Unregisters an unmounted emoji widget.
-  void unregisterPlayer(String messageId) {
+  void unregisterPlayer(String messageId, {Object? owner}) {
     if (messageId.isEmpty) return;
-    _players.remove(messageId);
+    if (owner == null) {
+      _players.remove(messageId);
+      return;
+    }
+    final list = _players[messageId];
+    if (list == null) return;
+    list.removeWhere((p) => identical(p.owner, owner));
+    if (list.isEmpty) {
+      _players.remove(messageId);
+    }
   }
 
   /// Triggers synchronized playback if and only if the emoji is currently visible on screen.
@@ -49,18 +68,19 @@ class EmojiInteractionManager {
   bool trigger(String messageId) {
     if (messageId.isEmpty) return false;
 
-    final player = _players[messageId];
-    if (player == null) {
+    final list = _players[messageId];
+    if (list == null || list.isEmpty) {
       // Message is not in the widget tree (e.g. not loaded or far out of view)
       return false;
     }
 
-    if (!player.isVisible()) {
-      // Message widget is mounted but scrolled off-screen
-      return false;
+    bool triggeredAny = false;
+    for (final player in List<_RegisteredEmojiPlayer>.of(list)) {
+      if (player.isVisible()) {
+        player.play();
+        triggeredAny = true;
+      }
     }
-
-    player.play();
-    return true;
+    return triggeredAny;
   }
 }

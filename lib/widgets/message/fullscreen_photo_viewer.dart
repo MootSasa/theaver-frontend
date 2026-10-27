@@ -27,7 +27,7 @@ class FullscreenPhotoViewer extends StatefulWidget {
     String? tag,
     String? localFilePath,
   }) {
-    return Navigator.of(context).push(
+    return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder(
         opaque: false,
         fullscreenDialog: true,

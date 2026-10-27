@@ -8,8 +8,10 @@ import '../screens/chat/channel_screen.dart';
 import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/private_chat_screen.dart';
 import '../widgets/message/video_message_widget.dart';
+import '../utils/swipe_back_route.dart';
 import 'deep_link_service.dart';
 import 'media_cache_manager.dart';
+import 'tiling_layout_controller.dart';
 import 'video_note_playback_service.dart';
 import 'voice_playback_service.dart';
 
@@ -41,6 +43,25 @@ class PlaybackTrack {
   bool get isVideoNote => mediaType == 'video_note';
 }
 
+/// Callbacks registered by a mounted chat screen instance for a specific [chatId].
+class ChatPlaybackCallbacks {
+  final void Function(String messageId) onScrollToMessage;
+  final void Function(String currentMessageId) onPlayNext;
+  final List<PlaybackTrack> Function(String startMessageId) onBuildPlaylist;
+
+  const ChatPlaybackCallbacks({
+    required this.onScrollToMessage,
+    required this.onPlayNext,
+    required this.onBuildPlaylist,
+  });
+
+  void Function(String messageId) get onScrollToMessageRequested =>
+      onScrollToMessage;
+  void Function(String currentMessageId) get onPlayNextRequested => onPlayNext;
+  List<PlaybackTrack> Function(String startMessageId)
+      get onBuildPlaylistRequested => onBuildPlaylist;
+}
+
 /// Central coordinator managing continuous cross-media autoplay,
 /// persistent background queues, out-of-chat playback, and global navigation.
 class MediaPlaybackCoordinator with ChangeNotifier {
@@ -54,14 +75,60 @@ class MediaPlaybackCoordinator with ChangeNotifier {
   List<PlaybackTrack> _queue = [];
   double _playbackSpeed = 1.0;
 
-  // Active chat in-screen scroll callback (non-null only when chat is mounted)
+  // Per-chat registered callbacks supporting 2+ simultaneously mounted chat tiles
+  final Map<String, ChatPlaybackCallbacks> _chatCallbacks = {};
+  final Set<String> _foregroundChatIds = {};
+
+  // Legacy single-chat fields kept for backward compatibility
   void Function(String messageId)? onScrollToMessageRequested;
-  // Callback registered by active chat to provide next track dynamically if queue is empty
   void Function(String currentMessageId)? onPlayNextRequested;
-  // Callback registered by active chat to build playlist queue when starting playback
   List<PlaybackTrack> Function(String startMessageId)? onBuildPlaylistRequested;
-  // Current active chatId opened in the viewport (to distinguish in-chat vs out-of-chat)
-  String? currentForegroundChatId;
+
+  String? get currentForegroundChatId =>
+      _foregroundChatIds.isNotEmpty ? _foregroundChatIds.last : null;
+  set currentForegroundChatId(String? value) {
+    if (value != null && value.isNotEmpty) {
+      _foregroundChatIds.remove(value);
+      _foregroundChatIds.add(value);
+    } else if (!TilingLayoutController.instance.isWorkspaceMounted) {
+      _foregroundChatIds.clear();
+    }
+  }
+
+  /// Registers callbacks for a specific mounted chat screen instance.
+  void registerChat(
+    String chatId,
+    ChatPlaybackCallbacks callbacks,
+  ) {
+    _foregroundChatIds.remove(chatId);
+    _foregroundChatIds.add(chatId);
+    _chatCallbacks[chatId] = callbacks;
+    onScrollToMessageRequested = callbacks.onScrollToMessage;
+    onPlayNextRequested = callbacks.onPlayNext;
+    onBuildPlaylistRequested = callbacks.onBuildPlaylist;
+  }
+
+  /// Unregisters callbacks when a chat screen is disposed.
+  void unregisterChat(String chatId) {
+    _foregroundChatIds.remove(chatId);
+    _chatCallbacks.remove(chatId);
+    if (_chatCallbacks.isNotEmpty) {
+      final last = _chatCallbacks.values.last;
+      onScrollToMessageRequested = last.onScrollToMessageRequested;
+      onPlayNextRequested = last.onPlayNextRequested;
+      onBuildPlaylistRequested = last.onBuildPlaylistRequested;
+    } else {
+      onScrollToMessageRequested = null;
+      onPlayNextRequested = null;
+      onBuildPlaylistRequested = null;
+    }
+  }
+
+  bool isChatInForeground(String chatId) {
+    return _foregroundChatIds.contains(chatId) ||
+        _chatCallbacks.containsKey(chatId) ||
+        TilingLayoutController.instance.isChatOpenInAnyTile(chatId);
+  }
 
   MediaPlaybackCoordinator._internal() {
     _loadSavedSpeed();
@@ -126,8 +193,11 @@ class MediaPlaybackCoordinator with ChangeNotifier {
     List<PlaybackTrack>? remainingQueue,
   }) async {
     _activeTrack = track;
+    final chatCb = _chatCallbacks[track.chatId];
     if (remainingQueue != null) {
       _queue = List.from(remainingQueue);
+    } else if (chatCb != null) {
+      _queue = chatCb.onBuildPlaylistRequested(track.messageId);
     } else if (onBuildPlaylistRequested != null) {
       _queue = onBuildPlaylistRequested!(track.messageId);
     }
@@ -150,7 +220,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
     } else {
       // 2. Video note playback
       await VoicePlaybackService().stopVoice();
-      final bool inForeground = currentForegroundChatId == track.chatId;
+      final bool inForeground = isChatInForeground(track.chatId);
       final bool inView = inForeground && VideoNotePlaybackService().isMessageInView(track.messageId);
 
       final cached = VideoNoteControllerPool.get(resolvedUrl);
@@ -222,11 +292,6 @@ class MediaPlaybackCoordinator with ChangeNotifier {
         }
       }
     }
-
-    // Disabled automatic scrolling to the next message to keep playback in the background
-    // if (currentForegroundChatId == track.chatId) {
-    //   onScrollToMessageRequested?.call(track.messageId);
-    // }
   }
 
   /// Automatically triggered when either a voice message or video note finishes.
@@ -235,10 +300,15 @@ class MediaPlaybackCoordinator with ChangeNotifier {
       return;
     }
 
+    final activeChatCb = _chatCallbacks[_activeTrack!.chatId];
+
     if (_queue.isNotEmpty) {
       final nextTrack = _queue.removeAt(0);
       debugPrint('[MediaPlaybackCoordinator] Advancing to next track: ${nextTrack.messageId} (${nextTrack.mediaType})');
       await startPlayback(track: nextTrack);
+    } else if (activeChatCb != null) {
+      debugPrint('[MediaPlaybackCoordinator] Queue empty, requesting next from chat ${_activeTrack!.chatId}...');
+      activeChatCb.onPlayNextRequested(finishedMessageId);
     } else if (onPlayNextRequested != null) {
       debugPrint('[MediaPlaybackCoordinator] Queue empty, requesting next from active chat...');
       onPlayNextRequested!(finishedMessageId);
@@ -272,19 +342,35 @@ class MediaPlaybackCoordinator with ChangeNotifier {
     final track = _activeTrack;
     if (track == null) return;
 
-    // 1. If chat is already in the foreground, simply scroll to message
+    // 1. If chat is mounted in any tile, scroll to message directly in that tile
+    final chatCb = _chatCallbacks[track.chatId];
+    if (chatCb != null) {
+      chatCb.onScrollToMessageRequested(track.messageId);
+      return;
+    }
     if (currentForegroundChatId == track.chatId && onScrollToMessageRequested != null) {
       onScrollToMessageRequested!(track.messageId);
       return;
     }
 
-    // 2. Otherwise navigate to the target chat screen via root navigatorKey
+    // 2. If tiling workspace is mounted, open/focus the chat in the active tile
+    if (TilingLayoutController.instance.isWorkspaceMounted) {
+      TilingLayoutController.instance.openChatInActiveTile(
+        chatId: track.chatId,
+        chatType: track.chatType,
+        chatName: track.chatTitle ?? '',
+        initialMessageId: track.messageId,
+      );
+      return;
+    }
+
+    // 3. Otherwise navigate to the target chat screen via root navigatorKey
     final nav = DeepLinkService().navigatorKey.currentState;
     if (nav == null) return;
 
     if (track.chatType == 'private') {
       nav.push(
-        MaterialPageRoute(
+        SwipeBackPageRoute(
           builder: (_) => PrivateChatScreen(
             chatId: track.chatId,
             otherUserName: track.chatTitle,
@@ -294,7 +380,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
       );
     } else if (track.chatType == 'group') {
       nav.push(
-        MaterialPageRoute(
+        SwipeBackPageRoute(
           builder: (_) => GroupChatScreen(
             chatId: track.chatId,
             groupName: track.chatTitle,
@@ -304,7 +390,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
       );
     } else if (track.chatType == 'channel') {
       nav.push(
-        MaterialPageRoute(
+        SwipeBackPageRoute(
           builder: (_) => ChannelScreen(
             channelId: track.chatId,
             channelName: track.chatTitle,

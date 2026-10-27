@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../../services/auth_service.dart';
+import '../../../services/tiling_layout_controller.dart';
 import '../../../services/websocket_service.dart';
 import '../../../l10n/app_localizations.dart';
-import '../main/main_screen.dart';
+import '../../widgets/tiling/tiling_workspace_scaffold.dart';
 import '../../utils/swipe_back_route.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -57,9 +58,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           await wsService.updateUserId(result['userId'] as String?);
           
           if (!mounted) return;
+          TilingLayoutController.instance.closeAllChats();
           // Navigate to main screen after successful registration
-          Navigator.of(context).pushAndRemoveUntil(
-            SwipeBackPageRoute(builder: (_) => const MainScreen()),
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
             (route) => false,
           );
         } else {

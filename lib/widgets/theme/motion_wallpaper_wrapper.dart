@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import '../../services/tiling_layout_controller.dart';
+
 /// Wraps wallpaper background with smooth gyroscope-driven parallax motion on mobile devices.
 ///
 /// Uses [ValueNotifier] and [RepaintBoundary] to avoid widget tree rebuilds and expensive
@@ -35,6 +37,11 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
   final ValueNotifier<Offset> _offsetNotifier = ValueNotifier<Offset>(Offset.zero);
   bool _isMobile = false;
 
+  bool get _shouldAnimate =>
+      widget.enabled &&
+      _isMobile &&
+      !(TilingLayoutController.instance.isWorkspaceMounted && !TilingLayoutController.instance.isSinglePane);
+
   @override
   void initState() {
     super.initState();
@@ -46,9 +53,8 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
       duration: const Duration(milliseconds: 16),
     )..addListener(_tick);
 
-    if (widget.enabled && _isMobile) {
+    if (_shouldAnimate) {
       _startListening();
-      _animController.repeat();
     }
   }
 
@@ -56,9 +62,8 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
   void didUpdateWidget(covariant MotionWallpaperWrapper oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.enabled != oldWidget.enabled) {
-      if (widget.enabled && _isMobile) {
+      if (_shouldAnimate) {
         _startListening();
-        if (!_animController.isAnimating) _animController.repeat();
       } else {
         _stopListening();
         _animController.stop();
@@ -72,10 +77,18 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
   }
 
   void _startListening() {
-    if (_gyroSub != null) return;
+    if (_gyroSub != null || !_shouldAnimate) return;
     try {
       _gyroSub = gyroscopeEventStream(samplingPeriod: SensorInterval.uiInterval).listen(
         (GyroscopeEvent event) {
+          if (!_shouldAnimate) {
+            _stopListening();
+            return;
+          }
+          // Ignore resting sensor micro-noise and hand touch micro-vibration (~0.10 rad/s deadzone)
+          if (event.x.abs() < 0.10 && event.y.abs() < 0.10) {
+            return;
+          }
           // Gyroscope gives rad/s
           // event.y controls horizontal tilt, event.x controls vertical tilt
           final double dx = event.y * 3.5;
@@ -115,11 +128,23 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
 
     _currentX = newX;
     _currentY = newY;
-    _offsetNotifier.value = Offset(newX, newY);
+
+    final prevOffset = _offsetNotifier.value;
+    if ((newX - prevOffset.dx).abs() >= 0.25 ||
+        (newY - prevOffset.dy).abs() >= 0.25) {
+      _offsetNotifier.value = Offset(newX, newY);
+    }
 
     // If movement has settled below visual perception and target is near center,
     // pause the animation loop to conserve CPU/GPU cycles.
-    if (diffX < 0.005 && diffY < 0.005 && _targetX.abs() < 0.01 && _targetY.abs() < 0.01) {
+    if (diffX < 0.05 && diffY < 0.05 && _targetX.abs() < 0.2 && _targetY.abs() < 0.2) {
+      _targetX = 0.0;
+      _targetY = 0.0;
+      _currentX = 0.0;
+      _currentY = 0.0;
+      if (_offsetNotifier.value != Offset.zero) {
+        _offsetNotifier.value = Offset.zero;
+      }
       if (_animController.isAnimating) {
         _animController.stop();
       }
@@ -128,9 +153,8 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && widget.enabled && _isMobile) {
+    if (state == AppLifecycleState.resumed && _shouldAnimate) {
       _startListening();
-      if (!_animController.isAnimating) _animController.repeat();
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _stopListening();
       _animController.stop();
@@ -148,8 +172,8 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
 
   @override
   Widget build(BuildContext context) {
-    if (!_isMobile || !widget.enabled) {
-      return widget.child;
+    if (!_shouldAnimate) {
+      return RepaintBoundary(child: widget.child);
     }
 
     return ClipRect(
@@ -157,6 +181,9 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
         valueListenable: _offsetNotifier,
         child: RepaintBoundary(child: widget.child),
         builder: (context, offset, staticChild) {
+          if (offset == Offset.zero) {
+            return staticChild!;
+          }
           return Transform.scale(
             scale: 1.15,
             child: Transform.translate(

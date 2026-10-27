@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import '../l10n/app_localizations.dart';
 import '../services/chat_service.dart';
 import '../widgets/chat/message_context_menu.dart';
+import '../widgets/message/media_album_widget.dart';
+import '../widgets/message/message_bubble.dart';
 import '../widgets/message/poll_message_widget.dart';
 import '../utils/emoji_utils.dart';
 
@@ -13,6 +15,65 @@ class MessageContextMenuService {
   MessageContextMenuService._internal();
 
   bool _isShowing = false;
+  NavigatorState? _activeNavigator;
+  OverlayEntry? _activeOverlayEntry;
+  GlobalKey<MessageContextMenuState>? _activeMenuKey;
+
+  /// Notifies chat lists which message ID is currently separated into the blur
+  /// overlay so the in-list widget can hide itself without layout shift.
+  final ValueNotifier<String?> activeBlurMessageId = ValueNotifier<String?>(null);
+
+  Offset? _pendingExternalStartPos;
+  Offset? _pendingExternalCurrentPos;
+  bool _isExternalDragActive = false;
+
+  bool get isShowing => _isShowing;
+  bool get hasActiveOverlay => _activeOverlayEntry != null;
+  Offset? get pendingExternalStartPos => _pendingExternalStartPos;
+  Offset? get pendingExternalCurrentPos => _pendingExternalCurrentPos;
+  bool get isExternalDragActive => _isExternalDragActive;
+
+  void clearActiveBlurMessage() {
+    if (activeBlurMessageId.value != null) {
+      activeBlurMessageId.value = null;
+    }
+  }
+
+  void removeActiveOverlay() {
+    _isShowing = false;
+    clearActiveBlurMessage();
+    _pendingExternalStartPos = null;
+    _pendingExternalCurrentPos = null;
+    _isExternalDragActive = false;
+    _activeNavigator = null;
+    _activeMenuKey = null;
+    final entry = _activeOverlayEntry;
+    _activeOverlayEntry = null;
+    if (entry != null && entry.mounted) {
+      entry.remove();
+    }
+  }
+
+  void dismiss() {
+    if (!_isShowing && _activeOverlayEntry == null) return;
+    final nav = _activeNavigator;
+    final hadOverlay = _activeOverlayEntry != null;
+    removeActiveOverlay();
+    if (!hadOverlay && nav != null && nav.mounted && nav.canPop()) {
+      nav.pop();
+    }
+  }
+
+  void updateExternalDragSelection(Offset globalPosition) {
+    _pendingExternalCurrentPos = globalPosition;
+    _isExternalDragActive = true;
+    _activeMenuKey?.currentState?.updateExternalDrag(globalPosition);
+  }
+
+  void endExternalDragSelection() {
+    _isExternalDragActive = false;
+    _activeMenuKey?.currentState?.endExternalDrag();
+  }
 
   void show({
     required BuildContext context,
@@ -21,14 +82,19 @@ class MessageContextMenuService {
     required bool isMe,
     required VoidCallback onReply,
     VoidCallback? onQuote,
+    void Function(String selectedText, int offset, int length)? onQuotePartial,
     required VoidCallback onPin,
     VoidCallback? onEdit,
+    VoidCallback? onSelect,
     required Function(Message message) onDelete,
     required Function(String messageId, String emoji) onReaction,
     Set<String>? selectedEmojis,
     String? currentUserId,
     bool canManagePoll = false,
     ValueChanged<Map<String, dynamic>>? onPollUpdated,
+    bool enableBlur = true,
+    Offset? initialDragStartGlobalPosition,
+    Offset? initialDragCurrentGlobalPosition,
   }) {
     if (_isShowing || message.isUnsupported) return;
 
@@ -36,8 +102,24 @@ class MessageContextMenuService {
         messageKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
 
-    final offset = renderBox.localToGlobal(Offset.zero);
+    final navState = Navigator.of(context);
+    final overlayState = navState.overlay ?? Overlay.maybeOf(context);
+    if (overlayState == null) return;
+
+    final navRenderObject = navState.context.findRenderObject();
+    final offset = renderBox.localToGlobal(
+      Offset.zero,
+      ancestor: navRenderObject,
+    );
     final size = renderBox.size;
+
+    final originalWidget = messageKey.currentContext?.widget;
+    Widget Function(GlobalKey focusedKey)? focusedMessageBuilder;
+    if (originalWidget is MessageBubble) {
+      focusedMessageBuilder = (focusedKey) => originalWidget.copyWithKey(focusedKey);
+    } else if (originalWidget is MediaAlbumWidget) {
+      focusedMessageBuilder = (focusedKey) => originalWidget.copyWithKey(focusedKey);
+    }
 
     final bool isPoll = message.messageType == 'poll';
     final bool isDice = message.messageType == 'dice' || EmojiUtils.isDiceEmoji(message.content);
@@ -102,39 +184,54 @@ class MessageContextMenuService {
       }
     }
 
+    final menuKey = GlobalKey<MessageContextMenuState>();
     _isShowing = true;
+    _activeNavigator = navState;
+    _activeMenuKey = menuKey;
+    _pendingExternalStartPos = initialDragStartGlobalPosition;
+    _pendingExternalCurrentPos =
+        initialDragCurrentGlobalPosition ?? initialDragStartGlobalPosition;
+    _isExternalDragActive = initialDragStartGlobalPosition != null;
+    final String? targetBlurMessageId =
+        (enableBlur && focusedMessageBuilder != null) ? message.id : null;
 
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        opaque: false,
-        barrierDismissible: true,
-        pageBuilder: (context, _, __) => MessageContextMenu(
-          messageOffset: offset,
-          messageSize: size,
-          isMe: isMe,
-          sendStatus: message.sendStatus,
-          onReply: onReply,
-          onQuote: (isPoll || isDice) ? null : onQuote,
-          onCopy: () {
-            Clipboard.setData(ClipboardData(text: message.content));
-          },
-          onPin: onPin,
-          onEdit: (isPoll || isDice) ? null : onEdit,
-          onViewPollResults: onViewPollResults,
-          onRetractVote: onRetractVote,
-          onStopPoll: onStopPoll,
-          onDelete: () => onDelete(message),
-          onReaction: (emoji) => onReaction(message.id, emoji),
-          selectedEmojis: selectedEmojis ?? message.myReactions,
-        ),
-        transitionsBuilder: (context, animation, _, child) {
-          return FadeTransition(opacity: animation, child: child);
+    // Insert via OverlayEntry instead of Navigator.push(PageRouteBuilder) because
+    // Flutter's NavigatorState._flushHistoryUpdates() calls cancelPointer() on all
+    // active pointers whenever a route is pushed, which would cancel an active LMB
+    // text-selection drag in the chat after 1-2 characters.
+    _activeOverlayEntry = OverlayEntry(
+      builder: (overlayContext) => MessageContextMenu(
+        key: menuKey,
+        messageOffset: offset,
+        messageSize: size,
+        isMe: isMe,
+        sendStatus: message.sendStatus,
+        messageKey: messageKey,
+        activeBlurMessageId: targetBlurMessageId,
+        messageContent: message.content,
+        focusedMessageBuilder: focusedMessageBuilder,
+        enableBlur: enableBlur,
+        initialDragStartGlobalPosition: initialDragStartGlobalPosition,
+        initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
+        onReply: onReply,
+        onQuote: (isPoll || isDice) ? null : onQuote,
+        onQuotePartial: (isPoll || isDice) ? null : onQuotePartial,
+        onCopy: () {
+          Clipboard.setData(ClipboardData(text: message.content));
         },
+        onPin: onPin,
+        onEdit: (isPoll || isDice) ? null : onEdit,
+        onSelect: onSelect,
+        onViewPollResults: onViewPollResults,
+        onRetractVote: onRetractVote,
+        onStopPoll: onStopPoll,
+        onDelete: () => onDelete(message),
+        onReaction: (emoji) => onReaction(message.id, emoji),
+        selectedEmojis: selectedEmojis ?? message.myReactions,
       ),
-    ).then((_) {
-      _isShowing = false;
-    });
+    );
+
+    overlayState.insert(_activeOverlayEntry!);
   }
 
   void _showStopPollConfirmation({

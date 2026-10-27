@@ -99,6 +99,8 @@ dev_dependencies:
 dependency_overrides:
   drift_dev: ^2.22.1
   build_runner: ^2.4.9
+  liquid_glass_easy:
+    path: packages/liquid_glass_easy
 
 flutter:
   # The following line ensures that the Material Icons font is

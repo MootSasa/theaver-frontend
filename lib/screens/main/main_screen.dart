@@ -53,7 +53,9 @@ import '../../services/chat_folder_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../services/video_note_playback_service.dart';
+import '../../services/tiling_layout_controller.dart';
 import '../../widgets/chat/swipeable_chat_tile.dart';
+import '../../widgets/tiling/tile_viewport_scope.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({Key? key}) : super(key: key);
@@ -67,9 +69,23 @@ class _MainScreenState extends State<MainScreen>
   int _currentIndex = 1; // 0: Settings, 1: Chats, 2: Search
   int _activeFilter = 0; // Index of the active folder in _folderService.folders
   final ChatFolderService _folderService = ChatFolderService();
+  String _lastTilingSignature = '';
 
   void _onServiceUpdate() {
     if (mounted) setState(() {});
+  }
+
+  void _onTilingUpdate() {
+    if (!mounted) return;
+    final tiling = TilingLayoutController.instance;
+    final openIds = tiling.chatTiles.map((t) => t.chatId).join(',');
+    final focusedId = tiling.focusedChatTile?.chatId ?? '';
+    final isTwoCol = tiling.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
+    final sig = '$openIds|$focusedId|$isTwoCol|${tiling.isWorkspaceMounted}';
+    if (sig != _lastTilingSignature) {
+      _lastTilingSignature = sig;
+      setState(() {});
+    }
   }
 
   // PageController для свайпа между Настройками и Чатами
@@ -126,13 +142,9 @@ class _MainScreenState extends State<MainScreen>
 
   // Top glass bar & morph context menu
   bool _isTopMenuOpen = false;
-  final LayerLink _topMenuLayerLink = LayerLink();
-  final OverlayPortalController _topMenuOverlayController = OverlayPortalController();
 
   // Central folder morph menu
   bool _isFolderMenuOpen = false;
-  final LayerLink _folderMenuLayerLink = LayerLink();
-  final OverlayPortalController _folderMenuOverlayController = OverlayPortalController();
 
   // Animation controllers for Material mode top bar morphing
   late final AnimationController _classicTopMenuController;
@@ -183,8 +195,6 @@ class _MainScreenState extends State<MainScreen>
       reverseCurve: Curves.easeInOutCubic,
     );
     WidgetsBinding.instance.addObserver(this);
-    _folderMenuOverlayController.show();
-    _topMenuOverlayController.show();
     _searchController.addListener(_onSearchChanged);
     DraftService().draftsNotifier.addListener(_onDraftsChanged);
     _accountManager.addListener(_onAccountChanged);
@@ -192,6 +202,14 @@ class _MainScreenState extends State<MainScreen>
     ChatSwipeService().addListener(_onServiceUpdate);
     VoicePlaybackService().addListener(_onServiceUpdate);
     VideoNotePlaybackService().addListener(_onServiceUpdate);
+    TilingLayoutController.instance.addListener(_onTilingUpdate);
+    TilingLayoutController.instance.registerTileBackHandler(
+      TilingLayoutController.kLeftTileId,
+      _handleLeftTileBack,
+    );
+    TilingLayoutController.instance.onMainScreenHandleBack =
+        _handleMainScreenRootBack;
+    TilingLayoutController.instance.onChatTileClosed = _onChatTileClosed;
 
     // Инициализация: сначала Drift, потом загрузка чатов и WebSocket
     _initApp();
@@ -205,6 +223,37 @@ class _MainScreenState extends State<MainScreen>
       NotificationService().isMainScreenReady = true;
       NotificationService().consumePendingNotification();
     });
+  }
+
+  bool _handleLeftTileBack() {
+    if (_isTopMenuOpen) {
+      _closeTopMenu();
+      return true;
+    }
+    if (_isFolderMenuOpen) {
+      _closeFolderMenu();
+      return true;
+    }
+    if (_isSelectMode) {
+      _exitSelectMode();
+      return true;
+    }
+    return false;
+  }
+
+  bool _handleMainScreenRootBack() {
+    if (_handleLeftTileBack()) return true;
+    if (_currentIndex != 1) {
+      _onTabTapped(1);
+      return true;
+    }
+    return false;
+  }
+
+  void _onChatTileClosed(String chatId) {
+    if (mounted) {
+      _refreshChatLastMessage(chatId);
+    }
   }
 
   /// Последовательная инициализация: Drift → стрим чатов → чаты с сервера → WebSocket
@@ -858,6 +907,19 @@ class _MainScreenState extends State<MainScreen>
     ChatSwipeService().removeListener(_onServiceUpdate);
     VoicePlaybackService().removeListener(_onServiceUpdate);
     VideoNotePlaybackService().removeListener(_onServiceUpdate);
+    TilingLayoutController.instance.removeListener(_onTilingUpdate);
+    TilingLayoutController.instance.unregisterTileBackHandler(
+      TilingLayoutController.kLeftTileId,
+      _handleLeftTileBack,
+    );
+    if (TilingLayoutController.instance.onMainScreenHandleBack ==
+        _handleMainScreenRootBack) {
+      TilingLayoutController.instance.onMainScreenHandleBack = null;
+    }
+    if (TilingLayoutController.instance.onChatTileClosed ==
+        _onChatTileClosed) {
+      TilingLayoutController.instance.onChatTileClosed = null;
+    }
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
@@ -1077,7 +1139,6 @@ class _MainScreenState extends State<MainScreen>
     _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
     _classicTopMenuController.forward();
-    _topMenuOverlayController.show();
     setState(() {
       _isTopMenuOpen = true;
     });
@@ -1107,7 +1168,6 @@ class _MainScreenState extends State<MainScreen>
     }
     HapticUtils.tap();
     _classicFolderMenuController.forward();
-    _folderMenuOverlayController.show();
     setState(() {
       _isFolderMenuOpen = true;
     });
@@ -1330,6 +1390,7 @@ class _MainScreenState extends State<MainScreen>
           ElevatedButton(
             onPressed: () async {
               Navigator.of(context).pop();
+              TilingLayoutController.instance.closeAllChats();
               final nav = DeepLinkService().navigatorKey.currentState ??
                   Navigator.of(context, rootNavigator: true);
               nav.pushAndRemoveUntil(
@@ -1380,6 +1441,7 @@ class _MainScreenState extends State<MainScreen>
               final nav = DeepLinkService().navigatorKey.currentState ??
                   Navigator.of(context, rootNavigator: true);
               Navigator.of(context).pop();
+              TilingLayoutController.instance.closeAllChats();
               nav.pushAndRemoveUntil(
                 SwipeBackPageRoute(builder: (_) => const LoginScreen()),
                 (route) => false,
@@ -1414,153 +1476,129 @@ class _MainScreenState extends State<MainScreen>
     const double menuWidth = 200.0;
     const double folderMenuWidth = 220.0;
     const double barRadius = ctrlSize / 2; // 22.0 — stadium capsule ratio
+    final double menuHeight = _getMenuHeight(_currentIndex);
+    final double folderMenuHeight =
+        math.max(44.0, _folderService.folders.length * 44.0 + 12.0);
 
-    final pillStyle = glassProvider.createStyle(
+    final morphStyle = glassProvider.createStyle(
       context: context,
       cornerRadius: barRadius,
       refractionIndex: 1.1,
       refractionWidth: 24.0,
     );
-
-    final morphStyle = pillStyle;
     const morphMotion = LiquidGlassMorphMotion.fluid;
 
     final double closedPillWidth =
         math.max(130.0, _calculateTitleWidth(context) + 48.0);
 
+    final double barHeight = _isFolderMenuOpen
+        ? math.max(ctrlSize + 4, folderMenuHeight + 8)
+        : (_isTopMenuOpen
+            ? math.max(ctrlSize + 4, menuHeight + 8)
+            : ctrlSize + 4);
+
+    final Widget folderPillPositioned = Positioned(
+      key: const ValueKey<String>('main_folder_pill_pos'),
+      top: 2,
+      left: 0,
+      right: 0,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: SizedBox(
+          width: math.max(folderMenuWidth, closedPillWidth),
+          height: folderMenuHeight,
+          child: LiquidGlassMorph(
+            key: const ValueKey<String>('main_folder_menu_morph'),
+            alignment: Alignment.topCenter,
+            motion: morphMotion,
+            smoothness: 28,
+            style: morphStyle,
+            child: _isFolderMenuOpen
+                ? _FolderMorphMenu(
+                    key: const ValueKey<String>('folder_menu'),
+                    width: folderMenuWidth,
+                    activeFilter: _activeFilter,
+                    folders: _folderService.folders,
+                    unreadCounts: List.generate(
+                      _folderService.folders.length,
+                      (index) => _getUnreadCountForFilter(index),
+                    ),
+                    onSelectFolder: (index) {
+                      HapticUtils.selection();
+                      setState(() => _activeFilter = index);
+                      _closeFolderMenu();
+                    },
+                  )
+                : _TitlePillContent(
+                    key: const ValueKey<String>('title_pill'),
+                    title: _currentTitleText,
+                    titleKey: _currentTitleKey,
+                    isConnected: _isTitleConnected,
+                    onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+                  ),
+          ),
+        ),
+      ),
+    );
+
+    final Widget topMenuPositioned = Positioned(
+      key: const ValueKey<String>('main_top_menu_pos'),
+      top: 2,
+      right: 16,
+      child: SizedBox(
+        width: menuWidth,
+        height: menuHeight,
+        child: LiquidGlassMorph(
+          key: const ValueKey<String>('main_top_menu_morph'),
+          alignment: Alignment.topRight,
+          motion: morphMotion,
+          smoothness: 28,
+          style: morphStyle,
+          child: _isTopMenuOpen
+              ? _TopMorphMenu(
+                  key: const ValueKey<String>('menu'),
+                  width: menuWidth,
+                  items: _getMenuItems(_currentIndex),
+                  onItemTap: _handleMenuAction,
+                )
+              : _ThreeDotsGlyph(
+                  key: const ValueKey<String>('glyph'),
+                  size: ctrlSize,
+                  onTap: _toggleTopMenu,
+                ),
+        ),
+      ),
+    );
+
     return SizedBox(
       width: double.infinity,
-      height: ctrlSize + 4,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // Centered title pill / morph folder dropdown menu
-          Positioned(
-            top: 2,
-            left: 0,
-            right: 0,
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: OverlayPortal(
-                controller: _folderMenuOverlayController,
-                overlayChildBuilder: (context) {
-                  return Stack(
-                    children: [
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          ignoring: !_isFolderMenuOpen,
-                          child: GestureDetector(
-                            onTap: _closeFolderMenu,
-                            behavior: HitTestBehavior.opaque,
-                          ),
-                        ),
-                      ),
-                      CompositedTransformFollower(
-                        link: _folderMenuLayerLink,
-                        showWhenUnlinked: false,
-                        targetAnchor: Alignment.topCenter,
-                        followerAnchor: Alignment.topCenter,
-                        child: LiquidGlassMorph(
-                          key: const ValueKey<String>('main_folder_menu_morph'),
-                          alignment: Alignment.topCenter,
-                          motion: morphMotion,
-                          smoothness: 28,
-                          style: pillStyle,
-                          child: _isFolderMenuOpen
-                              ? _FolderMorphMenu(
-                                  key: const ValueKey<String>('folder_menu'),
-                                  width: folderMenuWidth,
-                                  activeFilter: _activeFilter,
-                                  folders: _folderService.folders,
-                                  unreadCounts: List.generate(
-                                    _folderService.folders.length,
-                                    (index) => _getUnreadCountForFilter(index),
-                                  ),
-                                  onSelectFolder: (index) {
-                                    HapticUtils.selection();
-                                    setState(() => _activeFilter = index);
-                                    _closeFolderMenu();
-                                  },
-                                )
-                              : _TitlePillContent(
-                                  key: const ValueKey<String>('title_pill'),
-                                  title: _currentTitleText,
-                                  titleKey: _currentTitleKey,
-                                  isConnected: _isTitleConnected,
-                                  onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
-                                ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-                child: CompositedTransformTarget(
-                  link: _folderMenuLayerLink,
-                  child: SizedBox(
-                    width: closedPillWidth,
-                    height: ctrlSize,
-                  ),
+      height: barHeight,
+      child: LiquidGlassBlender(
+        smoothness: 0,
+        style: morphStyle,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            if (_isFolderMenuOpen || _isTopMenuOpen)
+              Positioned.fill(
+                key: const ValueKey<String>('main_top_bar_dismiss_backdrop'),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () {
+                    if (_isFolderMenuOpen) _closeFolderMenu();
+                    if (_isTopMenuOpen) _closeTopMenu();
+                  },
                 ),
               ),
-            ),
-          ),
-
-          // Persistent three dots button and morph context menu
-          Positioned(
-            top: 2,
-            right: 16,
-            child: OverlayPortal(
-              controller: _topMenuOverlayController,
-              overlayChildBuilder: (context) {
-                return Stack(
-                  children: [
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        ignoring: !_isTopMenuOpen,
-                        child: GestureDetector(
-                          onTap: _closeTopMenu,
-                          behavior: HitTestBehavior.opaque,
-                        ),
-                      ),
-                    ),
-                    CompositedTransformFollower(
-                      link: _topMenuLayerLink,
-                      showWhenUnlinked: false,
-                      targetAnchor: Alignment.topRight,
-                      followerAnchor: Alignment.topRight,
-                      child: LiquidGlassMorph(
-                        key: const ValueKey<String>('main_top_menu_morph'),
-                        alignment: Alignment.topRight,
-                        motion: morphMotion,
-                        smoothness: 28,
-                        style: morphStyle,
-                        child: _isTopMenuOpen
-                            ? _TopMorphMenu(
-                                key: const ValueKey<String>('menu'),
-                                width: menuWidth,
-                                items: _getMenuItems(_currentIndex),
-                                onItemTap: _handleMenuAction,
-                              )
-                            : _ThreeDotsGlyph(
-                                key: const ValueKey<String>('glyph'),
-                                size: ctrlSize,
-                                onTap: _toggleTopMenu,
-                              ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-              child: CompositedTransformTarget(
-                link: _topMenuLayerLink,
-                child: const SizedBox(
-                  width: ctrlSize,
-                  height: ctrlSize,
-                ),
-              ),
-            ),
-          ),
-        ],
+            if (_isFolderMenuOpen) ...[
+              topMenuPositioned,
+              folderPillPositioned,
+            ] else ...[
+              folderPillPositioned,
+              topMenuPositioned,
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -2090,9 +2128,19 @@ class _MainScreenState extends State<MainScreen>
             ],
           );
 
+    final tiling = TilingLayoutController.instance;
+    final isChatOpenInTile = tiling.isChatOpen(chat.id);
+    final isChatFocusedInTile = tiling.focusedChatTile?.chatId == chat.id;
+    final primaryColor = Theme.of(context).colorScheme.primary;
+
     final chatTile = Container(
-      color:
-          isSelected ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.08) : null,
+      color: isSelected
+          ? primaryColor.withValues(alpha: 0.08)
+          : isChatFocusedInTile
+              ? primaryColor.withValues(alpha: 0.12)
+              : isChatOpenInTile
+                  ? primaryColor.withValues(alpha: 0.06)
+                  : null,
       child: ListTile(
         onLongPress: () {
           HapticUtils.impact();
@@ -2167,6 +2215,11 @@ class _MainScreenState extends State<MainScreen>
       key: ValueKey('chat_swipe_${chat.id}'),
       chat: chat,
       enabled: !_isSelectMode,
+      onSecondaryTapUp: (details) {
+        _showChatContextMenu(context, chat, details.globalPosition);
+      },
+      onCreateDragPayload: (initialRect, globalPos) =>
+          _createChatDragPayload(chat, initialRect, globalPos),
       onAction: (action) async {
         switch (action) {
           case ChatSwipeAction.read:
@@ -2198,6 +2251,173 @@ class _MainScreenState extends State<MainScreen>
       },
       child: chatTile,
     );
+  }
+
+  DraggingChatPayload _createChatDragPayload(
+    Chat chat,
+    Rect initialRect,
+    Offset globalPos,
+  ) {
+    final effectiveSavedAvatar = chat.avatarUrl ??
+        _accountManager.currentAccount?.avatarUrl ??
+        _accountManager.currentAccount?.localAvatarPath;
+    final translatedSaved = context.l10n.translate('chat_saved_messages');
+    final displayName = chat.chatType == 'saved'
+        ? (translatedSaved != 'chat_saved_messages'
+            ? translatedSaved
+            : 'Избранное')
+        : (chat.chatType == 'system' && chat.name.isEmpty
+            ? context.l10n.translate('system_notifications_title')
+            : chat.name);
+
+    return DraggingChatPayload(
+      chatId: chat.id,
+      chatType: chat.chatType,
+      chatName: displayName,
+      avatarUrl: chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl,
+      otherUserId: chat.otherUserId,
+      otherUserOnline: chat.isOnline,
+      otherUserLastSeen: DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+      initialGlobalRect: initialRect,
+      currentGlobalPos: globalPos,
+    );
+  }
+
+  Future<void> _showChatContextMenu(
+    BuildContext itemContext,
+    Chat chat,
+    Offset globalPos,
+  ) async {
+    final overlay =
+        Overlay.of(context, rootOverlay: true).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+
+    final canSplit = TilingLayoutController.instance.windowSize.width >=
+        TilingLayoutController.kTwoColumnBreakpoint;
+    final hasUnread = chat.unreadCount > 0 || chat.unreadCount == -1;
+
+    final selected = await showMenu<String>(
+      context: context,
+      useRootNavigator: true,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPos.dx, globalPos.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      items: [
+        if (canSplit)
+          PopupMenuItem<String>(
+            value: 'open_adjacent',
+            child: Row(
+              children: [
+                iconoir.ViewColumns2(
+                  width: 18,
+                  height: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 10),
+                const Text('Открыть в соседнем окне'),
+              ],
+            ),
+          ),
+        PopupMenuItem<String>(
+          value: 'open',
+          child: Row(
+            children: [
+              iconoir.ChatBubble(
+                width: 18,
+                height: 18,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+              const SizedBox(width: 10),
+              const Text('Открыть чат'),
+            ],
+          ),
+        ),
+        if (chat.chatType != 'saved')
+          PopupMenuItem<String>(
+            value: 'pin',
+            child: Row(
+              children: [
+                chat.isPinned
+                    ? iconoir.PinSlash(
+                        width: 18,
+                        height: 18,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      )
+                    : iconoir.Pin(
+                        width: 18,
+                        height: 18,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                const SizedBox(width: 10),
+                Text(chat.isPinned ? 'Открепить' : 'Закрепить'),
+              ],
+            ),
+          ),
+        PopupMenuItem<String>(
+          value: 'read',
+          child: Row(
+            children: [
+              iconoir.DoubleCheck(
+                width: 18,
+                height: 18,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+              const SizedBox(width: 10),
+              Text(hasUnread ? 'Отметить прочитанным' : 'Отметить непрочитанным'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'select',
+          child: Row(
+            children: [
+              iconoir.CheckCircle(
+                width: 18,
+                height: 18,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+              const SizedBox(width: 10),
+              const Text('Выбрать чаты'),
+            ],
+          ),
+        ),
+        if (chat.chatType != 'saved')
+          const PopupMenuItem<String>(
+            value: 'delete',
+            child: Row(
+              children: [
+                iconoir.Trash(width: 18, height: 18, color: Colors.red),
+                SizedBox(width: 10),
+                Text('Удалить чат', style: TextStyle(color: Colors.red)),
+              ],
+            ),
+          ),
+      ],
+    );
+
+    if (!mounted || selected == null) return;
+    switch (selected) {
+      case 'open_adjacent':
+        _openChat(chat, inAdjacentTile: true);
+        break;
+      case 'open':
+        _openChat(chat);
+        break;
+      case 'pin':
+        await _togglePinChat(chat);
+        break;
+      case 'read':
+        await _toggleReadChat(chat);
+        break;
+      case 'select':
+        _enterSelectMode(chat.id);
+        break;
+      case 'delete':
+        await _batchDeleteChats([chat]);
+        break;
+    }
   }
 
   Future<void> _toggleReadChat(Chat chat) async {
@@ -2419,6 +2639,23 @@ class _MainScreenState extends State<MainScreen>
               ),
             ),
             const Divider(height: 1),
+            if (selectedChats.length == 1 &&
+                TilingLayoutController.instance.windowSize.width >=
+                    TilingLayoutController.kTwoColumnBreakpoint)
+              ListTile(
+                leading: iconoir.ViewColumns2(
+                  color: Theme.of(context).colorScheme.primary,
+                  width: 22,
+                  height: 22,
+                ),
+                title: const Text('Открыть в соседнем окне'),
+                onTap: () {
+                  Navigator.pop(context);
+                  final target = selectedChats.first;
+                  _exitSelectMode();
+                  _openChat(target, inAdjacentTile: true);
+                },
+              ),
             // Pin/Unpin
             if (!hasSavedChat || selectedChats.length > 1)
               ListTile(
@@ -2588,7 +2825,7 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  void _openChat(Chat chat) {
+  void _openChat(Chat chat, {bool inAdjacentTile = false}) {
     if (chat.unreadCount == -1) {
       final db = AppDatabase(_currentUserId);
       db.updateUnreadCount(chat.id, 0);
@@ -2596,16 +2833,56 @@ class _MainScreenState extends State<MainScreen>
         context.read<UnreadCountProvider>().setCount(chat.id, 0);
       } catch (_) {}
     }
+
+    final effectiveSavedAvatar = chat.avatarUrl ??
+        _accountManager.currentAccount?.avatarUrl ??
+        _accountManager.currentAccount?.localAvatarPath;
+    final translatedSaved = context.l10n.translate('chat_saved_messages');
+    final displayName = chat.chatType == 'saved'
+        ? (translatedSaved != 'chat_saved_messages'
+            ? translatedSaved
+            : 'Избранное')
+        : (chat.chatType == 'system' && chat.name.isEmpty
+            ? context.l10n.translate('system_notifications_title')
+            : chat.name);
+    final effectiveAvatar =
+        chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl;
+
+    if (TilingLayoutController.instance.isWorkspaceMounted) {
+      if (inAdjacentTile) {
+        TilingLayoutController.instance.openChatInAdjacentTile(
+          chatId: chat.id,
+          chatType: chat.chatType,
+          chatName: displayName,
+          avatarUrl: effectiveAvatar,
+          otherUserId: chat.otherUserId,
+          otherUserOnline: chat.isOnline,
+          otherUserLastSeen: DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+        );
+      } else {
+        TilingLayoutController.instance.openChatInActiveTile(
+          chatId: chat.id,
+          chatType: chat.chatType,
+          chatName: displayName,
+          avatarUrl: effectiveAvatar,
+          otherUserId: chat.otherUserId,
+          otherUserOnline: chat.isOnline,
+          otherUserLastSeen: DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+        );
+      }
+      return;
+    }
+
     try {
-      context.read<UnreadCountProvider>().setOpenChat(chat.id);
+      context.read<UnreadCountProvider>().openChat(chat.id);
     } catch (_) {}
-    NotificationService().setActiveChat(chat.id);
+    NotificationService().addActiveChat(chat.id);
 
     final VoidCallback onReturn = () {
       try {
-        context.read<UnreadCountProvider>().setOpenChat(null);
+        context.read<UnreadCountProvider>().closeChat(chat.id);
       } catch (_) {}
-      NotificationService().setActiveChat(null);
+      NotificationService().removeActiveChat(chat.id);
       if (mounted) _refreshChatLastMessage(chat.id);
     };
 
@@ -2627,17 +2904,13 @@ class _MainScreenState extends State<MainScreen>
         ).then((_) => onReturn());
         break;
       case 'saved':
-        final effectiveSavedAvatar = chat.avatarUrl ?? _accountManager.currentAccount?.avatarUrl ?? _accountManager.currentAccount?.localAvatarPath;
-        final translatedSaved = context.l10n.translate('chat_saved_messages');
         // Open saved chat as a special chat with yourself
         Navigator.push(
           context,
           SwipeBackPageRoute(
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              otherUserName: translatedSaved != 'chat_saved_messages'
-                  ? translatedSaved
-                  : 'Избранное',
+              otherUserName: displayName,
               otherUserAvatar: effectiveSavedAvatar,
             ),
           ),
@@ -2649,9 +2922,7 @@ class _MainScreenState extends State<MainScreen>
           SwipeBackPageRoute(
             builder: (_) => SystemNotificationsScreen(
               chatId: chat.id,
-              chatName: chat.name.isNotEmpty
-                  ? chat.name
-                  : context.l10n.translate('system_notifications_title'),
+              chatName: displayName,
             ),
           ),
         ).then((_) => onReturn());
@@ -2816,10 +3087,20 @@ class _MainScreenState extends State<MainScreen>
                             final statusBarHeight =
                                 MediaQuery.of(context).padding.top;
                             final topBarHeight = statusBarHeight + 52.0;
-                            final playerOffset = (VoicePlaybackService().hasActiveAudio ||
-                                    VideoNotePlaybackService().hasActiveVideo)
-                                ? 56.0
-                                : 0.0;
+                            final activePlayChatId = VoicePlaybackService().hasActiveAudio
+                                ? VoicePlaybackService().activeChatId
+                                : VideoNotePlaybackService().hasActiveVideo
+                                    ? VideoNotePlaybackService().activeChatId
+                                    : null;
+                            final isPlayingInVisibleRightTile = activePlayChatId != null &&
+                                TilingLayoutController.instance.isWorkspaceMounted &&
+                                TilingLayoutController.instance.windowSize.width >=
+                                    TilingLayoutController.kTwoColumnBreakpoint &&
+                                TilingLayoutController.instance.isChatOpen(activePlayChatId);
+                            final playerOffset =
+                                (activePlayChatId != null && !isPlayingInVisibleRightTile)
+                                    ? 56.0
+                                    : 0.0;
                             final targetTopPadding =
                                 topBarHeight + 8.0 + playerOffset;
                             return TweenAnimationBuilder<double>(
@@ -2904,7 +3185,7 @@ class _MainScreenState extends State<MainScreen>
             final topBarHeight = statusBarHeight + 52.0;
 
             if (glassProvider.enabled) {
-              final double screen = MediaQuery.sizeOf(context).width;
+              final double screen = TileViewportScope.widthOf(context);
               final double keyboardHeight = MediaQuery.viewInsetsOf(context).bottom;
               final double safeBottom = MediaQuery.paddingOf(context).bottom;
 
@@ -2947,6 +3228,7 @@ class _MainScreenState extends State<MainScreen>
               return LiquidGlassScaffold(
                 pixelRatio: 1.0,
                 useSync: true,
+                batch: false,
                 backgroundColor: Theme.of(context).scaffoldBackgroundColor,
                 appBar: _isSelectMode
                     ? _buildSelectModeBar(context)
@@ -3169,7 +3451,7 @@ class _MainScreenState extends State<MainScreen>
   LiquidGlassShape _glassShape(double cornerRadius) =>
       LiquidGlassShape.continuousRoundedRectangle(
         cornerRadius: cornerRadius,
-        clipQuality: LiquidGlassClipQuality.exact,
+        clipQuality: LiquidGlassClipQuality.roundedRectangle,
       );
 
   LiquidGlassTabBarItem _buildTabBarItem({
@@ -3322,7 +3604,16 @@ class _MainScreenState extends State<MainScreen>
           );
           if (chatResult['success'] == true && mounted) {
             final chat = chatResult['chat'] as Chat;
-            
+            if (TilingLayoutController.instance.isWorkspaceMounted) {
+              TilingLayoutController.instance.openChatInActiveTile(
+                chatId: chat.id,
+                chatType: 'private',
+                chatName: result.name,
+                avatarUrl: result.avatarUrl,
+                otherUserId: result.id,
+              );
+              return;
+            }
             Navigator.push(
               context,
               SwipeBackPageRoute(
@@ -3347,6 +3638,14 @@ class _MainScreenState extends State<MainScreen>
         break;
       case 'group':
         if (result is SearchResultGroup) {
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: result.id,
+              chatType: 'group',
+              chatName: result.name,
+            );
+            return;
+          }
           Navigator.push(
             context,
             SwipeBackPageRoute(
@@ -3363,6 +3662,14 @@ class _MainScreenState extends State<MainScreen>
         break;
       case 'channel':
         if (result is SearchResultChannel) {
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: result.id,
+              chatType: 'channel',
+              chatName: result.name,
+            );
+            return;
+          }
           Navigator.push(
             context,
             SwipeBackPageRoute(
@@ -3387,6 +3694,20 @@ class _MainScreenState extends State<MainScreen>
               (result.channelId.isNotEmpty ? 'channel' : 'group');
 
           if (!mounted) return;
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: targetChatId,
+              chatType: chatType,
+              chatName: dbChat?.name ?? '',
+              avatarUrl: dbChat?.avatarUrl,
+              otherUserId: dbChat?.otherUserId,
+              otherUserOnline: dbChat?.isOnline ?? false,
+              otherUserLastSeen:
+                  DateTimeUtils.parseUtcDateTime(dbChat?.lastSeen),
+              initialMessageId: result.id,
+            );
+            return;
+          }
           if (chatType == 'private') {
             Navigator.push(
               context,

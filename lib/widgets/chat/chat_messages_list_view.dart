@@ -85,6 +85,7 @@ class ChatMessagesListView extends StatelessWidget {
       controller: scrollController,
       reverse: reverse,
       cacheExtent: 600.0,
+      addRepaintBoundaries: false,
       padding: EdgeInsets.only(
         top: topPadding,
         left: 8,

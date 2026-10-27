@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 import '../../services/dice_cache_service.dart';
@@ -13,9 +14,9 @@ import '../../utils/emoji_utils.dart';
 /// - Layer 3 (Right Reel): outcome animation (`1f3b0_16..20`)
 /// - Layer 4 (Front / Lever): machine casing and lever pull (`1f3b0_3`)
 ///
-/// For historical messages (autoPlay == false), immediately renders the
-/// final settled state on frame 180 (value = 1.0) with all 3 stopped reels showing.
-/// On tap, triggers authentic lever pull, reel spins, and Telegram haptic feedback.
+/// For historical messages (autoPlay == false) and after rolling completes,
+/// renders a single pre-baked composite GPU texture ([RawImage]) instead of 5
+/// vector Lottie layers, and avoids infinite background tickers.
 class SlotMachineWidget extends StatefulWidget {
   final int value;
   final double size;
@@ -44,11 +45,51 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
   LottieComposition? _centerComp;
   LottieComposition? _rightComp;
   LottieComposition? _leverComp;
+  ui.Image? _settledCompositeFrame;
 
   bool _isRolling = false;
   bool _hasPlayedOnce = false;
   bool _showWinBackground = false;
   late SlotReelIndices _indices;
+
+  void _ensureSettledCompositeFrame() {
+    final left = _leftComp;
+    final center = _centerComp;
+    final right = _rightComp;
+    if (left == null || center == null || right == null) return;
+
+    final bg = _indices.isWin ? (_winBgComp ?? _idleBgComp) : _idleBgComp;
+    final lever = _leverComp;
+    final int targetPx = (widget.size * 2.0).round().clamp(128, 320);
+    final String cacheKey = 'slot_${widget.value}_$targetPx';
+
+    final syncImg = EmojiUtils.getBakedLottieFrameSync(cacheKey);
+    if (syncImg != null) {
+      _settledCompositeFrame = syncImg;
+      return;
+    }
+
+    final layers = <(LottieComposition, double)>[
+      if (bg != null) (bg, 1.0),
+      (left, 1.0),
+      (center, 1.0),
+      (right, 1.0),
+      if (lever != null) (lever, 1.0),
+    ];
+
+    final targetVal = widget.value;
+    EmojiUtils.bakeCompositeLottieFrames(
+      cacheKey: cacheKey,
+      layers: layers,
+      targetPx: targetPx,
+    ).then((img) {
+      if (mounted && img != null && widget.value == targetVal) {
+        setState(() {
+          _settledCompositeFrame = img;
+        });
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -74,11 +115,7 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     if (!widget.autoPlay) {
       _mainController.value = 1.0;
       _leverController.value = 1.0;
-      if (_indices.isWin) {
-        _bgController.repeat();
-      } else {
-        _bgController.value = 1.0;
-      }
+      _bgController.value = 1.0;
     }
 
     _loadCompositions();
@@ -93,7 +130,7 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
         setState(() {
           _showWinBackground = true;
         });
-        _bgController.repeat();
+        _bgController.forward(from: 0.0);
       }
     }
   }
@@ -104,6 +141,7 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     if (oldWidget.value != widget.value) {
       _indices = DiceCacheService.getSlotIndices(widget.value);
       _showWinBackground = (!widget.autoPlay && _indices.isWin);
+      _settledCompositeFrame = null;
       _loadCompositions();
     }
   }
@@ -144,14 +182,15 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
 
     if (!mounted) return;
 
-    setState(() {
-      _idleBgComp = results[0];
-      _winBgComp = results[1];
-      _leverComp = results[2];
-      _leftComp = results[3];
-      _centerComp = results[4];
-      _rightComp = results[5];
-    });
+    _idleBgComp = results[0];
+    _winBgComp = results[1];
+    _leverComp = results[2];
+    _leftComp = results[3];
+    _centerComp = results[4];
+    _rightComp = results[5];
+    _ensureSettledCompositeFrame();
+
+    setState(() {});
 
     if (widget.autoPlay && !_hasPlayedOnce) {
       _hasPlayedOnce = true;
@@ -159,11 +198,7 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
     } else if (!_isRolling) {
       _mainController.value = 1.0;
       _leverController.value = 1.0;
-      if (_indices.isWin) {
-        _bgController.repeat();
-      } else {
-        _bgController.value = 1.0;
-      }
+      _bgController.value = 1.0;
     }
   }
 
@@ -196,6 +231,11 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
       // Ignored if cancelled / disposed
     }
 
+    _hapticBinding?.dispose();
+    _hapticBinding = null;
+    _bgController.stop();
+    _bgController.value = 1.0;
+
     if (!mounted) return;
     setState(() => _isRolling = false);
   }
@@ -203,7 +243,15 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
   @override
   Widget build(BuildContext context) {
     Widget content;
-    if (_leftComp != null && _centerComp != null && _rightComp != null) {
+    if (!_isRolling && _settledCompositeFrame != null) {
+      content = RawImage(
+        image: _settledCompositeFrame,
+        width: widget.size,
+        height: widget.size,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.low,
+      );
+    } else if (_leftComp != null && _centerComp != null && _rightComp != null) {
       final bgComp = _showWinBackground ? _winBgComp : _idleBgComp;
       content = SizedBox(
         width: widget.size,
@@ -211,11 +259,11 @@ class _SlotMachineWidgetState extends State<SlotMachineWidget>
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Layer 0: Background (static casing during roll; flashing siren only after all 3 reels stop on win)
+            // Layer 0: Background (static casing during roll; flashing siren only during win reveal)
             if (bgComp != null)
               Lottie(
                 composition: bgComp,
-                controller: _showWinBackground ? _bgController : null,
+                controller: _bgController,
                 width: widget.size,
                 height: widget.size,
                 fit: BoxFit.contain,

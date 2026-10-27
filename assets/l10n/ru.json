@@ -897,7 +897,11 @@
   "theme_color_reply_line": "Полоса ответа / цитаты",
   "theme_color_reply_title": "Имя в ответе",
   "theme_color_reply_text": "Текст в ответе",
-  "theme_color_selection_overlay": "Подсветка выделения",
+  "theme_color_selection_overlay": "Цвет фонового выделения",
+  "theme_color_bubble_outgoing_selected": "Цвет выделенного сообщения",
+  "theme_color_bubble_incoming_selected": "Цвет выделенного сообщения",
+  "chat_action_select": "Выделить",
+  "chat_selected_count": "Выбрано: {count}",
   "theme_color_reaction_active": "Фон активной реакции",
   "theme_color_reaction_inactive": "Фон неактивной реакции",
   "theme_color_error": "Цвет ошибок и удаления",
@@ -1008,5 +1012,8 @@
   "message_unsupported_update_btn": "Обновить Theaver",
   "message_unsupported_preview": "Неподдерживаемое сообщение",
   "app_up_to_date": "У вас установлена последняя версия Theaver",
-  "check_updates_error": "Не удалось проверить обновления"
+  "check_updates_error": "Не удалось проверить обновления",
+  "settings_send_by_enter_title": "Отправка по Enter",
+  "settings_send_by_enter_subtitle_on": "Enter — отправить сообщение, Shift+Enter или Ctrl+Enter — перенос строки",
+  "settings_send_by_enter_subtitle_off": "Ctrl+Enter — отправить сообщение, Enter — перенос строки"
 }

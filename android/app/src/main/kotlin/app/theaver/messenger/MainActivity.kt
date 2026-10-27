@@ -33,8 +33,14 @@ class MainActivity : FlutterFragmentActivity() {
     private val NETWORK_CHANNEL = "app.theaver.messenger/network"
     private var pendingApkPath: String? = null
 
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableHighRefreshRate()
+    }
+
     override fun onResume() {
         super.onResume()
+        enableHighRefreshRate()
         val path = pendingApkPath
         if (path != null) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
@@ -43,6 +49,32 @@ class MainActivity : FlutterFragmentActivity() {
                     launchApkInstaller(File(path))
                 } catch (_: Exception) {}
             }
+        }
+    }
+
+    private fun enableHighRefreshRate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    this.display
+                } else {
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay
+                } ?: return
+                val modes = display.supportedModes
+                val currentMode = display.mode
+                val highestMode = modes
+                    .filter {
+                        it.physicalWidth == currentMode.physicalWidth &&
+                            it.physicalHeight == currentMode.physicalHeight
+                    }
+                    .maxByOrNull { it.refreshRate }
+                if (highestMode != null && highestMode.modeId != currentMode.modeId) {
+                    val params = window.attributes
+                    params.preferredDisplayModeId = highestMode.modeId
+                    window.attributes = params
+                }
+            } catch (_: Exception) {}
         }
     }
 

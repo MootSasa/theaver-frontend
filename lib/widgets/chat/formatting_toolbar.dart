@@ -110,13 +110,6 @@ class FormattingToolbar extends StatelessWidget {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
         border: Border.all(
           color: isDark ? Colors.white10 : Colors.black12,
           width: 0.8,

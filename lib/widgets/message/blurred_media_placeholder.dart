@@ -1,10 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-import 'dart:ui';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 /// Renders a high-performance blurred preview placeholder for photos/videos
 /// using the micro-thumbnail or a subtle fallback background.
+///
+/// Pre-bakes the Gaussian blur (`sigma = 18`) and `0.14` dark overlay into a
+/// compact `64×64` GPU [ui.Image] once per thumbnail (cached in an LRU map),
+/// avoiding a live `ImageFiltered` (`ImageFilterLayer`) offscreen blur pass on
+/// every scroll frame in Impeller.
 class BlurredMediaPlaceholder extends StatefulWidget {
   final String? thumbBase64;
   final double aspectRatio;
@@ -27,92 +33,151 @@ class BlurredMediaPlaceholder extends StatefulWidget {
 }
 
 class _BlurredMediaPlaceholderState extends State<BlurredMediaPlaceholder> {
-  Uint8List? _bytes;
-  MemoryImage? _imageProvider;
+  static const int _kBakedSizePx = 160;
+  static const int _kMaxCacheEntries = 64;
+  static final Map<int, ui.Image> _bakedThumbCache = <int, ui.Image>{};
+  static final Map<int, Future<ui.Image?>> _pendingBakes =
+      <int, Future<ui.Image?>>{};
+
+  ui.Image? _bakedImage;
+  int? _currentCacheKey;
 
   @override
   void initState() {
     super.initState();
-    _decodeThumb();
+    _resolveBakedThumb();
   }
 
   @override
   void didUpdateWidget(covariant BlurredMediaPlaceholder oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.thumbBase64 != widget.thumbBase64) {
-      _decodeThumb();
+    if (oldWidget.thumbBase64 != widget.thumbBase64 ||
+        oldWidget.blurSigma != widget.blurSigma) {
+      _resolveBakedThumb();
     }
   }
 
-  void _decodeThumb() {
+  void _resolveBakedThumb() {
     final rawThumb = widget.thumbBase64;
     if (rawThumb == null || rawThumb.isEmpty) {
-      _bytes = null;
-      _imageProvider = null;
+      _bakedImage = null;
+      _currentCacheKey = null;
       return;
     }
+
+    final int key = Object.hash(rawThumb, widget.blurSigma.round());
+    _currentCacheKey = key;
+
+    final ui.Image? cached = _bakedThumbCache[key];
+    if (cached != null) {
+      _bakedImage = cached;
+      return;
+    }
+
+    final Future<ui.Image?> future = _pendingBakes[key] ??= _bakeThumb(
+      rawThumb: rawThumb,
+      blurSigma: widget.blurSigma,
+    );
+
+    future.then((img) {
+      _pendingBakes.remove(key);
+      if (img != null) {
+        if (_bakedThumbCache.length >= _kMaxCacheEntries &&
+            !_bakedThumbCache.containsKey(key)) {
+          _bakedThumbCache.remove(_bakedThumbCache.keys.first);
+        }
+        _bakedThumbCache[key] = img;
+      }
+      if (mounted && _currentCacheKey == key && img != null) {
+        setState(() {
+          _bakedImage = img;
+        });
+      }
+    });
+  }
+
+  static Future<ui.Image?> _bakeThumb({
+    required String rawThumb,
+    required double blurSigma,
+  }) async {
     try {
       String raw = rawThumb.trim();
-      final commaIndex = raw.indexOf(',');
+      final int commaIndex = raw.indexOf(',');
       if (commaIndex != -1) {
         raw = raw.substring(commaIndex + 1);
       }
-      final decoded = base64Decode(raw);
-      if (decoded.isNotEmpty) {
-        _bytes = decoded;
-        _imageProvider = MemoryImage(decoded);
-      } else {
-        _bytes = null;
-        _imageProvider = null;
-      }
+      final decodedBytes = base64Decode(raw);
+      if (decodedBytes.isEmpty) return null;
+
+      final ui.Codec codec = await ui.instantiateImageCodec(decodedBytes);
+      final ui.FrameInfo frame = await codec.getNextFrame();
+      final ui.Image srcImg = frame.image;
+
+      final ui.PictureRecorder recorder = ui.PictureRecorder();
+      final Canvas canvas = Canvas(recorder);
+      final double size = _kBakedSizePx.toDouble();
+      final Rect rect = Rect.fromLTWH(0, 0, size, size);
+
+      // 1. Dark neutral base
+      canvas.drawRect(rect, Paint()..color = const Color(0xFF181818));
+
+      // 2. Overscaled blurred micro-thumbnail in 160x160 space
+      final double scaledSigma = (blurSigma * 0.625).clamp(4.0, 20.0);
+      canvas.saveLayer(
+        rect,
+        Paint()
+          ..imageFilter = ui.ImageFilter.blur(
+            sigmaX: scaledSigma,
+            sigmaY: scaledSigma,
+            tileMode: TileMode.clamp,
+          ),
+      );
+      final Rect overscaledRect = Rect.fromCenter(
+        center: rect.center,
+        width: size * 1.22,
+        height: size * 1.22,
+      );
+      paintImage(
+        canvas: canvas,
+        rect: overscaledRect,
+        image: srcImg,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+      );
+      canvas.restore();
+
+      // 3. Subtle darkening overlay for download button contrast
+      canvas.drawRect(
+        rect,
+        Paint()..color = Colors.black.withValues(alpha: 0.14),
+      );
+
+      final ui.Picture picture = recorder.endRecording();
+      final ui.Image baked = await picture.toImage(_kBakedSizePx, _kBakedSizePx);
+      picture.dispose();
+      srcImg.dispose();
+      return baked;
     } catch (_) {
-      _bytes = null;
-      _imageProvider = null;
+      return null;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     Widget content;
-    if (_imageProvider != null && _bytes != null) {
-      content = RepaintBoundary(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // 1. Dark neutral base so parent bubble color NEVER bleeds through
-            const ColoredBox(color: Color(0xFF181818)),
-
-            // 2. Overscaled and clipped blurred micro-thumbnail (BlurHash-style smooth preview)
-            ClipRect(
-              child: Transform.scale(
-                scale: 1.22,
-                child: ImageFiltered(
-                  imageFilter: ImageFilter.blur(
-                    sigmaX: widget.blurSigma,
-                    sigmaY: widget.blurSigma,
-                    tileMode: TileMode.clamp,
-                  ),
-                  child: Image(
-                    image: _imageProvider!,
-                    fit: widget.fit,
-                    gaplessPlayback: true,
-                    filterQuality: FilterQuality.medium,
-                  ),
-                ),
-              ),
-            ),
-
-            // 3. Subtle darkening overlay for download button contrast
-            Container(
-              color: Colors.black.withValues(alpha: 0.14),
-            ),
-          ],
-        ),
+    final ui.Image? baked = _bakedImage;
+    if (baked != null) {
+      content = RawImage(
+        image: baked,
+        fit: widget.fit,
+        width: double.infinity,
+        height: double.infinity,
+        filterQuality: FilterQuality.medium,
       );
     } else {
-      content = Container(
-        color: const Color(0xFF181818),
-        child: const Center(
+      content = const ColoredBox(
+        color: Color(0xFF181818),
+        child: Center(
           child: Icon(
             Icons.image_outlined,
             color: Colors.white24,

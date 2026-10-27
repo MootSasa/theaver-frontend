@@ -1,10 +1,10 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/blur_utils.dart';
 
 /// Разделитель «↓ X непрочитанных сообщений» в чате
 class UnreadSeparator extends StatelessWidget {
@@ -82,7 +82,7 @@ class DateSeparator extends StatelessWidget {
 }
 
 /// FAB кнопка прокрутки вниз с бейджем непрочитанных
-class ScrollDownFab extends StatelessWidget {
+class ScrollDownFab extends StatefulWidget {
   final int unreadCount;
   final VoidCallback onPressed;
   final bool visible;
@@ -95,65 +95,112 @@ class ScrollDownFab extends StatelessWidget {
   }) : super(key: key);
 
   @override
-  Widget build(BuildContext context) {
-    final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
-    final theme = Theme.of(context);
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final isDark = theme.brightness == Brightness.dark;
-    final unreadBg = themeExt?.palette.unreadBadge ?? theme.colorScheme.primary;
-    final unreadText = themeExt?.palette.unreadBadgeText ?? Colors.white;
+  State<ScrollDownFab> createState() => _ScrollDownFabState();
+}
 
-    final child = Stack(
-      alignment: Alignment.center,
-      clipBehavior: Clip.none,
-      children: [
-        const Icon(Icons.keyboard_arrow_down, size: 28),
-        if (unreadCount > 0)
-          Positioned(
-            top: -4,
-            right: -4,
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: unreadBg,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.2),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
+class _ScrollDownFabState extends State<ScrollDownFab>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+      value: widget.visible ? 1.0 : 0.0,
+    );
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(1.5, 0),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    ));
+  }
+
+  @override
+  void didUpdateWidget(covariant ScrollDownFab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible != oldWidget.visible) {
+      if (widget.visible) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        if (_controller.isDismissed && !widget.visible) {
+          return const SizedBox.shrink();
+        }
+        final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
+        final theme = Theme.of(context);
+        final themeExt = theme.extension<TheavThemeExtension>();
+        final isDark = theme.brightness == Brightness.dark;
+        final unreadBg = themeExt?.palette.unreadBadge ?? theme.colorScheme.primary;
+        final unreadText = themeExt?.palette.unreadBadgeText ?? Colors.white;
+
+        final child = Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            const Icon(Icons.keyboard_arrow_down, size: 28),
+            if (widget.unreadCount > 0)
+              Positioned(
+                top: -4,
+                right: -4,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: unreadBg,
+                    shape: BoxShape.circle,
                   ),
-                ],
-              ),
-              constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-              child: Text(
-                unreadCount > 99 ? '99+' : '$unreadCount',
-                style: TextStyle(
-                  color: unreadText,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
+                  constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                  child: Text(
+                    widget.unreadCount > 99 ? '99+' : '${widget.unreadCount}',
+                    style: TextStyle(
+                      color: unreadText,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
                 ),
-                textAlign: TextAlign.center,
+              ),
+          ],
+        );
+
+        return IgnorePointer(
+          ignoring: !widget.visible,
+          child: SlideTransition(
+            position: _slideAnimation,
+            child: GestureDetector(
+              onTap: widget.onPressed,
+              child: SizedBox(
+                width: 48,
+                height: 48,
+                child: glassEnabled
+                    ? _buildGlassButton(context, isDark, child)
+                    : _buildMatteButton(context, isDark, child),
               ),
             ),
           ),
-      ],
-    );
-
-    return AnimatedSlide(
-      offset: visible ? Offset.zero : const Offset(1.5, 0),
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeOutCubic,
-      child: GestureDetector(
-        onTap: onPressed,
-        child: SizedBox(
-          width: 48,
-          height: 48,
-          child: glassEnabled
-              ? _buildGlassButton(context, isDark, child)
-              : _buildMatteButton(context, isDark, child),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -181,8 +228,8 @@ class ScrollDownFab extends StatelessWidget {
 
   Widget _buildMatteButton(BuildContext context, bool isDark, Widget child) {
     return ClipOval(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+      child: BackdropFilter.grouped(
+        filter: BlurUtils.createDownsampledBlur(15),
         child: Container(
           decoration: BoxDecoration(
             shape: BoxShape.circle,

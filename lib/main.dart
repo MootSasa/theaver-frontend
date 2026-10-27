@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -45,6 +46,10 @@ import 'package:audio_session/audio_session.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   debugPrint('main() started');
+
+  if (kIsWeb) {
+    BrowserContextMenu.disableContextMenu();
+  }
 
   // Initialize cross-platform video player engine (Windows, Linux, macOS)
   if (!kIsWeb) {

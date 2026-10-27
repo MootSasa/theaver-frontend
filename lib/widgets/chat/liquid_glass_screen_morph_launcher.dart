@@ -125,10 +125,16 @@ class _LiquidGlassScreenMorphLauncherState
 
     if (_isMorphing) return;
 
-    // Замеряем точное положение исходного элемента на экране
+    // Замеряем точное положение исходного элемента внутри локального Overlay тайла
     final renderBox = context.findRenderObject() as RenderBox?;
+    final overlayRenderObject =
+        Overlay.maybeOf(context)?.context.findRenderObject();
     if (renderBox != null && renderBox.hasSize) {
-      _initialRect = renderBox.localToGlobal(Offset.zero) & renderBox.size;
+      final localOrigin = renderBox.localToGlobal(
+        Offset.zero,
+        ancestor: overlayRenderObject,
+      );
+      _initialRect = localOrigin & renderBox.size;
     } else {
       final size = MediaQuery.sizeOf(context);
       _initialRect = Rect.fromLTWH(60, 44, size.width - 120, 44);
@@ -230,36 +236,38 @@ class _LiquidGlassScreenMorphLauncherState
 
         // Полноэкранный LiquidGlassMorph
         Positioned.fill(
-          child: LiquidGlassMorph(
-            key: const ValueKey<String>('screen_morph_container'),
-            alignment: anchor,
-            width: _isExpanded ? screenSize.width : initial.width,
-            height: _isExpanded ? screenSize.height : initial.height,
-            motion: widget.motion,
-            smoothness: widget.smoothness,
-            onEnd: _onMorphEnd,
-            style: widget.style.copyWith(
-              color: _isExpanded ? scaffoldBgColor : widget.style.color,
-              blur: _isExpanded ? 0 : widget.style.blur,
-              shape: LiquidGlassShape(
-                cornerRadius: _isExpanded ? 0 : 22,
-                cornerStyle: _isExpanded
-                    ? LiquidGlassCornerStyle.squircle
-                    : LiquidGlassCornerStyle.continuousRoundedRectangle,
+          child: LiquidGlassBatch.exclude(
+            child: LiquidGlassMorph(
+              key: const ValueKey<String>('screen_morph_container'),
+              alignment: anchor,
+              width: _isExpanded ? screenSize.width : initial.width,
+              height: _isExpanded ? screenSize.height : initial.height,
+              motion: widget.motion,
+              smoothness: widget.smoothness,
+              onEnd: _onMorphEnd,
+              style: widget.style.copyWith(
+                color: _isExpanded ? scaffoldBgColor : widget.style.color,
+                blur: _isExpanded ? 0 : widget.style.blur,
+                shape: LiquidGlassShape(
+                  cornerRadius: _isExpanded ? 0 : 22,
+                  cornerStyle: _isExpanded
+                      ? LiquidGlassCornerStyle.squircle
+                      : LiquidGlassCornerStyle.continuousRoundedRectangle,
+                ),
               ),
+              child: _isExpanded
+                  ? (widget.expandedPreviewBuilder?.call(context) ??
+                      _DefaultExpandedPreview(
+                        key: const ValueKey<String>('expanded_preview_step'),
+                        width: screenSize.width,
+                        height: screenSize.height,
+                      ))
+                  : SizedBox(
+                      key: const ValueKey<String>('collapsed_preview_step'),
+                      width: initial.width,
+                      height: initial.height,
+                    ),
             ),
-            child: _isExpanded
-                ? (widget.expandedPreviewBuilder?.call(context) ??
-                    _DefaultExpandedPreview(
-                      key: const ValueKey<String>('expanded_preview_step'),
-                      width: screenSize.width,
-                      height: screenSize.height,
-                    ))
-                : SizedBox(
-                    key: const ValueKey<String>('collapsed_preview_step'),
-                    width: initial.width,
-                    height: initial.height,
-                  ),
           ),
         ),
       ],

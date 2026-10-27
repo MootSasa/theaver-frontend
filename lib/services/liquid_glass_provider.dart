@@ -63,14 +63,14 @@ class LiquidGlassProvider extends ChangeNotifier {
     BuildContext? context,
     double cornerRadius = 0,
     LiquidGlassCornerStyle cornerStyle = LiquidGlassCornerStyle.continuousRoundedRectangle,
-    LiquidGlassClipQuality clipQuality = LiquidGlassClipQuality.exact,
+    LiquidGlassClipQuality clipQuality = LiquidGlassClipQuality.roundedRectangle,
     LiquidGlassShape? shape,
     Color? color,
     double? blur,
     LiquidGlassShadow? shadow,
     double refractionIndex = 1.1,
     double refractionWidth = 24.0,
-    double dispersion = 1.32,
+    double dispersion = 0.0,
     double saturation = 1.2,
     double borderWidth = 1.25,
     Color? borderColor,
@@ -129,40 +129,18 @@ class LiquidGlassProvider extends ChangeNotifier {
           )
         : null;
 
-    final effectiveShadow = shadow ??
-        (!isDark
-            ? const LiquidGlassShadow(
-                blur: 8.0,
-                opacity: 0.14,
-              )
-            : null);
-
-    final effectiveAdaptivity = adaptivity ??
-        (color == null
-            ? const LiquidGlassAdaptivity(
-                glassColorOnDark: Color(0x33202025),
-                contentColorOnDark: Colors.white,
-                glassColorOnLight: Color(0x66FFFFFF),
-                contentColorOnLight: Color(0xFF1C1C1E),
-                duration: Duration(milliseconds: 300),
-                darkBelow: 0.6,
-                lightAbove: 0.6,
-                brightnessFallback: LiquidGlassBrightnessFallback.appTheme,
-              )
-            : null);
-
     return LiquidGlassStyle(
       shape: effectiveShape,
       color: color ?? defaultColor,
       blur: blur ?? _blur,
-      shadow: effectiveShadow,
+      shadow: shadow,
       specular: specular,
       glow: glow,
       refractionIndex: refractionIndex,
       refractionWidth: refractionWidth,
       dispersion: dispersion,
       saturation: saturation,
-      adaptivity: effectiveAdaptivity,
+      adaptivity: adaptivity,
       liteGlass: lite,
     );
   }
