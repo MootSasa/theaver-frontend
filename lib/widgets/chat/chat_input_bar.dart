@@ -63,6 +63,9 @@ class ChatInputBar extends StatefulWidget {
   final ValueChanged<LinkPreviewOptions?>? onLinkPreviewOptionsChanged;
   final bool invertMedia;
   final ValueChanged<bool>? onInvertMediaChanged;
+  final VoidCallback? onEditLastMessage;
+  final bool isEmojiPanelOpen;
+  final VoidCallback? onTapInputWhenEmojiOpen;
 
   const ChatInputBar({
     Key? key,
@@ -106,6 +109,9 @@ class ChatInputBar extends StatefulWidget {
     this.onLinkPreviewOptionsChanged,
     this.invertMedia = false,
     this.onInvertMediaChanged,
+    this.onEditLastMessage,
+    this.isEmojiPanelOpen = false,
+    this.onTapInputWhenEmojiOpen,
   }) : super(key: key);
 
   @override
@@ -234,6 +240,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
         _effectiveInvertMedia,
       );
     } else {
+      if (widget.controller.text.trim().isEmpty &&
+          widget.attachedFiles.isEmpty) {
+        return;
+      }
       widget.onSend?.call();
     }
     widget.controller.clear();
@@ -453,6 +463,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 onVideoRecordCancel: widget.onVideoRecordCancel,
                 isSending: widget.isSending,
                 hasAttachments: widget.attachedFiles.isNotEmpty,
+                onEditLastMessage: widget.isEditing ? null : widget.onEditLastMessage,
+                isEmojiPanelOpen: widget.isEmojiPanelOpen,
+                onTapInputWhenEmojiOpen: widget.onTapInputWhenEmojiOpen,
               ),
             ),
             if (widget.trailing != null) widget.trailing!,

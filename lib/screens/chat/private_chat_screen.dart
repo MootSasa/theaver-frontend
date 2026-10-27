@@ -238,6 +238,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   bool _lmbDownInsideBubble = false;
   bool _lmbDownInsideText = false;
 
+  // Mobile touch fast-scroll & tap-outside dismissal state
+  Offset? _touchDownPos;
+  Duration? _touchDownTime;
+  Offset? _lastTouchPos;
+  Duration? _lastTouchTime;
+  double _touchVelocityY = 0.0;
+  bool _dismissedOnCurrentTouch = false;
+  bool _touchDownInsideBubble = false;
+
   // GlobalKeys for messages to allow precise scrolling
   final Map<String, GlobalKey> _messageKeys = {};
   final GlobalKey _inputKey = GlobalKey();
@@ -258,6 +267,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   bool _isLoadingMore = false;
   UnreadCountProvider? _unreadCountProvider;
   String? _registeredTileId;
+  String? _lastActiveTileId;
 
   @override
   void initState() {
@@ -293,6 +303,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _initWebSocket();
     _scrollController.addListener(_onScroll);
     _inputFocusNode.addListener(_onFocusChanged);
+    TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
+    HardwareKeyboard.instance.addHandler(_handleGlobalDesktopKeyEvent);
 
     // Restore draft if exists
     final draft = DraftService().getDraft(widget.chatId);
@@ -323,6 +335,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _unreadCountProvider?.openChat(widget.chatId);
       } catch (_) {}
       NotificationService().cancelChatNotifications(widget.chatId, chatTitle: widget.otherUserName);
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        final activeTileId = TilingLayoutController.instance.activeTileId;
+        if (_registeredTileId == null || activeTileId == _registeredTileId) {
+          _inputFocusNode.requestFocus();
+          final len = _textController.text.length;
+          _textController.selection = TextSelection.collapsed(offset: len);
+        }
+      }
     });
   }
 
@@ -341,6 +361,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         );
       }
       _registeredTileId = tileId;
+      _lastActiveTileId = TilingLayoutController.instance.activeTileId;
       if (tileId != null) {
         TilingLayoutController.instance.registerTileBackHandler(
           tileId,
@@ -348,6 +369,105 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         );
       }
     }
+  }
+
+  void _onTilingLayoutChanged() {
+    if (!mounted) return;
+    final activeId = TilingLayoutController.instance.activeTileId;
+    if (activeId != _lastActiveTileId) {
+      final wasActive = _lastActiveTileId == _registeredTileId;
+      _lastActiveTileId = activeId;
+      if (!wasActive &&
+          _registeredTileId != null &&
+          activeId == _registeredTileId &&
+          !Platform.isAndroid &&
+          !Platform.isIOS) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted &&
+              !_isSelectionMode &&
+              !_isVoiceRecording &&
+              !_isVideoRecording &&
+              !MessageContextMenuService().isShowing) {
+            _inputFocusNode.requestFocus();
+          }
+        });
+      }
+    }
+  }
+
+  bool _handleGlobalDesktopKeyEvent(KeyEvent event) {
+    if (Platform.isAndroid || Platform.isIOS) return false;
+    if (!mounted || event is! KeyDownEvent) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+    if (_registeredTileId != null) {
+      final activeTileId = TilingLayoutController.instance.activeTileId;
+      if (activeTileId != _registeredTileId) {
+        return false;
+      }
+    }
+    if (_inputFocusNode.hasFocus) return false;
+    if (_isSelectionMode ||
+        _isVoiceRecording ||
+        _isVideoRecording ||
+        MessageContextMenuService().isShowing) {
+      return false;
+    }
+
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    final focusCtx = primaryFocus?.context;
+    if (focusCtx != null) {
+      if (focusCtx.widget is EditableText ||
+          focusCtx.findAncestorWidgetOfExactType<EditableText>() != null ||
+          focusCtx.findAncestorWidgetOfExactType<TextField>() != null) {
+        return false;
+      }
+    }
+
+    final hw = HardwareKeyboard.instance;
+    final isCtrlOrMeta = hw.isControlPressed || hw.isMetaPressed;
+    final isAlt = hw.isAltPressed;
+
+    if (isCtrlOrMeta &&
+        !isAlt &&
+        (event.logicalKey == LogicalKeyboardKey.keyV ||
+            event.physicalKey == PhysicalKeyboardKey.keyV)) {
+      _inputFocusNode.requestFocus();
+      Clipboard.getData(Clipboard.kTextPlain).then((data) {
+        if (!mounted || data?.text == null || data!.text!.isEmpty) return;
+        final text = _textController.text;
+        final sel = _textController.selection;
+        final start = sel.isValid ? sel.start : text.length;
+        final end = sel.isValid ? sel.end : text.length;
+        final newText = text.replaceRange(start, end, data.text!);
+        _textController.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(offset: start + data.text!.length),
+        );
+      });
+      return true;
+    }
+
+    if (!isCtrlOrMeta && !isAlt) {
+      final char = event.character;
+      if (char != null &&
+          char.isNotEmpty &&
+          char.codeUnitAt(0) >= 32 &&
+          char != '\x7f') {
+        _inputFocusNode.requestFocus();
+        final text = _textController.text;
+        final sel = _textController.selection;
+        final start = sel.isValid ? sel.start : text.length;
+        final end = sel.isValid ? sel.end : text.length;
+        final newText = text.replaceRange(start, end, char);
+        _textController.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(offset: start + char.length),
+        );
+        return true;
+      }
+    }
+
+    return false;
   }
 
   bool _handleTileBack() {
@@ -535,16 +655,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onFocusChanged() {
-    if (_inputFocusNode.hasFocus && _showEmojiPanel) {
-      _transitionTimer?.cancel();
-      setState(() {
-        _isKeyboardRising = true;
-      });
-      _transitionTimer = Timer(const Duration(milliseconds: 600), () {
-        if (mounted && _isKeyboardRising && _showEmojiPanel) {
-          _closeEmojiPanel();
-        }
-      });
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -928,17 +1040,70 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  void _dismissKeyboardAndEmoji() {
+    if (_showEmojiPanel || _isKeyboardRising) {
+      _closeEmojiPanel();
+    }
+    if (_inputFocusNode.hasFocus) {
+      _inputFocusNode.unfocus();
+    }
+    if (Platform.isAndroid || Platform.isIOS) {
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
+    }
+  }
+
+  void _focusInputField() {
+    if (!mounted) return;
+    if (_showEmojiPanel && (Platform.isAndroid || Platform.isIOS)) {
+      _onEmojiToggle();
+      return;
+    }
+    _inputFocusNode.requestFocus();
+    if (Platform.isAndroid || Platform.isIOS) {
+      SystemChannels.textInput.invokeMethod('TextInput.show');
+    }
+    final len = _textController.text.length;
+    _textController.selection = TextSelection.collapsed(offset: len);
+  }
+
+  void _editLastOwnMessage() {
+    if (_isEditing || _currentUserId == null) return;
+    for (final m in _messages) {
+      if (m.senderId == _currentUserId &&
+          !m.isRound &&
+          m.messageType != 'voice' &&
+          m.messageType != 'poll' &&
+          m.content.trim().isNotEmpty) {
+        setState(() {
+          _cancelReply();
+          _textController.loadMessage(m.content, m.entities);
+          _isEditing = true;
+          _editingMessageId = m.id;
+        });
+        _focusInputField();
+        break;
+      }
+    }
+  }
+
   void _closeEmojiPanel() {
     if (!_showEmojiPanel && !_isKeyboardRising && _emojiPanelController.value == 0.0) {
       return;
     }
     _transitionTimer?.cancel();
+    final wasKeyboardRising = _isKeyboardRising;
     setState(() {
       _showEmojiPanel = false;
       _isKeyboardRising = false;
       _isKeyboardFalling = false;
     });
     _emojiPanelController.reverse();
+    if (!wasKeyboardRising && (Platform.isAndroid || Platform.isIOS)) {
+      final bottomInset = MediaQuery.maybeOf(context)?.viewInsets.bottom ?? 0;
+      if (bottomInset == 0 && _inputFocusNode.hasFocus) {
+        _inputFocusNode.unfocus();
+      }
+    }
   }
 
   void _onEmojiToggle() {
@@ -986,10 +1151,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _isKeyboardFalling = true;
         }
       });
-      // Now hide keyboard - it will slide down and reveal the panel
-      if (bottomInset > 0 || _inputFocusNode.hasFocus) {
+      if (!_textController.selection.isValid) {
+        _textController.selection = TextSelection.collapsed(
+          offset: _textController.text.length,
+        );
+      }
+      if (!_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+      if (Platform.isAndroid || Platform.isIOS) {
         SystemChannels.textInput.invokeMethod('TextInput.hide');
-        _inputFocusNode.unfocus();
       }
     }
   }
@@ -1216,10 +1387,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       replyToMessageId: message.id,
       isQuote: false,
     );
-    // Focus the input field
-    _textController.selection = TextSelection.collapsed(
-      offset: _textController.text.length,
-    );
+    _focusInputField();
   }
 
   /// Start a quote reply (partial text)
@@ -1243,10 +1411,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       quoteText: selectedText,
       isQuote: true,
     );
-    // Focus the input field
-    _textController.selection = TextSelection.collapsed(
-      offset: _textController.text.length,
-    );
+    _focusInputField();
   }
 
   /// Cancel the current reply/quote
@@ -2095,6 +2260,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    _scrollToBottom();
 
     try {
       final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
@@ -2753,6 +2919,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       });
     }
 
+    if (_lastBottomInset > 0 &&
+        bottomInset == 0 &&
+        !_showEmojiPanel &&
+        !_isKeyboardRising &&
+        (Platform.isAndroid || Platform.isIOS)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            !_showEmojiPanel &&
+            !_isKeyboardRising &&
+            MediaQuery.of(context).viewInsets.bottom == 0 &&
+            _inputFocusNode.hasFocus) {
+          _inputFocusNode.unfocus();
+        }
+      });
+    }
+
     if (_isKeyboardRising && _showEmojiPanel) {
       // Hide panel only when keyboard is high enough or stable
       final bool keyboardCoveredPanel = bottomInset >= targetPanelHeight - 5;
@@ -2958,6 +3140,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                     // Сообщения на весь экран (с верхним отступом через ListView.padding)
                     Positioned.fill(
                       child: Listener(
+                        onPointerDown: _handleChatPointerDown,
                         onPointerMove: _handleChatPointerMove,
                         onPointerUp: _handleChatPointerUp,
                         onPointerCancel: _handleChatPointerCancel,
@@ -3394,6 +3577,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       focusNode: _inputFocusNode,
       isEditing: _isEditing,
       onCancelEditing: _cancelEditing,
+      onEditLastMessage: _editLastOwnMessage,
+      isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
+      onTapInputWhenEmojiOpen: _onEmojiToggle,
       replyToMessage: _replyToMessage,
       isQuote: _isQuote,
       quoteText: _quoteText,
@@ -3435,6 +3621,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _onStartVideoRecord() async {
+    _dismissKeyboardAndEmoji();
     final hasPerms = await _videoRecorderService.hasPermissions();
     if (!hasPerms) {
       final permanentlyDenied =
@@ -3555,6 +3742,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _onStartVoiceRecord() async {
+    _dismissKeyboardAndEmoji();
     var hasPerm = await _voiceRecorderService.hasPermission();
     if (!hasPerm) {
       final isPermanentlyDenied = await _voiceRecorderService.isPermanentlyDenied();
@@ -4137,6 +4325,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Show attachment picker bottom sheet
   void _showAttachmentPicker() async {
+    _dismissKeyboardAndEmoji();
     final result = await AttachmentPickerBottomSheet.show(context, allowPoll: true);
     if (result == null || !mounted) return;
 
@@ -4487,6 +4676,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
+    HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
     _syncDebounceTimer?.cancel();
 
     // Stop typing indicator if active
@@ -4745,6 +4936,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       DateTimeUtils.formatDateSeparator(dt, context: context);
 
   void _enterSelectionMode(Message message) {
+    _dismissKeyboardAndEmoji();
     HapticUtils.selection();
     setState(() {
       _selectedMessageIds.add(message.id);
@@ -4811,6 +5003,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  void _handleChatPointerDown(PointerDownEvent event) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _touchDownPos = event.position;
+      _touchDownTime = event.timeStamp;
+      _lastTouchPos = event.position;
+      _lastTouchTime = event.timeStamp;
+      _touchVelocityY = 0.0;
+      _dismissedOnCurrentTouch = false;
+    }
+  }
+
   void _handleRowPointerDown(
     PointerDownEvent event,
     int feedIndex,
@@ -4818,6 +5021,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     bool isMe,
     GlobalKey key,
   ) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _touchDownInsideBubble = MessageBubble.isGlobalPointInsideBubble(
+        key.currentContext,
+        event.position,
+      );
+      return;
+    }
     if (event.kind != PointerDeviceKind.mouse ||
         (event.buttons & kPrimaryMouseButton) == 0) {
       return;
@@ -4873,6 +5083,37 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _handleChatPointerMove(PointerMoveEvent event) {
+    if (event.kind == PointerDeviceKind.touch &&
+        (Platform.isAndroid || Platform.isIOS) &&
+        !_dismissedOnCurrentTouch &&
+        _touchDownPos != null &&
+        _lastTouchPos != null &&
+        _lastTouchTime != null) {
+      final dtMicros = (event.timeStamp - _lastTouchTime!).inMicroseconds;
+      final dy = event.position.dy - _lastTouchPos!.dy;
+      _lastTouchPos = event.position;
+      _lastTouchTime = event.timeStamp;
+
+      if (dtMicros > 500 && dtMicros < 200000) {
+        final instantVy = (dy.abs() * 1000000.0) / dtMicros;
+        _touchVelocityY = _touchVelocityY * 0.35 + instantVy * 0.65;
+      }
+
+      final totalDy = (event.position.dy - _touchDownPos!.dy).abs();
+      final totalDx = (event.position.dx - _touchDownPos!.dx).abs();
+      final hasScrollableContent = _scrollController.hasClients &&
+          _scrollController.position.maxScrollExtent > 0;
+
+      if (hasScrollableContent &&
+          totalDy > 42.0 &&
+          totalDy > totalDx * 1.8 &&
+          _touchVelocityY > 1250.0) {
+        _dismissedOnCurrentTouch = true;
+        _dismissKeyboardAndEmoji();
+      }
+      return;
+    }
+
     if (_lmbDownGlobalPos == null) return;
     if ((event.buttons & kPrimaryMouseButton) == 0) {
       _resetLmbDragState();
@@ -4947,6 +5188,34 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _handleChatPointerUp(PointerUpEvent event) {
+    if (event.kind == PointerDeviceKind.touch &&
+        (Platform.isAndroid || Platform.isIOS)) {
+      if (_touchDownPos != null &&
+          !_dismissedOnCurrentTouch &&
+          !_touchDownInsideBubble) {
+        final dist = (event.position - _touchDownPos!).distance;
+        final dtMs = _touchDownTime != null
+            ? (event.timeStamp - _touchDownTime!).inMilliseconds
+            : 0;
+        if (dist < 10.0 && dtMs < 350) {
+          _dismissKeyboardAndEmoji();
+        }
+      }
+      _touchDownPos = null;
+      _touchDownInsideBubble = false;
+      return;
+    }
+
+    if (event.kind == PointerDeviceKind.mouse &&
+        _showEmojiPanel &&
+        !_isLmbDirectTextSelecting &&
+        !_isLmbDraggingMessages) {
+      if (_lmbDownGlobalPos == null ||
+          (event.position - _lmbDownGlobalPos!).distance < 6.0) {
+        _closeEmojiPanel();
+      }
+    }
+
     if (_isLmbDirectTextSelecting) {
       _isLmbDirectTextSelecting = false;
       MessageContextMenuService().endExternalDragSelection();
@@ -4955,6 +5224,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _handleChatPointerCancel(PointerCancelEvent event) {
+    _touchDownPos = null;
+    _touchDownInsideBubble = false;
     if (_isLmbDirectTextSelecting) {
       _isLmbDirectTextSelecting = false;
       MessageContextMenuService().endExternalDragSelection();
@@ -4982,6 +5253,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     Offset? initialDragCurrentGlobalPosition,
   }) {
     debugPrint('DEBUG: _showContextMenu called for message ${message.id}');
+    _dismissKeyboardAndEmoji();
 
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
@@ -5031,8 +5303,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _textController.loadMessage(message.content, message.entities);
           _isEditing = true;
           _editingMessageId = message.id;
-          _inputFocusNode.requestFocus();
         });
+        _focusInputField();
       },
       onSelect: () => _enterSelectionMode(message),
       onDelete: (msg) => _confirmDeleteMessage(msg),

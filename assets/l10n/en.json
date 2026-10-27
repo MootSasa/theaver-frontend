@@ -1013,5 +1013,8 @@
   "message_unsupported_update_btn": "Update Theaver",
   "message_unsupported_preview": "Unsupported message",
   "app_up_to_date": "You have the latest version of Theaver",
-  "check_updates_error": "Failed to check for updates"
+  "check_updates_error": "Failed to check for updates",
+  "settings_send_by_enter_title": "Send by Enter",
+  "settings_send_by_enter_subtitle_on": "Enter — send message, Shift+Enter or Ctrl+Enter — new line",
+  "settings_send_by_enter_subtitle_off": "Ctrl+Enter — send message, Enter — new line"
 }
