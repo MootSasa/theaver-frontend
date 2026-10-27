@@ -52,7 +52,7 @@ void main() {
   });
 
   group('DraftService Local and Memory State', () {
-    test('saveDraft updates memory cache and draftsNotifier immediately', () {
+    test('saveDraft updates memory cache immediately and publishes to draftsNotifier on flush or immediate flag', () async {
       final service = DraftService();
       expect(service.getDraft('chat-1'), isNull);
 
@@ -66,6 +66,13 @@ void main() {
       expect(draft, isNotNull);
       expect(draft!.text, 'Draft for chat 1');
       expect(draft.replyToMessageId, 'reply-1');
+      // Not published to main screen yet while actively typing
+      expect(service.getPublishedDraft('chat-1'), isNull);
+      expect(service.draftsNotifier.value['chat-1'], isNull);
+
+      // Flush (e.g. on input blur or leaving chat) publishes immediately
+      await service.flushDraft('chat-1');
+      expect(service.getPublishedDraft('chat-1')?.text, 'Draft for chat 1');
       expect(service.draftsNotifier.value['chat-1']?.text, 'Draft for chat 1');
     });
 

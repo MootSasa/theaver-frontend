@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
 import '../widgets/tiling/tile_viewport_scope.dart';
+import '../widgets/tiling/trackpad_swipe_back_indicator.dart';
 import 'haptic_utils.dart';
 
 /// PageRoute с интерактивным жестом свайпа слева направо для возврата
@@ -270,8 +271,9 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
     final screenHeight = tileSize.height;
     final screenWidth = tileSize.width;
     final bottomInset = TileViewportScope.viewInsetsOf(context).bottom;
+    final isInsideTile = TileViewportScope.maybeTileIdOf(context) != null;
 
-    return RawGestureDetector(
+    Widget detector = RawGestureDetector(
       gestures: <Type, GestureRecognizerFactory>{
         _BackGestureRecognizer: GestureRecognizerFactoryWithHandlers<_BackGestureRecognizer>(
           () => _BackGestureRecognizer(
@@ -297,6 +299,20 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
       behavior: HitTestBehavior.translucent,
       child: widget.child,
     );
+
+    if (!isInsideTile) {
+      detector = TrackpadBackGestureWrapper(
+        canTriggerBack: _canPop,
+        onTriggerBack: () {
+          if (_canPop() && !_isPopBlocked()) {
+            Navigator.of(context).maybePop();
+          }
+        },
+        child: detector,
+      );
+    }
+
+    return detector;
   }
 }
 

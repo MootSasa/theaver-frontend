@@ -950,5 +950,8 @@
   "message_unsupported_update_btn": "Theaver を更新",
   "message_unsupported_preview": "サポートされていないメッセージ",
   "app_up_to_date": "お使いの Theaver は最新バージョンです",
-  "check_updates_error": "アップデートの確認に失敗しました"
+  "check_updates_error": "アップデートの確認に失敗しました",
+  "chat_draft_prefix": "下書き",
+  "chat_add_caption": "キャプションを追加...",
+  "channel_write_post": "投稿を書く..."
 }

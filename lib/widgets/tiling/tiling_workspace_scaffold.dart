@@ -273,10 +273,13 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       () => MaterialApp.createMaterialHeroController(),
     );
 
+    final bool isFocusedChatTile =
+        _controller.activeTileId == descriptor.tileId;
+
     return KeyedSubtree(
       key: subtreeKey,
       child: StaticTileCacheBoundary(
-        enabled: _shouldCacheStationaryTiles,
+        enabled: _shouldCacheStationaryTiles && !isFocusedChatTile,
         child: TileViewportScope(
           tileId: descriptor.tileId,
           isChatTile: true,

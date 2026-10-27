@@ -85,6 +85,22 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   int _loadedStickersCount = 24;
   bool _isLoadingMoreGifs = false;
   bool _isLoadingMoreStickers = false;
+  int _lastEmojiColumns = 8;
+
+  static int _computeEmojiColumns(double panelWidth) {
+    final available = math.max(160.0, panelWidth - 24.0);
+    return ((available + 8.0) / (36.0 + 8.0)).floor().clamp(5, 24);
+  }
+
+  static int _computeGifColumns(double panelWidth) {
+    final available = math.max(160.0, panelWidth - 16.0);
+    return ((available + 8.0) / (156.0 + 8.0)).floor().clamp(2, 8);
+  }
+
+  static int _computeStickerColumns(double panelWidth) {
+    final available = math.max(160.0, panelWidth - 16.0);
+    return ((available + 12.0) / (76.0 + 12.0)).floor().clamp(3, 12);
+  }
 
   @override
   void initState() {
@@ -434,64 +450,82 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
   Widget _buildMainGrid() {
-    return PageView(
-      controller: _pageController,
-      physics: const ClampingScrollPhysics(), // Prevent horizontal stretch effect
-      onPageChanged: (index) {
-        setState(() {
-          _currentTab = PanelTab.values[index];
-          if (_currentTab != PanelTab.emoji) {
-            _searchCollapseController.value = 0.0;
-          } else {
-            _onScroll();
-          }
-        });
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final panelWidth = constraints.maxWidth.isFinite && constraints.maxWidth > 0
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
+        final emojiColumns = _computeEmojiColumns(panelWidth);
+        final gifColumns = _computeGifColumns(panelWidth);
+        final stickerColumns = _computeStickerColumns(panelWidth);
+        _lastEmojiColumns = emojiColumns;
+
+        return PageView(
+          controller: _pageController,
+          physics: const ClampingScrollPhysics(), // Prevent horizontal stretch effect
+          onPageChanged: (index) {
+            setState(() {
+              _currentTab = PanelTab.values[index];
+              if (_currentTab != PanelTab.emoji) {
+                _searchCollapseController.value = 0.0;
+              } else {
+                _onScroll();
+              }
+            });
+          },
+          children: [
+            // Tab 1: Emoji
+            Stack(
+              children: [
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: _buildVerticalEmojiList(emojiColumns),
+                  ),
+                ),
+                RepaintBoundary(child: _buildEmojiTopControls()),
+              ],
+            ),
+            // Tab 2: GIF
+            Stack(
+              children: [
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: _buildGifGrid(gifColumns),
+                  ),
+                ),
+                RepaintBoundary(
+                  child: _buildSearch(
+                    'Поиск GIF',
+                    _gifSearchController,
+                    _gifSearchQuery,
+                    (v) => setState(() => _gifSearchQuery = v),
+                    _gifSearchFocusNode,
+                  ),
+                ),
+              ],
+            ),
+            // Tab 3: Stickers
+            Stack(
+              children: [
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    child: _buildStickerGrid(stickerColumns),
+                  ),
+                ),
+                RepaintBoundary(
+                  child: _buildSearch(
+                    'Поиск стикеров',
+                    _stickerSearchController,
+                    _stickerSearchQuery,
+                    (v) => setState(() => _stickerSearchQuery = v),
+                    _stickerSearchFocusNode,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
       },
-      children: [
-        // Tab 1: Emoji
-        Stack(
-          children: [
-            Positioned.fill(
-              child: RepaintBoundary(child: _buildVerticalEmojiList()),
-            ),
-            RepaintBoundary(child: _buildEmojiTopControls()),
-          ],
-        ),
-        // Tab 2: GIF
-        Stack(
-          children: [
-            Positioned.fill(
-              child: RepaintBoundary(child: _buildGifGrid()),
-            ),
-            RepaintBoundary(
-              child: _buildSearch(
-                'Поиск GIF',
-                _gifSearchController,
-                _gifSearchQuery,
-                (v) => setState(() => _gifSearchQuery = v),
-                _gifSearchFocusNode,
-              ),
-            ),
-          ],
-        ),
-        // Tab 3: Stickers
-        Stack(
-          children: [
-            Positioned.fill(
-              child: RepaintBoundary(child: _buildStickerGrid()),
-            ),
-            RepaintBoundary(
-              child: _buildSearch(
-                'Поиск стикеров',
-                _stickerSearchController,
-                _stickerSearchQuery,
-                (v) => setState(() => _stickerSearchQuery = v),
-                _stickerSearchFocusNode,
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 
@@ -587,7 +621,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     );
   }
 
-  Widget _buildVerticalEmojiList() {
+  Widget _buildVerticalEmojiList(int emojiColumns) {
     List<CategoryEmoji> categories = [...defaultEmojiSet];
 
     if (_displayedRecentEmojis.isNotEmpty) {
@@ -615,11 +649,12 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           ..._buildCategorySlivers(
             categoryEmoji,
             _getSectionKeyForCategory(categoryEmoji.category),
+            emojiColumns: emojiColumns,
             skipFilter: isSearching,
           ),
         if (!isSearching)
           for (var pack in _customPacks)
-            ..._buildCustomPackSlivers(pack),
+            ..._buildCustomPackSlivers(pack, emojiColumns: emojiColumns),
         const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
       ],
     );
@@ -631,7 +666,12 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     return null;
   }
 
-  List<Widget> _buildCategorySlivers(CategoryEmoji categoryEmoji, GlobalKey? key, {bool skipFilter = false}) {
+  List<Widget> _buildCategorySlivers(
+    CategoryEmoji categoryEmoji,
+    GlobalKey? key, {
+    required int emojiColumns,
+    bool skipFilter = false,
+  }) {
     if (!skipFilter && _emojiSearchQuery.isNotEmpty) {
       final query = _emojiSearchQuery.toLowerCase();
       final filteredEmojis = categoryEmoji.emoji.where((e) => e.emoji.contains(query) || e.name.toLowerCase().contains(query)).toList();
@@ -655,31 +695,37 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           ),
         ),
       ),
-      SliverGrid(
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 8,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
-        ),
-        delegate: SliverChildBuilderDelegate(
-          (context, index) {
-            final emoji = categoryEmoji.emoji[index];
-            return GestureDetector(
-              onTap: () => _onEmojiSelected(emoji),
-              behavior: HitTestBehavior.opaque,
-              child: Center(
-                child: EmojiUtils.appleEmoji(emoji.emoji, size: 26),
-              ),
-            );
-          },
-          childCount: categoryEmoji.emoji.length,
-          addAutomaticKeepAlives: false,
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        sliver: SliverGrid(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: emojiColumns,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+          ),
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final emoji = categoryEmoji.emoji[index];
+              return GestureDetector(
+                onTap: () => _onEmojiSelected(emoji),
+                behavior: HitTestBehavior.opaque,
+                child: Center(
+                  child: EmojiUtils.appleEmoji(emoji.emoji, size: 26),
+                ),
+              );
+            },
+            childCount: categoryEmoji.emoji.length,
+            addAutomaticKeepAlives: false,
+          ),
         ),
       ),
     ];
   }
 
-  List<Widget> _buildCustomPackSlivers(CustomEmojiPack pack) {
+  List<Widget> _buildCustomPackSlivers(
+    CustomEmojiPack pack, {
+    required int emojiColumns,
+  }) {
     return [
       SliverToBoxAdapter(
         child: Padding(
@@ -696,25 +742,28 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
           ),
         ),
       ),
-      SliverGrid(
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 8,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
-        ),
-        delegate: SliverChildBuilderDelegate(
-          (context, index) {
-            final emoji = pack.emojis[index];
-            return GestureDetector(
-              onTap: () => _onEmojiSelected(emoji, packId: pack.id),
-              behavior: HitTestBehavior.opaque,
-              child: Center(
-                child: EmojiUtils.appleEmoji(emoji.emoji, size: 26),
-              ),
-            );
-          },
-          childCount: pack.emojis.length,
-          addAutomaticKeepAlives: false,
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        sliver: SliverGrid(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: emojiColumns,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+          ),
+          delegate: SliverChildBuilderDelegate(
+            (context, index) {
+              final emoji = pack.emojis[index];
+              return GestureDetector(
+                onTap: () => _onEmojiSelected(emoji, packId: pack.id),
+                behavior: HitTestBehavior.opaque,
+                child: Center(
+                  child: EmojiUtils.appleEmoji(emoji.emoji, size: 26),
+                ),
+              );
+            },
+            childCount: pack.emojis.length,
+            addAutomaticKeepAlives: false,
+          ),
         ),
       ),
     ];
@@ -848,8 +897,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
       double offset = topOffset + 8.0; // Starting point (top padding)
       
       if (_displayedRecentEmojis.isNotEmpty) {
-        // Approx height of Recent section: header(40) + grid(6 rows * 40 approx)
-        offset += 280.0; 
+        final cols = _lastEmojiColumns > 0 ? _lastEmojiColumns : 8;
+        final rows = (_displayedRecentEmojis.length / cols).ceil();
+        // Approx height of Recent section: header(40) + grid(rows * 42 approx)
+        offset += 40.0 + rows * 42.0;
       }
 
       if (key == _sectionKeys['standard']) {
@@ -953,20 +1004,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
   }
 
 
-  Widget _buildGifGrid() {
+  Widget _buildGifGrid(int gifColumns) {
+    final effectiveCount = math.max(_loadedGifsCount, gifColumns * 4);
     return GridView.builder(
       controller: _gifScrollController,
       padding: const EdgeInsets.fromLTRB(8, _kSearchHeight + 12, 8, 80),
       physics: const ClampingScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: gifColumns,
         childAspectRatio: 1.5,
         mainAxisSpacing: 8,
         crossAxisSpacing: 8,
       ),
-      itemCount: _loadedGifsCount + (_isLoadingMoreGifs ? 1 : 0),
+      itemCount: effectiveCount + (_isLoadingMoreGifs ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index >= _loadedGifsCount) {
+        if (index >= effectiveCount) {
           return const Center(child: Padding(
             padding: EdgeInsets.all(16.0),
             child: CircularProgressIndicator(strokeWidth: 2),
@@ -983,20 +1035,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel> with SingleTicker
     );
   }
 
-  Widget _buildStickerGrid() {
+  Widget _buildStickerGrid(int stickerColumns) {
+    final effectiveCount = math.max(_loadedStickersCount, stickerColumns * 5);
     return GridView.builder(
       controller: _stickerScrollController,
       padding: const EdgeInsets.fromLTRB(8, _kSearchHeight + 12, 8, 80),
       physics: const ClampingScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: stickerColumns,
         childAspectRatio: 1,
         mainAxisSpacing: 12,
         crossAxisSpacing: 12,
       ),
-      itemCount: _loadedStickersCount + (_isLoadingMoreStickers ? 1 : 0),
+      itemCount: effectiveCount + (_isLoadingMoreStickers ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index >= _loadedStickersCount) {
+        if (index >= effectiveCount) {
           return const Center(child: Padding(
             padding: EdgeInsets.all(16.0),
             child: CircularProgressIndicator(strokeWidth: 2),

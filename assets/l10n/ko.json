@@ -950,5 +950,8 @@
   "message_unsupported_update_btn": "Theaver 업데이트",
   "message_unsupported_preview": "지원되지 않는 메시지",
   "app_up_to_date": "최신 버전의 Theaver를 사용 중입니다",
-  "check_updates_error": "업데이트 확인 실패"
+  "check_updates_error": "업데이트 확인 실패",
+  "chat_draft_prefix": "임시 저장",
+  "chat_add_caption": "캡션 추가...",
+  "channel_write_post": "게시물 작성..."
 }

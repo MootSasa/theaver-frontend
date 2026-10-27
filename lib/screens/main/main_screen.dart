@@ -90,6 +90,8 @@ class _MainScreenState extends State<MainScreen>
 
   // PageController для свайпа между Настройками и Чатами
   final PageController _pageController = PageController(initialPage: 1);
+  final GlobalKey _pageViewKey = GlobalKey();
+  bool? _lastGlassEnabled;
 
   // Search functionality
   final TextEditingController _searchController = TextEditingController();
@@ -101,6 +103,7 @@ class _MainScreenState extends State<MainScreen>
   bool _isLoadingChats = true;
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
   String? _currentUserId;
+  final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
 
   void _initChatsStream() {
     _chatsStreamSubscription?.cancel();
@@ -170,6 +173,8 @@ class _MainScreenState extends State<MainScreen>
   StreamSubscription<WebSocketEvent>? _wsSubscription;
   bool _isWsConnected = false;
   Timer? _connectionCheckTimer;
+  Timer? _updateCheckTimer;
+  DateTime? _lastUpdateCheckAt;
 
   @override
   void initState() {
@@ -274,8 +279,13 @@ class _MainScreenState extends State<MainScreen>
     _initWebSocket();
     _startConnectionCheck();
 
-    // 4. Проверка обновлений в фоне
+    // 4. Проверка обновлений в фоне + периодический таймер
     _checkForUpdates();
+    _updateCheckTimer?.cancel();
+    _updateCheckTimer = Timer.periodic(
+      const Duration(hours: 4),
+      (_) => _checkForUpdates(fromBackgroundTimer: true),
+    );
 
     // 5. Запрос разрешения на уведомления при первом входе
     _checkNotificationPermission();
@@ -288,24 +298,44 @@ class _MainScreenState extends State<MainScreen>
     await NotificationPermissionDialog.checkAndPrompt(context);
   }
 
-  Future<void> _checkForUpdates() async {
+  Future<void> _checkForUpdates({
+    bool fromBackgroundTimer = false,
+    bool forceDeviceNotify = false,
+  }) async {
     try {
       final isAutoCheck = await AppUpdateService.instance.isAutoCheckEnabled();
       if (!isAutoCheck) return;
 
-      // Небольшая задержка, чтобы не забивать сеть в момент первичной отрисовки UI
-      await Future.delayed(const Duration(seconds: 2));
+      if (!fromBackgroundTimer && !forceDeviceNotify) {
+        // Небольшая задержка, чтобы не забивать сеть в момент первичной отрисовки UI
+        await Future.delayed(const Duration(seconds: 2));
+      }
       if (!mounted) return;
 
+      _lastUpdateCheckAt = DateTime.now();
       final update = await AppUpdateService.instance.checkForUpdate(silent: true);
       if (!mounted) return;
 
       if (update.hasUpdate) {
-        UpdateDialog.show(context, update, isManual: false);
+        final shouldNotify = forceDeviceNotify ||
+            await AppUpdateService.instance.shouldNotifyDevice(update);
+        if (shouldNotify) {
+          await NotificationService().showAppUpdateNotification(update);
+          await AppUpdateService.instance.markDeviceNotified(update.latestBuild);
+        }
+        if (!fromBackgroundTimer && mounted) {
+          UpdateDialog.show(context, update, isManual: false);
+        }
       }
     } catch (e) {
       debugPrint('MainScreen: Background update check error: $e');
     }
+  }
+
+  void _onAppUpdateAvailable(WebSocketEvent event) {
+    debugPrint('MainScreen: app_update_available WS event received: ${event.data}');
+    if (!mounted) return;
+    _checkForUpdates(fromBackgroundTimer: false, forceDeviceNotify: true);
   }
 
   Future<void> _initOfflineFirst() async {
@@ -359,6 +389,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.subscribe(WebSocketEventType.messageDeleted, _onMessageDeleted);
     _wsService.subscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.subscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
+    _wsService.subscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
 
     // Now connect — the 'connected' event will be caught by our listeners
     await _wsService.connect();
@@ -498,11 +529,21 @@ class _MainScreenState extends State<MainScreen>
         // Save to local storage
         _localStorage.saveChats(_chats);
 
-        // Сохранить в Drift
+        // Сохранить в Drift только поля последнего сообщения (чтобы не затереть unreadCount и isOnline)
         final db = AppDatabase(_currentUserId);
         if (updatedChat != null) {
           try {
-            db.saveChat(_chatToCompanion(updatedChat!));
+            db.updateChatLastMessage(
+              chatId: updatedChat!.id,
+              content: updatedChat!.lastMessage ?? '',
+              createdAt: updatedChat!.lastMessageTime ??
+                  DateTime.now().toIso8601String(),
+              messageType: updatedChat!.lastMessageType ?? 'text',
+              isRound: updatedChat!.lastMessageIsRound,
+              fileUrl: updatedChat!.lastMessageFileUrl,
+              groupedId: updatedChat!.lastMessageGroupedId,
+              incrementUnread: false,
+            );
           } catch (_) {}
         }
         if (messageData != null) {
@@ -574,6 +615,22 @@ class _MainScreenState extends State<MainScreen>
         ? DateTimeUtils.parseUtcDateTime(event.data['last_seen'])
             ?.toIso8601String()
         : null;
+    final effectiveLastSeen =
+        lastSeen ?? (isOnline ? null : DateTime.now().toIso8601String());
+
+    if (userId != null) {
+      _liveUserPresence[userId] = (
+        isOnline: isOnline,
+        lastSeen: effectiveLastSeen,
+      );
+      try {
+        AppDatabase(_currentUserId).updateUserStatus(
+          userId,
+          isOnline: isOnline,
+          lastSeen: effectiveLastSeen,
+        );
+      } catch (_) {}
+    }
 
     if (userId != null && mounted) {
       setState(() {
@@ -582,12 +639,12 @@ class _MainScreenState extends State<MainScreen>
               _chats[i].otherUserId == userId) {
             _chats[i] = _chats[i].copyWith(
               isOnline: isOnline,
-              lastSeen: lastSeen ??
-                  (isOnline ? null : DateTime.now().toIso8601String()),
+              lastSeen: effectiveLastSeen,
             );
           }
         }
       });
+      _localStorage.saveChats(_chats);
     }
   }
 
@@ -716,6 +773,10 @@ class _MainScreenState extends State<MainScreen>
         _wsService.tryReconnect();
         _loadChats();
       }
+      if (_lastUpdateCheckAt == null ||
+          DateTime.now().difference(_lastUpdateCheckAt!) > const Duration(hours: 1)) {
+        _checkForUpdates(fromBackgroundTimer: true);
+      }
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden) {
@@ -746,6 +807,23 @@ class _MainScreenState extends State<MainScreen>
           final serverChats = result['chats'] as List<Chat>;
           DraftService().populateFromChats(serverChats);
 
+          for (final chat in serverChats) {
+            if (chat.chatType == 'private' &&
+                chat.otherUserId != null &&
+                chat.otherUserId!.isNotEmpty) {
+              _liveUserPresence[chat.otherUserId!] = (
+                isOnline: chat.isOnline,
+                lastSeen: chat.lastSeen,
+              );
+            }
+          }
+
+          // Обновить провайдер ДО сохранения в Drift, чтобы при срабатывании
+          // реактивного стрима watchChats() провайдер уже имел актуальные значения
+          try {
+            context.read<UnreadCountProvider>().loadFromChats(serverChats);
+          } catch (_) {}
+
           // Сохранить в Drift — это автоматически обновит _chats через reactive stream!
           try {
             final chatModels = serverChats.map(_chatToCompanion).toList();
@@ -753,11 +831,6 @@ class _MainScreenState extends State<MainScreen>
           } catch (e) {
             debugPrint('MainScreen: Error saving to Drift: $e');
           }
-
-          // Обновить провайдер
-          try {
-            context.read<UnreadCountProvider>().loadFromChats(serverChats);
-          } catch (_) {}
 
           // Фоновый предзагруз сообщений для топ-10 активных чатов в Drift
           _prefetchRecentMessages(serverChats);
@@ -847,6 +920,27 @@ class _MainScreenState extends State<MainScreen>
     if (model.chatType == 'saved' && (avatarUrl == null || avatarUrl.isEmpty)) {
       avatarUrl = _accountManager.currentAccount?.avatarUrl;
     }
+
+    int effectiveUnreadCount = model.unreadCount;
+    if (mounted) {
+      try {
+        final provider = context.read<UnreadCountProvider>();
+        if (provider.hasAuthoritativeCount(model.chatId)) {
+          effectiveUnreadCount = provider.getCount(model.chatId);
+        }
+      } catch (_) {}
+    }
+
+    bool effectiveIsOnline = model.isOnline;
+    String? effectiveLastSeen = model.lastSeen;
+    if (model.chatType == 'private' &&
+        model.otherUserId != null &&
+        _liveUserPresence.containsKey(model.otherUserId)) {
+      final live = _liveUserPresence[model.otherUserId]!;
+      effectiveIsOnline = live.isOnline;
+      effectiveLastSeen = live.lastSeen ?? model.lastSeen;
+    }
+
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
@@ -860,9 +954,9 @@ class _MainScreenState extends State<MainScreen>
       lastMessageGroupedId: model.lastMessageGroupedId,
       otherUserId: model.otherUserId,
       updatedAt: model.updatedAt,
-      unreadCount: model.unreadCount,
-      isOnline: model.isOnline,
-      lastSeen: model.lastSeen,
+      unreadCount: effectiveUnreadCount,
+      isOnline: effectiveIsOnline,
+      lastSeen: effectiveLastSeen,
       isPinned: model.isPinned,
     );
   }
@@ -925,6 +1019,7 @@ class _MainScreenState extends State<MainScreen>
     _pageController.dispose();
     _wsSubscription?.cancel();
     _connectionCheckTimer?.cancel();
+    _updateCheckTimer?.cancel();
     _chatsStreamSubscription?.cancel();
     // Don't disconnect WebSocket on dispose - it's a singleton and should stay connected
     // for the entire app lifecycle. Only unsubscribe OUR callbacks (not UnreadCountProvider's!).
@@ -939,6 +1034,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.unsubscribe(WebSocketEventType.messageDeleted, _onMessageDeleted);
     _wsService.unsubscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.unsubscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
+    _wsService.unsubscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
     // Remove UnreadCountProvider listener
     try {
       context.read<UnreadCountProvider>().removeListener(_onUnreadCountProviderChanged);
@@ -956,6 +1052,7 @@ class _MainScreenState extends State<MainScreen>
     }
     debugPrint('[MainScreen] Active account changed: $_currentUserId -> $newUserId. Refreshing state and WS...');
     _currentUserId = newUserId;
+    _liveUserPresence.clear();
     AppDatabase.setActiveUser(newUserId);
 
     setState(() {
@@ -2133,14 +2230,19 @@ class _MainScreenState extends State<MainScreen>
     final isChatFocusedInTile = tiling.focusedChatTile?.chatId == chat.id;
     final primaryColor = Theme.of(context).colorScheme.primary;
 
-    final chatTile = Container(
-      color: isSelected
-          ? primaryColor.withValues(alpha: 0.08)
-          : isChatFocusedInTile
-              ? primaryColor.withValues(alpha: 0.12)
-              : isChatOpenInTile
-                  ? primaryColor.withValues(alpha: 0.06)
-                  : null,
+    final chatTileBgColor = isSelected
+        ? primaryColor.withValues(alpha: 0.08)
+        : isChatFocusedInTile
+            ? primaryColor.withValues(alpha: 0.12)
+            : isChatOpenInTile
+                ? primaryColor.withValues(alpha: 0.06)
+                : null;
+
+    final chatTile = Material(
+      color: chatTileBgColor ?? Colors.transparent,
+      type: chatTileBgColor != null
+          ? MaterialType.canvas
+          : MaterialType.transparency,
       child: ListTile(
         onLongPress: () {
           HapticUtils.impact();
@@ -2448,9 +2550,9 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Widget? _buildChatSubtitle(Chat chat, bool hasUnread) {
-    final draft = DraftService().getDraft(chat.id) ?? chat.draft;
+    final draft = DraftService().getPublishedDraft(chat.id);
     if (draft != null && draft.isNotEmpty) {
-      final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft_prefix') ?? 'Черновик';
+      final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft') ?? 'Черновик';
       final draftText = draft.text.trim().isNotEmpty ? draft.text : '...';
       return RichText(
         maxLines: 1,
@@ -3040,9 +3142,23 @@ class _MainScreenState extends State<MainScreen>
         },
         child: Consumer<LiquidGlassProvider>(
           builder: (context, glassProvider, _) {
+            if (_lastGlassEnabled != glassProvider.enabled) {
+              _lastGlassEnabled = glassProvider.enabled;
+              final targetIndex = _currentIndex;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted && _pageController.hasClients) {
+                  final currentPage = _pageController.page?.round();
+                  if (currentPage != targetIndex) {
+                    _pageController.jumpToPage(targetIndex);
+                  }
+                }
+              });
+            }
+
             // PageView: страница 0 = Настройки, страница 1 = Чаты, страница 2 = Поиск
             // Свайп влево → Настройки, свайп вправо → Чаты
             final Widget pageView = PageView(
+                  key: _pageViewKey,
                   controller: _pageController,
                   physics: const NeverScrollableScrollPhysics(),
                   onPageChanged: (page) {
@@ -3249,7 +3365,7 @@ class _MainScreenState extends State<MainScreen>
                   resizeToAvoidBottomInset: true,
                   body: Stack(
                     children: [
-                      pageView,
+                      Positioned.fill(child: pageView),
                       Positioned(
                         top: topBarHeight + 4.0,
                         left: 0,

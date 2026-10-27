@@ -1015,5 +1015,8 @@
   "check_updates_error": "Не удалось проверить обновления",
   "settings_send_by_enter_title": "Отправка по Enter",
   "settings_send_by_enter_subtitle_on": "Enter — отправить сообщение, Shift+Enter или Ctrl+Enter — перенос строки",
-  "settings_send_by_enter_subtitle_off": "Ctrl+Enter — отправить сообщение, Enter — перенос строки"
+  "settings_send_by_enter_subtitle_off": "Ctrl+Enter — отправить сообщение, Enter — перенос строки",
+  "chat_draft_prefix": "Черновик",
+  "chat_add_caption": "Добавить подпись...",
+  "channel_write_post": "Написать публикацию..."
 }

@@ -446,8 +446,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 focusNode: widget.focusNode,
                 hintText: widget.hintText ??
                     (widget.attachedFiles.isNotEmpty
-                        ? 'Add a caption...'
-                        : 'Type a message...'),
+                        ? (AppLocalizations.of(context)
+                                ?.translate('chat_add_caption') ??
+                            'Add a caption...')
+                        : (AppLocalizations.of(context)
+                                ?.translate('chat_type_message') ??
+                            'Type a message...')),
                 onChanged: widget.onChanged,
                 onSend: widget.isSending ? null : _handleSend,
                 onAttach: widget.onAttach,

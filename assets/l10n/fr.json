@@ -950,5 +950,8 @@
   "message_unsupported_update_btn": "Mettre à jour Theaver",
   "message_unsupported_preview": "Message non pris en charge",
   "app_up_to_date": "Vous disposez de la dernière version de Theaver",
-  "check_updates_error": "Échec de la recherche de mises à jour"
+  "check_updates_error": "Échec de la recherche de mises à jour",
+  "chat_draft_prefix": "Brouillon",
+  "chat_add_caption": "Ajouter une légende...",
+  "channel_write_post": "Écrire une publication..."
 }

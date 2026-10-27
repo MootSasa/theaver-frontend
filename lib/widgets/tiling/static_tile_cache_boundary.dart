@@ -36,7 +36,7 @@ class StaticTileCacheBoundary extends StatefulWidget {
     super.key,
     required this.enabled,
     required this.child,
-    this.idleThreshold = const Duration(milliseconds: 140),
+    this.idleThreshold = const Duration(milliseconds: 750),
   });
 
   final bool enabled;
@@ -273,9 +273,9 @@ class _TileCacheOffsetLayer extends OffsetLayer {
   Timer? _idleTimer;
 
   /// Number of consecutive frames with an identical layer-subtree signature
-  /// before an active tile automatically freezes while another tile is
-  /// animating.
-  static const int _kAutoFreezeStableFrames = 4;
+  /// before an inactive tile automatically freezes while another tile is
+  /// animating (must exceed the 500ms cursor blink plateau).
+  static const int _kAutoFreezeStableFrames = 45;
 
   /// Ensures at most one tile captures its snapshot on any single frame so
   /// freezing multiple tiles never causes a combined frame spike.
@@ -551,7 +551,12 @@ class _TileCacheOffsetLayer extends OffsetLayer {
         pixelWidth.toDouble(),
         pixelHeight.toDouble(),
       );
-      final Rect dst = Offset.zero & size;
+      final Rect dst = Rect.fromLTWH(
+        0,
+        0,
+        pixelWidth / dpr,
+        pixelHeight / dpr,
+      );
       canvas.drawImageRect(
         image,
         src,

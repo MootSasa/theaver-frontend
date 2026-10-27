@@ -31,6 +31,7 @@ enum WebSocketEventType {
   userAppearanceUpdated,
   draftUpdated,
   emojiInteraction,
+  appUpdateAvailable,
 }
 
 /// WebSocket event data
@@ -94,6 +95,8 @@ class WebSocketEvent {
         return WebSocketEventType.draftUpdated;
       case 'emoji_interaction':
         return WebSocketEventType.emojiInteraction;
+      case 'app_update_available':
+        return WebSocketEventType.appUpdateAvailable;
       default:
         return WebSocketEventType.connected;
     }

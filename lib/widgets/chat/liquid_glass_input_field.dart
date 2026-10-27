@@ -585,7 +585,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
         ),
         if (widget.onAttach != null) const SizedBox(width: 4),
         Padding(
-          padding: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.only(bottom: 6, top: 6),
           child: widget.onAttach != null
               ? GestureDetector(
                   onTap: widget.onAttach,
@@ -617,7 +617,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
         ),
         const SizedBox(width: 2),
         Padding(
-          padding: const EdgeInsets.only(right: 6, bottom: 6),
+          padding: const EdgeInsets.only(right: 6, bottom: 6, top: 6),
           child: _buildSendButton(rightButtonBg),
         ),
       ],
@@ -656,11 +656,15 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
         (isDark ? const Color(0x22FFFFFF) : const Color(0x15000000));
 
     return Theme(
-      data: theme.copyWith(textSelectionTheme: textSelectionTheme),
+      data: theme.copyWith(
+        visualDensity: VisualDensity.standard,
+        textSelectionTheme: textSelectionTheme,
+      ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: ConstrainedBox(
           constraints: const BoxConstraints(
+            minHeight: _kActionButtonSize,
             maxHeight: _kInputMaxHeight,
           ),
           child: Scrollbar(
@@ -722,6 +726,11 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                         textCapitalization: TextCapitalization.sentences,
                         maxLines: null,
                         keyboardType: TextInputType.multiline,
+                        strutStyle: const StrutStyle(
+                          fontSize: _kInputFontSize,
+                          height: 1.2,
+                          forceStrutHeight: true,
+                        ),
                         onTap: () {
                           if (widget.isEmojiPanelOpen) {
                             widget.onTapInputWhenEmojiOpen?.call();
@@ -754,12 +763,18 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                           disabledBorder: InputBorder.none,
                           focusedErrorBorder: InputBorder.none,
                           filled: false,
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                              vertical: 9, horizontal: 4),
+                          isCollapsed: true,
+                          contentPadding: const EdgeInsets.only(
+                            left: 4,
+                            right: 4,
+                            top: 8,
+                            bottom: 10,
+                          ),
                           hintStyle: TextStyle(
                             color: theme.colorScheme.onSurface
                                 .withValues(alpha: 0.4),
+                            fontSize: _kInputFontSize,
+                            height: 1.2,
                           ),
                         ),
                         style: TextStyle(

@@ -28,8 +28,10 @@ import '../utils/image_utils.dart';
 import '../screens/chat/private_chat_screen.dart';
 import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/channel_screen.dart';
+import '../screens/settings/widgets/update_dialog.dart';
 import '../utils/swipe_back_route.dart';
 import '../widgets/notifications/in_app_notification_banner.dart';
+import 'update_service.dart';
 import 'web_notification_helper.dart';
 
 export '../widgets/notifications/in_app_notification_banner.dart' show InAppNotificationData;
@@ -144,6 +146,12 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       description: 'Уведомления о новых сообщениях в группах',
       importance: Importance.high,
     ));
+    await androidPlugin?.createNotificationChannel(const AndroidNotificationChannel(
+      'app_updates',
+      'Обновления приложения',
+      description: 'Уведомления о выходе новых версий Theaver',
+      importance: Importance.high,
+    ));
   }
   final data = message.data;
   if (data['type'] == 'read_status_updated') {
@@ -154,6 +162,39 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         await nativeChannel.invokeMethod('cancelChatNotifications', {'chat_id': cid});
       } catch (_) {}
     }
+    return;
+  }
+  if (data['type'] == 'app_update') {
+    final version = data['latest_version']?.toString() ?? data['version']?.toString() ?? '';
+    final title = data['title']?.toString() ??
+        (version.isNotEmpty ? 'Доступно обновление Theaver v$version' : 'Доступно обновление Theaver');
+    final body = data['body']?.toString() ??
+        data['release_notes']?.toString() ??
+        'Вышла новая версия приложения. Нажмите для установки.';
+    final androidDetails = AndroidNotificationDetails(
+      'app_updates',
+      'Обновления приложения',
+      channelDescription: 'Уведомления о выходе новых версий Theaver',
+      importance: Importance.high,
+      priority: Priority.high,
+      icon: '@drawable/ic_notification',
+      color: const Color(0xFF5B7FFF),
+      autoCancel: true,
+      onlyAlertOnce: true,
+      styleInformation: BigTextStyleInformation(body, contentTitle: title),
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+    await localNotifications.show(
+      88888,
+      title,
+      body,
+      NotificationDetails(android: androidDetails, iOS: iosDetails),
+      payload: jsonEncode({...data, 'type': 'app_update'}),
+    );
     return;
   }
   if (data.containsKey('chat_id') && data.containsKey('chat_name')) {
@@ -811,6 +852,11 @@ class NotificationService {
       description: 'Тихие уведомления — только бейдж',
       importance: Importance.low,
     ));
+    await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
+      'app_updates', 'Обновления приложения',
+      description: 'Уведомления о выходе новых версий Theaver',
+      importance: Importance.high,
+    ));
   }
 
   // ============ Token Registration ============
@@ -995,6 +1041,21 @@ class NotificationService {
       case 'incoming_call':
         _handleIncomingCall(data);
         break;
+      case 'app_update':
+        _handleAppUpdatePush(data);
+        break;
+    }
+  }
+
+  Future<void> _handleAppUpdatePush(Map<String, dynamic> data) async {
+    try {
+      final update = await AppUpdateService.instance.checkForUpdate(silent: true);
+      if (update.hasUpdate) {
+        await showAppUpdateNotification(update);
+        await AppUpdateService.instance.markDeviceNotified(update.latestBuild);
+      }
+    } catch (e) {
+      debugPrint('NotificationService: _handleAppUpdatePush error: $e');
     }
   }
 
@@ -1055,6 +1116,40 @@ class NotificationService {
           if (decoded is Map) data.addAll(Map<String, dynamic>.from(decoded));
         } catch (_) {}
       }
+    }
+
+    if (data['type'] == 'app_update') {
+      if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+        try {
+          await DesktopTrayService().showAndFocusWindow();
+        } catch (_) {}
+      }
+      dismissBanner();
+      if (!isMainScreenReady) {
+        _pendingNotificationData = data;
+        return;
+      }
+      final context = DeepLinkService().navigatorKey.currentContext;
+      if (context == null || !context.mounted) {
+        _pendingNotificationData = data;
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (_pendingNotificationData != null && isMainScreenReady) {
+            consumePendingNotification();
+          }
+        });
+        return;
+      }
+      AppUpdateInfo update;
+      if (data['download_url']?.toString().isNotEmpty == true &&
+          data['latest_version']?.toString().isNotEmpty == true) {
+        update = AppUpdateInfo.fromJson(data);
+      } else {
+        update = await AppUpdateService.instance.checkForUpdate(silent: false);
+      }
+      if (update.hasUpdate && context.mounted) {
+        UpdateDialog.show(context, update, isManual: true);
+      }
+      return;
     }
 
     final chatId = data['chat_id']?.toString();
@@ -1357,6 +1452,116 @@ class NotificationService {
     );
   }
 
+  static const int _kAppUpdateNotificationId = 88888;
+
+  /// Показывает реальное системное уведомление на устройстве о доступности новой версии Theaver
+  Future<void> showAppUpdateNotification(AppUpdateInfo update) async {
+    if (!update.hasUpdate) return;
+
+    final title = update.forceUpdate
+        ? 'Требуется обновление Theaver v${update.latestVersion}'
+        : 'Доступно обновление Theaver v${update.latestVersion}';
+
+    final cleanNotes = update.releaseNotes.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final sizeInfo = update.formattedSize.isNotEmpty ? ' (${update.formattedSize})' : '';
+    final body = cleanNotes.isNotEmpty
+        ? 'Сборка #${update.latestBuild}$sizeInfo: ${cleanNotes.length > 140 ? '${cleanNotes.substring(0, 140)}…' : cleanNotes}'
+        : 'Доступна новая сборка #${update.latestBuild}$sizeInfo. Нажмите, чтобы установить обновление.';
+
+    final payloadMap = <String, dynamic>{
+      ...update.toJson(),
+      'type': 'app_update',
+    };
+
+    if (kIsWeb) {
+      WebNotificationHelper.showBrowserNotification(
+        title: title,
+        body: body,
+        tag: 'app_update_${update.latestBuild}',
+        onTap: () {
+          _navigateFromNotificationData(payloadMap);
+        },
+      );
+      return;
+    }
+
+    // Desktop (Windows, Linux, macOS)
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        final prevList = _desktopNotifications.remove('app_updates');
+        if (prevList != null) {
+          for (final prev in prevList) {
+            try {
+              await prev.close();
+            } catch (_) {}
+          }
+        }
+        final notification = LocalNotification(
+          identifier: 'app_update_${update.latestBuild}',
+          title: title,
+          body: body,
+          silent: false,
+        );
+        (_desktopNotifications['app_updates'] ??= []).add(notification);
+        notification.onClose = (_) {
+          _desktopNotifications['app_updates']?.remove(notification);
+        };
+        notification.onClick = () async {
+          _desktopNotifications['app_updates']?.remove(notification);
+          try {
+            await notification.close();
+          } catch (_) {}
+          await DesktopTrayService().showAndFocusWindow();
+          await _navigateFromNotificationData(payloadMap);
+        };
+        await notification.show();
+      } catch (e) {
+        debugPrint('NotificationService: desktop update notification error: $e');
+      }
+      return;
+    }
+
+    // Android / iOS
+    try {
+      final androidDetails = AndroidNotificationDetails(
+        'app_updates',
+        _channelLabel('app_updates'),
+        channelDescription: _channelDescription('app_updates'),
+        importance: Importance.high,
+        priority: Priority.high,
+        icon: '@drawable/ic_notification',
+        color: const Color(0xFF5B7FFF),
+        enableVibration: true,
+        playSound: true,
+        autoCancel: true,
+        onlyAlertOnce: true,
+        styleInformation: BigTextStyleInformation(
+          body,
+          contentTitle: title,
+          summaryText: 'Theaver v${update.latestVersion}',
+        ),
+      );
+
+      const iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+        presentBanner: true,
+      );
+
+      final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+      await _localNotifications.show(
+        _kAppUpdateNotificationId,
+        title,
+        body,
+        details,
+        payload: jsonEncode(payloadMap),
+      );
+    } catch (e) {
+      debugPrint('NotificationService: mobile update notification error: $e');
+    }
+  }
+
   void updateUnreadCount(int count) {
     _unreadCount = count;
     if (kIsWeb) return;
@@ -1568,7 +1773,7 @@ class NotificationService {
   String _channelLabel(String id) => {
     'private_chats': 'Личные чаты', 'group_chats': 'Групповые чаты',
     'channels': 'Каналы', 'calls': 'Звонки', 'mentions': 'Упоминания',
-    'silent': 'Беззвучные',
+    'silent': 'Беззвучные', 'app_updates': 'Обновления приложения',
   }[id] ?? 'Уведомления';
 
   String _channelDescription(String id) => {
@@ -1578,6 +1783,7 @@ class NotificationService {
     'calls': 'Уведомления о входящих звонках',
     'mentions': 'Уведомления об @упоминаниях',
     'silent': 'Тихие уведомления — только бейдж',
+    'app_updates': 'Уведомления о выходе новых версий Theaver',
   }[id] ?? 'Уведомления Theaver';
 
   Importance _getImportance(EffectiveChatSettings? e) =>
