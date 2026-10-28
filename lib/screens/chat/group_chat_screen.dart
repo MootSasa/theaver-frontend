@@ -189,13 +189,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   bool _hasScrolledToUnread = false;
   double _newestMessageHeight = 150.0;
 
-  // Floating/sticky date header & inline date separator keys
+  // Sticky date header & inline date separator keys
   final Map<DateTime, GlobalKey> _dateSeparatorKeys = {};
-  final ValueNotifier<String?> _floatingDateLabelNotifier = ValueNotifier<String?>(null);
-  final ValueNotifier<bool> _floatingDateVisibleNotifier = ValueNotifier<bool>(false);
-  final ValueNotifier<double> _floatingDatePushOffsetNotifier = ValueNotifier<double>(0.0);
-  DateTime? _floatingDateValue;
-  Timer? _floatingDateHideTimer;
+  final GlobalKey _stickyDateSlotKey = GlobalKey();
+  final ValueNotifier<StickyDateState> _stickyDateStateNotifier =
+      ValueNotifier<StickyDateState>(StickyDateState.empty);
+  List<({DateTime day, DateTime sampleDt, int newestIdx, int oldestIdx})>
+      _daySpans = [];
+  bool _stickyDatePostFrameScheduled = false;
 
   static final Map<String, (DateTime, DateTime)> _dateCache = {};
 
@@ -223,16 +224,34 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } else {
       _firstUnreadFeedIndex = -1;
     }
+
+    final spans =
+        <({DateTime day, DateTime sampleDt, int newestIdx, int oldestIdx})>[];
+    for (int i = 0; i < _feedItems.length; i++) {
+      final (dt, day) = _resolveDates(_feedItems[i].createdAt);
+      _dateSeparatorKeys.putIfAbsent(day, () => GlobalKey());
+      if (spans.isEmpty || spans.last.day != day) {
+        spans.add((day: day, sampleDt: dt, newestIdx: i, oldestIdx: i));
+      } else {
+        final prev = spans.removeLast();
+        spans.add((
+          day: prev.day,
+          sampleDt: prev.sampleDt,
+          newestIdx: prev.newestIdx,
+          oldestIdx: i,
+        ));
+      }
+    }
+    _daySpans = spans;
+
     _pruneMessageKeys();
+    _scheduleStickyDateUpdate();
   }
 
   void _pruneMessageKeys() {
     if (_messageKeys.length > 300) {
       final activeIds = _messages.take(150).map((m) => m.id).toSet();
       _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
-    }
-    if (_dateSeparatorKeys.length > 120) {
-      _dateSeparatorKeys.clear();
     }
   }
 
@@ -416,6 +435,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
 
       _updateFloatingDateOnScroll();
+      _scheduleStickyDateUpdate();
     });
 
     // Notify provider that this chat is open (so unread count is not incremented)
@@ -2929,100 +2949,84 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
-  /// Updates the floating/sticky date pill at the top of the viewport while scrolling
+  void _scheduleStickyDateUpdate() {
+    if (_stickyDatePostFrameScheduled) return;
+    _stickyDatePostFrameScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _stickyDatePostFrameScheduled = false;
+      if (mounted) {
+        _updateFloatingDateOnScroll();
+      }
+    });
+  }
+
+  /// Updates which day span owns the top sticky date slot.
+  /// Exact inline-vs-sticky visibility and push-handoff are evaluated during
+  /// flushPaint() by InlineChatDateHeader and FloatingChatDateHeader.
   void _updateFloatingDateOnScroll() {
-    if (!mounted || !_scrollController.hasClients || _feedItems.isEmpty) return;
+    if (!mounted || _daySpans.isEmpty) {
+      if (_stickyDateStateNotifier.value != StickyDateState.empty) {
+        _stickyDateStateNotifier.value = StickyDateState.empty;
+      }
+      return;
+    }
 
-    final rootBox = context.findRenderObject() as RenderBox?;
-    if (rootBox == null || !rootBox.hasSize) return;
-    final screenTopGlobalY = rootBox.localToGlobal(Offset.zero).dy;
-    final topPadding = MediaQuery.paddingOf(context).top +
-        kToolbarHeight +
-        kTextTabBarHeight +
-        24.0;
-    final readingTopY = screenTopGlobalY + topPadding - 8.0;
+    final stickyBox =
+        _stickyDateSlotKey.currentContext?.findRenderObject() as RenderBox?;
+    if (stickyBox == null || !stickyBox.attached || !stickyBox.hasSize) {
+      _scheduleStickyDateUpdate();
+      return;
+    }
+    final stickyTopY = stickyBox.localToGlobal(Offset.zero).dy;
 
-    // Find the top-most visible message in the reading area
-    int? topVisibleFeedIndex;
-    double topVisibleBestY = double.infinity;
-
+    int? mountedRefIdx;
     for (int i = 0; i < _feedItems.length; i++) {
-      final item = _feedItems[i];
-      final key = _messageKeys[item.id];
+      final key = _messageKeys[_feedItems[i].id];
       final box = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (box == null || !box.hasSize || !box.attached) continue;
-      final itemTop = box.localToGlobal(Offset.zero).dy;
-      final itemBottom = itemTop + box.size.height;
-
-      if (itemBottom > readingTopY + 12.0) {
-        if (itemTop < topVisibleBestY) {
-          topVisibleBestY = itemTop;
-          topVisibleFeedIndex = i;
-        }
-      }
-    }
-
-    if (topVisibleFeedIndex == null) return;
-
-    final topItem = _feedItems[topVisibleFeedIndex];
-    final (topDt, topDayStart) = _resolveDates(topItem.createdAt);
-
-    // Check if the inline DateSeparator for this day is currently visible near the top
-    // so we don't show two identical pills or overlap them
-    double pushOffset = 0.0;
-    bool inlineSameDayNearTop = false;
-
-    final sameDaySepKey = _dateSeparatorKeys[topDayStart];
-    final sameDaySepBox =
-        sameDaySepKey?.currentContext?.findRenderObject() as RenderBox?;
-    if (sameDaySepBox != null &&
-        sameDaySepBox.hasSize &&
-        sameDaySepBox.attached) {
-      final sepTop = sameDaySepBox.localToGlobal(Offset.zero).dy;
-      if (sepTop >= readingTopY - 12.0 && sepTop <= readingTopY + 46.0) {
-        inlineSameDayNearTop = true;
-      }
-    }
-
-    // Check if another inline DateSeparator is approaching from below or above to push the floating pill
-    for (final entry in _dateSeparatorKeys.entries) {
-      if (entry.key == topDayStart) continue;
-      final box = entry.value.currentContext?.findRenderObject() as RenderBox?;
-      if (box == null || !box.hasSize || !box.attached) continue;
-      final sepTop = box.localToGlobal(Offset.zero).dy;
-      const pillHeight = 32.0;
-      if (sepTop > readingTopY - pillHeight &&
-          sepTop < readingTopY + pillHeight) {
-        pushOffset = (sepTop - (readingTopY + pillHeight)).clamp(-pillHeight, 0.0);
+      if (box != null && box.attached && box.hasSize) {
+        mountedRefIdx = i;
         break;
       }
     }
 
-    _floatingDateValue = topDayStart;
-    final label = _formatDateLabel(topDt);
-    if (_floatingDateLabelNotifier.value != label) {
-      _floatingDateLabelNotifier.value = label;
-    }
-    if ((_floatingDatePushOffsetNotifier.value - pushOffset).abs() > 0.5) {
-      _floatingDatePushOffsetNotifier.value = pushOffset;
+    int? activeSpanIdx;
+    for (int s = 0; s < _daySpans.length; s++) {
+      final span = _daySpans[s];
+      final sepKey = _dateSeparatorKeys[span.day];
+      final sepBox = sepKey?.currentContext?.findRenderObject() as RenderBox?;
+
+      bool isAtOrAboveSticky;
+      if (sepBox != null && sepBox.attached && sepBox.hasSize) {
+        final sepTopY = sepBox.localToGlobal(Offset.zero).dy;
+        isAtOrAboveSticky = sepTopY <= stickyTopY + 0.5;
+      } else if (mountedRefIdx != null) {
+        isAtOrAboveSticky = span.oldestIdx > mountedRefIdx;
+      } else {
+        isAtOrAboveSticky = false;
+      }
+
+      if (isAtOrAboveSticky) {
+        activeSpanIdx = s;
+        break;
+      }
     }
 
-    final shouldBeVisible =
-        !inlineSameDayNearTop && _scrollController.offset > 20.0;
-    if (shouldBeVisible) {
-      if (!_floatingDateVisibleNotifier.value) {
-        _floatingDateVisibleNotifier.value = true;
-      }
-      _floatingDateHideTimer?.cancel();
-      _floatingDateHideTimer = Timer(const Duration(milliseconds: 1200), () {
-        if (mounted) {
-          _floatingDateVisibleNotifier.value = false;
-        }
-      });
-    } else {
-      if (_floatingDateVisibleNotifier.value) {
-        _floatingDateVisibleNotifier.value = false;
-      }
+    final effectiveSpanIdx = activeSpanIdx ?? (_daySpans.length - 1);
+    final activeSpan = _daySpans[effectiveSpanIdx];
+    final nextNewerSpan =
+        effectiveSpanIdx > 0 ? _daySpans[effectiveSpanIdx - 1] : null;
+
+    final nextState = StickyDateState(
+      day: activeSpan.day,
+      label: _formatDateLabel(activeSpan.sampleDt),
+      sameDaySepKey: _dateSeparatorKeys[activeSpan.day],
+      nextDaySepKey: nextNewerSpan != null
+          ? _dateSeparatorKeys[nextNewerSpan.day]
+          : null,
+    );
+
+    if (_stickyDateStateNotifier.value != nextState) {
+      _stickyDateStateNotifier.value = nextState;
     }
   }
 
@@ -3205,10 +3209,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     WidgetsBinding.instance.removeObserver(this);
     _syncDebounceTimer?.cancel();
     _transitionTimer?.cancel();
-    _floatingDateHideTimer?.cancel();
-    _floatingDateLabelNotifier.dispose();
-    _floatingDateVisibleNotifier.dispose();
-    _floatingDatePushOffsetNotifier.dispose();
+    _stickyDateStateNotifier.dispose();
     _emojiPanelController.dispose();
     _inputFocusNode.removeListener(_onFocusChanged);
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
@@ -3673,36 +3674,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 child: messageList,
               ),
             ),
-            // Sticky/floating date header (top-center, auto-hides after scrolling stops)
+            // Sticky date header (stays attached at the top of the chat reading area)
             Positioned(
-              top: topPadding - 8,
+              top: topPadding,
               left: 0,
               right: 0,
               child: Center(
-                child: ValueListenableBuilder<bool>(
-                  valueListenable: _floatingDateVisibleNotifier,
-                  builder: (context, visible, _) {
-                    return ValueListenableBuilder<String?>(
-                      valueListenable: _floatingDateLabelNotifier,
-                      builder: (context, label, _) {
-                        if (label == null || label.isEmpty) {
-                          return const SizedBox.shrink();
-                        }
-                        return ValueListenableBuilder<double>(
-                          valueListenable: _floatingDatePushOffsetNotifier,
-                          builder: (context, pushOffset, _) {
-                            return FloatingChatDateHeader(
-                              dateLabel: label,
-                              visible: visible && !_isSelectionMode,
-                              pushOffset: pushOffset,
-                              onTap: () {
-                                final dt = _floatingDateValue ?? DateTime.now();
-                                _openCalendarForDate(dt);
-                              },
-                            );
-                          },
-                        );
-                      },
+                child: ValueListenableBuilder<StickyDateState>(
+                  valueListenable: _stickyDateStateNotifier,
+                  builder: (context, stickyState, _) {
+                    return FloatingChatDateHeader(
+                      key: _stickyDateSlotKey,
+                      state: stickyState,
+                      scrollListenable: _scrollController,
+                      hiddenBySelectionMode: _isSelectionMode,
+                      onTapDay: _openCalendarForDate,
                     );
                   },
                 ),
@@ -4007,12 +3993,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      final sepKey = _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
+      final sepKey =
+          _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
       items.add(
-        DateSeparator(
+        InlineChatDateHeader(
           key: sepKey,
-          dateLabel: _formatDateLabel(currentDt),
-          onTap: () => _openCalendarForDate(currentDt),
+          day: currentDate,
+          scrollListenable: _scrollController,
+          stickySlotKey: _stickyDateSlotKey,
+          stickyStateListenable: _stickyDateStateNotifier,
+          child: DateSeparator(
+            key: ValueKey<DateTime>(currentDate),
+            dateLabel: _formatDateLabel(currentDt),
+            onTap: () => _openCalendarForDate(currentDt),
+          ),
         ),
       );
     }
@@ -4154,12 +4148,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      final sepKey = _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
+      final sepKey =
+          _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
       items.add(
-        DateSeparator(
+        InlineChatDateHeader(
           key: sepKey,
-          dateLabel: _formatDateLabel(currentDt),
-          onTap: () => _openCalendarForDate(currentDt),
+          day: currentDate,
+          scrollListenable: _scrollController,
+          stickySlotKey: _stickyDateSlotKey,
+          stickyStateListenable: _stickyDateStateNotifier,
+          child: DateSeparator(
+            key: ValueKey<DateTime>(currentDate),
+            dateLabel: _formatDateLabel(currentDt),
+            onTap: () => _openCalendarForDate(currentDt),
+          ),
         ),
       );
     }
