@@ -966,17 +966,27 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                                              ),
                                            ),
                                          )
-                                       : FittedBox(
-                                           fit: BoxFit.cover,
-                                           child: SizedBox(
-                                             width: _controller!.value.size.width > 0
+                                       : Builder(
+                                           builder: (context) {
+                                             final double rawW = _controller!.value.size.width > 0
                                                  ? _controller!.value.size.width
-                                                 : effectiveDiameter,
-                                             height: _controller!.value.size.height > 0
+                                                 : effectiveDiameter;
+                                             final double rawH = _controller!.value.size.height > 0
                                                  ? _controller!.value.size.height
-                                                 : effectiveDiameter,
-                                             child: VideoPlayer(_controller!),
-                                           ),
+                                                 : effectiveDiameter;
+                                             final int rot = _controller!.value.rotationCorrection.abs();
+                                             final bool swapDims = (rot % 180 != 0) && rawW > rawH;
+                                             final double boxW = swapDims ? rawH : rawW;
+                                             final double boxH = swapDims ? rawW : rawH;
+                                             return FittedBox(
+                                               fit: BoxFit.cover,
+                                               child: SizedBox(
+                                                 width: boxW,
+                                                 height: boxH,
+                                                 child: VideoPlayer(_controller!),
+                                               ),
+                                             );
+                                           },
                                          ),
                         ),
                       ),

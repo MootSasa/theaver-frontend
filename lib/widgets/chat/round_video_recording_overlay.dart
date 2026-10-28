@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -195,37 +196,28 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
 
   /// Called by parent or gesture detector when finger moves
   void updatePointerOffset(double dx, double dy) {
-    if (_isCancelling || _isSending) return;
+    if (_isCancelling || _isSending || _isLocked) return;
 
-    if (!_isLocked) {
+    setState(() {
+      _dragOffsetX = dx.clamp(-160.0, 0.0);
+      _dragOffsetY = dy.clamp(-120.0, 0.0);
+    });
+
+    // Check lock threshold
+    if (_dragOffsetY <= _kLockThreshold) {
+      HapticFeedback.mediumImpact();
       setState(() {
-        _dragOffsetX = dx.clamp(-160.0, 0.0);
-        _dragOffsetY = dy.clamp(-120.0, 0.0);
+        _isLocked = true;
+        _dragOffsetX = 0.0;
+        _dragOffsetY = 0.0;
       });
+      return;
+    }
 
-      // Check lock threshold
-      if (_dragOffsetY <= _kLockThreshold) {
-        HapticFeedback.mediumImpact();
-        setState(() {
-          _isLocked = true;
-          _dragOffsetX = 0.0;
-          _dragOffsetY = 0.0;
-        });
-      }
-
-      // Check cancel threshold
-      if (_dragOffsetX <= _kCancelThreshold && !_isCancelling) {
-        _triggerTrashCancel();
-        return;
-      }
-    } else if (!widget.recorderService.isPreview) {
-      // Once locked, dragging further up adjusts zoom (1.0x to 3.0x)
-      if (dy <= _kLockThreshold) {
-        final zoomFraction = ((-dy - (-_kLockThreshold)) / 150.0).clamp(0.0, 1.0);
-        _setZoom(1.0 + zoomFraction * 2.0);
-      } else {
-        _setZoom(1.0);
-      }
+    // Check cancel threshold
+    if (_dragOffsetX <= _kCancelThreshold && !_isCancelling) {
+      _triggerTrashCancel();
+      return;
     }
   }
 
@@ -595,17 +587,25 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
                 ? Stack(
                     alignment: Alignment.center,
                     children: [
-                      FittedBox(
-                        fit: BoxFit.cover,
-                        child: SizedBox(
-                          width: previewCtrl.value.size.width > 0
+                      Builder(
+                        builder: (context) {
+                          final rawW = previewCtrl.value.size.width > 0
                               ? previewCtrl.value.size.width
-                              : diameter,
-                          height: previewCtrl.value.size.height > 0
+                              : diameter;
+                          final rawH = previewCtrl.value.size.height > 0
                               ? previewCtrl.value.size.height
-                              : diameter,
-                          child: VideoPlayer(previewCtrl),
-                        ),
+                              : diameter;
+                          final rot = previewCtrl.value.rotationCorrection.abs();
+                          final bool swapDims = (rot % 180 != 0) && rawW > rawH;
+                          return FittedBox(
+                            fit: BoxFit.cover,
+                            child: SizedBox(
+                              width: swapDims ? rawH : rawW,
+                              height: swapDims ? rawW : rawH,
+                              child: VideoPlayer(previewCtrl),
+                            ),
+                          );
+                        },
                       ),
                       if (!previewCtrl.value.isPlaying)
                         Container(
@@ -650,7 +650,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
           _baseZoom = _currentZoom;
         },
         onScaleUpdate: (details) {
-          if (details.pointerCount >= 2 || details.scale != 1.0) {
+          if (details.pointerCount >= 2) {
             _setZoom(_baseZoom * details.scale);
           }
         },
@@ -684,12 +684,27 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
                       builder: (context) {
                         final ctrl = widget.recorderService.cameraController!;
                         final previewSize = ctrl.value.previewSize;
-                        final double previewW = (previewSize != null && previewSize.width > 0)
+                        final bool isMobile = !kIsWeb &&
+                            (defaultTargetPlatform == TargetPlatform.android ||
+                             defaultTargetPlatform == TargetPlatform.iOS);
+                        final bool isPortrait =
+                            MediaQuery.orientationOf(context) == Orientation.portrait;
+                        final double rawW = (previewSize != null && previewSize.width > 0)
                             ? previewSize.width
                             : diameter;
-                        final double previewH = (previewSize != null && previewSize.height > 0)
+                        final double rawH = (previewSize != null && previewSize.height > 0)
                             ? previewSize.height
                             : diameter;
+                        // On Android & iOS, CameraController.value.previewSize is reported
+                        // in landscape sensor coordinates (width > height). Swap in portrait
+                        // so the portrait camera texture is not stretched horizontally.
+                        final double previewW =
+                            (isMobile && isPortrait && rawW > rawH) ? rawH : rawW;
+                        final double previewH =
+                            (isMobile && isPortrait && rawW > rawH) ? rawW : rawH;
+                        // Mobile platforms mirror the front camera preview natively; only mirror manually on desktop.
+                        final double mirrorScaleX =
+                            (!isMobile && widget.recorderService.isFrontCamera) ? -1.0 : 1.0;
 
                         return FittedBox(
                           fit: BoxFit.cover,
@@ -697,7 +712,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
                             width: previewW,
                             height: previewH,
                             child: Transform.scale(
-                              scaleX: widget.recorderService.isFrontCamera ? -1.0 : 1.0,
+                              scaleX: mirrorScaleX,
                               child: ctrl.buildPreview(),
                             ),
                           ),

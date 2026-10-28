@@ -158,15 +158,12 @@ class VideoNoteRecorderService with ChangeNotifier {
                   : c.lensDirection == CameraLensDirection.back,
               orElse: () => _availableCameras.first,
             );
-            _cameraController = CameraController(
-              cam,
-              ResolutionPreset.medium,
-              enableAudio: true,
-            );
-            await _cameraController!.initialize();
-            _isInitialized = true;
-            notifyListeners();
-            return true;
+            final initialized = await _initCameraControllerWithFallback(cam);
+            if (initialized) {
+              _isInitialized = true;
+              notifyListeners();
+              return true;
+            }
           } else if (defaultTargetPlatform == TargetPlatform.windows) {
             _errorMessage = 'No camera available';
             notifyListeners();
@@ -205,6 +202,72 @@ class VideoNoteRecorderService with ChangeNotifier {
       _cleanupStream();
       notifyListeners();
       return false;
+    }
+  }
+
+  /// Initializes [CameraController] trying multiple [ResolutionPreset]s (`high` -> `medium` -> `low`)
+  /// and locks capture orientation to [DeviceOrientation.portraitUp] on mobile so tilted devices
+  /// never record sideways or upside-down video notes.
+  Future<bool> _initCameraControllerWithFallback(
+    CameraDescription cam, {
+    List<ResolutionPreset> presets = const [
+      ResolutionPreset.high,
+      ResolutionPreset.medium,
+      ResolutionPreset.low,
+    ],
+  }) async {
+    for (final preset in presets) {
+      CameraController? ctrl;
+      try {
+        ctrl = CameraController(
+          cam,
+          preset,
+          enableAudio: true,
+        );
+        await ctrl.initialize();
+        if (!kIsWeb &&
+            (defaultTargetPlatform == TargetPlatform.android ||
+             defaultTargetPlatform == TargetPlatform.iOS)) {
+          try {
+            await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
+          } catch (_) {}
+        }
+        _cameraController = ctrl;
+        return true;
+      } catch (e) {
+        debugPrint(
+            'VideoNoteRecorderService: CameraController preset $preset failed: $e');
+        try {
+          await ctrl?.dispose();
+        } catch (_) {}
+      }
+    }
+    _cameraController = null;
+    return false;
+  }
+
+  /// Ensures any file returned by `CameraController.stopVideoRecording()` (which on Android
+  /// often ends with `.temp`, e.g. `REC12345.temp`) is renamed to a clean `video_note_*.mp4` path.
+  Future<String> _normalizeRecordedSegmentPath(String rawPath) async {
+    try {
+      final rawFile = File(rawPath);
+      if (!await rawFile.exists()) return rawPath;
+      final dir = await getTemporaryDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final segIdx = _recordedSegments.length;
+      final targetPath = '${dir.path}/video_note_${ts}_seg$segIdx.mp4';
+      try {
+        final moved = await rawFile.rename(targetPath);
+        return moved.path;
+      } catch (_) {
+        final copied = await rawFile.copy(targetPath);
+        try {
+          await rawFile.delete();
+        } catch (_) {}
+        return copied.path;
+      }
+    } catch (_) {
+      return rawPath;
     }
   }
 
@@ -261,7 +324,26 @@ class VideoNoteRecorderService with ChangeNotifier {
 
       // 1. CameraController path (hardware encoded MP4 with synchronized audio)
       if (_cameraController != null && _cameraController!.value.isInitialized) {
-        await _cameraController!.startVideoRecording();
+        try {
+          await _cameraController!.startVideoRecording();
+        } catch (startErr) {
+          debugPrint(
+              'VideoNoteRecorderService: startVideoRecording failed on current preset, retrying lower preset: $startErr');
+          final cam = _cameraController!.description;
+          try {
+            await _cameraController!.dispose();
+          } catch (_) {}
+          _cameraController = null;
+          final reinit = await _initCameraControllerWithFallback(
+            cam,
+            presets: const [ResolutionPreset.medium, ResolutionPreset.low],
+          );
+          if (reinit && _cameraController != null) {
+            await _cameraController!.startVideoRecording();
+          } else {
+            rethrow;
+          }
+        }
         _isRecording = true;
         _elapsed = Duration.zero;
         _stopwatch
@@ -284,14 +366,35 @@ class VideoNoteRecorderService with ChangeNotifier {
         _audioRecorder = AudioRecorder();
         _audioFilePath =
             '${tempDir.path}/audio_note_${DateTime.now().millisecondsSinceEpoch}.m4a';
-        await _audioRecorder!.start(
-          const RecordConfig(
+        const configs = [
+          RecordConfig(
             encoder: AudioEncoder.aacLc,
             bitRate: 96000,
             sampleRate: 44100,
+            numChannels: 1,
           ),
-          path: _audioFilePath!,
-        );
+          RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 44100,
+            numChannels: 1,
+          ),
+          RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          RecordConfig(
+            encoder: AudioEncoder.aacLc,
+          ),
+        ];
+        for (final cfg in configs) {
+          try {
+            await _audioRecorder!.start(cfg, path: _audioFilePath!);
+            break;
+          } catch (_) {}
+        }
       } catch (audioErr) {
         debugPrint('VideoNoteRecorderService: Audio recording start note: $audioErr');
       }
@@ -388,20 +491,17 @@ class VideoNoteRecorderService with ChangeNotifier {
               final segXFile = await _cameraController!.stopVideoRecording();
               final segFile = File(segXFile.path);
               if (await segFile.exists() && await segFile.length() > 0) {
-                _recordedSegments.add(segFile.path);
+                final cleanSegPath = await _normalizeRecordedSegmentPath(segFile.path);
+                _recordedSegments.add(cleanSegPath);
               }
             } catch (stopErr) {
               debugPrint('VideoNoteRecorderService: Segment stop on flip error: $stopErr');
             }
           }
           await _cameraController!.dispose();
-          _cameraController = CameraController(
-            nextCam,
-            ResolutionPreset.medium,
-            enableAudio: true,
-          );
-          await _cameraController!.initialize();
-          if (wasRecording) {
+          _cameraController = null;
+          final initialized = await _initCameraControllerWithFallback(nextCam);
+          if (initialized && wasRecording && _cameraController != null) {
             await _cameraController!.startVideoRecording();
           }
           _isFrontCamera = !_isFrontCamera;
@@ -533,7 +633,8 @@ class VideoNoteRecorderService with ChangeNotifier {
           final xfile = await _cameraController!.stopVideoRecording();
           final file = File(xfile.path);
           if (await file.exists() && await file.length() > 0) {
-            _recordedSegments.add(file.path);
+            final cleanSegPath = await _normalizeRecordedSegmentPath(file.path);
+            _recordedSegments.add(cleanSegPath);
           }
         }
         if (_recordedSegments.isNotEmpty) {

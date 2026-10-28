@@ -366,8 +366,35 @@ class MainActivity : FlutterFragmentActivity() {
                 return false
             }
 
+            val videoFormat = videoExtractor.getTrackFormat(videoTrackIndex)
+            var rotationDegrees = 0
+            try {
+                if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                    rotationDegrees = videoFormat.getInteger(MediaFormat.KEY_ROTATION)
+                }
+            } catch (_: Exception) {}
+            if (rotationDegrees == 0) {
+                var retriever: MediaMetadataRetriever? = null
+                try {
+                    retriever = MediaMetadataRetriever()
+                    retriever.setDataSource(videoPath)
+                    val rotStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    if (!rotStr.isNullOrEmpty()) {
+                        rotationDegrees = rotStr.toIntOrNull() ?: 0
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    try { retriever?.release() } catch (_: Exception) {}
+                }
+            }
+
             muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            val muxerVideoTrack = muxer.addTrack(videoExtractor.getTrackFormat(videoTrackIndex))
+            if (rotationDegrees == 90 || rotationDegrees == 180 || rotationDegrees == 270) {
+                try {
+                    muxer.setOrientationHint(rotationDegrees)
+                } catch (_: Exception) {}
+            }
+            val muxerVideoTrack = muxer.addTrack(videoFormat)
             val muxerAudioTrack = muxer.addTrack(audioExtractor.getTrackFormat(audioTrackIndex))
             muxer.start()
 

@@ -95,7 +95,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
     }
   }
 
-  /// Starts voice recording to a temporary `.m4a` file.
+  /// Starts voice recording to a temporary audio file with automatic hardware encoder fallbacks.
   Future<bool> startRecording() async {
     if (_isRecording) return true;
 
@@ -115,17 +115,82 @@ class VoiceNoteRecorderService with ChangeNotifier {
 
       final dir = await getTemporaryDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      _currentFilePath = '${dir.path}/voice_note_$timestamp.m4a';
 
-      await _recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-          numChannels: 1,
+      // Multi-stage fallback chain for picky Android hardware MediaCodec encoders
+      final candidates = <({RecordConfig config, String ext})>[
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 96000,
+            sampleRate: 44100,
+            numChannels: 1,
+          ),
+          ext: 'm4a',
         ),
-        path: _currentFilePath!,
-      );
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 44100,
+            numChannels: 1,
+          ),
+          ext: 'm4a',
+        ),
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          ext: 'm4a',
+        ),
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+          ),
+          ext: 'm4a',
+        ),
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.wav,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          ext: 'wav',
+        ),
+      ];
+
+      Object? lastErr;
+      bool started = false;
+      for (final candidate in candidates) {
+        final candidatePath = '${dir.path}/voice_note_$timestamp.${candidate.ext}';
+        try {
+          if (kIsWeb) {
+            _currentFilePath = '${dir.path}/voice_note_$timestamp.m4a';
+            await _recorder.start(candidate.config, path: _currentFilePath!);
+            started = true;
+            break;
+          }
+          final supported = await _recorder.isEncoderSupported(candidate.config.encoder);
+          if (!supported && candidate != candidates.last) continue;
+          _currentFilePath = candidatePath;
+          await _recorder.start(candidate.config, path: _currentFilePath!);
+          started = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          debugPrint('[VoiceNoteRecorderService] candidate ${candidate.config.encoder} (${candidate.config.bitRate}) failed: $err');
+          try {
+            final f = File(candidatePath);
+            if (f.existsSync()) f.deleteSync();
+          } catch (_) {}
+        }
+      }
+
+      if (!started) {
+        throw lastErr ?? StateError('All audio recording configurations failed');
+      }
 
       _isRecording = true;
       _isPaused = false;
