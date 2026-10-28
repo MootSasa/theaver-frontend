@@ -809,23 +809,29 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
           const double kMenuGap = 8.0;
           const double kScreenEdgeMargin = 12.0;
-          const double kDesiredMenuMaxHeight = 360.0;
           const double kMinPanelHeight = 120.0;
           const double kMinSidePlacementChatWidth = 440.0;
           const double kSideMenuTotalWidth = 277.0; // 44 (emoji) + 8 (gap) + 225 (actions)
 
           int actionItemCount = 4; // reply, copy, pin, delete
-          if (_shouldShowReadStatus) actionItemCount += (_isPlayableNote ? 2 : 1);
           if (widget.onQuote != null) actionItemCount++;
           if (widget.onViewPollResults != null) actionItemCount++;
           if (widget.onRetractVote != null) actionItemCount++;
           if (widget.onStopPoll != null) actionItemCount++;
           if (widget.isMe && widget.onEdit != null) actionItemCount++;
           if (widget.onSelect != null) actionItemCount++;
-          final double naturalMenuHeight = math.min(
-            kDesiredMenuMaxHeight,
-            math.max(220.0, actionItemCount * 44.0 + 4.0),
-          );
+
+          double readReceiptHeight = 0.0;
+          if (_shouldShowReadStatus) {
+            readReceiptHeight = _isPlayableNote ? 76.0 : 60.0;
+          }
+
+          final double actionsNaturalHeight = _showingReadersList
+              ? (44.0 + 1.0 + 8.0 + _readers.length * 58.0)
+              : (readReceiptHeight + actionItemCount * 46.0 + 6.0);
+          const double kEmojiPanelNaturalHeight = 336.0;
+          final double naturalMenuHeight =
+              math.max(kEmojiPanelNaturalHeight, actionsNaturalHeight);
 
           final double safeTop = mediaPadding.top + kScreenEdgeMargin;
           final double safeBottom =
@@ -853,15 +859,17 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
           if (placeBesideMessage) {
             showAbove = false;
-            maxAvailableHeight =
-                visibleHeight.clamp(kMinPanelHeight, kDesiredMenuMaxHeight);
             final double effectiveSideMenuHeight =
-                math.min(naturalMenuHeight, maxAvailableHeight);
+                math.min(naturalMenuHeight, visibleHeight);
             menuTop = targetMessageTop.clamp(
               safeTop,
               math.max(safeTop, size.height - safeBottom - effectiveSideMenuHeight),
             );
             menuBottom = null;
+            maxAvailableHeight = math.max(
+              kMinPanelHeight,
+              (size.height - safeBottom) - menuTop,
+            );
 
             final Rect visualBubbleRect = _resolveVisualBubbleRect(context);
             final double maxLeft =
@@ -877,24 +885,29 @@ class MessageContextMenuState extends State<MessageContextMenu>
               menuLeft = idealLeft.clamp(16.0, maxLeft);
             }
           } else {
-            if (availableBelow >= kDesiredMenuMaxHeight ||
+            if (availableBelow >= naturalMenuHeight ||
                 (availableBelow >= availableAbove &&
                     availableBelow >= kMinPanelHeight)) {
               showAbove = false;
               menuTop = messageBottom + kMenuGap;
-              maxAvailableHeight =
-                  availableBelow.clamp(kMinPanelHeight, kDesiredMenuMaxHeight);
+              maxAvailableHeight = math.max(kMinPanelHeight, availableBelow);
             } else if (availableAbove >= kMinPanelHeight) {
               showAbove = true;
               menuBottom = size.height - (targetMessageTop - kMenuGap);
-              maxAvailableHeight =
-                  availableAbove.clamp(kMinPanelHeight, kDesiredMenuMaxHeight);
+              maxAvailableHeight = math.max(kMinPanelHeight, availableAbove);
             } else {
               showAbove = false;
-              maxAvailableHeight =
-                  visibleHeight.clamp(kMinPanelHeight, kDesiredMenuMaxHeight);
-              menuTop = (size.height - safeBottom - maxAvailableHeight)
-                  .clamp(safeTop, math.max(safeTop, size.height - safeBottom));
+              final double effectiveFallbackHeight =
+                  math.min(naturalMenuHeight, visibleHeight);
+              menuTop = (size.height - safeBottom - effectiveFallbackHeight)
+                  .clamp(
+                safeTop,
+                math.max(safeTop, size.height - safeBottom - kMinPanelHeight),
+              );
+              maxAvailableHeight = math.max(
+                kMinPanelHeight,
+                (size.height - safeBottom) - menuTop,
+              );
             }
 
             final double menuWidth = (size.width - 32.0).clamp(220.0, 285.0);
@@ -1157,6 +1170,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
                                 child: _buildActionPanel(
                                   theme,
                                   maxAvailableHeight,
+                                  showAbove: showAbove,
                                 ),
                               ),
                             ],
@@ -1292,12 +1306,16 @@ class MessageContextMenuState extends State<MessageContextMenu>
     );
   }
 
-  Widget _buildActionPanel(ThemeData theme, double maxHeight) {
+  Widget _buildActionPanel(
+    ThemeData theme,
+    double maxHeight, {
+    bool showAbove = false,
+  }) {
     final bool isSending = widget.sendStatus == 0;
     return AnimatedSize(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
-      alignment: Alignment.topRight,
+      alignment: showAbove ? Alignment.bottomRight : Alignment.topRight,
       child: Container(
         width: _showingReadersList ? 275 : 225,
         constraints: BoxConstraints(maxHeight: maxHeight),
