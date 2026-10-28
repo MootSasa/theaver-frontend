@@ -48,6 +48,7 @@ import '../../widgets/chat/round_video_thumbnail.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
 import '../../services/notification_service.dart';
+import '../../services/proximity_audio_service.dart';
 import '../../models/chat_folder.dart';
 import '../../services/chat_folder_service.dart';
 import '../../services/chat_swipe_service.dart';
@@ -280,6 +281,7 @@ class _MainScreenState extends State<MainScreen>
     // 3. WebSocket (параллельно, не блокирует UI)
     _initWebSocket();
     _startConnectionCheck();
+    ProximityAudioService.instance.registerListeners();
 
     // 4. Проверка обновлений в фоне + периодический таймер
     _checkForUpdates();
