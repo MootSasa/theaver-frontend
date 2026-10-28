@@ -375,6 +375,7 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _initWebSocket() async {
+    _wsSubscription?.cancel();
     // Subscribe to WebSocket events BEFORE connecting,
     // so we don't miss the 'connected' event from the broadcast stream.
     _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
@@ -1099,6 +1100,14 @@ class _MainScreenState extends State<MainScreen>
     }
     debugPrint('[MainScreen] Active account changed: $_currentUserId -> $newUserId. Refreshing state and WS...');
     _currentUserId = newUserId;
+    TilingLayoutController.instance.closeAllChats();
+    try {
+      VoicePlaybackService().stopVoice();
+      VideoNotePlaybackService().stopActivePlayback();
+    } catch (_) {}
+    if (_isSelectMode) {
+      _exitSelectMode();
+    }
     _liveUserPresence.clear();
     for (final state in _chatTypingStates.values) {
       state.timer.cancel();
@@ -1107,9 +1116,13 @@ class _MainScreenState extends State<MainScreen>
     AppDatabase.setActiveUser(newUserId);
 
     setState(() {
+      _activeFilter = 0;
       _chats = [];
       _isLoadingChats = true;
     });
+    if (_currentIndex != 1) {
+      _onTabTapped(1);
+    }
     _initChatsStream();
     // Disconnect old WebSocket, reconnect with new account token, reload chats
     _wsService.disconnect();

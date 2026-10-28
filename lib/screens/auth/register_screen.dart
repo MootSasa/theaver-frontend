@@ -59,11 +59,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
           
           if (!mounted) return;
           TilingLayoutController.instance.closeAllChats();
-          // Navigate to main screen after successful registration
-          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-            SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
-            (route) => false,
-          );
+          final localNav = Navigator.of(context);
+          if (TilingLayoutController.instance.isWorkspaceMounted &&
+              localNav.canPop()) {
+            localNav.popUntil((route) => route.isFirst);
+          } else {
+            // Navigate to main screen after successful registration
+            Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+              SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
+              (route) => false,
+            );
+          }
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(result['message'] ?? l10n.translate('auth_registration_failed'))),

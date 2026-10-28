@@ -70,11 +70,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
         if (!mounted) return;
         TilingLayoutController.instance.closeAllChats();
-        // Navigate to main workspace with new account on root navigator
-        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
-          (route) => false,
-        );
+        final localNav = Navigator.of(context);
+        if (TilingLayoutController.instance.isWorkspaceMounted &&
+            localNav.canPop()) {
+          localNav.popUntil((route) => route.isFirst);
+        } else {
+          // Navigate to main workspace with new account on root navigator
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
+            (route) => false,
+          );
+        }
       } else {
         // Token explicitly expired / rejected by server
         _showReLoginDialog(account);
@@ -179,6 +185,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
     if (confirmed == true) {
       final isCurrent = account.userId == _currentAccount?.userId;
       if (isCurrent) {
+        TilingLayoutController.instance.closeAllChats();
         final nav = DeepLinkService().navigatorKey.currentState ??
             Navigator.of(context, rootNavigator: true);
         nav.pushAndRemoveUntil(

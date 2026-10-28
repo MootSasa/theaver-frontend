@@ -59,7 +59,6 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   @override
   void initState() {
     super.initState();
-    _controller.attachLeftTileNavigatorKey(_leftTileNavigatorKey);
     _wasShowingSinglePaneChat = _controller.singlePaneShowingChat;
     _singlePaneChatController = AnimationController(
       vsync: this,
@@ -67,9 +66,12 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       reverseDuration: const Duration(milliseconds: 250),
       value: _wasShowingSinglePaneChat ? 1.0 : 0.0,
     );
-    _controller.rightWorkspaceRectResolver = _getRightWorkspaceGlobalRect;
-    _controller.onRequestAnimatedSinglePaneClose = _animateCloseSinglePaneChat;
-    _controller.setWorkspaceMounted(true);
+    _controller.attachWorkspace(
+      owner: this,
+      leftTileNavigatorKey: _leftTileNavigatorKey,
+      rightWorkspaceRectResolver: _getRightWorkspaceGlobalRect,
+      onRequestAnimatedSinglePaneClose: _animateCloseSinglePaneChat,
+    );
     _controller.addListener(_onControllerChanged);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
   }
@@ -78,14 +80,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _controller.removeListener(_onControllerChanged);
-    if (_controller.rightWorkspaceRectResolver == _getRightWorkspaceGlobalRect) {
-      _controller.rightWorkspaceRectResolver = null;
-    }
-    if (_controller.onRequestAnimatedSinglePaneClose ==
-        _animateCloseSinglePaneChat) {
-      _controller.onRequestAnimatedSinglePaneClose = null;
-    }
-    _controller.setWorkspaceMounted(false);
+    _controller.detachWorkspace(this);
     _singlePaneChatController.dispose();
     _leftHeroController.dispose();
     for (final ctrl in _chatTileHeroControllers.values) {
@@ -158,6 +153,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
   bool _onHardwareKey(KeyEvent event) {
     if (!mounted) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
     if (event is KeyDownEvent &&
         (event.logicalKey == LogicalKeyboardKey.escape ||
             event.logicalKey == LogicalKeyboardKey.browserBack ||

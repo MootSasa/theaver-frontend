@@ -561,8 +561,10 @@ class WebSocketService {
 
   /// Subscribe to specific event type
   void subscribe(WebSocketEventType type, WebSocketEventCallback callback) {
-    _callbacks[type] ??= [];
-    _callbacks[type]!.add(callback);
+    final list = _callbacks[type] ??= [];
+    if (!list.contains(callback)) {
+      list.add(callback);
+    }
   }
 
   /// Unsubscribe from specific event type
