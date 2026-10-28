@@ -23,6 +23,7 @@ class ProximityAudioService {
   bool _isMonitoring = false;
   bool _isNear = false;
   bool _isEarpieceActive = false;
+  bool _voiceListenerRegistered = false;
 
   final Map<String, Future<bool> Function()> _openChatCallbacks = {};
   String? _activeOpenChatId;
@@ -36,6 +37,12 @@ class ProximityAudioService {
   void _init() {
     if (!isSupported) return;
     SettingsService().raiseToListenNotifier.addListener(_evaluateMonitoringState);
+    Future.microtask(registerListeners);
+  }
+
+  void registerListeners() {
+    if (!isSupported || _voiceListenerRegistered) return;
+    _voiceListenerRegistered = true;
     VoicePlaybackService().addListener(_evaluateMonitoringState);
   }
 

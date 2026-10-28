@@ -45,8 +45,7 @@ class VoicePlaybackService with ChangeNotifier {
     _initStreams();
     _initMediaSessionChannel();
     unawaited(_ensureAudioSessionConfigured());
-    // Ensure ProximityAudioService is initialized
-    ProximityAudioService.instance;
+    Future.microtask(() => ProximityAudioService.instance.registerListeners());
   }
 
   String? get activeMessageId => _activeMessageId;
