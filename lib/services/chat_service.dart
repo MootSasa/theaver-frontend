@@ -1236,6 +1236,8 @@ class ChatService {
     int offset = 0,
     String? beforeMessageId,
     String? beforeCreatedAt,
+    String? untilMessageId,
+    String? aroundMessageId,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -1248,13 +1250,20 @@ class ChatService {
       }
 
       var url = '${AppConfig.baseUrl}/api/chats/$chatId/messages?limit=$limit';
-      if (beforeMessageId != null && beforeMessageId.isNotEmpty) {
-        url += '&before_message_id=$beforeMessageId';
-      }
-      if (beforeCreatedAt != null && beforeCreatedAt.isNotEmpty) {
-        url += '&before_created_at=${Uri.encodeComponent(beforeCreatedAt)}';
-      } else if (beforeMessageId == null && offset > 0) {
-        url += '&offset=$offset';
+      if (aroundMessageId != null && aroundMessageId.isNotEmpty) {
+        url += '&around_message_id=$aroundMessageId';
+      } else {
+        if (beforeMessageId != null && beforeMessageId.isNotEmpty) {
+          url += '&before_message_id=$beforeMessageId';
+        }
+        if (beforeCreatedAt != null && beforeCreatedAt.isNotEmpty) {
+          url += '&before_created_at=${Uri.encodeComponent(beforeCreatedAt)}';
+        } else if (beforeMessageId == null && offset > 0) {
+          url += '&offset=$offset';
+        }
+        if (untilMessageId != null && untilMessageId.isNotEmpty) {
+          url += '&until_message_id=$untilMessageId';
+        }
       }
 
       final response = await http.get(
@@ -2348,5 +2357,86 @@ class ChatService {
       debugPrint('Get message readers error: $e');
       return {'success': false, 'readers': []};
     }
+  }
+
+  /// Gets the calendar day index (message counts, first/last message IDs, and media preview URLs)
+  /// for a chat, grouped in the user's local timezone.
+  static Future<Map<String, ChatCalendarDayInfo>> getChatCalendar({
+    required String chatId,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) return {};
+
+      final tzOffsetMinutes = DateTime.now().timeZoneOffset.inMinutes;
+      final response = await http.get(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/chats/$chatId/calendar?tz_offset_minutes=$tzOffsetMinutes',
+        ),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> &&
+            data['success'] == true &&
+            data['days'] is List) {
+          final result = <String, ChatCalendarDayInfo>{};
+          for (final raw in data['days'] as List) {
+            if (raw is Map) {
+              final info = ChatCalendarDayInfo.fromJson(
+                Map<String, dynamic>.from(raw),
+              );
+              if (info.date.isNotEmpty) {
+                result[info.date] = info;
+              }
+            }
+          }
+          return result;
+        }
+      }
+    } catch (e) {
+      debugPrint('Get chat calendar error: $e');
+    }
+    return {};
+  }
+}
+
+/// Summary of messages and media preview for a single calendar day in a chat.
+class ChatCalendarDayInfo {
+  final String date; // YYYY-MM-DD in local timezone
+  final int messageCount;
+  final String firstMessageId;
+  final String lastMessageId;
+  final String? firstCreatedAt;
+  final String? previewUrl;
+  final String? previewBlurhash;
+
+  const ChatCalendarDayInfo({
+    required this.date,
+    required this.messageCount,
+    required this.firstMessageId,
+    required this.lastMessageId,
+    this.firstCreatedAt,
+    this.previewUrl,
+    this.previewBlurhash,
+  });
+
+  factory ChatCalendarDayInfo.fromJson(Map<String, dynamic> json) {
+    final rawPreview = json['preview_url']?.toString();
+    final rawBlurhash = json['preview_blurhash']?.toString();
+    return ChatCalendarDayInfo(
+      date: json['date']?.toString() ?? '',
+      messageCount: (json['message_count'] as num?)?.toInt() ?? 0,
+      firstMessageId: json['first_message_id']?.toString() ?? '',
+      lastMessageId: json['last_message_id']?.toString() ?? '',
+      firstCreatedAt: json['first_created_at']?.toString(),
+      previewUrl: (rawPreview != null && rawPreview.isNotEmpty) ? rawPreview : null,
+      previewBlurhash:
+          (rawBlurhash != null && rawBlurhash.isNotEmpty) ? rawBlurhash : null,
+    );
   }
 }

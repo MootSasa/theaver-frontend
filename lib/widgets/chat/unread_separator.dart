@@ -6,74 +6,185 @@ import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
 
-/// Разделитель «↓ X непрочитанных сообщений» в чате
+/// Разделитель «Непрочитанные сообщения» в чате (статичный, как в Telegram)
 class UnreadSeparator extends StatelessWidget {
-  final int count;
-  final VoidCallback onTap;
+  final int? count;
+  final VoidCallback? onTap;
 
-  const UnreadSeparator({Key? key, required this.count, required this.onTap}) : super(key: key);
+  const UnreadSeparator({
+    Key? key,
+    this.count,
+    this.onTap,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
 
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
-        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
-        child: Row(
-          children: [
-            Expanded(child: Container(height: 1, color: theme.colorScheme.primary.withValues(alpha: 0.3))),
-            const SizedBox(width: 8),
-            Icon(Icons.arrow_downward, size: 14, color: theme.colorScheme.primary),
-            const SizedBox(width: 4),
-            Text(
-              l10n.translate('chat_unread_messages').replaceAll('{count}', count.toString()),
+    final rawLabel = l10n.translate('chat_unread_messages_banner');
+    final label = rawLabel == 'chat_unread_messages_banner'
+        ? 'Непрочитанные сообщения'
+        : rawLabel;
+
+    final bgColor = glassEnabled
+        ? (isDark
+            ? Colors.white.withValues(alpha: 0.10)
+            : Colors.black.withValues(alpha: 0.06))
+        : (isDark
+            ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.65)
+            : theme.colorScheme.primaryContainer.withValues(alpha: 0.35));
+
+    final textColor = glassEnabled
+        ? (isDark ? Colors.white.withValues(alpha: 0.92) : Colors.black87)
+        : theme.colorScheme.primary;
+
+    final lineColor = textColor.withValues(alpha: 0.25);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+      color: bgColor,
+      child: Row(
+        children: [
+          Expanded(child: Container(height: 1, color: lineColor)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              label,
               style: TextStyle(
-                color: theme.colorScheme.primary,
-                fontSize: 12,
+                color: textColor,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(child: Container(height: 1, color: theme.colorScheme.primary.withValues(alpha: 0.3))),
-          ],
-        ),
+          ),
+          Expanded(child: Container(height: 1, color: lineColor)),
+        ],
       ),
     );
   }
 }
 
-/// Дата-разделитель между днями в чате
+/// Дата-разделитель между днями в чате (кликабельная плашка даты)
 class DateSeparator extends StatelessWidget {
   final String dateLabel;
+  final VoidCallback? onTap;
 
-  const DateSeparator({Key? key, required this.dateLabel}) : super(key: key);
+  const DateSeparator({
+    Key? key,
+    required this.dateLabel,
+    this.onTap,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final badgeBg = themeExt?.palette.chatDateBadge ?? Colors.black.withValues(alpha: 0.2);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassEnabled = glassProvider.enabled;
+
+    final badgeBg = themeExt?.palette.chatDateBadge ??
+        (isDark
+            ? Colors.black.withValues(alpha: 0.42)
+            : Colors.black.withValues(alpha: 0.22));
     final badgeText = themeExt?.palette.chatDateBadgeText ?? Colors.white;
+
+    Widget pillContent = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4.5),
+      child: Text(
+        dateLabel,
+        style: TextStyle(
+          color: badgeText,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          height: 1.15,
+        ),
+      ),
+    );
+
+    Widget pill;
+    if (glassEnabled) {
+      pill = ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.black.withValues(alpha: 0.38)
+                  : Colors.black.withValues(alpha: 0.26),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: isDark ? 0.14 : 0.22),
+                width: 0.6,
+              ),
+            ),
+            child: pillContent,
+          ),
+        ),
+      );
+    } else {
+      pill = Container(
+        decoration: BoxDecoration(
+          color: badgeBg,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: pillContent,
+      );
+    }
+
+    if (onTap != null) {
+      pill = MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: pill,
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 3.5),
-          decoration: BoxDecoration(
-            color: badgeBg,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            dateLabel,
-            style: TextStyle(
-              color: badgeText,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-            ),
+      child: Center(child: pill),
+    );
+  }
+}
+
+/// Плавающая (sticky) плашка с датой вверху экрана чата при прокрутке
+class FloatingChatDateHeader extends StatelessWidget {
+  final String dateLabel;
+  final bool visible;
+  final double pushOffset;
+  final VoidCallback? onTap;
+
+  const FloatingChatDateHeader({
+    Key? key,
+    required this.dateLabel,
+    required this.visible,
+    this.pushOffset = 0.0,
+    this.onTap,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveVisible = visible && dateLabel.isNotEmpty;
+    return IgnorePointer(
+      ignoring: !effectiveVisible,
+      child: AnimatedOpacity(
+        opacity: effectiveVisible ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        child: Transform.translate(
+          offset: Offset(0, pushOffset),
+          child: DateSeparator(
+            dateLabel: dateLabel,
+            onTap: onTap,
           ),
         ),
       ),

@@ -110,15 +110,6 @@ class ChatMessagesListView extends StatelessWidget {
       },
     );
 
-    final content = typingIndicator != null
-        ? Column(
-            children: [
-              typingIndicator!,
-              Expanded(child: listView),
-            ],
-          )
-        : listView;
-
-    return content;
+    return listView;
   }
 }

@@ -143,11 +143,43 @@ class DateTimeUtils {
     return formatted;
   }
 
-  /// Formats date separator label ("Сегодня", "Вчера", "DD.MM.YYYY") in local device timezone,
-  /// localized for the current user language if [context] is provided.
+  static const List<String> _ruMonthsGenitive = [
+    '',
+    'января',
+    'февраля',
+    'марта',
+    'апреля',
+    'мая',
+    'июня',
+    'июля',
+    'августа',
+    'сентября',
+    'октября',
+    'ноября',
+    'декабря',
+  ];
+
+  static const List<String> _ruMonthsNominative = [
+    '',
+    'Январь',
+    'Февраль',
+    'Март',
+    'Апрель',
+    'Май',
+    'Июнь',
+    'Июль',
+    'Август',
+    'Сентябрь',
+    'Октябрь',
+    'Ноябрь',
+    'Декабрь',
+  ];
+
+  /// Formats date separator label ("Сегодня", "Вчера", "27 октября", "27 октября 2025")
+  /// in local device timezone, localized for the current user language if [context] is provided.
   static String formatDateSeparator(DateTime dt, {BuildContext? context, DateTime? now}) {
     final localDt = dt.toLocal();
-    final currentNow = now ?? nowProvider();
+    final currentNow = (now ?? nowProvider()).toLocal();
     final today = startOfDay(currentNow);
     final yesterday = today.subtract(const Duration(days: 1));
     final dateDay = startOfDay(localDt);
@@ -158,7 +190,63 @@ class DateTimeUtils {
     if (dateDay == yesterday) {
       return context != null ? context.l10n.translate('date_yesterday') : 'Вчера';
     }
-    return '${localDt.day}.${localDt.month.toString().padLeft(2, '0')}.${localDt.year}';
+
+    final monthIdx = localDt.month.clamp(1, 12);
+    if (context == null) {
+      final monthName = _ruMonthsGenitive[monthIdx];
+      if (localDt.year == today.year) {
+        return '${localDt.day} $monthName';
+      }
+      return '${localDt.day} $monthName ${localDt.year}';
+    }
+
+    final l10n = context.l10n;
+    final monthName = l10n.translate('month_gen_$monthIdx');
+    final effectiveMonth =
+        monthName == 'month_gen_$monthIdx' ? _ruMonthsGenitive[monthIdx] : monthName;
+
+    if (localDt.year == today.year) {
+      final pattern = l10n.translate('date_day_month');
+      if (pattern == 'date_day_month') {
+        return '${localDt.day} $effectiveMonth';
+      }
+      return pattern
+          .replaceAll('{day}', localDt.day.toString())
+          .replaceAll('{month}', effectiveMonth);
+    } else {
+      final pattern = l10n.translate('date_day_month_year');
+      if (pattern == 'date_day_month_year') {
+        return '${localDt.day} $effectiveMonth ${localDt.year}';
+      }
+      return pattern
+          .replaceAll('{day}', localDt.day.toString())
+          .replaceAll('{month}', effectiveMonth)
+          .replaceAll('{year}', localDt.year.toString());
+    }
+  }
+
+  /// Formats calendar month and year header (e.g., "Октябрь 2026 г." or "October 2026")
+  /// without any triangle prefix.
+  static String formatCalendarMonthYear(DateTime dt, BuildContext context) {
+    final l10n = context.l10n;
+    final monthIdx = dt.month.clamp(1, 12);
+    final monthName = l10n.translate('month_nom_$monthIdx');
+    final effectiveMonth =
+        monthName == 'month_nom_$monthIdx' ? _ruMonthsNominative[monthIdx] : monthName;
+    final pattern = l10n.translate('calendar_month_year');
+    if (pattern == 'calendar_month_year') {
+      return '$effectiveMonth ${dt.year} г.';
+    }
+    return pattern
+        .replaceAll('{month}', effectiveMonth)
+        .replaceAll('{year}', dt.year.toString());
+  }
+
+  /// Formats standalone localized month name in nominative case (1..12).
+  static String formatMonthNominative(int month, BuildContext context) {
+    final monthIdx = month.clamp(1, 12);
+    final monthName = context.l10n.translate('month_nom_$monthIdx');
+    return monthName == 'month_nom_$monthIdx' ? _ruMonthsNominative[monthIdx] : monthName;
   }
 
   /// Formats the abbreviated localized weekday (1 = Monday, ..., 7 = Sunday)
