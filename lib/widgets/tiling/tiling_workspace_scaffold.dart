@@ -39,6 +39,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   final TilingLayoutController _controller = TilingLayoutController.instance;
   final GlobalKey _rightWorkspaceKey = GlobalKey(debugLabel: 'RightChatWorkspace');
   final GlobalKey _leftTileSubtreeKey = GlobalKey(debugLabel: 'LeftMainTileSubtree');
+  final GlobalKey<NavigatorState> _leftTileNavigatorKey =
+      GlobalKey<NavigatorState>(debugLabel: 'LeftMainTileNavigator');
   final Map<String, GlobalKey> _chatTileSubtreeKeys = {};
   late final HeroController _leftHeroController =
       MaterialApp.createMaterialHeroController();
@@ -57,6 +59,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   @override
   void initState() {
     super.initState();
+    _controller.attachLeftTileNavigatorKey(_leftTileNavigatorKey);
     _wasShowingSinglePaneChat = _controller.singlePaneShowingChat;
     _singlePaneChatController = AnimationController(
       vsync: this,
@@ -243,7 +246,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           child: HeroControllerScope(
             controller: _leftHeroController,
             child: Navigator(
-              key: _controller.leftTileNavigatorKey,
+              key: _leftTileNavigatorKey,
               onGenerateRoute: (settings) {
                 final sub = _onGenerateSubRoute(settings);
                 if (sub != null) return sub;

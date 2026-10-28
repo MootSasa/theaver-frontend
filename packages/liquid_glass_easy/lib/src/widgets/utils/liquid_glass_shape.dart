@@ -108,6 +108,16 @@ class LiquidGlassShape {
       a.cornerStyle == b.cornerStyle &&
       a.cornerRadius == b.cornerRadius &&
       a.clipQuality == b.clipQuality;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other.runtimeType == runtimeType &&
+          other is LiquidGlassShape &&
+          sameOutline(this, other);
+
+  @override
+  int get hashCode => Object.hash(cornerStyle, cornerRadius, clipQuality);
 }
 
 /// A shape together with the two lights of its border: what the renderers
@@ -190,6 +200,23 @@ class LiquidGlassLitShape extends LiquidGlassShape {
       a.specular == b.specular &&
       a.glow == b.glow &&
       a.secondSpecular == b.secondSpecular;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LiquidGlassLitShape &&
+          LiquidGlassShape.sameOutline(this, other) &&
+          sameBorder(this, other);
+
+  @override
+  int get hashCode => Object.hash(
+        cornerStyle,
+        cornerRadius,
+        clipQuality,
+        specular,
+        glow,
+        secondSpecular,
+      );
 }
 
 /// How a lens is **clipped** to its outline. Every [LiquidGlassShape] carries

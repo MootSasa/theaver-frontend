@@ -139,8 +139,13 @@ class TilingLayoutController extends ChangeNotifier {
   static const String kLeftTileId = 'left_main_tile';
 
   // === Навигаторы и состояние ===
-  final GlobalKey<NavigatorState> leftTileNavigatorKey =
+  GlobalKey<NavigatorState> _leftTileNavigatorKey =
       GlobalKey<NavigatorState>(debugLabel: 'LeftMainTileNavigator');
+  GlobalKey<NavigatorState> get leftTileNavigatorKey => _leftTileNavigatorKey;
+
+  void attachLeftTileNavigatorKey(GlobalKey<NavigatorState> key) {
+    _leftTileNavigatorKey = key;
+  }
 
   bool _isWorkspaceMounted = false;
   bool get isWorkspaceMounted => _isWorkspaceMounted;

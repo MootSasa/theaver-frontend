@@ -90,7 +90,7 @@ class _MainScreenState extends State<MainScreen>
 
   // PageController для свайпа между Настройками и Чатами
   final PageController _pageController = PageController(initialPage: 1);
-  final GlobalKey _pageViewKey = GlobalKey();
+  static const ValueKey<String> _pageViewKey = ValueKey<String>('main_page_view');
   bool? _lastGlassEnabled;
 
   // Search functionality
@@ -832,7 +832,7 @@ class _MainScreenState extends State<MainScreen>
 
   Future<void> _loadChats({bool silent = false}) async {
     final bool isInitialLoad = _chats.isEmpty;
-    if (isInitialLoad && !silent) {
+    if (isInitialLoad && !silent && !_isLoadingChats) {
       setState(() => _isLoadingChats = true);
     }
 
@@ -1397,8 +1397,8 @@ class _MainScreenState extends State<MainScreen>
     return true;
   }
 
-  List<_MorphMenuItemData> _getMenuItems(int index) {
-    final l10n = context.l10n;
+  List<_MorphMenuItemData> _getMenuItems(int index, [BuildContext? ctx]) {
+    final l10n = (ctx ?? context).l10n;
     switch (index) {
       case 0: // Settings
         return [
@@ -1706,7 +1706,7 @@ class _MainScreenState extends State<MainScreen>
               ? _TopMorphMenu(
                   key: const ValueKey<String>('menu'),
                   width: menuWidth,
-                  items: _getMenuItems(_currentIndex),
+                  items: _getMenuItems(_currentIndex, context),
                   onItemTap: _handleMenuAction,
                 )
               : _ThreeDotsGlyph(
@@ -1995,7 +1995,7 @@ class _MainScreenState extends State<MainScreen>
                           child: _TopMorphMenu(
                             key: const ValueKey<String>('menu'),
                             width: menuWidth,
-                            items: _getMenuItems(menuTabIndex),
+                            items: _getMenuItems(menuTabIndex, context),
                             onItemTap: _handleMenuAction,
                           ),
                         ),
@@ -2065,7 +2065,7 @@ class _MainScreenState extends State<MainScreen>
     return 0;
   }
 
-  Widget _buildChatList({double topPadding = 8}) {
+  Widget _buildChatList(BuildContext context, {double topPadding = 8}) {
     final l10n = context.l10n;
 
     if (_isLoadingChats && _chats.isEmpty) {
@@ -2131,14 +2131,14 @@ class _MainScreenState extends State<MainScreen>
         bottom: 100,
       ),
       itemCount: filteredChats.length,
-      itemBuilder: (context, index) {
+      itemBuilder: (itemContext, index) {
         final chat = filteredChats[index];
-        return _buildChatListItem(chat);
+        return _buildChatListItem(itemContext, chat);
       },
     );
   }
 
-  Widget _buildChatListItem(Chat chat) {
+  Widget _buildChatListItem(BuildContext context, Chat chat) {
     Widget iconWidget;
     switch (chat.chatType) {
       case 'private':
@@ -2232,7 +2232,7 @@ class _MainScreenState extends State<MainScreen>
             children: [
               if (chat.lastMessageTime != null)
                 Text(
-                  _formatChatTime(chat.lastMessageTime!),
+                  _formatChatTime(context, chat.lastMessageTime!),
                   style: TextStyle(
                     fontSize: 12,
                     color: hasUnread
@@ -2355,7 +2355,7 @@ class _MainScreenState extends State<MainScreen>
             ),
           ],
         ),
-        subtitle: _buildChatSubtitle(chat, hasUnread),
+        subtitle: _buildChatSubtitle(context, chat, hasUnread),
         trailing: trailingWidget,
       ),
     );
@@ -2388,14 +2388,14 @@ class _MainScreenState extends State<MainScreen>
             break;
           case ChatSwipeAction.archive:
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(content: Text('Архивация чатов скоро будет доступна')),
               );
             }
             break;
           case ChatSwipeAction.mute:
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(content: Text('Отключение уведомлений скоро будет доступно')),
               );
             }
@@ -2600,7 +2600,7 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  Widget? _buildChatSubtitle(Chat chat, bool hasUnread) {
+  Widget? _buildChatSubtitle(BuildContext context, Chat chat, bool hasUnread) {
     final typingState = _chatTypingStates[chat.id];
     if (typingState != null) {
       final loc = AppLocalizations.of(context);
@@ -3150,7 +3150,7 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  String _formatChatTime(String timestamp) {
+  String _formatChatTime(BuildContext context, String timestamp) {
     try {
       final localDateTime = DateTimeUtils.parseUtcDateTime(timestamp);
       if (localDateTime == null) return '';
@@ -3236,6 +3236,10 @@ class _MainScreenState extends State<MainScreen>
         },
         child: Consumer<LiquidGlassProvider>(
           builder: (context, glassProvider, _) {
+            final totalUnread =
+                context.watch<UnreadCountProvider>().totalUnread;
+            final primaryColor = Theme.of(context).colorScheme.primary;
+
             if (_lastGlassEnabled != glassProvider.enabled) {
               _lastGlassEnabled = glassProvider.enabled;
               final targetIndex = _currentIndex;
@@ -3322,6 +3326,7 @@ class _MainScreenState extends State<MainScreen>
                               curve: Curves.easeOutCubic,
                               builder: (context, animatedTopPadding, _) {
                                 return _buildChatList(
+                                  context,
                                   topPadding: animatedTopPadding,
                                 );
                               },
@@ -3487,8 +3492,6 @@ class _MainScreenState extends State<MainScreen>
                           width: i.size,
                           height: i.size,
                         );
-                        final totalUnread =
-                            context.watch<UnreadCountProvider>().totalUnread;
                         if (totalUnread <= 0) return icon;
                         return Stack(
                           clipBehavior: Clip.none,
@@ -3502,7 +3505,7 @@ class _MainScreenState extends State<MainScreen>
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 5, vertical: 1),
                                 decoration: BoxDecoration(
-                                  color: Theme.of(context).colorScheme.primary,
+                                  color: primaryColor,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 constraints: const BoxConstraints(
@@ -3545,7 +3548,7 @@ class _MainScreenState extends State<MainScreen>
                   itemPadding: 3,
                   style: barStyle,
                   itemStyle: LiquidGlassTabItemStyle(
-                    selectedColor: Theme.of(context).colorScheme.primary,
+                    selectedColor: primaryColor,
                     unselectedColor: isDark
                         ? const Color(0xFF8E8E93)
                         : const Color(0xFF636366),
@@ -3639,8 +3642,7 @@ class _MainScreenState extends State<MainScreen>
                       top: false,
                       child: ClassicBottomBar(
                         selectedIndex: _currentIndex,
-                        unreadCount:
-                            context.watch<UnreadCountProvider>().totalUnread,
+                        unreadCount: totalUnread,
                         onTabSelected: (index) {
                           _onTabTapped(index);
                         },
