@@ -4,22 +4,33 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.RectF
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadata
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.net.Uri
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.CalendarContract
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -31,11 +42,44 @@ class MainActivity : FlutterFragmentActivity() {
     private val CALENDAR_CHANNEL = "app.theaver.messenger/calendar"
     private val INSTALLER_CHANNEL = "app.theaver.messenger/installer"
     private val NETWORK_CHANNEL = "app.theaver.messenger/network"
+    private val PROXIMITY_CHANNEL = "app.theaver.messenger/proximity"
+    private val PROXIMITY_EVENTS_CHANNEL = "app.theaver.messenger/proximity_events"
+    private val MEDIA_SESSION_CHANNEL = "app.theaver.messenger/media_session"
     private var pendingApkPath: String? = null
+
+    private var sensorManager: SensorManager? = null
+    private var proximitySensor: Sensor? = null
+    private var proximityWakeLock: PowerManager.WakeLock? = null
+    private var proximityEventSink: EventChannel.EventSink? = null
+    private var isProximityMonitoring = false
+    private var mediaSession: MediaSession? = null
+    private var mediaSessionChannel: MethodChannel? = null
+
+    private val proximityListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent?) {
+            val sensor = event?.sensor ?: return
+            if (sensor.type != Sensor.TYPE_PROXIMITY) return
+            val distance = event.values.firstOrNull() ?: return
+            val maxRange = sensor.maximumRange
+            val isNear = distance < maxRange && distance < 5.0f
+            updateProximityWakeLock(isNear)
+            runOnUiThread {
+                proximityEventSink?.success(isNear)
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         enableHighRefreshRate()
+    }
+
+    override fun onDestroy() {
+        stopProximitySensor()
+        releaseMediaSession()
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -84,6 +128,7 @@ class MainActivity : FlutterFragmentActivity() {
         // Register push detector MethodChannel handler
         val pushDetector = PushDetectorHandler(this)
         pushDetector.setup(flutterEngine)
+        setupProximityAndMediaSession(flutterEngine)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NETWORK_CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "getNetworkType") {
@@ -222,55 +267,60 @@ class MainActivity : FlutterFragmentActivity() {
                 val audioPath = call.argument<String>("audioPath")
                 val outputPath = call.argument<String>("outputPath")
                 if (videoPath != null && audioPath != null && outputPath != null) {
-                    try {
-                        val ok = muxVideoAndAudio(videoPath, audioPath, outputPath)
-                        result.success(ok)
-                    } catch (e: Exception) {
-                        result.error("MUX_ERROR", e.message, null)
-                    }
+                    Thread {
+                        try {
+                            val ok = muxVideoAndAudio(videoPath, audioPath, outputPath)
+                            runOnUiThread { result.success(ok) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("MUX_ERROR", e.message, null) }
+                        }
+                    }.start()
                 } else {
                     result.error("INVALID_ARGS", "Missing paths", null)
                 }
             } else if (call.method == "getVideoThumbnail") {
                 val videoPath = call.argument<String>("videoPath")
                 if (videoPath != null) {
-                    try {
-                        val retriever = MediaMetadataRetriever()
-                        retriever.setDataSource(videoPath)
-                        val bitmap = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                        val widthStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-                        val heightStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-                        val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                        val rotationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
-                        
-                        var w = widthStr?.toIntOrNull() ?: 0
-                        var h = heightStr?.toIntOrNull() ?: 0
-                        val rot = rotationStr?.toIntOrNull() ?: 0
-                        if (rot == 90 || rot == 270) {
-                            val tmp = w
-                            w = h
-                            h = tmp
-                        }
-                        val durMs = durStr?.toLongOrNull() ?: 0L
-                        val durSec = (durMs / 1000L).toInt()
+                    Thread {
+                        try {
+                            val retriever = MediaMetadataRetriever()
+                            retriever.setDataSource(videoPath)
+                            val bitmap = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                            val widthStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                            val heightStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                            val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            val rotationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
 
-                        var thumbBytes: ByteArray? = null
-                        if (bitmap != null) {
-                            val stream = ByteArrayOutputStream()
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 60, stream)
-                            thumbBytes = stream.toByteArray()
-                        }
-                        retriever.release()
+                            var w = widthStr?.toIntOrNull() ?: 0
+                            var h = heightStr?.toIntOrNull() ?: 0
+                            val rot = rotationStr?.toIntOrNull() ?: 0
+                            if (rot == 90 || rot == 270) {
+                                val tmp = w
+                                w = h
+                                h = tmp
+                            }
+                            val durMs = durStr?.toLongOrNull() ?: 0L
+                            val durSec = (durMs / 1000L).toInt()
 
-                        result.success(mapOf(
-                            "thumbnail" to thumbBytes,
-                            "width" to w,
-                            "height" to h,
-                            "duration" to durSec
-                        ))
-                    } catch (e: Exception) {
-                        result.success(null)
-                    }
+                            var thumbBytes: ByteArray? = null
+                            if (bitmap != null) {
+                                val stream = ByteArrayOutputStream()
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 60, stream)
+                                thumbBytes = stream.toByteArray()
+                            }
+                            retriever.release()
+
+                            val payload = mapOf(
+                                "thumbnail" to thumbBytes,
+                                "width" to w,
+                                "height" to h,
+                                "duration" to durSec
+                            )
+                            runOnUiThread { result.success(payload) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.success(null) }
+                        }
+                    }.start()
                 } else {
                     result.error("INVALID_ARGS", "Missing videoPath", null)
                 }
@@ -316,8 +366,35 @@ class MainActivity : FlutterFragmentActivity() {
                 return false
             }
 
+            val videoFormat = videoExtractor.getTrackFormat(videoTrackIndex)
+            var rotationDegrees = 0
+            try {
+                if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                    rotationDegrees = videoFormat.getInteger(MediaFormat.KEY_ROTATION)
+                }
+            } catch (_: Exception) {}
+            if (rotationDegrees == 0) {
+                var retriever: MediaMetadataRetriever? = null
+                try {
+                    retriever = MediaMetadataRetriever()
+                    retriever.setDataSource(videoPath)
+                    val rotStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    if (!rotStr.isNullOrEmpty()) {
+                        rotationDegrees = rotStr.toIntOrNull() ?: 0
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    try { retriever?.release() } catch (_: Exception) {}
+                }
+            }
+
             muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            val muxerVideoTrack = muxer.addTrack(videoExtractor.getTrackFormat(videoTrackIndex))
+            if (rotationDegrees == 90 || rotationDegrees == 180 || rotationDegrees == 270) {
+                try {
+                    muxer.setOrientationHint(rotationDegrees)
+                } catch (_: Exception) {}
+            }
+            val muxerVideoTrack = muxer.addTrack(videoFormat)
             val muxerAudioTrack = muxer.addTrack(audioExtractor.getTrackFormat(audioTrackIndex))
             muxer.start()
 
@@ -465,5 +542,211 @@ class MainActivity : FlutterFragmentActivity() {
             srcFile.copyTo(destFile, overwrite = true)
             return destFile.absolutePath
         }
+    }
+
+    private fun setupProximityAndMediaSession(flutterEngine: FlutterEngine) {
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+
+        MethodChannel(messenger, PROXIMITY_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startMonitoring" -> {
+                    result.success(startProximitySensor())
+                }
+                "stopMonitoring" -> {
+                    stopProximitySensor()
+                    result.success(true)
+                }
+                "setEarpieceMode" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    result.success(setEarpieceAudioRouting(enabled))
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        EventChannel(messenger, PROXIMITY_EVENTS_CHANNEL).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                proximityEventSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                proximityEventSink = null
+            }
+        })
+
+        val mChannel = MethodChannel(messenger, MEDIA_SESSION_CHANNEL)
+        mediaSessionChannel = mChannel
+        mChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "updateMetadata" -> {
+                    val title = call.argument<String>("title") ?: "Voice Message"
+                    val artist = call.argument<String>("artist") ?: "Theaver"
+                    val durationMs = (call.argument<Number>("durationMs") ?: 0).toLong()
+                    val positionMs = (call.argument<Number>("positionMs") ?: 0).toLong()
+                    val isPlaying = call.argument<Boolean>("isPlaying") ?: false
+                    val speed = (call.argument<Number>("speed") ?: 1.0f).toFloat()
+                    updateMediaSessionMetadata(title, artist, durationMs, positionMs, isPlaying, speed)
+                    result.success(true)
+                }
+                "clearSession" -> {
+                    releaseMediaSession()
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun startProximitySensor(): Boolean {
+        return try {
+            if (sensorManager == null) {
+                sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            }
+            if (proximitySensor == null) {
+                proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+            }
+            val sensor = proximitySensor ?: return false
+            if (!isProximityMonitoring) {
+                sensorManager?.registerListener(proximityListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+                isProximityMonitoring = true
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun stopProximitySensor() {
+        try {
+            if (isProximityMonitoring) {
+                sensorManager?.unregisterListener(proximityListener)
+                isProximityMonitoring = false
+            }
+            updateProximityWakeLock(false)
+        } catch (_: Exception) {}
+    }
+
+    private fun updateProximityWakeLock(isNear: Boolean) {
+        try {
+            if (isNear) {
+                if (proximityWakeLock == null) {
+                    val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                    if (pm != null && pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+                        proximityWakeLock = pm.newWakeLock(
+                            PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                            "Theaver:ProximityVoiceWakeLock"
+                        )
+                    }
+                }
+                if (proximityWakeLock?.isHeld == false) {
+                    proximityWakeLock?.acquire(10 * 60 * 1000L)
+                }
+            } else {
+                if (proximityWakeLock?.isHeld == true) {
+                    proximityWakeLock?.release()
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun setEarpieceAudioRouting(enabled: Boolean): Boolean {
+        return try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+            if (enabled) {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val earpiece = audioManager.availableCommunicationDevices.firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                    }
+                    if (earpiece != null) {
+                        audioManager.setCommunicationDevice(earpiece)
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = false
+                }
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    audioManager.clearCommunicationDevice()
+                } else {
+                    @Suppress("DEPRECATION")
+                    audioManager.isSpeakerphoneOn = true
+                }
+                audioManager.mode = AudioManager.MODE_NORMAL
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun updateMediaSessionMetadata(
+        title: String,
+        artist: String,
+        durationMs: Long,
+        positionMs: Long,
+        isPlaying: Boolean,
+        speed: Float
+    ) {
+        try {
+            if (mediaSession == null) {
+                val session = MediaSession(this, "TheaverVoiceMediaSession")
+                session.setCallback(object : MediaSession.Callback() {
+                    override fun onPlay() {
+                        runOnUiThread { mediaSessionChannel?.invokeMethod("onPlay", null) }
+                    }
+
+                    override fun onPause() {
+                        runOnUiThread { mediaSessionChannel?.invokeMethod("onPause", null) }
+                    }
+
+                    override fun onSkipToNext() {
+                        runOnUiThread { mediaSessionChannel?.invokeMethod("onNext", null) }
+                    }
+
+                    override fun onSeekTo(pos: Long) {
+                        runOnUiThread {
+                            mediaSessionChannel?.invokeMethod("onSeek", mapOf("positionMs" to pos.toInt()))
+                        }
+                    }
+
+                    override fun onStop() {
+                        runOnUiThread { mediaSessionChannel?.invokeMethod("onStop", null) }
+                    }
+                })
+                session.isActive = true
+                mediaSession = session
+            }
+
+            val session = mediaSession ?: return
+            val metadata = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
+                .build()
+            session.setMetadata(metadata)
+
+            val actions = PlaybackState.ACTION_PLAY or
+                PlaybackState.ACTION_PAUSE or
+                PlaybackState.ACTION_PLAY_PAUSE or
+                PlaybackState.ACTION_SKIP_TO_NEXT or
+                PlaybackState.ACTION_SEEK_TO or
+                PlaybackState.ACTION_STOP
+
+            val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+            val playbackState = PlaybackState.Builder()
+                .setActions(actions)
+                .setState(state, positionMs, if (isPlaying) speed else 0f)
+                .build()
+            session.setPlaybackState(playbackState)
+        } catch (_: Exception) {}
+    }
+
+    private fun releaseMediaSession() {
+        try {
+            mediaSession?.isActive = false
+            mediaSession?.release()
+            mediaSession = null
+        } catch (_: Exception) {}
     }
 }

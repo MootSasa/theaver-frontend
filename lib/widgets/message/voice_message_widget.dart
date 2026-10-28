@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../models/theav_theme.dart';
@@ -22,6 +23,7 @@ class VoiceMessageWidget extends StatefulWidget {
   final List<int>? waveform;
   final bool isMe;
   final bool isRead;
+  final bool isListened;
   final int sendStatus;
   final String? timeText;
   final String? senderName;
@@ -30,6 +32,7 @@ class VoiceMessageWidget extends StatefulWidget {
   final String? chatId;
   final String? chatType;
   final String? chatTitle;
+  final String? title;
 
   const VoiceMessageWidget({
     Key? key,
@@ -39,6 +42,7 @@ class VoiceMessageWidget extends StatefulWidget {
     this.waveform,
     this.isMe = false,
     this.isRead = false,
+    this.isListened = false,
     this.sendStatus = 1,
     this.timeText,
     this.senderName,
@@ -47,6 +51,7 @@ class VoiceMessageWidget extends StatefulWidget {
     this.chatId,
     this.chatType,
     this.chatTitle,
+    this.title,
   }) : super(key: key);
 
   @override
@@ -101,7 +106,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   Future<void> _checkCacheStatus() async {
     if (widget.audioUrl.isEmpty) return;
 
-    if (widget.isMe || !widget.audioUrl.startsWith('http')) {
+    if (kIsWeb || widget.isMe || !widget.audioUrl.startsWith('http')) {
       if (mounted) {
         setState(() {
           _isCached = true;
@@ -252,6 +257,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
         chatTitle: widget.chatTitle ?? widget.senderName,
         duration: widget.duration,
         waveform: widget.waveform,
+        isMe: widget.isMe,
       ),
     );
   }
@@ -277,6 +283,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
           chatTitle: widget.chatTitle ?? widget.senderName,
           duration: widget.duration,
           waveform: widget.waveform,
+          isMe: widget.isMe,
         ),
       ).then((_) {
         _playbackService.seekVoice(Duration(milliseconds: targetMs));
@@ -333,7 +340,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
         : (duration > Duration.zero ? _formatDuration(duration) : '0:00');
 
     final bool showUnplayedDot =
-        !widget.isMe && !widget.isRead && !_hasBeenPlayedLocally && !_isThisActive;
+        !widget.isMe && !widget.isListened && !_hasBeenPlayedLocally && !_isThisActive;
 
     return Container(
       constraints: const BoxConstraints(minWidth: 200, maxWidth: 260),
@@ -370,6 +377,21 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (widget.title != null && widget.title!.isNotEmpty) ...[
+                      Text(
+                        widget.title!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: widget.isMe
+                              ? (themeExt?.palette.chatBubbleOutgoingText ?? Colors.white)
+                              : theme.textTheme.bodyMedium?.color,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                    ],
                     // Waveform Scrubber
                     LayoutBuilder(
                       builder: (context, constraints) {
@@ -458,14 +480,14 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
           ),
 
           // Time and Status pill row
-          Align(
-            alignment: Alignment.bottomRight,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 2, right: 2),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (widget.timeText != null && widget.timeText!.isNotEmpty)
+          if (widget.timeText != null && widget.timeText!.isNotEmpty)
+            Align(
+              alignment: Alignment.bottomRight,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 2, right: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     Text(
                       widget.timeText!,
                       style: TextStyle(
@@ -475,37 +497,37 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
                             : (isDark ? Colors.white54 : Colors.black45),
                       ),
                     ),
-                  if (widget.isMe) ...[
-                    const SizedBox(width: 4),
-                    if (widget.sendStatus == 0)
-                      const SizedBox(
-                        width: 10,
-                        height: 10,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.2,
-                          color: Colors.white70,
+                    if (widget.isMe) ...[
+                      const SizedBox(width: 4),
+                      if (widget.sendStatus == 0)
+                        const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.2,
+                            color: Colors.white70,
+                          ),
+                        )
+                      else if (widget.sendStatus == 2)
+                        GestureDetector(
+                          onTap: widget.onRetry,
+                          child: const iconoir.WarningCircle(
+                            width: 13,
+                            height: 13,
+                            color: Colors.redAccent,
+                          ),
+                        )
+                      else
+                        MessageStatusWidget(
+                          isRead: widget.isRead,
+                          isOutgoing: widget.isMe,
+                          colorOverride: Colors.white.withValues(alpha: 0.7),
                         ),
-                      )
-                    else if (widget.sendStatus == 2)
-                      GestureDetector(
-                        onTap: widget.onRetry,
-                        child: const iconoir.WarningCircle(
-                          width: 13,
-                          height: 13,
-                          color: Colors.redAccent,
-                        ),
-                      )
-                    else
-                      MessageStatusWidget(
-                        isRead: widget.isRead,
-                        isOutgoing: widget.isMe,
-                        colorOverride: Colors.white.withValues(alpha: 0.7),
-                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

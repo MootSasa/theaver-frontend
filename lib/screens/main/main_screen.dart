@@ -90,7 +90,7 @@ class _MainScreenState extends State<MainScreen>
 
   // PageController для свайпа между Настройками и Чатами
   final PageController _pageController = PageController(initialPage: 1);
-  final GlobalKey _pageViewKey = GlobalKey();
+  static const ValueKey<String> _pageViewKey = ValueKey<String>('main_page_view');
   bool? _lastGlassEnabled;
 
   // Search functionality
@@ -104,6 +104,8 @@ class _MainScreenState extends State<MainScreen>
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
   String? _currentUserId;
   final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
+  final Map<String, ({String action, String? userName, Timer timer})>
+      _chatTypingStates = {};
 
   void _initChatsStream() {
     _chatsStreamSubscription?.cancel();
@@ -373,6 +375,7 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _initWebSocket() async {
+    _wsSubscription?.cancel();
     // Subscribe to WebSocket events BEFORE connecting,
     // so we don't miss the 'connected' event from the broadcast stream.
     _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
@@ -390,6 +393,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.subscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.subscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.subscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.subscribe(WebSocketEventType.typing, _onChatTyping);
 
     // Now connect — the 'connected' event will be caught by our listeners
     await _wsService.connect();
@@ -398,6 +402,43 @@ class _MainScreenState extends State<MainScreen>
     // (in case the broadcast event was still missed)
     if (_wsService.isConnected && mounted) {
       setState(() => _isWsConnected = true);
+    }
+  }
+
+  void _onChatTyping(WebSocketEvent event) {
+    final chatId = event.data['chat_id']?.toString();
+    if (chatId == null || chatId.isEmpty) return;
+
+    final typingUserId = event.data['user_id']?.toString();
+    if (typingUserId != null && typingUserId == _currentUserId) return;
+
+    final action = event.data['action']?.toString() ?? 'typing';
+    final bool isTyping = event.data['is_typing'] != false && action != 'stop';
+
+    if (!isTyping) {
+      final existing = _chatTypingStates.remove(chatId);
+      existing?.timer.cancel();
+      if (mounted && existing != null) {
+        setState(() {});
+      }
+      return;
+    }
+
+    final userName = event.data['user_name']?.toString();
+    _chatTypingStates[chatId]?.timer.cancel();
+    final timer = Timer(const Duration(seconds: 4), () {
+      _chatTypingStates.remove(chatId);
+      if (mounted) {
+        setState(() {});
+      }
+    });
+    _chatTypingStates[chatId] = (
+      action: action,
+      userName: userName,
+      timer: timer,
+    );
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -474,6 +515,8 @@ class _MainScreenState extends State<MainScreen>
     final messageData = event.data['message'] as Map<String, dynamic>?;
 
     if (chatId != null && mounted) {
+      final existingTyping = _chatTypingStates.remove(chatId);
+      existingTyping?.timer.cancel();
       // NOTE: UnreadCountProvider already increments via its own _onNewMessage
       // subscriber (initialized in initialize()). Do NOT call provider.increment()
       // here — that would cause double-counting.
@@ -790,7 +833,7 @@ class _MainScreenState extends State<MainScreen>
 
   Future<void> _loadChats({bool silent = false}) async {
     final bool isInitialLoad = _chats.isEmpty;
-    if (isInitialLoad && !silent) {
+    if (isInitialLoad && !silent && !_isLoadingChats) {
       setState(() => _isLoadingChats = true);
     }
 
@@ -1035,6 +1078,11 @@ class _MainScreenState extends State<MainScreen>
     _wsService.unsubscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.unsubscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.unsubscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.unsubscribe(WebSocketEventType.typing, _onChatTyping);
+    for (final state in _chatTypingStates.values) {
+      state.timer.cancel();
+    }
+    _chatTypingStates.clear();
     // Remove UnreadCountProvider listener
     try {
       context.read<UnreadCountProvider>().removeListener(_onUnreadCountProviderChanged);
@@ -1052,13 +1100,29 @@ class _MainScreenState extends State<MainScreen>
     }
     debugPrint('[MainScreen] Active account changed: $_currentUserId -> $newUserId. Refreshing state and WS...');
     _currentUserId = newUserId;
+    TilingLayoutController.instance.closeAllChats();
+    try {
+      VoicePlaybackService().stopVoice();
+      VideoNotePlaybackService().stopActivePlayback();
+    } catch (_) {}
+    if (_isSelectMode) {
+      _exitSelectMode();
+    }
     _liveUserPresence.clear();
+    for (final state in _chatTypingStates.values) {
+      state.timer.cancel();
+    }
+    _chatTypingStates.clear();
     AppDatabase.setActiveUser(newUserId);
 
     setState(() {
+      _activeFilter = 0;
       _chats = [];
       _isLoadingChats = true;
     });
+    if (_currentIndex != 1) {
+      _onTabTapped(1);
+    }
     _initChatsStream();
     // Disconnect old WebSocket, reconnect with new account token, reload chats
     _wsService.disconnect();
@@ -1346,8 +1410,8 @@ class _MainScreenState extends State<MainScreen>
     return true;
   }
 
-  List<_MorphMenuItemData> _getMenuItems(int index) {
-    final l10n = context.l10n;
+  List<_MorphMenuItemData> _getMenuItems(int index, [BuildContext? ctx]) {
+    final l10n = (ctx ?? context).l10n;
     switch (index) {
       case 0: // Settings
         return [
@@ -1655,7 +1719,7 @@ class _MainScreenState extends State<MainScreen>
               ? _TopMorphMenu(
                   key: const ValueKey<String>('menu'),
                   width: menuWidth,
-                  items: _getMenuItems(_currentIndex),
+                  items: _getMenuItems(_currentIndex, context),
                   onItemTap: _handleMenuAction,
                 )
               : _ThreeDotsGlyph(
@@ -1944,7 +2008,7 @@ class _MainScreenState extends State<MainScreen>
                           child: _TopMorphMenu(
                             key: const ValueKey<String>('menu'),
                             width: menuWidth,
-                            items: _getMenuItems(menuTabIndex),
+                            items: _getMenuItems(menuTabIndex, context),
                             onItemTap: _handleMenuAction,
                           ),
                         ),
@@ -2014,7 +2078,7 @@ class _MainScreenState extends State<MainScreen>
     return 0;
   }
 
-  Widget _buildChatList({double topPadding = 8}) {
+  Widget _buildChatList(BuildContext context, {double topPadding = 8}) {
     final l10n = context.l10n;
 
     if (_isLoadingChats && _chats.isEmpty) {
@@ -2080,14 +2144,14 @@ class _MainScreenState extends State<MainScreen>
         bottom: 100,
       ),
       itemCount: filteredChats.length,
-      itemBuilder: (context, index) {
+      itemBuilder: (itemContext, index) {
         final chat = filteredChats[index];
-        return _buildChatListItem(chat);
+        return _buildChatListItem(itemContext, chat);
       },
     );
   }
 
-  Widget _buildChatListItem(Chat chat) {
+  Widget _buildChatListItem(BuildContext context, Chat chat) {
     Widget iconWidget;
     switch (chat.chatType) {
       case 'private':
@@ -2181,7 +2245,7 @@ class _MainScreenState extends State<MainScreen>
             children: [
               if (chat.lastMessageTime != null)
                 Text(
-                  _formatChatTime(chat.lastMessageTime!),
+                  _formatChatTime(context, chat.lastMessageTime!),
                   style: TextStyle(
                     fontSize: 12,
                     color: hasUnread
@@ -2304,7 +2368,7 @@ class _MainScreenState extends State<MainScreen>
             ),
           ],
         ),
-        subtitle: _buildChatSubtitle(chat, hasUnread),
+        subtitle: _buildChatSubtitle(context, chat, hasUnread),
         trailing: trailingWidget,
       ),
     );
@@ -2337,14 +2401,14 @@ class _MainScreenState extends State<MainScreen>
             break;
           case ChatSwipeAction.archive:
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(content: Text('Архивация чатов скоро будет доступна')),
               );
             }
             break;
           case ChatSwipeAction.mute:
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(content: Text('Отключение уведомлений скоро будет доступно')),
               );
             }
@@ -2549,7 +2613,50 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  Widget? _buildChatSubtitle(Chat chat, bool hasUnread) {
+  Widget? _buildChatSubtitle(BuildContext context, Chat chat, bool hasUnread) {
+    final typingState = _chatTypingStates[chat.id];
+    if (typingState != null) {
+      final loc = AppLocalizations.of(context);
+      final isGroup = chat.chatType == 'group';
+      final userName = typingState.userName;
+      final String statusText;
+      if (isGroup && userName != null && userName.isNotEmpty) {
+        final String key;
+        if (typingState.action == 'record_voice') {
+          key = 'chat_user_recording_voice';
+        } else if (typingState.action == 'record_round') {
+          key = 'chat_user_recording_round';
+        } else {
+          key = 'chat_user_typing';
+        }
+        statusText =
+            (loc?.translate(key) ?? '$userName typing...').replaceAll('{name}', userName);
+      } else {
+        final String key;
+        if (typingState.action == 'record_voice') {
+          key = 'chat_status_recording_voice';
+        } else if (typingState.action == 'record_round') {
+          key = 'chat_status_recording_round';
+        } else {
+          key = 'chat_status_typing';
+        }
+        statusText = loc?.translate(key) ?? 'typing...';
+      }
+      final accentColor = Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF5CB8E6)
+          : Theme.of(context).colorScheme.primary;
+      return Text(
+        statusText,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: accentColor,
+          fontWeight: FontWeight.w500,
+          fontSize: 14,
+        ),
+      );
+    }
+
     final draft = DraftService().getPublishedDraft(chat.id);
     if (draft != null && draft.isNotEmpty) {
       final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft') ?? 'Черновик';
@@ -3056,7 +3163,7 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  String _formatChatTime(String timestamp) {
+  String _formatChatTime(BuildContext context, String timestamp) {
     try {
       final localDateTime = DateTimeUtils.parseUtcDateTime(timestamp);
       if (localDateTime == null) return '';
@@ -3142,6 +3249,10 @@ class _MainScreenState extends State<MainScreen>
         },
         child: Consumer<LiquidGlassProvider>(
           builder: (context, glassProvider, _) {
+            final totalUnread =
+                context.watch<UnreadCountProvider>().totalUnread;
+            final primaryColor = Theme.of(context).colorScheme.primary;
+
             if (_lastGlassEnabled != glassProvider.enabled) {
               _lastGlassEnabled = glassProvider.enabled;
               final targetIndex = _currentIndex;
@@ -3228,6 +3339,7 @@ class _MainScreenState extends State<MainScreen>
                               curve: Curves.easeOutCubic,
                               builder: (context, animatedTopPadding, _) {
                                 return _buildChatList(
+                                  context,
                                   topPadding: animatedTopPadding,
                                 );
                               },
@@ -3393,8 +3505,6 @@ class _MainScreenState extends State<MainScreen>
                           width: i.size,
                           height: i.size,
                         );
-                        final totalUnread =
-                            context.watch<UnreadCountProvider>().totalUnread;
                         if (totalUnread <= 0) return icon;
                         return Stack(
                           clipBehavior: Clip.none,
@@ -3408,7 +3518,7 @@ class _MainScreenState extends State<MainScreen>
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 5, vertical: 1),
                                 decoration: BoxDecoration(
-                                  color: Theme.of(context).colorScheme.primary,
+                                  color: primaryColor,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 constraints: const BoxConstraints(
@@ -3451,7 +3561,7 @@ class _MainScreenState extends State<MainScreen>
                   itemPadding: 3,
                   style: barStyle,
                   itemStyle: LiquidGlassTabItemStyle(
-                    selectedColor: Theme.of(context).colorScheme.primary,
+                    selectedColor: primaryColor,
                     unselectedColor: isDark
                         ? const Color(0xFF8E8E93)
                         : const Color(0xFF636366),
@@ -3545,8 +3655,7 @@ class _MainScreenState extends State<MainScreen>
                       top: false,
                       child: ClassicBottomBar(
                         selectedIndex: _currentIndex,
-                        unreadCount:
-                            context.watch<UnreadCountProvider>().totalUnread,
+                        unreadCount: totalUnread,
                         onTabSelected: (index) {
                           _onTabTapped(index);
                         },

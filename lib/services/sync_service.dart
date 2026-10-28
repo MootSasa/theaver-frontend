@@ -1,10 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:uuid/uuid.dart';
 import 'auth_service.dart';
 import 'avatar_sync_service.dart';
 import 'chat_service.dart';
+import 'file_service.dart';
+import 'media_cache_manager.dart';
 import 'websocket_service.dart';
 import 'database/app_database.dart';
 
@@ -385,16 +388,18 @@ class SyncService {
     final String? entitiesStr = entities is List
         ? jsonEncode(entities.map((e) => e is MessageEntity ? e.toJson() : e).toList())
         : (entities is String ? entities : null);
-    String? linkPreviewOptionsStr = messageType == 'voice' && (waveform != null || duration != null)
-        ? jsonEncode({
-            if (waveform != null) 'waveform': waveform,
-            if (duration != null) 'duration': duration,
-          })
-        : (linkPreviewOptions is LinkPreviewOptions
-            ? jsonEncode(linkPreviewOptions.toJson())
-            : (linkPreviewOptions is Map
-                ? jsonEncode(linkPreviewOptions)
-                : (linkPreviewOptions is String ? linkPreviewOptions : null)));
+    String? linkPreviewOptionsStr =
+        (messageType == 'voice' || messageType == 'video' || isRound) &&
+                (waveform != null || duration != null)
+            ? jsonEncode({
+                if (waveform != null) 'waveform': waveform,
+                if (duration != null) 'duration': duration,
+              })
+            : (linkPreviewOptions is LinkPreviewOptions
+                ? jsonEncode(linkPreviewOptions.toJson())
+                : (linkPreviewOptions is Map
+                    ? jsonEncode(linkPreviewOptions)
+                    : (linkPreviewOptions is String ? linkPreviewOptions : null)));
     if (linkPreviewOptionsStr == null && mediaPayload != null) {
       linkPreviewOptionsStr = mediaPayload is String
           ? mediaPayload
@@ -488,21 +493,82 @@ class SyncService {
     await _db.updateMessageStatus(localId, MessageSendStatus.sending.index);
 
     try {
+      String? remoteFileUrl = msg.fileUrl;
+      Map<String, dynamic>? mediaPayload;
+      List<int>? waveform;
+      int? duration;
+
+      if (msg.linkPreviewOptions != null && msg.linkPreviewOptions!.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(msg.linkPreviewOptions!);
+          if (decoded is Map<String, dynamic>) {
+            if (decoded['waveform'] is List) {
+              waveform = (decoded['waveform'] as List).map((e) => (e as num).toInt()).toList();
+            }
+            if (decoded['duration'] is num) {
+              duration = (decoded['duration'] as num).toInt();
+            }
+            if (decoded.containsKey('thumb_url') || decoded.containsKey('thumb_base64')) {
+              mediaPayload = decoded;
+            }
+          }
+        } catch (_) {}
+      }
+
+      File? uploadedLocalFile;
+      if (remoteFileUrl != null &&
+          remoteFileUrl.isNotEmpty &&
+          !remoteFileUrl.startsWith('http://') &&
+          !remoteFileUrl.startsWith('https://') &&
+          !remoteFileUrl.startsWith('/api/')) {
+        final localPath = remoteFileUrl.startsWith('file://')
+            ? Uri.parse(remoteFileUrl).toFilePath()
+            : remoteFileUrl;
+        final localFile = File(localPath);
+        final fileService = FileService();
+        final uploadResult = (msg.messageType == 'voice' || msg.messageType == 'audio')
+            ? await fileService.uploadFile(localFile)
+            : await fileService.uploadFileChunked(localFile);
+
+        uploadedLocalFile = localFile;
+        remoteFileUrl = uploadResult.url;
+        mediaPayload = uploadResult.toMediaPayload();
+        if ((duration == null || duration <= 0) && uploadResult.duration > 0) {
+          duration = uploadResult.duration;
+        }
+      }
+
       final result = await ChatService.sendMessage(
         chatId: msg.chatId,
         content: msg.content,
         messageType: msg.messageType,
         localId: msg.localId,
-        fileUrl: msg.fileUrl,
+        fileUrl: remoteFileUrl,
         fileName: msg.fileName,
+        replyToMessageId: msg.replyToMessageId,
+        isQuote: msg.isQuote,
+        quoteText: msg.quoteText,
+        quoteOffset: msg.quoteOffset,
+        quoteLength: msg.quoteLength,
+        invertMedia: msg.invertMedia,
+        isRound: msg.isRound,
+        waveform: waveform,
+        duration: duration,
+        mediaPayload: mediaPayload,
       );
 
       if (result['success'] == true) {
-        // result['message'] is a Message object, not a Map
+        if (!kIsWeb &&
+            uploadedLocalFile != null &&
+            remoteFileUrl != null &&
+            remoteFileUrl.isNotEmpty) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(remoteFileUrl, uploadedLocalFile);
+        }
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty) {
-          await confirmMessageSent(localId, serverId);
+          await confirmMessageSent(localId, serverId, remoteFileUrl: remoteFileUrl);
         }
       } else {
         await markMessageFailed(localId);

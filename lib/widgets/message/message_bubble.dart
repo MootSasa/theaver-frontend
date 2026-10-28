@@ -1307,7 +1307,7 @@ class MessageBubble extends StatelessWidget {
       );
 
       Widget innerContent;
-      if (_isRoundVideo || _isVoice) {
+      if (_isRoundVideo || _isVoice || (_isAudio && !hasCaption)) {
         innerContent = mediaWidget;
       } else if (hasCaption) {
         Widget captionWidget = MetaData(
@@ -1638,6 +1638,7 @@ class MessageBubble extends StatelessWidget {
         fileSize: message.mediaFileSize,
         isMe: isMe,
         isRead: message.isRead,
+        isListened: message.isListened,
         sendStatus: message.sendStatus,
         timeText: formatTime(message.createdAt),
         senderName: isMe ? null : senderName,
@@ -1706,28 +1707,27 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (_isAudio) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.05),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const iconoir.MusicNote(width: 28, height: 28, color: Color(0xFF0088CC)),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                message.fileName ?? 'Audio',
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-              ),
-            ),
-          ],
-        ),
+      final effectiveDurSec = message.duration ?? message.mediaDuration;
+      return VoiceMessageWidget(
+        key: ValueKey('audio_${message.id}'),
+        messageId: message.id,
+        audioUrl: resolvedUrl,
+        title: message.fileName ?? 'Audio',
+        duration: effectiveDurSec != null && effectiveDurSec > 0
+            ? Duration(seconds: effectiveDurSec)
+            : null,
+        waveform: message.waveform,
+        fileSize: message.mediaFileSize,
+        isMe: isMe,
+        isRead: true,
+        isListened: true,
+        sendStatus: message.sendStatus,
+        timeText: _hasCaption ? null : formatTime(message.createdAt),
+        senderName: isMe ? null : senderName,
+        onRetry: onRetry != null ? () => onRetry!(message) : null,
+        chatId: message.chatId,
+        chatType: chatType,
+        chatTitle: chatTitle ?? (isMe ? null : senderName),
       );
     }
 
@@ -1960,6 +1960,7 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
           borderRadius: BorderRadius.circular(effectiveRadius),
           child: InlineVideoPlayer(
             url: _cachedFile!.path,
+            autoplay: true,
           ),
         ),
       );

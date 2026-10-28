@@ -543,6 +543,31 @@ class ChatSettingsScreen extends StatelessWidget {
               },
             ),
 
+            const SizedBox(height: 6),
+
+            // Raise to Listen Setting (Proximity Sensor + Earpiece routing)
+            ValueListenableBuilder<bool>(
+              valueListenable: SettingsService().raiseToListenNotifier,
+              builder: (context, raiseToListen, _) {
+                return ListTile(
+                  leading: iconoir.SoundHigh(
+                    color: raiseToListen ? activePrimary : Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(l10n.translate('settings_raise_to_listen_title')),
+                  subtitle: Text(
+                    l10n.translate('settings_raise_to_listen_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: AdaptiveSwitch(
+                    value: raiseToListen,
+                    onChanged: (val) => SettingsService().setRaiseToListen(val),
+                  ),
+                );
+              },
+            ),
+
             const SizedBox(height: 12),
 
             // 7. Liquid Glass Design Controls

@@ -247,17 +247,27 @@ class _FloatingVideoNoteOverlayState extends State<FloatingVideoNoteOverlay>
                       child: SizedBox(
                         width: _kSize,
                         height: _kSize,
-                        child: FittedBox(
-                          fit: BoxFit.cover,
-                          child: SizedBox(
-                            width: controller.value.size.width > 0
+                        child: Builder(
+                          builder: (context) {
+                            final double rawW = controller.value.size.width > 0
                                 ? controller.value.size.width
-                                : _kSize,
-                            height: controller.value.size.height > 0
+                                : _kSize;
+                            final double rawH = controller.value.size.height > 0
                                 ? controller.value.size.height
-                                : _kSize,
-                            child: VideoPlayer(controller),
-                          ),
+                                : _kSize;
+                            final int rot = controller.value.rotationCorrection.abs();
+                            final bool swapDims = (rot % 180 != 0) && rawW > rawH;
+                            final double boxW = swapDims ? rawH : rawW;
+                            final double boxH = swapDims ? rawW : rawH;
+                            return FittedBox(
+                              fit: BoxFit.cover,
+                              child: SizedBox(
+                                width: boxW,
+                                height: boxH,
+                                child: VideoPlayer(controller),
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ),

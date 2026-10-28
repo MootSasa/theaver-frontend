@@ -32,6 +32,7 @@ enum WebSocketEventType {
   draftUpdated,
   emojiInteraction,
   appUpdateAvailable,
+  messageListened,
 }
 
 /// WebSocket event data
@@ -97,6 +98,8 @@ class WebSocketEvent {
         return WebSocketEventType.emojiInteraction;
       case 'app_update_available':
         return WebSocketEventType.appUpdateAvailable;
+      case 'message_listened':
+        return WebSocketEventType.messageListened;
       default:
         return WebSocketEventType.connected;
     }
@@ -502,11 +505,16 @@ class WebSocketService {
     _channel!.sink.add(message);
   }
 
-  /// Send typing indicator
-  void sendTypingIndicator(String chatId, {bool isTyping = true}) {
+  /// Send typing or recording indicator ('typing', 'record_voice', 'record_round', 'stop')
+  void sendTypingIndicator(
+    String chatId, {
+    bool isTyping = true,
+    String action = 'typing',
+  }) {
     sendMessage('typing', {
       'chat_id': chatId,
       'is_typing': isTyping,
+      'action': isTyping ? action : 'stop',
     });
   }
 
@@ -553,8 +561,10 @@ class WebSocketService {
 
   /// Subscribe to specific event type
   void subscribe(WebSocketEventType type, WebSocketEventCallback callback) {
-    _callbacks[type] ??= [];
-    _callbacks[type]!.add(callback);
+    final list = _callbacks[type] ??= [];
+    if (!list.contains(callback)) {
+      list.add(callback);
+    }
   }
 
   /// Unsubscribe from specific event type

@@ -22,12 +22,15 @@ class VoiceRecordResult {
 /// Service managing audio recording, live amplitude streaming, and hands-free locking.
 class VoiceNoteRecorderService with ChangeNotifier {
   final AudioRecorder _recorder = AudioRecorder();
+  final Stopwatch _stopwatch = Stopwatch();
   Timer? _timer;
   StreamSubscription<Amplitude>? _amplitudeSubscription;
 
   bool _isRecording = false;
   bool _isPaused = false;
   bool _isLocked = false;
+  bool _isPreview = false;
+  VoiceRecordResult? _previewResult;
   Duration _elapsed = Duration.zero;
   String? _currentFilePath;
   final List<double> _liveAmplitudes = [];
@@ -37,7 +40,9 @@ class VoiceNoteRecorderService with ChangeNotifier {
   bool get isRecording => _isRecording;
   bool get isPaused => _isPaused;
   bool get isLocked => _isLocked;
-  Duration get elapsed => _elapsed;
+  bool get isPreview => _isPreview;
+  VoiceRecordResult? get previewResult => _previewResult;
+  Duration get elapsed => _isRecording ? _stopwatch.elapsed : _elapsed;
   String? get currentFilePath => _currentFilePath;
   List<double> get liveAmplitudes => List.unmodifiable(_liveAmplitudes);
   String? get errorMessage => _errorMessage;
@@ -90,12 +95,14 @@ class VoiceNoteRecorderService with ChangeNotifier {
     }
   }
 
-  /// Starts voice recording to a temporary `.m4a` file.
+  /// Starts voice recording to a temporary audio file with automatic hardware encoder fallbacks.
   Future<bool> startRecording() async {
     if (_isRecording) return true;
 
     try {
       _errorMessage = null;
+      _isPreview = false;
+      _previewResult = null;
       final ok = await hasPermissions();
       if (!ok) {
         final granted = await requestPermissions();
@@ -108,22 +115,90 @@ class VoiceNoteRecorderService with ChangeNotifier {
 
       final dir = await getTemporaryDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      _currentFilePath = '${dir.path}/voice_note_$timestamp.m4a';
 
-      await _recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-          numChannels: 1,
+      // Multi-stage fallback chain for picky Android hardware MediaCodec encoders
+      final candidates = <({RecordConfig config, String ext})>[
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 96000,
+            sampleRate: 44100,
+            numChannels: 1,
+          ),
+          ext: 'm4a',
         ),
-        path: _currentFilePath!,
-      );
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 44100,
+            numChannels: 1,
+          ),
+          ext: 'm4a',
+        ),
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          ext: 'm4a',
+        ),
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+          ),
+          ext: 'm4a',
+        ),
+        (
+          config: const RecordConfig(
+            encoder: AudioEncoder.wav,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          ext: 'wav',
+        ),
+      ];
+
+      Object? lastErr;
+      bool started = false;
+      for (final candidate in candidates) {
+        final candidatePath = '${dir.path}/voice_note_$timestamp.${candidate.ext}';
+        try {
+          if (kIsWeb) {
+            _currentFilePath = '${dir.path}/voice_note_$timestamp.m4a';
+            await _recorder.start(candidate.config, path: _currentFilePath!);
+            started = true;
+            break;
+          }
+          final supported = await _recorder.isEncoderSupported(candidate.config.encoder);
+          if (!supported && candidate != candidates.last) continue;
+          _currentFilePath = candidatePath;
+          await _recorder.start(candidate.config, path: _currentFilePath!);
+          started = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          debugPrint('[VoiceNoteRecorderService] candidate ${candidate.config.encoder} (${candidate.config.bitRate}) failed: $err');
+          try {
+            final f = File(candidatePath);
+            if (f.existsSync()) f.deleteSync();
+          } catch (_) {}
+        }
+      }
+
+      if (!started) {
+        throw lastErr ?? StateError('All audio recording configurations failed');
+      }
 
       _isRecording = true;
       _isPaused = false;
       _isLocked = false;
       _elapsed = Duration.zero;
+      _stopwatch
+        ..reset()
+        ..start();
       _liveAmplitudes.clear();
       _allAmplitudes.clear();
 
@@ -135,6 +210,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
       debugPrint('[VoiceNoteRecorderService] startRecording error: $e');
       _errorMessage = e.toString();
       _isRecording = false;
+      _stopwatch.stop();
       if (_currentFilePath != null) {
         try {
           final file = File(_currentFilePath!);
@@ -153,7 +229,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       if (_isRecording && !_isPaused) {
-        _elapsed += const Duration(milliseconds: 200);
+        _elapsed = _stopwatch.elapsed;
         notifyListeners();
       }
     });
@@ -193,6 +269,8 @@ class VoiceNoteRecorderService with ChangeNotifier {
     if (!_isRecording || _isPaused) return;
     try {
       await _recorder.pause();
+      _stopwatch.stop();
+      _elapsed = _stopwatch.elapsed;
       _isPaused = true;
       notifyListeners();
     } catch (e) {
@@ -205,6 +283,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
     if (!_isRecording || !_isPaused) return;
     try {
       await _recorder.resume();
+      _stopwatch.start();
       _isPaused = false;
       notifyListeners();
     } catch (e) {
@@ -212,10 +291,69 @@ class VoiceNoteRecorderService with ChangeNotifier {
     }
   }
 
-  /// Stops recording and returns the file, duration, and sampled waveform.
-  Future<VoiceRecordResult?> stopRecording() async {
+  /// Stops recording into preview state (keeping the overlay open in locked mode).
+  Future<VoiceRecordResult?> stopForPreview() async {
+    if (_isPreview && _previewResult != null) return _previewResult;
     if (!_isRecording) return null;
 
+    _stopwatch.stop();
+    _elapsed = _stopwatch.elapsed;
+    _timer?.cancel();
+    _timer = null;
+    await _amplitudeSubscription?.cancel();
+    _amplitudeSubscription = null;
+
+    try {
+      final recordedPath = await _recorder.stop();
+      _isRecording = false;
+      _isPaused = false;
+
+      final path = recordedPath ?? _currentFilePath;
+      _currentFilePath = null;
+      if (path == null) {
+        notifyListeners();
+        return null;
+      }
+
+      final file = File(path);
+      if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
+        notifyListeners();
+        return null;
+      }
+
+      final duration = _elapsed;
+      final waveform = _generateWaveformSamples(_allAmplitudes, targetCount: 36);
+      _previewResult = VoiceRecordResult(
+        file: file,
+        duration: duration,
+        waveform: waveform,
+      );
+      _isPreview = true;
+      notifyListeners();
+      return _previewResult;
+    } catch (e) {
+      debugPrint('[VoiceNoteRecorderService] stopForPreview error: $e');
+      _isRecording = false;
+      _currentFilePath = null;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Stops recording and returns the file, duration, and sampled waveform.
+  Future<VoiceRecordResult?> stopRecording() async {
+    if (_isPreview && _previewResult != null) {
+      final res = _previewResult;
+      _previewResult = null;
+      _isPreview = false;
+      _isLocked = false;
+      notifyListeners();
+      return res;
+    }
+    if (!_isRecording) return null;
+
+    _stopwatch.stop();
+    _elapsed = _stopwatch.elapsed;
     _timer?.cancel();
     _timer = null;
     await _amplitudeSubscription?.cancel();
@@ -226,6 +364,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
       _isRecording = false;
       _isPaused = false;
       _isLocked = false;
+      _isPreview = false;
 
       final path = recordedPath ?? _currentFilePath;
       _currentFilePath = null;
@@ -265,9 +404,21 @@ class VoiceNoteRecorderService with ChangeNotifier {
     await _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
 
-    try {
-      await _recorder.stop();
-    } catch (_) {}
+    if (_isRecording) {
+      try {
+        await _recorder.stop();
+      } catch (_) {}
+    }
+
+    if (_previewResult != null && !kIsWeb) {
+      try {
+        if (await _previewResult!.file.exists()) {
+          await _previewResult!.file.delete();
+        }
+      } catch (_) {}
+    }
+    _previewResult = null;
+    _isPreview = false;
 
     if (_currentFilePath != null) {
       try {

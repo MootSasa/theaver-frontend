@@ -182,4 +182,40 @@ class DateTimeUtils {
         return '';
     }
   }
+
+  /// Formats a message read/listened timestamp in local device timezone:
+  /// "сегодня в HH:mm", "вчера в HH:mm", or "DD.MM.YYYY в HH:mm".
+  static String formatReceiptTimestamp(
+    dynamic raw,
+    BuildContext context, {
+    DateTime? now,
+  }) {
+    final dt = parseUtcDateTime(raw);
+    if (dt == null) return '';
+    final localDt = dt.toLocal();
+    final currentNow = (now ?? nowProvider()).toLocal();
+    final today = startOfDay(currentNow);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final dateDay = startOfDay(localDt);
+
+    final timeStr =
+        '${localDt.hour.toString().padLeft(2, '0')}:${localDt.minute.toString().padLeft(2, '0')}';
+
+    if (dateDay == today) {
+      return context.l10n
+          .translate('msg_receipt_today_at')
+          .replaceAll('{time}', timeStr);
+    }
+    if (dateDay == yesterday) {
+      return context.l10n
+          .translate('msg_receipt_yesterday_at')
+          .replaceAll('{time}', timeStr);
+    }
+    final dateStr =
+        '${localDt.day.toString().padLeft(2, '0')}.${localDt.month.toString().padLeft(2, '0')}.${localDt.year}';
+    return context.l10n
+        .translate('profile_date_at_time')
+        .replaceAll('{date}', dateStr)
+        .replaceAll('{time}', timeStr);
+  }
 }

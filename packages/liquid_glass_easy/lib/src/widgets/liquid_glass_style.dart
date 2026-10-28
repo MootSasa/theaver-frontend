@@ -289,4 +289,41 @@ class LiquidGlassStyle {
       liteGlass: other.liteGlass || liteGlass,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LiquidGlassStyle &&
+          other.shape == shape &&
+          other.specular == specular &&
+          other.glow == glow &&
+          other.secondSpecular == secondSpecular &&
+          other.refractionIndex == refractionIndex &&
+          other.refractionWidth == refractionWidth &&
+          other.magnification == magnification &&
+          other.dispersion == dispersion &&
+          other.saturation == saturation &&
+          other.blur == blur &&
+          other.color == color &&
+          other.shadow == shadow &&
+          other.adaptivity == adaptivity &&
+          other.liteGlass == liteGlass;
+
+  @override
+  int get hashCode => Object.hash(
+        shape,
+        specular,
+        glow,
+        secondSpecular,
+        refractionIndex,
+        refractionWidth,
+        magnification,
+        dispersion,
+        saturation,
+        blur,
+        color,
+        shadow,
+        adaptivity,
+        liteGlass,
+      );
 }

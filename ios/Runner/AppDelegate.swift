@@ -1,9 +1,14 @@
 import Flutter
 import UIKit
 import AVFoundation
+import MediaPlayer
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, FlutterStreamHandler {
+  private var proximityEventSink: FlutterEventSink?
+  private var mediaSessionChannel: FlutterMethodChannel?
+  private var remoteCommandsConfigured = false
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -11,12 +16,157 @@ import AVFoundation
     let controller = window?.rootViewController as? FlutterViewController
     if let messenger = controller?.binaryMessenger {
       setupMediaMuxer(messenger: messenger)
+      setupProximityAndMediaSession(messenger: messenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    let messenger = engineBridge.applicationRegistrar.messenger()
+    setupMediaMuxer(messenger: messenger)
+    setupProximityAndMediaSession(messenger: messenger)
+  }
+
+  private func setupProximityAndMediaSession(messenger: FlutterBinaryMessenger) {
+    let proximityChannel = FlutterMethodChannel(name: "app.theaver.messenger/proximity", binaryMessenger: messenger)
+    proximityChannel.setMethodCallHandler { [weak self] (call, result) in
+      guard let self = self else { return }
+      switch call.method {
+      case "startMonitoring":
+        DispatchQueue.main.async {
+          UIDevice.current.isProximityMonitoringEnabled = true
+          result(UIDevice.current.isProximityMonitoringEnabled)
+        }
+      case "stopMonitoring":
+        DispatchQueue.main.async {
+          UIDevice.current.isProximityMonitoringEnabled = false
+          result(true)
+        }
+      case "setEarpieceMode":
+        let args = call.arguments as? [String: Any]
+        let enabled = args?["enabled"] as? Bool ?? false
+        let session = AVAudioSession.sharedInstance()
+        do {
+          if enabled {
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+            try session.overrideOutputAudioPort(.none)
+          } else {
+            try session.setCategory(.playback, mode: .spokenAudio, options: [])
+            try session.overrideOutputAudioPort(.none)
+          }
+          try session.setActive(true)
+          result(true)
+        } catch {
+          result(false)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    let eventChannel = FlutterEventChannel(name: "app.theaver.messenger/proximity_events", binaryMessenger: messenger)
+    eventChannel.setStreamHandler(self)
+
+    let mediaChannel = FlutterMethodChannel(name: "app.theaver.messenger/media_session", binaryMessenger: messenger)
+    self.mediaSessionChannel = mediaChannel
+    mediaChannel.setMethodCallHandler { [weak self] (call, result) in
+      guard let self = self else { return }
+      switch call.method {
+      case "updateMetadata":
+        guard let args = call.arguments as? [String: Any] else {
+          result(false)
+          return
+        }
+        self.configureRemoteCommandsIfNeeded()
+        let title = args["title"] as? String ?? "Voice Message"
+        let artist = args["artist"] as? String ?? "Theaver"
+        let durationMs = args["durationMs"] as? Int ?? 0
+        let positionMs = args["positionMs"] as? Int ?? 0
+        let isPlaying = args["isPlaying"] as? Bool ?? false
+        let speed = args["speed"] as? Double ?? 1.0
+
+        var nowPlayingInfo = [String: Any]()
+        nowPlayingInfo[MPMediaItemPropertyTitle] = title
+        nowPlayingInfo[MPMediaItemPropertyArtist] = artist
+        nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = Double(durationMs) / 1000.0
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = Double(positionMs) / 1000.0
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? speed : 0.0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        result(true)
+      case "clearSession":
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        result(true)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private func configureRemoteCommandsIfNeeded() {
+    guard !remoteCommandsConfigured else { return }
+    remoteCommandsConfigured = true
+    let commandCenter = MPRemoteCommandCenter.shared()
+
+    commandCenter.playCommand.isEnabled = true
+    commandCenter.playCommand.addTarget { [weak self] _ in
+      self?.mediaSessionChannel?.invokeMethod("onPlay", arguments: nil)
+      return .success
+    }
+
+    commandCenter.pauseCommand.isEnabled = true
+    commandCenter.pauseCommand.addTarget { [weak self] _ in
+      self?.mediaSessionChannel?.invokeMethod("onPause", arguments: nil)
+      return .success
+    }
+
+    commandCenter.togglePlayPauseCommand.isEnabled = true
+    commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
+      self?.mediaSessionChannel?.invokeMethod("onTogglePlayPause", arguments: nil)
+      return .success
+    }
+
+    commandCenter.nextTrackCommand.isEnabled = true
+    commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+      self?.mediaSessionChannel?.invokeMethod("onNext", arguments: nil)
+      return .success
+    }
+
+    commandCenter.changePlaybackPositionCommand.isEnabled = true
+    commandCenter.changePlaybackPositionCommand.addTarget { [weak self] event in
+      guard let posEvent = event as? MPChangePlaybackPositionCommandEvent else {
+        return .commandFailed
+      }
+      let posMs = Int(posEvent.positionTime * 1000.0)
+      self?.mediaSessionChannel?.invokeMethod("onSeek", arguments: ["positionMs": posMs])
+      return .success
+    }
+  }
+
+  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    self.proximityEventSink = events
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(proximityStateDidChange),
+      name: UIDevice.proximityStateDidChangeNotification,
+      object: nil
+    )
+    return nil
+  }
+
+  func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    NotificationCenter.default.removeObserver(
+      self,
+      name: UIDevice.proximityStateDidChangeNotification,
+      object: nil
+    )
+    self.proximityEventSink = nil
+    return nil
+  }
+
+  @objc private func proximityStateDidChange() {
+    let isNear = UIDevice.current.proximityState
+    proximityEventSink?(isNear)
   }
 
   private func setupMediaMuxer(messenger: FlutterBinaryMessenger) {

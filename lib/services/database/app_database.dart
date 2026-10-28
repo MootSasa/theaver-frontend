@@ -324,9 +324,13 @@ class AppDatabase extends _$AppDatabase {
         await _cleanupDuplicateSavedChats();
       } catch (_) {}
 
-      // 3. Очистка поврежденных сообщений без chat_id
+      // 3. Очистка поврежденных сообщений без chat_id и дубликатов по server_id
       try {
         await customStatement("DELETE FROM messages WHERE chat_id = '' OR chat_id IS NULL");
+        await customStatement(
+          "DELETE FROM messages WHERE server_id IS NOT NULL AND server_id != '' "
+          "AND rowid NOT IN (SELECT MAX(rowid) FROM messages WHERE server_id IS NOT NULL AND server_id != '' GROUP BY server_id)",
+        );
       } catch (_) {}
     } catch (e) {
       debugPrint('AppDatabase initialize error: $e');
@@ -408,7 +412,9 @@ class AppDatabase extends _$AppDatabase {
   /// Получить чат по server chatId
   Future<DbChat?> getChat(String chatId) async {
     await ensureInitialized();
-    return (select(chats)..where((t) => t.chatId.equals(chatId)))
+    return (select(chats)
+          ..where((t) => t.chatId.equals(chatId))
+          ..limit(1))
         .getSingleOrNull();
   }
 
@@ -660,7 +666,10 @@ class AppDatabase extends _$AppDatabase {
     );
 
     // Проверяем, существует ли уже серверный чат в базе
-    final serverChat = await (select(chats)..where((t) => t.chatId.equals(serverSavedId))).getSingleOrNull();
+    final serverChat = await (select(chats)
+          ..where((t) => t.chatId.equals(serverSavedId))
+          ..limit(1))
+        .getSingleOrNull();
     if (serverChat != null) {
       // Серверный чат уже вставлен, удаляем локальный плейсхолдер во избежание дубликатов
       await (delete(chats)..where((t) => t.chatId.equals(localSavedId))).go();
@@ -701,14 +710,18 @@ class AppDatabase extends _$AppDatabase {
   /// Получить сообщение по localId
   Future<DbMessage?> getMessageByLocalId(String localId) async {
     await ensureInitialized();
-    return (select(messages)..where((t) => t.localId.equals(localId)))
+    return (select(messages)
+          ..where((t) => t.localId.equals(localId))
+          ..limit(1))
         .getSingleOrNull();
   }
 
   /// Получить сообщение по serverId
   Future<DbMessage?> getMessageByServerId(String serverId) async {
     await ensureInitialized();
-    return (select(messages)..where((t) => t.serverId.equals(serverId)))
+    return (select(messages)
+          ..where((t) => t.serverId.equals(serverId))
+          ..limit(1))
         .getSingleOrNull();
   }
 
@@ -719,13 +732,28 @@ class AppDatabase extends _$AppDatabase {
     await ensureInitialized();
     // Если есть serverId (не absent и не null), проверить существующее сообщение
     final serverIdValue = message.serverId;
-    final hasServerId = serverIdValue.present && serverIdValue.value != null;
+    final hasServerId = serverIdValue.present &&
+        serverIdValue.value != null &&
+        serverIdValue.value!.isNotEmpty;
     if (hasServerId) {
-      final existing = await getMessageByServerId(serverIdValue.value!);
-      if (existing != null) {
+      final sid = serverIdValue.value!;
+      final existingMatches = await (select(messages)
+            ..where((t) => t.serverId.equals(sid) | t.localId.equals(sid)))
+          .get();
+      if (existingMatches.isNotEmpty) {
+        final canonical = existingMatches.first;
+        if (existingMatches.length > 1) {
+          final duplicateLocalIds = existingMatches
+              .skip(1)
+              .map((m) => m.localId)
+              .toList();
+          await (delete(messages)
+                ..where((t) => t.localId.isIn(duplicateLocalIds)))
+              .go();
+        }
         // Переиспользовать существующий localId для корректного upsert
         await into(messages).insertOnConflictUpdate(
-          message.copyWith(localId: Value(existing.localId)),
+          message.copyWith(localId: Value(canonical.localId)),
         );
         return;
       }
@@ -746,6 +774,14 @@ class AppDatabase extends _$AppDatabase {
       String localId, String serverId, int status,
       {String? fileUrl}) async {
     await ensureInitialized();
+    if (serverId.isNotEmpty) {
+      // Удаляем возможный дубликат, если сообщение уже успело прийти по WebSocket/Sync с localId == serverId
+      await (delete(messages)
+            ..where((t) =>
+                t.localId.isNotValue(localId) &
+                (t.serverId.equals(serverId) | t.localId.equals(serverId))))
+          .go();
+    }
     await (update(messages)..where((t) => t.localId.equals(localId)))
         .write(MessagesCompanion(
       serverId: Value(serverId),
@@ -818,14 +854,89 @@ class AppDatabase extends _$AppDatabase {
     await (delete(messages)..where((t) => t.chatId.equals(chatId))).go();
   }
 
-  /// Пометить сообщения как прочитанные (отправителя в чате)
-  Future<void> markMessagesAsRead(String chatId, String senderId) async {
-    await (update(messages)
+  /// Пометить сообщения как прочитанные (отправителя в чате) с сохранением времени прочтения read_at
+  Future<void> markMessagesAsRead(
+    String chatId,
+    String senderId, {
+    String? readAt,
+  }) async {
+    await ensureInitialized();
+    final effectiveReadAt = readAt ?? DateTime.now().toUtc().toIso8601String();
+    final unreadMsgs = await (select(messages)
           ..where((t) =>
               t.chatId.equals(chatId) &
               t.senderId.equals(senderId) &
               t.isRead.equals(false)))
-        .write(const MessagesCompanion(isRead: Value(true)));
+        .get();
+
+    if (unreadMsgs.isEmpty) return;
+
+    await batch((b) {
+      for (final msg in unreadMsgs) {
+        Map<String, dynamic> mp = {};
+        if (msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(msg.mediaPayload!);
+            if (decoded is Map) {
+              mp = Map<String, dynamic>.from(decoded);
+            }
+          } catch (_) {}
+        }
+        mp['read_at'] ??= effectiveReadAt;
+        b.update(
+          messages,
+          MessagesCompanion(
+            isRead: const Value(true),
+            mediaPayload: Value(jsonEncode(mp)),
+          ),
+          where: (t) => t.localId.equals(msg.localId),
+        );
+      }
+    });
+  }
+
+  /// Обновить время прочтения (read_at) и/или прослушивания (listened_at) конкретного сообщения
+  Future<void> updateMessageReadAndListened(
+    String messageId, {
+    bool? isRead,
+    String? readAt,
+    String? listenedAt,
+    bool? isListened,
+  }) async {
+    await ensureInitialized();
+    final existing = await (select(messages)
+          ..where(
+              (t) => t.serverId.equals(messageId) | t.localId.equals(messageId))
+          ..limit(1))
+        .getSingleOrNull();
+    if (existing == null) return;
+
+    Map<String, dynamic> mp = {};
+    if (existing.mediaPayload != null && existing.mediaPayload!.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(existing.mediaPayload!);
+        if (decoded is Map) {
+          mp = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    if (readAt != null && readAt.isNotEmpty) {
+      mp['read_at'] ??= readAt;
+    }
+    if (listenedAt != null && listenedAt.isNotEmpty) {
+      mp['listened_at'] ??= listenedAt;
+    }
+    if (isListened != null) {
+      mp['is_listened'] = isListened;
+    }
+
+    await (update(messages)..where((t) => t.localId.equals(existing.localId)))
+        .write(MessagesCompanion(
+      isRead: isRead != null
+          ? Value(isRead)
+          : (readAt != null ? const Value(true) : const Value.absent()),
+      mediaPayload: Value(jsonEncode(mp)),
+    ));
   }
 
   // === SYNC STATE ===
@@ -833,7 +944,8 @@ class AppDatabase extends _$AppDatabase {
   /// Получить последний USN для пользователя
   Future<int> getLastKnownUsn(String userId) async {
     final state = await (select(syncStates)
-          ..where((t) => t.userId.equals(userId)))
+          ..where((t) => t.userId.equals(userId))
+          ..limit(1))
         .getSingleOrNull();
     return state?.lastKnownUsn ?? 0;
   }

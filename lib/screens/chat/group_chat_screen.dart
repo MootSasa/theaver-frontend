@@ -34,6 +34,7 @@ import 'package:drift/drift.dart' show Value;
 import '../../utils/image_utils.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
+import '../../services/media_cache_manager.dart';
 import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
@@ -70,6 +71,7 @@ import '../../widgets/chat/emoji_sticker_panel.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
+import '../../services/proximity_audio_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -148,7 +150,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   final WebSocketService _wsService = WebSocketService();
   ChatSubscription? _chatSubscription;
   bool _isTyping = false;
+  String _typingAction = 'typing';
   Timer? _typingTimer;
+  Timer? _recordingActionTimer;
   String? _typingUserName;
   String? _typingUserId;
 
@@ -325,7 +329,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         onScrollToMessage: (id) => _scrollToMessage(id),
         onPlayNext: _playNextMediaNote,
         onBuildPlaylist: (id) => _buildPlaylistFrom(id),
+        onMessageListenedLocally: _onLocalMessageListened,
       ),
+    );
+    ProximityAudioService.instance.registerOpenChat(
+      widget.chatId,
+      onRaiseToListenFirstUnplayed: _onRaiseToListenFirstUnplayed,
     );
     NotificationService().addActiveChat(widget.chatId);
 
@@ -772,6 +781,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onMessageDeleted: _onMessageDeleted,
       onReactionUpdated: _onMessageReactionUpdated,
       onMessageRead: _onMessageRead,
+      onMessageListened: _onMessageListened,
       onTyping: _onTypingIndicator,
       onUserStatus: _onUserStatusUpdate,
       onUnreadCountUpdated: _onUnreadCountUpdated,
@@ -1155,12 +1165,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final typingUserId = event.data['user_id']?.toString();
     if (typingUserId == _currentUserId) return;
 
-    final bool isTyping = event.data['is_typing'] != false;
+    final action = event.data['action']?.toString() ?? 'typing';
+    final bool isTyping = event.data['is_typing'] != false && action != 'stop';
     if (!isTyping) {
       if (mounted && _typingUserId == typingUserId) {
         _typingTimer?.cancel();
         setState(() {
           _isTyping = false;
+          _typingAction = 'typing';
           _typingUserId = null;
           _typingUserName = null;
         });
@@ -1187,6 +1199,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _typingUserId = typingUserId;
         _typingUserName = name;
         _isTyping = true;
+        _typingAction = action;
       });
 
       // Clear typing indicator after 4 seconds (Telegram-like smooth window)
@@ -1195,6 +1208,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted) {
           setState(() {
             _isTyping = false;
+            _typingAction = 'typing';
             _typingUserId = null;
             _typingUserName = null;
           });
@@ -1258,7 +1272,27 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _typingKeepAliveTimer = null;
     if (_amITyping) {
       _amITyping = false;
-      _wsService.sendTypingIndicator(widget.chatId, isTyping: false);
+      _wsService.sendTypingIndicator(widget.chatId, isTyping: false, action: 'stop');
+    }
+  }
+
+  void _startRecordingActionBroadcast(String action) {
+    _recordingActionTimer?.cancel();
+    _wsService.sendTypingIndicator(widget.chatId, isTyping: true, action: action);
+    _recordingActionTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (mounted && (_isVoiceRecording || _isVideoRecording)) {
+        _wsService.sendTypingIndicator(widget.chatId, isTyping: true, action: action);
+      } else {
+        _stopRecordingActionBroadcast();
+      }
+    });
+  }
+
+  void _stopRecordingActionBroadcast() {
+    if (_recordingActionTimer != null) {
+      _recordingActionTimer?.cancel();
+      _recordingActionTimer = null;
+      _wsService.sendTypingIndicator(widget.chatId, isTyping: false, action: 'stop');
     }
   }
 
@@ -1267,17 +1301,92 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final readerId = event.data['reader_id']?.toString();
     if (readerId == _currentUserId) return;
 
+    final readAt = event.data['read_at']?.toString() ?? DateTime.now().toUtc().toIso8601String();
+    final upToMessageId = event.data['up_to_message_id']?.toString();
+
     if (mounted) {
       setState(() {
-        // Mark all messages sent by current user as read
-        for (int i = 0; i < _messages.length; i++) {
+        int upToIndex = 0;
+        if (upToMessageId != null && upToMessageId.isNotEmpty) {
+          final foundIndex = _messages.indexWhere((m) => m.id == upToMessageId);
+          if (foundIndex >= 0) {
+            upToIndex = foundIndex;
+          }
+        }
+        // Messages list is newest-first (index 0 is newest)
+        for (int i = upToIndex; i < _messages.length; i++) {
           if (_messages[i].senderId == _currentUserId) {
-            _messages[i] = _messages[i].copyWith(isRead: true);
+            _messages[i] = _messages[i].copyWith(
+              isRead: true,
+              readAt: _messages[i].readAt ?? readAt,
+            );
           }
         }
         _updateFeedItems();
       });
+
+      if (_currentUserId != null) {
+        context
+            .read<AppDatabase>()
+            .markMessagesAsRead(widget.chatId, _currentUserId!, readAt: readAt);
+      }
     }
+  }
+
+  void _onMessageListened(WebSocketEvent event) {
+    final chatId = event.data['chat_id']?.toString();
+    if (chatId != widget.chatId) return;
+
+    final messageId = event.data['message_id']?.toString() ?? '';
+    if (messageId.isEmpty) return;
+
+    final listenedAt = event.data['listened_at']?.toString() ??
+        DateTime.now().toUtc().toIso8601String();
+    final readAt = event.data['read_at']?.toString() ?? listenedAt;
+
+    if (mounted) {
+      setState(() {
+        final index = _messages.indexWhere((m) => m.id == messageId);
+        if (index >= 0) {
+          _messages[index] = _messages[index].copyWith(
+            isRead: true,
+            isListened: true,
+            readAt: _messages[index].readAt ?? readAt,
+            listenedAt: _messages[index].listenedAt ?? listenedAt,
+          );
+          _updateFeedItems();
+        }
+      });
+
+      context.read<AppDatabase>().updateMessageReadAndListened(
+            messageId,
+            readAt: readAt,
+            listenedAt: listenedAt,
+            isListened: true,
+          );
+    }
+  }
+
+  void _onLocalMessageListened(String messageId, String listenedAt) {
+    if (!mounted) return;
+    setState(() {
+      final index = _messages.indexWhere((m) => m.id == messageId);
+      if (index >= 0) {
+        _messages[index] = _messages[index].copyWith(
+          isRead: true,
+          isListened: true,
+          readAt: _messages[index].readAt ?? listenedAt,
+          listenedAt: _messages[index].listenedAt ?? listenedAt,
+        );
+        _updateFeedItems();
+      }
+    });
+    context.read<AppDatabase>().updateMessageReadAndListened(
+          messageId,
+          readAt: listenedAt,
+          listenedAt: listenedAt,
+          isListened: true,
+        );
   }
 
   Future<void> _markMessagesAsRead() async {
@@ -1663,9 +1772,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       linkPreviewOptions: msg.linkPreviewOptions != null
           ? Value(jsonEncode(msg.linkPreviewOptions!.toJson()))
           : const Value.absent(),
-      mediaPayload: msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty
-          ? Value(jsonEncode(msg.mediaPayload))
-          : const Value.absent(),
+      mediaPayload: (() {
+        final mergedPayload = <String, dynamic>{
+          if (msg.mediaPayload != null) ...msg.mediaPayload!,
+          if (msg.readAt != null && msg.readAt!.isNotEmpty)
+            'read_at': msg.readAt,
+          if (msg.listenedAt != null && msg.listenedAt!.isNotEmpty)
+            'listened_at': msg.listenedAt,
+          if (msg.isListened) 'is_listened': true,
+        };
+        return mergedPayload.isNotEmpty
+            ? Value<String?>(jsonEncode(mergedPayload))
+            : const Value<String?>.absent();
+      })(),
       invertMedia: Value(msg.invertMedia),
       isForward: Value(msg.isForward),
       forwardFromId: Value(msg.forwardFromId),
@@ -2873,6 +2992,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _showScrollDownFabNotifier.dispose();
     _uploadProgressNotifier.dispose();
     _stopMyTyping();
+    _stopRecordingActionBroadcast();
     _tabController.dispose();
     _messageController.dispose();
     _scrollController.dispose();
@@ -2903,8 +3023,46 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _voiceRecorderService.dispose();
 
     MediaPlaybackCoordinator.instance.unregisterChat(widget.chatId);
+    ProximityAudioService.instance.unregisterOpenChat(widget.chatId);
 
     super.dispose();
+  }
+
+  Future<bool> _onRaiseToListenFirstUnplayed() async {
+    if (!mounted || _isVoiceRecording || _isVideoRecording) return false;
+    // Find the chronologically oldest unlistened incoming voice message
+    for (int i = _messages.length - 1; i >= 0; i--) {
+      final m = _messages[i];
+      if (m.senderId != _currentUserId &&
+          m.messageType == 'voice' &&
+          !m.isListened) {
+        final rawUrl = m.fileUrl ?? '';
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        if (resolvedUrl.isEmpty) continue;
+
+        final track = PlaybackTrack(
+          messageId: m.id,
+          chatId: widget.chatId,
+          chatType: 'group',
+          mediaType: 'voice',
+          mediaUrl: resolvedUrl,
+          senderName: m.senderName,
+          chatTitle: widget.groupName,
+          duration: m.duration != null && m.duration! > 0
+              ? Duration(seconds: m.duration!)
+              : null,
+          waveform: m.waveform,
+        );
+        final remainingQueue = _buildPlaylistFrom(m.id);
+        await MediaPlaybackCoordinator.instance.startPlayback(
+          track: track,
+          remainingQueue: remainingQueue,
+          isIncomingUnplayed: true,
+        );
+        return true;
+      }
+    }
+    return false;
   }
 
   List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {
@@ -3009,8 +3167,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final int onlineCount = _participants.where((p) => p.isOnline).length;
     final String statusSubtitle;
     if (_isTyping && _typingUserName != null && _typingUserName!.isNotEmpty) {
+      final String l10nKey;
+      if (_typingAction == 'record_voice') {
+        l10nKey = 'chat_user_recording_voice';
+      } else if (_typingAction == 'record_round') {
+        l10nKey = 'chat_user_recording_round';
+      } else {
+        l10nKey = 'chat_user_typing';
+      }
       statusSubtitle = context.l10n
-          .translate('chat_user_typing')
+          .translate(l10nKey)
           .replaceAll('{name}', _typingUserName!);
     } else if (onlineCount >= 1) {
       statusSubtitle = context.l10n
@@ -3036,6 +3202,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           } else if (_isVideoRecording) {
             _onVideoRecordingCancelled();
           } else if (_isVoiceRecording) {
+            _stopRecordingActionBroadcast();
             _voiceRecorderService.cancelRecording();
             setState(() => _isVoiceRecording = false);
           }
@@ -3396,12 +3563,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 child: VoiceRecordingOverlay(
                   key: _voiceOverlayKey,
                   recorderService: _voiceRecorderService,
-                  onCancel: () => setState(() => _isVoiceRecording = false),
+                  onCancel: () {
+                    _stopRecordingActionBroadcast();
+                    setState(() => _isVoiceRecording = false);
+                  },
                   onSend: (res) async {
+                    _stopRecordingActionBroadcast();
                     setState(() => _isVoiceRecording = false);
                     await _sendVoiceMessage(res);
                   },
                   onTooShort: () {
+                    _stopRecordingActionBroadcast();
                     setState(() => _isVoiceRecording = false);
                     HapticFeedback.selectionClick();
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -3515,6 +3687,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       album: album,
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
+      chatType: 'group',
       senderName: isMe ? null : message.senderName,
       formatTime: _formatTime,
       onFileTap: (url, name, type) => _openFile(url, name, type),
@@ -3801,10 +3974,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     );
   }
 
+  bool _isVideoPointerDown = false;
+  bool _isVoicePointerDown = false;
+
   Future<void> _onStartVideoRecord() async {
+    _isVideoPointerDown = true;
     _dismissKeyboardAndEmoji();
     final hasPerms = await _videoRecorderService.hasPermissions();
     if (!hasPerms) {
+      _isVideoPointerDown = false;
       final permanentlyDenied =
           await _videoRecorderService.isPermanentlyDenied();
       if (permanentlyDenied) {
@@ -3855,10 +4033,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       return;
     }
 
+    if (!_isVideoPointerDown) return;
+
     HapticFeedback.heavyImpact();
     setState(() => _isVideoRecording = true);
+    _startRecordingActionBroadcast('record_round');
     final ok = await _videoRecorderService.startRecording();
+    if (!_isVideoPointerDown && ok) {
+      await _videoRecorderService.cancelRecording();
+      if (mounted) {
+        _onVideoRecordingTooShort();
+      }
+      return;
+    }
     if (!ok && mounted) {
+      _stopRecordingActionBroadcast();
       setState(() => _isVideoRecording = false);
       final isPermDenied =
           _videoRecorderService.errorMessage == 'permission_denied';
@@ -3889,22 +4078,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onVideoRecordEnd() {
+    _isVideoPointerDown = false;
     if (!_isVideoRecording) return;
     final state = _videoOverlayKey.currentState as dynamic;
     state?.handlePointerUp();
   }
 
   void _onVideoRecordCancel() {
+    _isVideoPointerDown = false;
     if (!_isVideoRecording) return;
+    final state = _videoOverlayKey.currentState as dynamic;
+    if (state?.isLocked == true) return;
+    _stopRecordingActionBroadcast();
     _videoRecorderService.cancelRecording();
     setState(() => _isVideoRecording = false);
   }
 
   void _onVideoRecordingCancelled() {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
   }
 
   void _onVideoRecordingTooShort() {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
     HapticFeedback.selectionClick();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -3918,14 +4114,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _onVideoRecordingSend(File file) async {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
     await _sendRoundVideoMessage(file);
   }
 
   Future<void> _onStartVoiceRecord() async {
+    _isVoicePointerDown = true;
     _dismissKeyboardAndEmoji();
-    var hasPerm = await _voiceRecorderService.hasPermission();
+    final hasPerm = await _voiceRecorderService.hasPermission();
     if (!hasPerm) {
+      _isVoicePointerDown = false;
       final isPermanentlyDenied = await _voiceRecorderService.isPermanentlyDenied();
       if (isPermanentlyDenied) {
         if (mounted) {
@@ -3945,14 +4144,37 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
       final granted = await _voiceRecorderService.requestPermissions();
       if (!granted) return;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.l10n.translate('chat_video_note_hold_hint'),
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
     }
+
+    if (!_isVoicePointerDown) return;
 
     VoicePlaybackService().stopVoice();
     VideoNotePlaybackService().stopActivePlayback();
 
     final started = await _voiceRecorderService.startRecording();
+    if (!_isVoicePointerDown) {
+      if (started) {
+        await _voiceRecorderService.cancelRecording();
+      }
+      if (mounted) {
+        setState(() => _isVoiceRecording = false);
+      }
+      return;
+    }
     if (started && mounted) {
       setState(() => _isVoiceRecording = true);
+      _startRecordingActionBroadcast('record_voice');
     }
   }
 
@@ -3963,13 +4185,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onVoiceRecordEnd() {
+    _isVoicePointerDown = false;
     if (!_isVoiceRecording) return;
     final state = _voiceOverlayKey.currentState as dynamic;
     state?.handlePointerUp();
   }
 
   void _onVoiceRecordCancel() {
+    _isVoicePointerDown = false;
     if (!_isVoiceRecording) return;
+    final state = _voiceOverlayKey.currentState as dynamic;
+    if (state?.isLocked == true) return;
+    _stopRecordingActionBroadcast();
     _voiceRecorderService.cancelRecording();
     setState(() => _isVoiceRecording = false);
   }
@@ -3979,7 +4206,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final voiceLabel =
         AppLocalizations.of(context)?.translate('chat_voice_message') ??
             'Voice message';
-    if (!await file.exists() || await file.length() == 0) {
+    if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
       debugPrint('Voice file is empty or does not exist');
       return;
     }
@@ -3996,7 +4223,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     DbMessage? pendingMsg;
 
     try {
-      final fileName = file.path.split(Platform.pathSeparator).last;
+      final fileName = kIsWeb
+          ? 'voice_${DateTime.now().millisecondsSinceEpoch}.webm'
+          : file.path.split(Platform.pathSeparator).last;
       try {
         pendingMsg = await syncService.createPendingMessage(
           chatId: widget.chatId,
@@ -4057,7 +4286,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
 
       // 2. Upload voice file to MinIO storage
-      final uploadResult = await _fileService.uploadFile(file);
+      setState(() => _isUploading = true);
+      final uploadResult = await _fileService.uploadFile(
+        file,
+        onProgress: (progress) {
+          if (mounted) _uploadProgressNotifier.value = progress;
+        },
+      );
+
+      final effectiveDuration = uploadResult.duration > 0
+          ? uploadResult.duration
+          : result.duration.inSeconds;
 
       // 3. Send message via ChatService
       final sendResult = await ChatService.sendMessage(
@@ -4074,10 +4313,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         quoteOffset: replyQuoteOffset,
         quoteLength: replyQuoteLength,
         waveform: result.waveform,
-        duration: result.duration.inSeconds,
+        duration: effectiveDuration,
       );
 
       if (sendResult['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
         final sentMessage = sendResult['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
@@ -4093,13 +4336,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     localId: pendingLocalId,
                     replyInfo: _messages[idx].replyInfo,
                     waveform: sentMessage.waveform ?? _messages[idx].waveform,
-                    duration: sentMessage.duration ?? _messages[idx].duration,
+                    duration: sentMessage.duration ?? effectiveDuration,
                     fileUrl: uploadResult.url,
                   );
                 } else {
                   _messages[idx] = _messages[idx].copyWith(
                     id: serverId,
                     sendStatus: 1,
+                    duration: effectiveDuration,
                     fileUrl: uploadResult.url,
                   );
                 }
@@ -4138,6 +4382,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           });
         }
       }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+          _uploadProgressNotifier.value = 0.0;
+        });
+      }
     }
   }
 
@@ -4145,11 +4396,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final videoNoteLabel =
         AppLocalizations.of(context)?.translate('chat_video_note') ??
             'Video message';
-    if (!await file.exists() || await file.length() == 0) {
+    if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
       debugPrint('Video file is empty or does not exist');
       return;
     }
 
+    final recordedDurationSec = math.max(1, _videoRecorderService.elapsed.inSeconds);
     final replyTo = _replyToMessage;
     final replyIsQuote = _isQuote;
     final replyQuoteText = _quoteText;
@@ -4162,7 +4414,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     DbMessage? pendingMsg;
 
     try {
-      final fileName = file.path.split(Platform.pathSeparator).last;
+      final fileName = kIsWeb
+          ? 'video_note_${DateTime.now().millisecondsSinceEpoch}.webm'
+          : file.path.split(Platform.pathSeparator).last;
       // 1. Immediately create pending message with local file path for instant preview
       try {
         pendingMsg = await syncService.createPendingMessage(
@@ -4173,6 +4427,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           fileUrl: file.path,
           fileName: fileName,
           isRound: true,
+          duration: recordedDurationSec,
           replyToMessageId: replyTo?.id,
           isQuote: replyIsQuote,
           quoteText: replyQuoteText,
@@ -4190,7 +4445,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       if (pendingMsg != null) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
-        var message = Message.fromDbMessage(pendingMsg);
+        var message = Message.fromDbMessage(pendingMsg).copyWith(
+          duration: recordedDurationSec,
+        );
         if (replyTo != null) {
           final isReplyToMe = replyTo.senderId == _currentUserId;
           message = message.copyWith(
@@ -4220,7 +4477,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
 
       // 2. Upload file to MinIO storage
-      final uploadResult = await _fileService.uploadFileChunked(file);
+      setState(() => _isUploading = true);
+      final uploadResult = await _fileService.uploadFileChunked(
+        file,
+        onProgress: (progress) {
+          if (mounted) _uploadProgressNotifier.value = progress;
+        },
+      );
+
+      final effectiveDuration = uploadResult.duration > 0
+          ? uploadResult.duration
+          : recordedDurationSec;
 
       // 3. Send message via ChatService
       final result = await ChatService.sendMessage(
@@ -4232,6 +4499,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         fileName: uploadResult.fileName,
         mediaPayload: uploadResult.toMediaPayload(),
         isRound: true,
+        duration: effectiveDuration,
         replyToMessageId: replyTo?.id,
         isQuote: replyIsQuote,
         quoteText: replyQuoteText,
@@ -4240,6 +4508,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
 
       if (result['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
@@ -4253,8 +4525,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 if (sentMessage is Message) {
                   _messages[idx] = sentMessage.copyWith(
                     localId: pendingLocalId,
+                    replyInfo: _messages[idx].replyInfo,
                     sendStatus: 1,
                     isRound: true,
+                    duration: sentMessage.duration ?? effectiveDuration,
                     fileUrl: uploadResult.url,
                   );
                 } else {
@@ -4262,6 +4536,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     id: serverId,
                     sendStatus: 1,
                     isRound: true,
+                    duration: effectiveDuration,
                     fileUrl: uploadResult.url,
                   );
                 }
@@ -4308,6 +4583,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             ),
           ),
         );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+          _uploadProgressNotifier.value = 0.0;
+        });
       }
     }
   }

@@ -37,6 +37,7 @@ import '../../services/websocket_service.dart';
 import '../../services/notification_service.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../services/update_service.dart';
+import '../../services/tiling_layout_controller.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'widgets/update_dialog.dart';
 
@@ -842,6 +843,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
 
     if (confirmed == true) {
+      TilingLayoutController.instance.closeAllChats();
       // 1. Immediately kick user to LoginScreen using root navigator
       final nav = DeepLinkService().navigatorKey.currentState ??
           Navigator.of(context, rootNavigator: true);
@@ -964,6 +966,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         SnackBar(content: Text(l10n.translate('clear_data_success'))),
       );
 
+      TilingLayoutController.instance.closeAllChats();
       final nav = DeepLinkService().navigatorKey.currentState ??
           (context.mounted ? Navigator.of(context, rootNavigator: true) : null);
       nav?.pushAndRemoveUntil(

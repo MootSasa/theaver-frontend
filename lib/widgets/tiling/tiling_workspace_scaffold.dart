@@ -39,6 +39,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   final TilingLayoutController _controller = TilingLayoutController.instance;
   final GlobalKey _rightWorkspaceKey = GlobalKey(debugLabel: 'RightChatWorkspace');
   final GlobalKey _leftTileSubtreeKey = GlobalKey(debugLabel: 'LeftMainTileSubtree');
+  final GlobalKey<NavigatorState> _leftTileNavigatorKey =
+      GlobalKey<NavigatorState>(debugLabel: 'LeftMainTileNavigator');
   final Map<String, GlobalKey> _chatTileSubtreeKeys = {};
   late final HeroController _leftHeroController =
       MaterialApp.createMaterialHeroController();
@@ -64,9 +66,12 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       reverseDuration: const Duration(milliseconds: 250),
       value: _wasShowingSinglePaneChat ? 1.0 : 0.0,
     );
-    _controller.rightWorkspaceRectResolver = _getRightWorkspaceGlobalRect;
-    _controller.onRequestAnimatedSinglePaneClose = _animateCloseSinglePaneChat;
-    _controller.setWorkspaceMounted(true);
+    _controller.attachWorkspace(
+      owner: this,
+      leftTileNavigatorKey: _leftTileNavigatorKey,
+      rightWorkspaceRectResolver: _getRightWorkspaceGlobalRect,
+      onRequestAnimatedSinglePaneClose: _animateCloseSinglePaneChat,
+    );
     _controller.addListener(_onControllerChanged);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
   }
@@ -75,14 +80,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _controller.removeListener(_onControllerChanged);
-    if (_controller.rightWorkspaceRectResolver == _getRightWorkspaceGlobalRect) {
-      _controller.rightWorkspaceRectResolver = null;
-    }
-    if (_controller.onRequestAnimatedSinglePaneClose ==
-        _animateCloseSinglePaneChat) {
-      _controller.onRequestAnimatedSinglePaneClose = null;
-    }
-    _controller.setWorkspaceMounted(false);
+    _controller.detachWorkspace(this);
     _singlePaneChatController.dispose();
     _leftHeroController.dispose();
     for (final ctrl in _chatTileHeroControllers.values) {
@@ -155,6 +153,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
   bool _onHardwareKey(KeyEvent event) {
     if (!mounted) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
     if (event is KeyDownEvent &&
         (event.logicalKey == LogicalKeyboardKey.escape ||
             event.logicalKey == LogicalKeyboardKey.browserBack ||
@@ -243,7 +243,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           child: HeroControllerScope(
             controller: _leftHeroController,
             child: Navigator(
-              key: _controller.leftTileNavigatorKey,
+              key: _leftTileNavigatorKey,
               onGenerateRoute: (settings) {
                 final sub = _onGenerateSubRoute(settings);
                 if (sub != null) return sub;

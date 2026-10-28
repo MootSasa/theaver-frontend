@@ -357,6 +357,7 @@ class MediaCacheManager {
             final isTempUpload = normSource.startsWith(normTemp) &&
                 (base.startsWith('voice_note_') ||
                     base.startsWith('video_note_') ||
+                    base.startsWith('REC') ||
                     base.startsWith('send_') ||
                     base.startsWith('image_picker') ||
                     base.startsWith('scaled_'));

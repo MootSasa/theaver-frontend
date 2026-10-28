@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:just_audio/just_audio.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/voice_note_recorder_service.dart';
@@ -43,16 +45,26 @@ class VoiceRecordingOverlay extends StatefulWidget {
 }
 
 class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _fadeController;
   late AnimationController _pulseController;
   late AnimationController _lockSlideController;
 
   bool _isLocked = false;
+  bool get isLocked => _isLocked;
   bool _isSending = false;
   bool _isCancelling = false;
   double _dragOffsetX = 0.0;
   double _dragOffsetY = 0.0;
+
+  // Preview player state (in locked mode after pressing stop)
+  AudioPlayer? _previewPlayer;
+  StreamSubscription<PlayerState>? _previewStateSub;
+  StreamSubscription<Duration>? _previewPosSub;
+  StreamSubscription<Duration?>? _previewDurSub;
+  bool _isPreviewPlaying = false;
+  Duration _previewPosition = Duration.zero;
+  Duration _previewDuration = Duration.zero;
 
   static const double _kCancelThreshold = -85.0;
   static const double _kLockThreshold = -70.0;
@@ -60,6 +72,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _fadeController = AnimationController(
       vsync: this,
@@ -79,14 +92,130 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     widget.recorderService.addListener(_onRecorderUpdate);
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if ((state == AppLifecycleState.paused ||
+            state == AppLifecycleState.inactive) &&
+        !_isSending &&
+        !_isCancelling &&
+        widget.recorderService.isRecording) {
+      if (!_isLocked) {
+        _lockRecording();
+      }
+      if (!widget.recorderService.isPaused) {
+        widget.recorderService.pauseRecording();
+      }
+    }
+  }
+
   void _onRecorderUpdate() {
     if (mounted) setState(() {});
   }
 
+  Future<void> _disposePreviewPlayer() async {
+    await _previewStateSub?.cancel();
+    _previewStateSub = null;
+    await _previewPosSub?.cancel();
+    _previewPosSub = null;
+    await _previewDurSub?.cancel();
+    _previewDurSub = null;
+    final p = _previewPlayer;
+    _previewPlayer = null;
+    if (p != null) {
+      try {
+        await p.stop();
+        await p.dispose();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _stopToPreview() async {
+    if (_isSending || _isCancelling) return;
+    if (widget.recorderService.elapsed.inMilliseconds < 1000) {
+      _discardTooShort();
+      return;
+    }
+    HapticFeedback.selectionClick();
+    final res = await widget.recorderService.stopForPreview();
+    if (!mounted || res == null) return;
+
+    await _disposePreviewPlayer();
+    final player = AudioPlayer();
+    _previewPlayer = player;
+    _previewDuration = res.duration;
+    _previewPosition = Duration.zero;
+    _isPreviewPlaying = false;
+
+    _previewStateSub = player.playerStateStream.listen((state) {
+      if (!mounted) return;
+      final playing =
+          state.playing && state.processingState != ProcessingState.completed;
+      if (state.processingState == ProcessingState.completed) {
+        player.pause();
+        player.seek(Duration.zero);
+        setState(() {
+          _isPreviewPlaying = false;
+          _previewPosition = Duration.zero;
+        });
+      } else if (_isPreviewPlaying != playing) {
+        setState(() => _isPreviewPlaying = playing);
+      }
+    });
+
+    _previewPosSub = player.positionStream.listen((pos) {
+      if (!mounted) return;
+      setState(() => _previewPosition = pos);
+    });
+
+    _previewDurSub = player.durationStream.listen((dur) {
+      if (!mounted || dur == null || dur <= Duration.zero) return;
+      setState(() => _previewDuration = dur);
+    });
+
+    try {
+      if (kIsWeb ||
+          res.file.path.startsWith('http') ||
+          res.file.path.startsWith('blob:')) {
+        await player.setUrl(res.file.path);
+      } else {
+        await player.setFilePath(res.file.path);
+      }
+    } catch (e) {
+      debugPrint('[VoiceRecordingOverlay] preview player init error: $e');
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _togglePreviewPlayPause() async {
+    final p = _previewPlayer;
+    if (p == null) return;
+    HapticFeedback.selectionClick();
+    if (_isPreviewPlaying) {
+      await p.pause();
+    } else {
+      await p.play();
+    }
+  }
+
+  void _seekPreview(double localDx, double totalWidth) {
+    final p = _previewPlayer;
+    if (p == null || totalWidth <= 0) return;
+    final durMs = _previewDuration.inMilliseconds;
+    if (durMs <= 0) return;
+    final fraction = (localDx / totalWidth).clamp(0.0, 1.0);
+    final target = Duration(milliseconds: (fraction * durMs).round());
+    setState(() => _previewPosition = target);
+    p.seek(target);
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.recorderService.removeListener(_onRecorderUpdate);
-    if (!_isSending && widget.recorderService.isRecording) {
+    _disposePreviewPlayer();
+    if (!_isSending &&
+        (widget.recorderService.isRecording ||
+            widget.recorderService.isPreview)) {
       widget.recorderService.cancelRecording();
     }
     _fadeController.dispose();
@@ -151,8 +280,13 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     HapticFeedback.lightImpact();
 
     try {
+      await _disposePreviewPlayer();
       final result = await widget.recorderService.stopRecording();
-      if (result != null && result.file.existsSync() && await result.file.length() > 0) {
+      final isValidFile = result != null &&
+          (kIsWeb
+              ? result.file.path.isNotEmpty
+              : (result.file.existsSync() && await result.file.length() > 0));
+      if (isValidFile) {
         widget.onSend(result);
       } else {
         widget.onCancel();
@@ -168,6 +302,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     _isCancelling = true;
     HapticFeedback.heavyImpact();
 
+    await _disposePreviewPlayer();
     await widget.recorderService.cancelRecording();
     if (mounted) {
       widget.onCancel();
@@ -429,18 +564,116 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
 
   Widget _buildLockedControls(BuildContext context, Color primaryColor, String elapsedText) {
     final isPaused = widget.recorderService.isPaused;
+    final isPreview = widget.recorderService.isPreview;
+    final previewRes = widget.recorderService.previewResult;
+
+    if (isPreview && previewRes != null) {
+      final totalMs = _previewDuration.inMilliseconds;
+      final progress = totalMs > 0
+          ? (_previewPosition.inMilliseconds / totalMs).clamp(0.0, 1.0)
+          : 0.0;
+      final timeLabel = _isPreviewPlaying || _previewPosition > Duration.zero
+          ? _formatDuration(_previewPosition)
+          : _formatDuration(_previewDuration);
+
+      return Row(
+        children: [
+          // 1. Trash / Discard Button
+          IconButton(
+            icon: const iconoir.Trash(width: 22, height: 22, color: Colors.redAccent),
+            onPressed: _cancelRecording,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          ),
+
+          // 2. Play / Pause Preview Button
+          GestureDetector(
+            onTap: _togglePreviewPlayPause,
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: primaryColor.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                _isPreviewPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                size: 22,
+                color: primaryColor,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // 3. Interactive Waveform Scrubber
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (d) =>
+                      _seekPreview(d.localPosition.dx, constraints.maxWidth),
+                  onHorizontalDragUpdate: (d) =>
+                      _seekPreview(d.localPosition.dx, constraints.maxWidth),
+                  child: SizedBox(
+                    height: 28,
+                    child: CustomPaint(
+                      painter: _PreviewWaveformPainter(
+                        waveform: previewRes.waveform,
+                        progress: progress,
+                        activeColor: primaryColor,
+                        inactiveColor: primaryColor.withValues(alpha: 0.28),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // 4. Preview Timer
+          Text(
+            timeLabel,
+            style: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // 5. Send Button
+          GestureDetector(
+            onTap: _sendRecording,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: primaryColor,
+                shape: BoxShape.circle,
+              ),
+              child: const Center(
+                child: iconoir.SendSolid(width: 20, height: 20, color: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
 
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         // 1. Trash / Discard Button
         IconButton(
-          icon: const iconoir.Trash(width: 24, height: 24, color: Colors.redAccent),
+          icon: const iconoir.Trash(width: 22, height: 22, color: Colors.redAccent),
           onPressed: _cancelRecording,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
           tooltip: 'Discard',
         ),
+        const SizedBox(width: 4),
 
-        // 2. Timer & Live/Static Waveform
+        // 2. Timer
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -455,18 +688,27 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
             const SizedBox(width: 6),
             Text(
               elapsedText,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold),
             ),
           ],
         ),
+        const SizedBox(width: 8),
 
-        // 3. Pause / Resume Button
+        // 3. Live Waveform
+        Expanded(
+          child: _buildLiveWaveform(primaryColor),
+        ),
+        const SizedBox(width: 4),
+
+        // 4. Pause / Resume Recording Button
         IconButton(
           icon: Icon(
-            isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-            size: 28,
+            isPaused ? Icons.mic_rounded : Icons.pause_rounded,
+            size: 24,
             color: primaryColor,
           ),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
           onPressed: () {
             if (isPaused) {
               widget.recorderService.resumeRecording();
@@ -476,7 +718,21 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
           },
         ),
 
-        // 4. Send Button
+        // 5. Stop to Preview Button
+        IconButton(
+          icon: Icon(
+            Icons.stop_circle_outlined,
+            size: 24,
+            color: primaryColor,
+          ),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+          onPressed: _stopToPreview,
+          tooltip: 'Preview',
+        ),
+        const SizedBox(width: 6),
+
+        // 6. Send Button
         GestureDetector(
           onTap: _sendRecording,
           child: Container(
@@ -506,6 +762,58 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
         ),
       ),
     );
+  }
+}
+
+class _PreviewWaveformPainter extends CustomPainter {
+  final List<int> waveform;
+  final double progress;
+  final Color activeColor;
+  final Color inactiveColor;
+
+  const _PreviewWaveformPainter({
+    required this.waveform,
+    required this.progress,
+    required this.activeColor,
+    required this.inactiveColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (waveform.isEmpty || size.width <= 0) return;
+
+    final int count = waveform.length;
+    final double spacing = size.width / count;
+    final double strokeWidth = (spacing * 0.58).clamp(1.8, 3.2);
+    final double centerY = size.height / 2;
+
+    final activePaint = Paint()
+      ..color = activeColor
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = strokeWidth;
+    final inactivePaint = Paint()
+      ..color = inactiveColor
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = strokeWidth;
+
+    for (int i = 0; i < count; i++) {
+      final double x = (i + 0.5) * spacing;
+      final double norm = (waveform[i].clamp(2, 31)) / 31.0;
+      final double barH = math.max(3.0, norm * size.height * 0.88);
+      final bool isPlayed = (i / count) <= progress;
+      canvas.drawLine(
+        Offset(x, centerY - barH / 2),
+        Offset(x, centerY + barH / 2),
+        isPlayed ? activePaint : inactivePaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PreviewWaveformPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.waveform != waveform ||
+        oldDelegate.activeColor != activeColor;
   }
 }
 

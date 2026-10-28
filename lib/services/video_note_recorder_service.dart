@@ -11,16 +11,33 @@ import 'package:record/record.dart';
 /// Cross-platform service for recording Telegram-style circular video notes.
 /// Uses [camera_windows] on Windows for native direct recording, and [flutter_webrtc] on other platforms.
 class VideoNoteRecorderService with ChangeNotifier {
+  static final Map<String, List<String>> _multiSegmentsByPrimaryPath = {};
+
+  /// Retrieves and removes any multi-segment file paths associated with a recorded primary video note file.
+  static List<String>? takeRecordedSegments(String primaryPath) {
+    return _multiSegmentsByPrimaryPath.remove(primaryPath);
+  }
+
+  /// Peeks at any multi-segment file paths associated with a recorded primary video note file.
+  static List<String>? peekRecordedSegments(String primaryPath) {
+    return _multiSegmentsByPrimaryPath[primaryPath];
+  }
+
   RTCVideoRenderer? _renderer;
   MediaStream? _stream;
   MediaRecorder? _recorder;
   CameraController? _cameraController;
   List<CameraDescription> _availableCameras = [];
+  final List<String> _recordedSegments = [];
+  final Stopwatch _stopwatch = Stopwatch();
   Timer? _timer;
   String? _currentFilePath;
 
   bool _isInitialized = false;
   bool _isRecording = false;
+  bool _isPaused = false;
+  bool _isPreview = false;
+  File? _previewFile;
   bool _isFrontCamera = true;
   Duration _elapsed = Duration.zero;
   String? _errorMessage;
@@ -31,8 +48,11 @@ class VideoNoteRecorderService with ChangeNotifier {
   bool get isCameraController => _cameraController != null;
   bool get isInitialized => _isInitialized;
   bool get isRecording => _isRecording;
+  bool get isPaused => _isPaused;
+  bool get isPreview => _isPreview;
+  File? get previewFile => _previewFile;
   bool get isFrontCamera => _isFrontCamera;
-  Duration get elapsed => _elapsed;
+  Duration get elapsed => _isRecording ? _stopwatch.elapsed : _elapsed;
   String? get errorMessage => _errorMessage;
   String? get currentFilePath => _currentFilePath;
   double get zoomLevel => _zoomLevel;
@@ -138,15 +158,12 @@ class VideoNoteRecorderService with ChangeNotifier {
                   : c.lensDirection == CameraLensDirection.back,
               orElse: () => _availableCameras.first,
             );
-            _cameraController = CameraController(
-              cam,
-              ResolutionPreset.medium,
-              enableAudio: true,
-            );
-            await _cameraController!.initialize();
-            _isInitialized = true;
-            notifyListeners();
-            return true;
+            final initialized = await _initCameraControllerWithFallback(cam);
+            if (initialized) {
+              _isInitialized = true;
+              notifyListeners();
+              return true;
+            }
           } else if (defaultTargetPlatform == TargetPlatform.windows) {
             _errorMessage = 'No camera available';
             notifyListeners();
@@ -185,6 +202,72 @@ class VideoNoteRecorderService with ChangeNotifier {
       _cleanupStream();
       notifyListeners();
       return false;
+    }
+  }
+
+  /// Initializes [CameraController] trying multiple [ResolutionPreset]s (`high` -> `medium` -> `low`)
+  /// and locks capture orientation to [DeviceOrientation.portraitUp] on mobile so tilted devices
+  /// never record sideways or upside-down video notes.
+  Future<bool> _initCameraControllerWithFallback(
+    CameraDescription cam, {
+    List<ResolutionPreset> presets = const [
+      ResolutionPreset.high,
+      ResolutionPreset.medium,
+      ResolutionPreset.low,
+    ],
+  }) async {
+    for (final preset in presets) {
+      CameraController? ctrl;
+      try {
+        ctrl = CameraController(
+          cam,
+          preset,
+          enableAudio: true,
+        );
+        await ctrl.initialize();
+        if (!kIsWeb &&
+            (defaultTargetPlatform == TargetPlatform.android ||
+             defaultTargetPlatform == TargetPlatform.iOS)) {
+          try {
+            await ctrl.lockCaptureOrientation(DeviceOrientation.portraitUp);
+          } catch (_) {}
+        }
+        _cameraController = ctrl;
+        return true;
+      } catch (e) {
+        debugPrint(
+            'VideoNoteRecorderService: CameraController preset $preset failed: $e');
+        try {
+          await ctrl?.dispose();
+        } catch (_) {}
+      }
+    }
+    _cameraController = null;
+    return false;
+  }
+
+  /// Ensures any file returned by `CameraController.stopVideoRecording()` (which on Android
+  /// often ends with `.temp`, e.g. `REC12345.temp`) is renamed to a clean `video_note_*.mp4` path.
+  Future<String> _normalizeRecordedSegmentPath(String rawPath) async {
+    try {
+      final rawFile = File(rawPath);
+      if (!await rawFile.exists()) return rawPath;
+      final dir = await getTemporaryDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final segIdx = _recordedSegments.length;
+      final targetPath = '${dir.path}/video_note_${ts}_seg$segIdx.mp4';
+      try {
+        final moved = await rawFile.rename(targetPath);
+        return moved.path;
+      } catch (_) {
+        final copied = await rawFile.copy(targetPath);
+        try {
+          await rawFile.delete();
+        } catch (_) {}
+        return copied.path;
+      }
+    } catch (_) {
+      return rawPath;
     }
   }
 
@@ -231,20 +314,45 @@ class VideoNoteRecorderService with ChangeNotifier {
     }
 
     try {
+      _isPreview = false;
+      _previewFile = null;
+      _recordedSegments.clear();
       final tempDir = await getTemporaryDirectory();
       const extension = kIsWeb ? 'webm' : 'mp4';
       _currentFilePath =
           '${tempDir.path}/video_note_${DateTime.now().millisecondsSinceEpoch}.$extension';
 
-      // 1. Windows CameraController path (hardware encoded MP4 with synchronized audio)
+      // 1. CameraController path (hardware encoded MP4 with synchronized audio)
       if (_cameraController != null && _cameraController!.value.isInitialized) {
-        await _cameraController!.startVideoRecording();
+        try {
+          await _cameraController!.startVideoRecording();
+        } catch (startErr) {
+          debugPrint(
+              'VideoNoteRecorderService: startVideoRecording failed on current preset, retrying lower preset: $startErr');
+          final cam = _cameraController!.description;
+          try {
+            await _cameraController!.dispose();
+          } catch (_) {}
+          _cameraController = null;
+          final reinit = await _initCameraControllerWithFallback(
+            cam,
+            presets: const [ResolutionPreset.medium, ResolutionPreset.low],
+          );
+          if (reinit && _cameraController != null) {
+            await _cameraController!.startVideoRecording();
+          } else {
+            rethrow;
+          }
+        }
         _isRecording = true;
         _elapsed = Duration.zero;
+        _stopwatch
+          ..reset()
+          ..start();
 
         _timer?.cancel();
         _timer = Timer.periodic(const Duration(milliseconds: 100), (t) {
-          _elapsed += const Duration(milliseconds: 100);
+          _elapsed = _stopwatch.elapsed;
           notifyListeners();
         });
 
@@ -258,14 +366,35 @@ class VideoNoteRecorderService with ChangeNotifier {
         _audioRecorder = AudioRecorder();
         _audioFilePath =
             '${tempDir.path}/audio_note_${DateTime.now().millisecondsSinceEpoch}.m4a';
-        await _audioRecorder!.start(
-          const RecordConfig(
+        const configs = [
+          RecordConfig(
             encoder: AudioEncoder.aacLc,
             bitRate: 96000,
             sampleRate: 44100,
+            numChannels: 1,
           ),
-          path: _audioFilePath!,
-        );
+          RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 44100,
+            numChannels: 1,
+          ),
+          RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          RecordConfig(
+            encoder: AudioEncoder.aacLc,
+          ),
+        ];
+        for (final cfg in configs) {
+          try {
+            await _audioRecorder!.start(cfg, path: _audioFilePath!);
+            break;
+          } catch (_) {}
+        }
       } catch (audioErr) {
         debugPrint('VideoNoteRecorderService: Audio recording start note: $audioErr');
       }
@@ -289,10 +418,13 @@ class VideoNoteRecorderService with ChangeNotifier {
 
       _isRecording = true;
       _elapsed = Duration.zero;
+      _stopwatch
+        ..reset()
+        ..start();
 
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(milliseconds: 100), (t) {
-        _elapsed += const Duration(milliseconds: 100);
+        _elapsed = _stopwatch.elapsed;
         notifyListeners();
       });
 
@@ -301,6 +433,7 @@ class VideoNoteRecorderService with ChangeNotifier {
     } catch (e) {
       debugPrint('VideoNoteRecorderService: Failed to start recording: $e');
       _isRecording = false;
+      _stopwatch.stop();
       _timer?.cancel();
       _timer = null;
       if (_audioRecorder != null) {
@@ -353,14 +486,22 @@ class VideoNoteRecorderService with ChangeNotifier {
             ),
           );
           final wasRecording = _isRecording;
+          if (wasRecording && _cameraController!.value.isRecordingVideo) {
+            try {
+              final segXFile = await _cameraController!.stopVideoRecording();
+              final segFile = File(segXFile.path);
+              if (await segFile.exists() && await segFile.length() > 0) {
+                final cleanSegPath = await _normalizeRecordedSegmentPath(segFile.path);
+                _recordedSegments.add(cleanSegPath);
+              }
+            } catch (stopErr) {
+              debugPrint('VideoNoteRecorderService: Segment stop on flip error: $stopErr');
+            }
+          }
           await _cameraController!.dispose();
-          _cameraController = CameraController(
-            nextCam,
-            ResolutionPreset.medium,
-            enableAudio: true,
-          );
-          await _cameraController!.initialize();
-          if (wasRecording) {
+          _cameraController = null;
+          final initialized = await _initCameraControllerWithFallback(nextCam);
+          if (initialized && wasRecording && _cameraController != null) {
             await _cameraController!.startVideoRecording();
           }
           _isFrontCamera = !_isFrontCamera;
@@ -409,24 +550,102 @@ class VideoNoteRecorderService with ChangeNotifier {
     }
   }
 
+  /// Pause an active video note recording (e.g. when app goes to background)
+  Future<void> pauseRecording() async {
+    if (!_isRecording || _isPaused) return;
+    _isPaused = true;
+    _stopwatch.stop();
+    _elapsed = _stopwatch.elapsed;
+    try {
+      if (_cameraController != null &&
+          _cameraController!.value.isRecordingVideo &&
+          !_cameraController!.value.isRecordingPaused) {
+        await _cameraController!.pauseVideoRecording();
+      }
+    } catch (e) {
+      debugPrint('VideoNoteRecorderService: pauseVideoRecording error: $e');
+    }
+    try {
+      await _audioRecorder?.pause();
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Resume a paused video note recording
+  Future<void> resumeRecording() async {
+    if (!_isRecording || !_isPaused) return;
+    _isPaused = false;
+    _stopwatch.start();
+    try {
+      if (_cameraController != null &&
+          _cameraController!.value.isRecordingVideo &&
+          _cameraController!.value.isRecordingPaused) {
+        await _cameraController!.resumeVideoRecording();
+      }
+    } catch (e) {
+      debugPrint('VideoNoteRecorderService: resumeVideoRecording error: $e');
+    }
+    try {
+      await _audioRecorder?.resume();
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Stop recording and enter preview mode so the user can review before sending
+  Future<File?> stopForPreview() async {
+    if (_isPreview && _previewFile != null) return _previewFile;
+    final file = await _stopRecordingInternal();
+    if (file != null) {
+      _previewFile = file;
+      _isPreview = true;
+      notifyListeners();
+    }
+    return file;
+  }
+
   /// Stop recording and return the finalized video file
   Future<File?> stopRecording() async {
+    if (_isPreview && _previewFile != null) {
+      final file = _previewFile;
+      _previewFile = null;
+      _isPreview = false;
+      notifyListeners();
+      return file;
+    }
+    return _stopRecordingInternal();
+  }
+
+  Future<File?> _stopRecordingInternal() async {
     if (!_isRecording) return null;
 
+    _stopwatch.stop();
+    _elapsed = _stopwatch.elapsed;
     _timer?.cancel();
     _timer = null;
     _isRecording = false;
+    _isPaused = false;
 
-    // 1. Windows CameraController
-    if (_cameraController != null && _cameraController!.value.isRecordingVideo) {
+    // 1. CameraController path
+    if (_cameraController != null) {
       File? resultFile;
       try {
-        final xfile = await _cameraController!.stopVideoRecording();
-        final file = File(xfile.path);
-        if (await file.exists() && await file.length() > 0) {
-          resultFile = file;
+        if (_cameraController!.value.isRecordingVideo) {
+          final xfile = await _cameraController!.stopVideoRecording();
+          final file = File(xfile.path);
+          if (await file.exists() && await file.length() > 0) {
+            final cleanSegPath = await _normalizeRecordedSegmentPath(file.path);
+            _recordedSegments.add(cleanSegPath);
+          }
+        }
+        if (_recordedSegments.isNotEmpty) {
+          final firstPath = _recordedSegments.first;
+          resultFile = File(firstPath);
+          if (_recordedSegments.length > 1) {
+            _multiSegmentsByPrimaryPath[firstPath] = List<String>.from(_recordedSegments);
+          }
+          _recordedSegments.clear();
           debugPrint(
-              'VideoNoteRecorderService: CameraController video recorded: ${file.path} (${await file.length()} bytes)');
+              'VideoNoteRecorderService: CameraController video recorded: ${resultFile.path} (${await resultFile.length()} bytes)');
         }
       } catch (e) {
         debugPrint('VideoNoteRecorderService: CameraController stop error: $e');
@@ -540,9 +759,36 @@ class VideoNoteRecorderService with ChangeNotifier {
 
   /// Cancel recording and discard the recorded file (e.g. slide to cancel)
   Future<void> cancelRecording() async {
+    _stopwatch.stop();
+    _stopwatch.reset();
     _timer?.cancel();
     _timer = null;
     _isRecording = false;
+    _isPreview = false;
+    if (_previewFile != null) {
+      final prevPath = _previewFile!.path;
+      final extraSegs = _multiSegmentsByPrimaryPath.remove(prevPath);
+      if (extraSegs != null) {
+        for (final seg in extraSegs) {
+          try {
+            final f = File(seg);
+            if (await f.exists()) await f.delete();
+          } catch (_) {}
+        }
+      }
+      try {
+        if (await _previewFile!.exists()) await _previewFile!.delete();
+      } catch (_) {}
+      _previewFile = null;
+    }
+
+    for (final segPath in _recordedSegments) {
+      try {
+        final f = File(segPath);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
+    _recordedSegments.clear();
 
     if (_cameraController != null && _cameraController!.value.isRecordingVideo) {
       try {

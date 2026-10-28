@@ -95,11 +95,17 @@ class _LoginScreenState extends State<LoginScreen> {
         
         if (!mounted) return;
         TilingLayoutController.instance.closeAllChats();
-        // Navigate to home screen and clear back stack
-        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
-          (route) => false,
-        );
+        final localNav = Navigator.of(context);
+        if (TilingLayoutController.instance.isWorkspaceMounted &&
+            localNav.canPop()) {
+          localNav.popUntil((route) => route.isFirst);
+        } else {
+          // Navigate to home screen and clear back stack
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
+            (route) => false,
+          );
+        }
       } else {
         setState(() {
           _isLoading = false;

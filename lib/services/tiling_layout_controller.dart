@@ -139,11 +139,19 @@ class TilingLayoutController extends ChangeNotifier {
   static const String kLeftTileId = 'left_main_tile';
 
   // === Навигаторы и состояние ===
-  final GlobalKey<NavigatorState> leftTileNavigatorKey =
+  GlobalKey<NavigatorState> _leftTileNavigatorKey =
       GlobalKey<NavigatorState>(debugLabel: 'LeftMainTileNavigator');
+  GlobalKey<NavigatorState> get leftTileNavigatorKey => _leftTileNavigatorKey;
+
+  Object? _activeWorkspaceOwner;
+
+  void attachLeftTileNavigatorKey(GlobalKey<NavigatorState> key) {
+    _leftTileNavigatorKey = key;
+  }
 
   bool _isWorkspaceMounted = false;
-  bool get isWorkspaceMounted => _isWorkspaceMounted;
+  bool get isWorkspaceMounted =>
+      _isWorkspaceMounted || (_leftTileNavigatorKey.currentContext != null);
 
   final List<ChatTileDescriptor> _chatTiles = [];
   List<ChatTileDescriptor> get chatTiles => List.unmodifiable(_chatTiles);
@@ -219,7 +227,38 @@ class TilingLayoutController extends ChangeNotifier {
   /// Колбэк для плавной анимации закрытия чата в однооконном режиме перед удалением тайла.
   Future<void> Function(String tileId)? onRequestAnimatedSinglePaneClose;
 
-  void setWorkspaceMounted(bool mounted) {
+  void attachWorkspace({
+    required Object owner,
+    required GlobalKey<NavigatorState> leftTileNavigatorKey,
+    required Rect? Function() rightWorkspaceRectResolver,
+    required Future<void> Function(String tileId)
+        onRequestAnimatedSinglePaneClose,
+  }) {
+    _activeWorkspaceOwner = owner;
+    _leftTileNavigatorKey = leftTileNavigatorKey;
+    this.rightWorkspaceRectResolver = rightWorkspaceRectResolver;
+    this.onRequestAnimatedSinglePaneClose = onRequestAnimatedSinglePaneClose;
+    _isWorkspaceMounted = true;
+    _recalculateSplitAndWindowLocks();
+  }
+
+  void detachWorkspace(Object owner) {
+    if (_activeWorkspaceOwner != owner) return;
+    _activeWorkspaceOwner = null;
+    _isWorkspaceMounted = false;
+    rightWorkspaceRectResolver = null;
+    onRequestAnimatedSinglePaneClose = null;
+  }
+
+  void setWorkspaceMounted(bool mounted, {Object? owner}) {
+    if (!mounted && owner != null && _activeWorkspaceOwner != owner) {
+      return;
+    }
+    if (mounted && owner != null) {
+      _activeWorkspaceOwner = owner;
+    } else if (!mounted) {
+      _activeWorkspaceOwner = null;
+    }
     _isWorkspaceMounted = mounted;
     if (mounted) {
       _recalculateSplitAndWindowLocks();
