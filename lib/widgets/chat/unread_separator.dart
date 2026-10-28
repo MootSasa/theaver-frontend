@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
@@ -156,39 +158,361 @@ class DateSeparator extends StatelessWidget {
   }
 }
 
-/// Плавающая (sticky) плашка с датой вверху экрана чата при прокрутке
+/// Состояние верхней закреплённой (sticky) плашки с датой в чате.
+@immutable
+class StickyDateState {
+  final DateTime? day;
+  final String label;
+  final GlobalKey? sameDaySepKey;
+  final GlobalKey? nextDaySepKey;
+
+  const StickyDateState({
+    required this.day,
+    required this.label,
+    this.sameDaySepKey,
+    this.nextDaySepKey,
+  });
+
+  static const StickyDateState empty = StickyDateState(day: null, label: '');
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is StickyDateState &&
+        other.day == day &&
+        other.label == label &&
+        other.sameDaySepKey == sameDaySepKey &&
+        other.nextDaySepKey == nextDaySepKey;
+  }
+
+  @override
+  int get hashCode => Object.hash(day, label, sameDaySepKey, nextDaySepKey);
+}
+
+/// Обёртка для инлайновой плашки даты внутри списка сообщений.
+/// Когда плашка доходит до верхней границы чата (`stickySlotKey`), она
+/// перестаёт рисоваться в потоке сообщений и передаёт отрисовку верхней
+/// закреплённой плашке (`FloatingChatDateHeader`), исключая дублирование
+/// и пересоздание виджетов.
+class InlineChatDateHeader extends SingleChildRenderObjectWidget {
+  final DateTime day;
+  final Listenable scrollListenable;
+  final GlobalKey stickySlotKey;
+  final ValueListenable<StickyDateState> stickyStateListenable;
+
+  const InlineChatDateHeader({
+    Key? key,
+    required this.day,
+    required this.scrollListenable,
+    required this.stickySlotKey,
+    required this.stickyStateListenable,
+    required Widget child,
+  }) : super(key: key, child: child);
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return RenderInlineChatDateHeader(
+      day: day,
+      scrollListenable: scrollListenable,
+      stickySlotKey: stickySlotKey,
+      stickyStateListenable: stickyStateListenable,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant RenderInlineChatDateHeader renderObject,
+  ) {
+    renderObject
+      ..day = day
+      ..scrollListenable = scrollListenable
+      ..stickySlotKey = stickySlotKey
+      ..stickyStateListenable = stickyStateListenable;
+  }
+}
+
+class RenderInlineChatDateHeader extends RenderProxyBox {
+  DateTime _day;
+  Listenable _scrollListenable;
+  GlobalKey _stickySlotKey;
+  ValueListenable<StickyDateState> _stickyStateListenable;
+
+  RenderInlineChatDateHeader({
+    required DateTime day,
+    required Listenable scrollListenable,
+    required GlobalKey stickySlotKey,
+    required ValueListenable<StickyDateState> stickyStateListenable,
+  })  : _day = day,
+        _scrollListenable = scrollListenable,
+        _stickySlotKey = stickySlotKey,
+        _stickyStateListenable = stickyStateListenable;
+
+  set day(DateTime value) {
+    if (_day == value) return;
+    _day = value;
+    markNeedsPaint();
+  }
+
+  set scrollListenable(Listenable value) {
+    if (identical(_scrollListenable, value)) return;
+    if (attached) {
+      _scrollListenable.removeListener(markNeedsPaint);
+      value.addListener(markNeedsPaint);
+    }
+    _scrollListenable = value;
+  }
+
+  set stickySlotKey(GlobalKey value) {
+    if (_stickySlotKey == value) return;
+    _stickySlotKey = value;
+    markNeedsPaint();
+  }
+
+  set stickyStateListenable(ValueListenable<StickyDateState> value) {
+    if (identical(_stickyStateListenable, value)) return;
+    if (attached) {
+      _stickyStateListenable.removeListener(markNeedsPaint);
+      value.addListener(markNeedsPaint);
+    }
+    _stickyStateListenable = value;
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _scrollListenable.addListener(markNeedsPaint);
+    _stickyStateListenable.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    _scrollListenable.removeListener(markNeedsPaint);
+    _stickyStateListenable.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (child == null || !hasSize) return false;
+    final stickyBox =
+        _stickySlotKey.currentContext?.findRenderObject() as RenderBox?;
+    if (stickyBox != null && stickyBox.attached && stickyBox.hasSize) {
+      final stickyTopY = stickyBox.localToGlobal(Offset.zero).dy;
+      final myTopY = localToGlobal(Offset.zero).dy;
+      if (myTopY <= stickyTopY + 0.5) {
+        return false;
+      }
+    }
+    return super.hitTest(result, position: position);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+    final stickyBox =
+        _stickySlotKey.currentContext?.findRenderObject() as RenderBox?;
+    if (stickyBox != null && stickyBox.attached && stickyBox.hasSize) {
+      final stickyTopY = stickyBox.localToGlobal(Offset.zero).dy;
+      final myTopY = localToGlobal(Offset.zero).dy;
+      if (myTopY <= stickyTopY + 0.5) {
+        final stickyDay = _stickyStateListenable.value.day;
+        if (stickyDay != null && !_day.isAfter(stickyDay)) {
+          // Плашка уже примагничена к верху чата (или вытеснена более новой датой)
+          return;
+        }
+        // Переходный кадр в момент пересечения границы: фиксируем ровно на stickyTopY
+        context.paintChild(child!, offset + Offset(0, stickyTopY - myTopY));
+        return;
+      }
+    }
+    context.paintChild(child!, offset);
+  }
+}
+
+/// Верхняя закреплённая (sticky) плашка с датой в чате.
+/// Отображается только тогда, когда инлайновая плашка соответствующего дня
+/// достигла верха чата или ушла выше него. Плавный сдвиг (push) следующей
+/// плашкой выполняется напрямую на этапе отрисовки (paint) без пересоздания виджетов.
 class FloatingChatDateHeader extends StatelessWidget {
-  final String dateLabel;
-  final bool visible;
-  final double pushOffset;
-  final VoidCallback? onTap;
+  final StickyDateState state;
+  final Listenable scrollListenable;
+  final bool hiddenBySelectionMode;
+  final ValueChanged<DateTime>? onTapDay;
 
   const FloatingChatDateHeader({
     Key? key,
-    required this.dateLabel,
-    required this.visible,
-    this.pushOffset = 0.0,
-    this.onTap,
+    required this.state,
+    required this.scrollListenable,
+    this.hiddenBySelectionMode = false,
+    this.onTapDay,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    final effectiveVisible = visible && dateLabel.isNotEmpty;
-    return IgnorePointer(
-      ignoring: !effectiveVisible,
-      child: AnimatedOpacity(
-        opacity: effectiveVisible ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-        child: Transform.translate(
-          offset: Offset(0, pushOffset),
-          child: DateSeparator(
-            dateLabel: dateLabel,
-            onTap: onTap,
-          ),
-        ),
+    final day = state.day;
+    return _StickyChatDateRenderWidget(
+      state: state,
+      scrollListenable: scrollListenable,
+      hiddenBySelectionMode: hiddenBySelectionMode,
+      child: DateSeparator(
+        dateLabel: state.label,
+        onTap: (day != null && onTapDay != null) ? () => onTapDay!(day) : null,
       ),
     );
+  }
+}
+
+class _StickyChatDateRenderWidget extends SingleChildRenderObjectWidget {
+  final StickyDateState state;
+  final Listenable scrollListenable;
+  final bool hiddenBySelectionMode;
+
+  const _StickyChatDateRenderWidget({
+    Key? key,
+    required this.state,
+    required this.scrollListenable,
+    required this.hiddenBySelectionMode,
+    required Widget child,
+  }) : super(key: key, child: child);
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderStickyChatDateHeader(
+      state: state,
+      scrollListenable: scrollListenable,
+      hiddenBySelectionMode: hiddenBySelectionMode,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderStickyChatDateHeader renderObject,
+  ) {
+    renderObject
+      ..state = state
+      ..scrollListenable = scrollListenable
+      ..hiddenBySelectionMode = hiddenBySelectionMode;
+  }
+}
+
+class _RenderStickyChatDateHeader extends RenderProxyBox {
+  StickyDateState _state;
+  Listenable _scrollListenable;
+  bool _hiddenBySelectionMode;
+
+  _RenderStickyChatDateHeader({
+    required StickyDateState state,
+    required Listenable scrollListenable,
+    required bool hiddenBySelectionMode,
+  })  : _state = state,
+        _scrollListenable = scrollListenable,
+        _hiddenBySelectionMode = hiddenBySelectionMode;
+
+  set state(StickyDateState value) {
+    if (_state == value) return;
+    _state = value;
+    markNeedsPaint();
+  }
+
+  set scrollListenable(Listenable value) {
+    if (identical(_scrollListenable, value)) return;
+    if (attached) {
+      _scrollListenable.removeListener(markNeedsPaint);
+      value.addListener(markNeedsPaint);
+    }
+    _scrollListenable = value;
+  }
+
+  set hiddenBySelectionMode(bool value) {
+    if (_hiddenBySelectionMode == value) return;
+    _hiddenBySelectionMode = value;
+    markNeedsPaint();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _scrollListenable.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    _scrollListenable.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  double? _computePushOffset() {
+    if (_hiddenBySelectionMode || _state.day == null || _state.label.isEmpty) {
+      return null;
+    }
+    if (!hasSize || size.height <= 0) return null;
+
+    final stickyTopY = localToGlobal(Offset.zero).dy;
+
+    // Если инлайновая плашка этого же дня находится в пределах экрана ниже stickyTopY,
+    // она рисует себя сама в потоке сообщений — верхнюю плашку рисовать не нужно.
+    final sameDayBox =
+        _state.sameDaySepKey?.currentContext?.findRenderObject() as RenderBox?;
+    if (sameDayBox != null && sameDayBox.attached && sameDayBox.hasSize) {
+      final sameDayTopY = sameDayBox.localToGlobal(Offset.zero).dy;
+      if (sameDayTopY > stickyTopY + 0.5) {
+        return null;
+      }
+    }
+
+    // Если снизу подходит инлайновая плашка следующего (более нового) дня,
+    // плавно сдвигаем текущую верхнюю плашку вверх.
+    final nextDayBox =
+        _state.nextDaySepKey?.currentContext?.findRenderObject() as RenderBox?;
+    if (nextDayBox != null && nextDayBox.attached && nextDayBox.hasSize) {
+      final nextTopY = nextDayBox.localToGlobal(Offset.zero).dy;
+      final h = size.height;
+      if (nextTopY <= stickyTopY + 0.5) {
+        return null;
+      }
+      if (nextTopY < stickyTopY + h) {
+        return (nextTopY - (stickyTopY + h)).clamp(-h, 0.0);
+      }
+    }
+
+    return 0.0;
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (child == null) return false;
+    final pushOffset = _computePushOffset();
+    if (pushOffset == null) return false;
+    final shiftedPosition = position - Offset(0, pushOffset);
+    if (!size.contains(shiftedPosition)) return false;
+    return result.addWithPaintOffset(
+      offset: Offset(0, pushOffset),
+      position: position,
+      hitTest: (BoxHitTestResult result, Offset transformed) {
+        return child!.hitTest(result, position: transformed);
+      },
+    );
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+    final pushOffset = _computePushOffset();
+    if (pushOffset == null) return;
+    if (pushOffset < -0.1) {
+      context.pushClipRect(
+        needsCompositing,
+        offset,
+        Offset.zero & size,
+        (PaintingContext ctx, Offset ofs) {
+          ctx.paintChild(child!, ofs + Offset(0, pushOffset));
+        },
+      );
+    } else {
+      context.paintChild(child!, offset);
+    }
   }
 }
 
