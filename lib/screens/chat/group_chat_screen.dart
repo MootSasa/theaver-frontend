@@ -47,6 +47,7 @@ import '../../widgets/chat/chat_messages_list_view.dart';
 import '../../widgets/chat/visible_message_detector.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
+import '../../widgets/chat/chat_history_calendar.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../../models/media_album.dart';
 import '../../widgets/message/media_album_widget.dart';
@@ -183,18 +184,25 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   int _unreadCount = 0;
   String? _firstUnreadMessageId;
   bool _showUnreadDivider = false;
-  int _dividerUnreadCount = 0;
   int _firstUnreadFeedIndex = -1;
   final GlobalKey _unreadSeparatorKey = GlobalKey();
   bool _hasScrolledToUnread = false;
   double _newestMessageHeight = 150.0;
+
+  // Floating/sticky date header & inline date separator keys
+  final Map<DateTime, GlobalKey> _dateSeparatorKeys = {};
+  final ValueNotifier<String?> _floatingDateLabelNotifier = ValueNotifier<String?>(null);
+  final ValueNotifier<bool> _floatingDateVisibleNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<double> _floatingDatePushOffsetNotifier = ValueNotifier<double>(0.0);
+  DateTime? _floatingDateValue;
+  Timer? _floatingDateHideTimer;
 
   static final Map<String, (DateTime, DateTime)> _dateCache = {};
 
   (DateTime, DateTime) _resolveDates(String createdAt) {
     var cached = _dateCache[createdAt];
     if (cached != null) return cached;
-    final dt = DateTime.tryParse(createdAt) ?? DateTime.now();
+    final dt = DateTimeUtils.parseUtcDateTime(createdAt) ?? DateTime.now();
     final startOfDay = DateTimeUtils.startOfDay(dt);
     cached = (dt, startOfDay);
     if (_dateCache.length > 500) _dateCache.clear();
@@ -222,6 +230,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (_messageKeys.length > 300) {
       final activeIds = _messages.take(150).map((m) => m.id).toSet();
       _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
+    }
+    if (_dateSeparatorKeys.length > 120) {
+      _dateSeparatorKeys.clear();
     }
   }
 
@@ -403,6 +414,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _accumulatedScrollUp = 0;
         }
       }
+
+      _updateFloatingDateOnScroll();
     });
 
     // Notify provider that this chat is open (so unread count is not incremented)
@@ -1082,11 +1095,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (mounted) {
       setState(() {
         _unreadCount = newUnreadCount;
-        if (_unreadCount == 0) {
-          _firstUnreadMessageId = null;
-          _hasScrolledToUnread = false;
-          _showUnreadDivider = false;
-        }
+        // Keep _showUnreadDivider and _firstUnreadMessageId during the active chat session
+        // (Telegram behavior: banner stays until user sends a message or leaves chat).
         _updateFeedItems();
       });
       try {
@@ -1136,6 +1146,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (_) {}
 
     if (mounted) {
+      final bool isFromOther = message.senderId != _currentUserId;
+      final bool isNearBottom =
+          !_scrollController.hasClients || _scrollController.offset <= 150.0;
+
       setState(() {
         if (_typingUserId == message.senderId || _isTyping) {
           _typingTimer?.cancel();
@@ -1144,21 +1158,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _typingUserName = null;
         }
         _messages.insert(0, message);
+        if (isFromOther && !isNearBottom) {
+          _unreadCount++;
+        }
         _updateFeedItems();
       });
-      if (message.senderId != _currentUserId) {
+      if (isFromOther && isNearBottom) {
         _onMessageVisible(message.id);
       }
     }
   }
 
   void _onTypingIndicator(WebSocketEvent event) {
-    // Show/hide scroll-down FAB logic
-    final showFab = _scrollController.hasClients && _scrollController.offset > 200;
-    if (showFab != _showScrollDownFabNotifier.value) {
-      _showScrollDownFabNotifier.value = showFab;
-    }
-
     final chatId = event.data['chat_id']?.toString();
     if (chatId != widget.chatId) return;
 
@@ -1436,7 +1447,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _firstUnreadMessageId = unreadInfo['first_unread_message_id'] as String?;
         if (_unreadCount > 0 && _firstUnreadMessageId != null) {
           _showUnreadDivider = true;
-          _dividerUnreadCount = _unreadCount;
         }
         _updateFeedItems();
       });
@@ -1501,7 +1511,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
         _updateFeedItems();
       });
-      _scrollToBottom();
+      if (widget.initialMessageId == null &&
+          (_firstUnreadMessageId == null || _unreadCount == 0)) {
+        _scrollToBottom();
+      }
     }
 
     // 2. Затем загрузить с сервера (обновление)
@@ -1598,7 +1611,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             }
           }
         });
-        if (localMessages.isEmpty) {
+        if (localMessages.isEmpty &&
+            widget.initialMessageId == null &&
+            (_firstUnreadMessageId == null || _unreadCount == 0)) {
           _scrollToBottom();
         }
       }
@@ -1871,6 +1886,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _quoteText = null;
       _quoteOffset = 0;
       _quoteLength = 0;
+      _showUnreadDivider = false;
+      _firstUnreadMessageId = null;
+      _firstUnreadFeedIndex = -1;
     });
     _scrollToBottom();
 
@@ -2695,13 +2713,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || !_scrollController.hasClients) return;
 
-      // 1. If unread separator is already in view, align directly
+      // 1. If unread separator is already in view, align near the top of the viewport
+      // In a reverse: true ListView, alignment ~0.82 places the widget near the top of the screen
       if (_unreadSeparatorKey.currentContext != null) {
         await Scrollable.ensureVisible(
           _unreadSeparatorKey.currentContext!,
-          duration: const Duration(milliseconds: 350),
+          duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
-          alignment: 0.15,
+          alignment: 0.82,
         );
         return;
       }
@@ -2715,7 +2734,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
       }
 
-      // If message is beyond current loaded page, prefetch older messages (up to 4 batches)
+      // If message is beyond current loaded page, fetch around it from server
+      if (targetFeedIndex == -1 && _firstUnreadMessageId != null && mounted) {
+        await _fetchMessagesAround(_firstUnreadMessageId!);
+        targetFeedIndex = _feedItems.indexWhere((item) =>
+            item.id == _firstUnreadMessageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      }
+
       int retries = 0;
       while (targetFeedIndex == -1 && _hasMoreMessages && retries < 4 && mounted) {
         await _loadMoreMessages();
@@ -2735,21 +2762,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         return;
       }
 
-      // 3. Approximate jump to divider position (_firstUnreadFeedIndex + 1)
-      final dividerItemIndex = targetFeedIndex + 1;
+      // 3. Approximate jump to target item position
       const estimatedItemHeight = 90.0;
       final maxScroll = _scrollController.position.hasContentDimensions
           ? _scrollController.position.maxScrollExtent
           : 0.0;
       final targetOffset =
-          (dividerItemIndex * estimatedItemHeight).clamp(0.0, maxScroll);
+          (targetFeedIndex * estimatedItemHeight).clamp(0.0, maxScroll);
 
       if ((_scrollController.offset - targetOffset).abs() > 1500) {
         _scrollController.jumpTo(targetOffset);
       } else {
         await _scrollController.animateTo(
           targetOffset,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 280),
           curve: Curves.easeOut,
         );
       }
@@ -2757,13 +2783,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       await Future.delayed(const Duration(milliseconds: 60));
       if (!mounted) return;
 
-      // 4. Precision alignment: ensureVisible on unread separator or first unread bubble
+      // 4. Precision alignment: ensureVisible on unread separator or first unread bubble near top (alignment: 0.82)
       if (_unreadSeparatorKey.currentContext != null) {
         await Scrollable.ensureVisible(
           _unreadSeparatorKey.currentContext!,
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
-          alignment: 0.15,
+          alignment: 0.82,
         );
       } else {
         final key = _messageKeys[_firstUnreadMessageId];
@@ -2772,15 +2798,67 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             key!.currentContext!,
             duration: const Duration(milliseconds: 250),
             curve: Curves.easeOut,
-            alignment: 0.15,
+            alignment: 0.82,
           );
         }
       }
     });
   }
 
+  /// Fetch messages around a specific target message ID when jumping to a distant date or unread message
+  Future<void> _fetchMessagesAround(String targetMessageId) async {
+    try {
+      final result = await ChatService.getMessages(
+        chatId: widget.chatId,
+        limit: 60,
+        aroundMessageId: targetMessageId,
+      );
+      if (result['success'] == true && mounted) {
+        final fetched = result['messages'] as List<Message>;
+        if (fetched.isEmpty) return;
+        setState(() {
+          final existingIds = <String>{
+            for (final m in _messages) m.id,
+            for (final m in _messages)
+              if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+          };
+          for (final m in fetched) {
+            if (!existingIds.contains(m.id) &&
+                (m.localId == null || !existingIds.contains(m.localId))) {
+              _messages.add(m);
+              existingIds.add(m.id);
+              if (m.reactions.isNotEmpty) {
+                _messageReactions[m.id] = Map.from(m.reactions);
+              }
+              if (m.myReactions.isNotEmpty) {
+                _myReactions[m.id] = Set.from(m.myReactions);
+              }
+            }
+          }
+          _messages.sort((a, b) {
+            final ta = DateTimeUtils.parseUtcDateTime(a.createdAt) ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final tb = DateTimeUtils.parseUtcDateTime(b.createdAt) ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final cmp = tb.compareTo(ta);
+            if (cmp != 0) return cmp;
+            return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+          });
+          _updateFeedItems();
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching messages around $targetMessageId: $e');
+    }
+  }
+
   /// Scroll to a specific message and highlight it
-  Future<void> _scrollToMessage(String messageId, {int retryCount = 0}) async {
+  Future<void> _scrollToMessage(
+    String messageId, {
+    int retryCount = 0,
+    double alignment = 0.5,
+    bool highlight = true,
+  }) async {
     if (!mounted) return;
 
     final key = _messageKeys[messageId];
@@ -2789,22 +2867,38 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         key!.currentContext!,
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeOut,
-        alignment: 0.5,
+        alignment: alignment,
       );
-      _setHighlight(messageId);
+      if (highlight) {
+        _setHighlight(messageId);
+      }
       return;
     }
 
-    final index = _feedItems.indexWhere((item) =>
+    int index = _feedItems.indexWhere((item) =>
         item.id == messageId ||
         (item is FeedAlbumItem &&
             item.album.items.any((ai) => ai.id == messageId)));
     if (index == -1) {
-      if (_hasMoreMessages && retryCount < 12) {
-        await _loadMoreMessages();
-        return _scrollToMessage(messageId, retryCount: retryCount + 1);
+      if (retryCount == 0) {
+        await _fetchMessagesAround(messageId);
+        index = _feedItems.indexWhere((item) =>
+            item.id == messageId ||
+            (item is FeedAlbumItem &&
+                item.album.items.any((ai) => ai.id == messageId)));
       }
-      return;
+      if (index == -1) {
+        if (_hasMoreMessages && retryCount < 8) {
+          await _loadMoreMessages();
+          return _scrollToMessage(
+            messageId,
+            retryCount: retryCount + 1,
+            alignment: alignment,
+            highlight: highlight,
+          );
+        }
+        return;
+      }
     }
 
     const estimatedItemHeight = 110.0;
@@ -2824,10 +2918,146 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     await Future.delayed(const Duration(milliseconds: 100));
-    
-    if (retryCount < 15) {
-      return _scrollToMessage(messageId, retryCount: retryCount + 1);
+
+    if (retryCount < 12) {
+      return _scrollToMessage(
+        messageId,
+        retryCount: retryCount + 1,
+        alignment: alignment,
+        highlight: highlight,
+      );
     }
+  }
+
+  /// Updates the floating/sticky date pill at the top of the viewport while scrolling
+  void _updateFloatingDateOnScroll() {
+    if (!mounted || !_scrollController.hasClients || _feedItems.isEmpty) return;
+
+    final rootBox = context.findRenderObject() as RenderBox?;
+    if (rootBox == null || !rootBox.hasSize) return;
+    final screenTopGlobalY = rootBox.localToGlobal(Offset.zero).dy;
+    final topPadding = MediaQuery.paddingOf(context).top +
+        kToolbarHeight +
+        kTextTabBarHeight +
+        24.0;
+    final readingTopY = screenTopGlobalY + topPadding - 8.0;
+
+    // Find the top-most visible message in the reading area
+    int? topVisibleFeedIndex;
+    double topVisibleBestY = double.infinity;
+
+    for (int i = 0; i < _feedItems.length; i++) {
+      final item = _feedItems[i];
+      final key = _messageKeys[item.id];
+      final box = key?.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final itemTop = box.localToGlobal(Offset.zero).dy;
+      final itemBottom = itemTop + box.size.height;
+
+      if (itemBottom > readingTopY + 12.0) {
+        if (itemTop < topVisibleBestY) {
+          topVisibleBestY = itemTop;
+          topVisibleFeedIndex = i;
+        }
+      }
+    }
+
+    if (topVisibleFeedIndex == null) return;
+
+    final topItem = _feedItems[topVisibleFeedIndex];
+    final (topDt, topDayStart) = _resolveDates(topItem.createdAt);
+
+    // Check if the inline DateSeparator for this day is currently visible near the top
+    // so we don't show two identical pills or overlap them
+    double pushOffset = 0.0;
+    bool inlineSameDayNearTop = false;
+
+    final sameDaySepKey = _dateSeparatorKeys[topDayStart];
+    final sameDaySepBox =
+        sameDaySepKey?.currentContext?.findRenderObject() as RenderBox?;
+    if (sameDaySepBox != null &&
+        sameDaySepBox.hasSize &&
+        sameDaySepBox.attached) {
+      final sepTop = sameDaySepBox.localToGlobal(Offset.zero).dy;
+      if (sepTop >= readingTopY - 12.0 && sepTop <= readingTopY + 46.0) {
+        inlineSameDayNearTop = true;
+      }
+    }
+
+    // Check if another inline DateSeparator is approaching from below or above to push the floating pill
+    for (final entry in _dateSeparatorKeys.entries) {
+      if (entry.key == topDayStart) continue;
+      final box = entry.value.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final sepTop = box.localToGlobal(Offset.zero).dy;
+      const pillHeight = 32.0;
+      if (sepTop > readingTopY - pillHeight &&
+          sepTop < readingTopY + pillHeight) {
+        pushOffset = (sepTop - (readingTopY + pillHeight)).clamp(-pillHeight, 0.0);
+        break;
+      }
+    }
+
+    _floatingDateValue = topDayStart;
+    final label = _formatDateLabel(topDt);
+    if (_floatingDateLabelNotifier.value != label) {
+      _floatingDateLabelNotifier.value = label;
+    }
+    if ((_floatingDatePushOffsetNotifier.value - pushOffset).abs() > 0.5) {
+      _floatingDatePushOffsetNotifier.value = pushOffset;
+    }
+
+    final shouldBeVisible =
+        !inlineSameDayNearTop && _scrollController.offset > 20.0;
+    if (shouldBeVisible) {
+      if (!_floatingDateVisibleNotifier.value) {
+        _floatingDateVisibleNotifier.value = true;
+      }
+      _floatingDateHideTimer?.cancel();
+      _floatingDateHideTimer = Timer(const Duration(milliseconds: 1200), () {
+        if (mounted) {
+          _floatingDateVisibleNotifier.value = false;
+        }
+      });
+    } else {
+      if (_floatingDateVisibleNotifier.value) {
+        _floatingDateVisibleNotifier.value = false;
+      }
+    }
+  }
+
+  /// Opens the Telegram-style chat media calendar when tapping a date pill
+  Future<void> _openCalendarForDate(DateTime initialDate) async {
+    HapticUtils.selection();
+    final selectedDay = await ChatHistoryCalendar.show(
+      context: context,
+      chatId: widget.chatId,
+      initialDate: initialDate,
+      currentMessages: _messages,
+    );
+    if (selectedDay != null && mounted) {
+      await _jumpToCalendarDay(selectedDay);
+    }
+  }
+
+  /// Jumps to the first message of the selected calendar day and saves jump history
+  Future<void> _jumpToCalendarDay(ChatCalendarDayInfo dayInfo) async {
+    if (!mounted || dayInfo.firstMessageId.isEmpty) return;
+
+    // Record current bottom/visible message in _jumpHistory so ScrollDownFab can return back
+    if (_messages.isNotEmpty) {
+      final currentAnchorId = _messages.first.id;
+      if (_jumpHistory.isEmpty || _jumpHistory.last != currentAnchorId) {
+        _jumpHistory.add(currentAnchorId);
+        _showScrollDownFabNotifier.value = true;
+      }
+    }
+
+    await _scrollToMessage(
+      dayInfo.firstMessageId,
+      alignment: 0.78,
+      highlight: true,
+    );
   }
 
   void _setHighlight(String messageId) {
@@ -2975,6 +3205,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     WidgetsBinding.instance.removeObserver(this);
     _syncDebounceTimer?.cancel();
     _transitionTimer?.cancel();
+    _floatingDateHideTimer?.cancel();
+    _floatingDateLabelNotifier.dispose();
+    _floatingDateVisibleNotifier.dispose();
+    _floatingDatePushOffsetNotifier.dispose();
     _emojiPanelController.dispose();
     _inputFocusNode.removeListener(_onFocusChanged);
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
@@ -3403,33 +3637,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _lastBottomInset = bottomInset;
     final safeBottom = MediaQuery.paddingOf(context).bottom;
 
-    final typingWidget = _isTyping
-        ? Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '$_typingUserName is typing...',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
-            ),
-          )
-        : null;
-
-    final bool hasUnreadDivider = _showUnreadDivider && _firstUnreadFeedIndex != -1;
-    final int totalCount = _feedItems.length + (hasUnreadDivider ? 1 : 0);
-
     return AnimatedBuilder(
       animation: _emojiPanelAnimation,
       builder: (context, _) {
@@ -3446,32 +3653,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         final messageList = ChatMessagesListView(
           isLoading: _isLoading,
           isLoadingMore: _isLoadingMore,
-          itemCount: totalCount,
+          itemCount: _feedItems.length,
           scrollController: _scrollController,
           topPadding: topPadding,
           bottomPadding: _inputHeight + effectiveBottom + 8,
-          typingIndicator: typingWidget,
-          itemBuilder: (context, index) {
-            if (hasUnreadDivider) {
-              final dividerPosition = _firstUnreadFeedIndex + 1;
-              if (index == dividerPosition) {
-                return UnreadSeparator(
-                  key: _unreadSeparatorKey,
-                  count: _dividerUnreadCount,
-                  onTap: () {},
-                );
-              }
-              if (index < dividerPosition) {
-                return _buildFeedItem(index);
-              }
-              final adjustedIndex = index - 1;
-              if (adjustedIndex >= 0 && adjustedIndex < _feedItems.length) {
-                return _buildFeedItem(adjustedIndex);
-              }
-              return const SizedBox.shrink();
-            }
-            return _buildFeedItem(index);
-          },
+          itemBuilder: (context, index) => _buildFeedItem(index),
         );
 
         return Stack(
@@ -3485,6 +3671,41 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 onPointerCancel: _handleChatPointerCancel,
                 behavior: HitTestBehavior.translucent,
                 child: messageList,
+              ),
+            ),
+            // Sticky/floating date header (top-center, auto-hides after scrolling stops)
+            Positioned(
+              top: topPadding - 8,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: _floatingDateVisibleNotifier,
+                  builder: (context, visible, _) {
+                    return ValueListenableBuilder<String?>(
+                      valueListenable: _floatingDateLabelNotifier,
+                      builder: (context, label, _) {
+                        if (label == null || label.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+                        return ValueListenableBuilder<double>(
+                          valueListenable: _floatingDatePushOffsetNotifier,
+                          builder: (context, pushOffset, _) {
+                            return FloatingChatDateHeader(
+                              dateLabel: label,
+                              visible: visible && !_isSelectionMode,
+                              pushOffset: pushOffset,
+                              onTap: () {
+                                final dt = _floatingDateValue ?? DateTime.now();
+                                _openCalendarForDate(dt);
+                              },
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
             ),
             // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
@@ -3704,8 +3925,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     );
 
     if (!isMe && !album.isRead) {
+      final latestAlbumItemId = album.items.last.id;
       albumWidget = VisibleMessageDetector(
-        messageId: message.id,
+        messageId: latestAlbumItemId,
         onMessageSeen: () {
           for (final ai in album.items) {
             _onMessageVisible(ai.id);
@@ -3785,7 +4007,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
+      final sepKey = _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
+      items.add(
+        DateSeparator(
+          key: sepKey,
+          dateLabel: _formatDateLabel(currentDt),
+          onTap: () => _openCalendarForDate(currentDt),
+        ),
+      );
+    }
+    if (_showUnreadDivider && index == _firstUnreadFeedIndex) {
+      items.add(
+        UnreadSeparator(
+          key: _unreadSeparatorKey,
+        ),
+      );
     }
     items.add(albumWidget);
 
@@ -3918,7 +4154,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
+      final sepKey = _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
+      items.add(
+        DateSeparator(
+          key: sepKey,
+          dateLabel: _formatDateLabel(currentDt),
+          onTap: () => _openCalendarForDate(currentDt),
+        ),
+      );
+    }
+    if (_showUnreadDivider && index == _firstUnreadFeedIndex) {
+      items.add(
+        UnreadSeparator(
+          key: _unreadSeparatorKey,
+        ),
+      );
     }
     items.add(messageWidget);
 
@@ -4702,19 +4952,35 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (_) {}
   }
 
+  List<String> _resolveSelectionIdsForMessage(Message message) {
+    final gId = message.groupedId;
+    if (gId != null && gId.isNotEmpty) {
+      final albumIds = _messages
+          .where((m) => m.groupedId == gId)
+          .map((m) => m.id)
+          .toList();
+      if (albumIds.isNotEmpty) return albumIds;
+    }
+    return [message.id];
+  }
+
   void _enterSelectionMode(Message message) {
     _dismissKeyboardAndEmoji();
     HapticUtils.selection();
+    final ids = _resolveSelectionIdsForMessage(message);
     setState(() {
-      _selectedMessageIds.add(message.id);
+      _selectedMessageIds.addAll(ids);
     });
   }
 
   void _toggleMessageSelection(Message message) {
     HapticUtils.selection();
+    final ids = _resolveSelectionIdsForMessage(message);
     setState(() {
-      if (!_selectedMessageIds.remove(message.id)) {
-        _selectedMessageIds.add(message.id);
+      if (_selectedMessageIds.contains(message.id)) {
+        _selectedMessageIds.removeAll(ids);
+      } else {
+        _selectedMessageIds.addAll(ids);
       }
     });
   }
@@ -4831,14 +5097,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     return closestIndex;
   }
 
-  String _feedItemPrimaryId(int index) {
+  List<String> _feedItemAllIds(int index) {
     final item = _feedItems[index];
     if (item is FeedAlbumItem) {
-      return item.album.primaryMessage.id;
+      return item.album.items.map((ai) => ai.id).toList();
     } else if (item is FeedSingleItem) {
-      return item.message.id;
+      return [item.message.id];
     }
-    return item.id;
+    return [item.id];
   }
 
   void _handleChatPointerMove(PointerMoveEvent event) {
@@ -4923,11 +5189,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         final updated = Set<String>.from(_dragSelectBaselineIds);
         for (int i = startIdx; i <= endIdx; i++) {
           if (i >= 0 && i < _feedItems.length) {
-            final msgId = _feedItemPrimaryId(i);
+            final msgIds = _feedItemAllIds(i);
             if (_dragSelectTargetState) {
-              updated.add(msgId);
+              updated.addAll(msgIds);
             } else {
-              updated.remove(msgId);
+              updated.removeAll(msgIds);
             }
           }
         }
@@ -5117,36 +5383,54 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (_pendingMarkRead.isEmpty || _isMarkingRead) return;
     _isMarkingRead = true;
 
-    String? latestMessageId;
-    int latestIndex = -1;
-    for (final id in _pendingMarkRead) {
-      final idx = _messages.indexWhere((m) => m.id == id);
-      if (idx != -1 && idx < (latestIndex == -1 ? 999999 : latestIndex)) {
-        latestIndex = idx;
-        latestMessageId = id;
+    try {
+      String? latestMessageId;
+      int latestIndex = -1;
+      for (final id in _pendingMarkRead) {
+        final idx = _messages.indexWhere((m) => m.id == id);
+        if (idx != -1 && idx < (latestIndex == -1 ? 999999 : latestIndex)) {
+          latestIndex = idx;
+          latestMessageId = id;
+        }
       }
-    }
 
-    _pendingMarkRead.clear();
-    _isMarkingRead = false;
+      _pendingMarkRead.clear();
 
-    if (latestMessageId == null) return;
+      if (latestMessageId == null) return;
 
-    final result = await ChatService.markMessagesReadUpTo(
-      chatId: widget.chatId,
-      messageId: latestMessageId,
-    );
+      final result = await ChatService.markMessagesReadUpTo(
+        chatId: widget.chatId,
+        messageId: latestMessageId,
+      );
 
-    final markedCount = result['marked_count'] as int? ?? 0;
-    if (markedCount > 0) {
-      _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
+      final markedCount = result['marked_count'] as int? ?? 0;
+      if (markedCount > 0) {
+        _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
 
-      if (mounted) {
-        setState(() {
-          _unreadCount = (_unreadCount - markedCount).clamp(0, _unreadCount);
+        if (mounted) {
+          setState(() {
+            _unreadCount = (_unreadCount - markedCount).clamp(0, _unreadCount);
+            if (latestIndex != -1) {
+              for (int i = latestIndex; i < _messages.length; i++) {
+                if (_messages[i].senderId != _currentUserId &&
+                    !_messages[i].isRead) {
+                  _messages[i] = _messages[i].copyWith(isRead: true);
+                }
+              }
+              _updateFeedItems();
+            }
+          });
+          final provider = context.read<UnreadCountProvider>();
+          provider.decrement(widget.chatId, markedCount);
+        }
+      }
+    } finally {
+      _isMarkingRead = false;
+      if (_pendingMarkRead.isNotEmpty && mounted) {
+        _markReadTimer?.cancel();
+        _markReadTimer = Timer(const Duration(milliseconds: 300), () {
+          _flushMarkRead();
         });
-        final provider = context.read<UnreadCountProvider>();
-        provider.decrement(widget.chatId, markedCount);
       }
     }
   }

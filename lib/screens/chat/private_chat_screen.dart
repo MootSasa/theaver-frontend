@@ -39,6 +39,7 @@ import '../../widgets/chat/chat_input_bar.dart';
 import '../../widgets/chat/visible_message_detector.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
+import '../../widgets/chat/chat_history_calendar.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -138,7 +139,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       false; // Whether we've scrolled to the unread area
   bool _showUnreadDivider =
       false; // Show unread divider (persists until user leaves chat)
-  int _dividerUnreadCount = 0; // Count shown in divider (frozen at entry time)
   final Set<String> _pendingMarkRead =
       {}; // Messages queued to be marked as read (debounced)
   Timer? _markReadTimer; // Debounce timer for batch mark-as-read
@@ -168,6 +168,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   List<FeedItem> _feedItems = [];
   int _firstUnreadFeedIndex = -1;
   final GlobalKey _unreadSeparatorKey = GlobalKey();
+  final Map<int, GlobalKey> _dateSeparatorKeys = {};
+  final ValueNotifier<String> _floatingDateLabelNotifier = ValueNotifier<String>('');
+  final ValueNotifier<bool> _floatingDateVisibleNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<double> _floatingDatePushOffsetNotifier = ValueNotifier<double>(0.0);
+  DateTime? _floatingDateValue;
+  Timer? _floatingDateHideTimer;
   double _newestMessageHeight = 150.0;
 
   void _updateFeedItems() {
@@ -187,6 +193,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (_messageKeys.length > 300) {
       final activeIds = _messages.take(150).map((m) => m.id).toSet();
       _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
+    }
+    if (_dateSeparatorKeys.length > 150) {
+      _dateSeparatorKeys.removeWhere((idx, _) => idx >= _feedItems.length);
     }
   }
 
@@ -928,12 +937,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (mounted) {
       setState(() {
         _unreadCount = newUnreadCount;
-        if (_unreadCount == 0) {
-          _firstUnreadMessageId = null;
-          _hasScrolledToUnread = false;
-          _showUnreadDivider = false;
-        }
-        _updateFeedItems();
+        // Keep _showUnreadDivider and _firstUnreadMessageId during the active chat session
+        // (Telegram behavior: unread banner stays until user sends a message or re-enters chat)
       });
       try {
         _unreadCountProvider?.setCount(widget.chatId, newUnreadCount);
@@ -982,6 +987,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     } catch (_) {}
 
     if (mounted) {
+      final isFromOther = message.senderId != _currentUserId;
+      final isNearBottom =
+          !_scrollController.hasClients || _scrollController.offset <= 150.0;
+
       setState(() {
         // If typing user sent message, immediately cancel typing
         if (_typingUserId == message.senderId || _isTyping) {
@@ -990,11 +999,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _typingUserId = null;
         }
         _messages.insert(0, message);
+        if (isFromOther && !isNearBottom) {
+          _unreadCount++;
+          if (!_showUnreadDivider) {
+            _firstUnreadMessageId = message.id;
+            _showUnreadDivider = true;
+          }
+        }
         _updateFeedItems();
       });
 
-      // If message is from other user, queue it for mark-as-read
-      if (message.senderId != _currentUserId) {
+      // Only mark as read automatically if the user is at the bottom of the chat
+      if (isFromOther && isNearBottom) {
         _onMessageVisible(message.id);
       }
     }
@@ -1416,43 +1432,58 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (_pendingMarkRead.isEmpty || _isMarkingRead) return;
     _isMarkingRead = true;
 
-    // Find the latest message among the pending ones (highest created_at = lowest index in reversed list)
-    String? latestMessageId;
-    int latestIndex = -1;
-    for (final id in _pendingMarkRead) {
-      final idx = _messages.indexWhere((m) => m.id == id);
-      if (idx != -1 && idx < (latestIndex == -1 ? 999999 : latestIndex)) {
-        latestIndex = idx;
-        latestMessageId = id;
+    try {
+      // Find the latest message among the pending ones (highest created_at = lowest index in reversed list)
+      String? latestMessageId;
+      int latestIndex = -1;
+      for (final id in _pendingMarkRead) {
+        final idx = _messages.indexWhere((m) => m.id == id);
+        if (idx != -1 && idx < (latestIndex == -1 ? 999999 : latestIndex)) {
+          latestIndex = idx;
+          latestMessageId = id;
+        }
       }
-    }
 
-    _pendingMarkRead.clear();
-    _isMarkingRead = false;
+      _pendingMarkRead.clear();
 
-    if (latestMessageId == null) return;
+      if (latestMessageId == null) return;
 
-    // Mark all messages up to and including this one as read
-    final result = await ChatService.markMessagesReadUpTo(
-      chatId: widget.chatId,
-      messageId: latestMessageId,
-    );
+      // Mark all messages up to and including this one as read
+      final result = await ChatService.markMessagesReadUpTo(
+        chatId: widget.chatId,
+        messageId: latestMessageId,
+      );
 
-    final markedCount = result['marked_count'] as int? ?? 0;
-    if (markedCount > 0) {
-      _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
-
-      // Optimistically update local unread count
-      if (mounted) {
+      final markedCount = result['marked_count'] as int? ?? 0;
+      if (mounted && latestIndex >= 0) {
         setState(() {
-          _unreadCount = (_unreadCount - markedCount).clamp(0, _unreadCount);
+          for (int i = latestIndex; i < _messages.length; i++) {
+            if (_messages[i].senderId != _currentUserId &&
+                !_messages[i].isRead) {
+              _messages[i] = _messages[i].copyWith(isRead: true);
+            }
+          }
+          if (markedCount > 0) {
+            _unreadCount = (_unreadCount - markedCount).clamp(0, _unreadCount);
+          }
+          _updateFeedItems();
         });
       }
 
-      // Update the provider
-      if (mounted) {
-        final provider = context.read<UnreadCountProvider>();
-        provider.decrement(widget.chatId, markedCount);
+      if (markedCount > 0) {
+        _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
+
+        // Update the provider
+        if (mounted) {
+          final provider = context.read<UnreadCountProvider>();
+          provider.decrement(widget.chatId, markedCount);
+        }
+      }
+    } finally {
+      _isMarkingRead = false;
+      if (_pendingMarkRead.isNotEmpty && mounted) {
+        _markReadTimer?.cancel();
+        _markReadTimer = Timer(const Duration(milliseconds: 200), _flushMarkRead);
       }
     }
   }
@@ -1557,65 +1588,145 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     });
   }
 
+  /// Fetches a window of messages around [targetMessageId] and merges them into [_messages].
+  Future<bool> _fetchMessagesAround(String targetMessageId) async {
+    if (int.tryParse(targetMessageId) == null) return false;
+    final res = await ChatService.getMessages(
+      chatId: widget.chatId,
+      aroundMessageId: targetMessageId,
+      limit: 100,
+    );
+    if (res['success'] != true || !mounted) return false;
+    final fetched = res['messages'] as List<Message>? ?? [];
+    if (fetched.isEmpty) return false;
+
+    try {
+      await AppDatabase()
+          .saveMessages(fetched.map((m) => _messageToCompanion(m)).toList());
+    } catch (_) {}
+
+    if (!mounted) return false;
+    setState(() {
+      final existingIds = <String>{
+        for (final m in _messages) m.id,
+        for (final m in _messages)
+          if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+      };
+      for (final m in fetched) {
+        if (!existingIds.contains(m.id) &&
+            (m.localId == null || !existingIds.contains(m.localId))) {
+          _messages.add(m);
+          existingIds.add(m.id);
+          if (m.localId != null && m.localId!.isNotEmpty) {
+            existingIds.add(m.localId!);
+          }
+          if (m.reactions.isNotEmpty) {
+            _messageReactions[m.id] = Map.from(m.reactions);
+          }
+          if (m.myReactions.isNotEmpty) {
+            _myReactions[m.id] = Set.from(m.myReactions);
+          }
+        }
+      }
+      _messages.sort((a, b) {
+        final ta = DateTimeUtils.parseUtcDateTime(a.createdAt)
+                ?.millisecondsSinceEpoch ??
+            0;
+        final tb = DateTimeUtils.parseUtcDateTime(b.createdAt)
+                ?.millisecondsSinceEpoch ??
+            0;
+        final cmp = tb.compareTo(ta);
+        if (cmp != 0) return cmp;
+        return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+      });
+      _updateFeedItems();
+    });
+    return _feedItems.any((item) =>
+        item.id == targetMessageId ||
+        (item is FeedAlbumItem &&
+            item.album.items.any((ai) => ai.id == targetMessageId)));
+  }
+
   /// Scroll to a specific message and highlight it
-  Future<void> _scrollToMessage(String messageId, {int retryCount = 0}) async {
+  Future<void> _scrollToMessage(
+    String messageId, {
+    int retryCount = 0,
+    double alignment = 0.5,
+    bool highlight = true,
+  }) async {
     if (!mounted) return;
 
     final key = _messageKeys[messageId];
     if (key?.currentContext != null) {
-      // Message is already built and has a context, scroll precisely
       await Scrollable.ensureVisible(
         key!.currentContext!,
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeOut,
-        alignment: 0.5, // Center the message in view
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        alignment: alignment,
       );
-      _setHighlight(messageId);
+      if (highlight) {
+        _setHighlight(messageId);
+      }
       return;
     }
 
-    // If message is not built yet, we need to find it in the list
     int index = _feedItems.indexWhere((item) =>
         item.id == messageId ||
         (item is FeedAlbumItem &&
             item.album.items.any((ai) => ai.id == messageId)));
-    
-    // If message not in list, try to load more
+
     if (index == -1) {
-      if (_hasMoreMessages && retryCount < 12) {
-        await _loadMoreMessages();
-        // Recurse to try finding it again
-        return _scrollToMessage(messageId, retryCount: retryCount + 1);
+      if (retryCount == 0) {
+        final foundViaAround = await _fetchMessagesAround(messageId);
+        if (foundViaAround && mounted) {
+          await Future.delayed(const Duration(milliseconds: 40));
+          return _scrollToMessage(
+            messageId,
+            retryCount: retryCount + 1,
+            alignment: alignment,
+            highlight: highlight,
+          );
+        }
       }
-      return; // Not found even after loading more
+      if (_hasMoreMessages && retryCount < 8) {
+        await _loadMoreMessages();
+        return _scrollToMessage(
+          messageId,
+          retryCount: retryCount + 1,
+          alignment: alignment,
+          highlight: highlight,
+        );
+      }
+      return;
     }
 
-    // Message is in the list but not built. 
-    // In a reversed ListView, higher index means OLDER message = HIGHER scroll offset.
-    // We'll jump close to the target then let it refine.
-    const estimatedItemHeight = 110.0;
+    if (!_scrollController.hasClients) return;
+
+    const estimatedItemHeight = 96.0;
     final maxScroll = _scrollController.position.hasContentDimensions
         ? _scrollController.position.maxScrollExtent
         : 0.0;
     final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
 
-    // Use jump if far, animate if close
-    if ((_scrollController.offset - targetOffset).abs() > 2000) {
+    if ((_scrollController.offset - targetOffset).abs() > 1600) {
       _scrollController.jumpTo(targetOffset);
     } else {
       await _scrollController.animateTo(
         targetOffset,
-        duration: const Duration(milliseconds: 300),
+        duration: const Duration(milliseconds: 260),
         curve: Curves.easeOut,
       );
     }
 
-    // Wait a bit for ListView to build the items at this offset
-    await Future.delayed(const Duration(milliseconds: 100));
-    
-    // Retry to refine position if message is now built
-    if (retryCount < 15) {
-      return _scrollToMessage(messageId, retryCount: retryCount + 1);
+    await Future.delayed(const Duration(milliseconds: 70));
+
+    if (retryCount < 12 && mounted) {
+      return _scrollToMessage(
+        messageId,
+        retryCount: retryCount + 1,
+        alignment: alignment,
+        highlight: highlight,
+      );
     }
   }
 
@@ -1687,7 +1798,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
-  /// Handle scroll events — пагинация при прокрутке вверх + FAB visibility
+  /// Handle scroll events — пагинация при прокрутке вверх + FAB visibility + плавающая плашка даты
   void _onScroll() {
     if (!_scrollController.hasClients || _messages.isEmpty) return;
 
@@ -1762,6 +1873,140 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _accumulatedScrollUp = 0;
       }
     }
+
+    _updateFloatingDateOnScroll(delta);
+  }
+
+  /// Updates the Telegram-style sticky/floating date pill at the top of the reading area
+  /// while scrolling, and hides it 1200ms after scrolling stops.
+  void _updateFloatingDateOnScroll(double scrollDelta) {
+    if (!mounted || _feedItems.isEmpty) return;
+
+    final screenBox = context.findRenderObject() as RenderBox?;
+    if (screenBox == null || !screenBox.hasSize) return;
+    final screenTopGlobalY = screenBox.localToGlobal(Offset.zero).dy;
+    final topPad = MediaQuery.paddingOf(context).top;
+    final readingTopY = screenTopGlobalY + topPad + kFloatingAppBarTotalHeight + 6.0;
+
+    // Find the topmost visible feed item near readingTopY
+    int? topVisibleIndex;
+    double bestDist = double.infinity;
+
+    for (int i = 0; i < _feedItems.length; i++) {
+      final item = _feedItems[i];
+      final key = _messageKeys[item.id];
+      final box = key?.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final topY = box.localToGlobal(Offset.zero).dy;
+      final bottomY = topY + box.size.height;
+
+      // Item straddles readingTopY + 18
+      if (topY <= readingTopY + 24.0 && bottomY >= readingTopY + 8.0) {
+        topVisibleIndex = i;
+        break;
+      }
+      if (bottomY >= readingTopY) {
+        final dist = (topY - readingTopY).abs();
+        if (dist < bestDist) {
+          bestDist = dist;
+          topVisibleIndex = i;
+        }
+      }
+    }
+
+    if (topVisibleIndex == null) {
+      final approxIdx = (_scrollController.offset / 95.0)
+          .floor()
+          .clamp(0, _feedItems.length - 1);
+      topVisibleIndex = approxIdx;
+    }
+
+    final topItem = _feedItems[topVisibleIndex];
+    final (dt, _) = _resolveDates(topItem.createdAt);
+    _floatingDateValue = dt;
+    final label = _formatDateLabel(dt);
+    if (_floatingDateLabelNotifier.value != label) {
+      _floatingDateLabelNotifier.value = label;
+    }
+
+    // Compute push/handoff with any inline DateSeparator near readingTopY
+    double pushOffset = 0.0;
+    bool inlineSeparatorCoincides = false;
+    for (final entry in _dateSeparatorKeys.entries) {
+      final box =
+          entry.value.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize || !box.attached) continue;
+      final sepTopY = box.localToGlobal(Offset.zero).dy;
+      final diff = sepTopY - readingTopY;
+      if (diff.abs() <= 14.0) {
+        inlineSeparatorCoincides = true;
+        break;
+      } else if (diff > 14.0 && diff < 44.0) {
+        pushOffset = (diff - 44.0).clamp(-30.0, 0.0);
+      }
+    }
+
+    if ((_floatingDatePushOffsetNotifier.value - pushOffset).abs() > 0.5) {
+      _floatingDatePushOffsetNotifier.value = pushOffset;
+    }
+
+    if (inlineSeparatorCoincides) {
+      if (_floatingDateVisibleNotifier.value) {
+        _floatingDateVisibleNotifier.value = false;
+      }
+      return;
+    }
+
+    if (scrollDelta.abs() > 0.5) {
+      if (!_floatingDateVisibleNotifier.value) {
+        _floatingDateVisibleNotifier.value = true;
+      }
+      _floatingDateHideTimer?.cancel();
+      _floatingDateHideTimer = Timer(const Duration(milliseconds: 1200), () {
+        if (mounted) {
+          _floatingDateVisibleNotifier.value = false;
+        }
+      });
+    }
+  }
+
+  /// Opens the Telegram-style chat media calendar at [initialDate] and jumps to the selected day.
+  Future<void> _openCalendarForDate(DateTime initialDate) async {
+    _dismissKeyboardAndEmoji();
+    final selectedDay = await ChatHistoryCalendar.show(
+      context: context,
+      chatId: widget.chatId,
+      initialDate: initialDate,
+      currentMessages: _messages,
+    );
+    if (selectedDay == null ||
+        selectedDay.firstMessageId.isEmpty ||
+        !mounted) {
+      return;
+    }
+    await _jumpToCalendarDay(selectedDay);
+  }
+
+  Future<void> _jumpToCalendarDay(ChatCalendarDayInfo dayInfo) async {
+    // Save current visible message into _jumpHistory so ScrollDownFab returns back
+    if (_feedItems.isNotEmpty) {
+      final currentApproxIdx = (_scrollController.hasClients
+              ? (_scrollController.offset / 95.0).floor()
+              : 0)
+          .clamp(0, _feedItems.length - 1);
+      final fromId = _feedItems[currentApproxIdx].id;
+      if (fromId.isNotEmpty &&
+          (_jumpHistory.isEmpty || _jumpHistory.last != fromId)) {
+        _jumpHistory.add(fromId);
+        _showScrollDownFabNotifier.value = true;
+      }
+    }
+
+    await _scrollToMessage(
+      dayInfo.firstMessageId,
+      alignment: 0.78,
+      highlight: true,
+    );
   }
 
   Future<void> _loadData() async {
@@ -1825,7 +2070,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         // Установить разделитель при входе в чат (если есть непрочитанные)
         if (_unreadCount > 0 && _firstUnreadMessageId != null) {
           _showUnreadDivider = true;
-          _dividerUnreadCount = _unreadCount;
         }
         _updateFeedItems();
       });
@@ -1925,7 +2169,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _updateFeedItems();
       });
 
-      if (_firstUnreadMessageId == null || _unreadCount == 0) {
+      if (widget.initialMessageId == null &&
+          (_firstUnreadMessageId == null || _unreadCount == 0)) {
         _scrollToBottom();
       }
     }
@@ -2040,7 +2285,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         }
       });
 
-      if (_firstUnreadMessageId == null || _unreadCount == 0) {
+      if (widget.initialMessageId == null &&
+          (_firstUnreadMessageId == null || _unreadCount == 0)) {
         _scrollToBottom();
       }
     }
@@ -2236,13 +2482,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || !_scrollController.hasClients) return;
 
+      // In reverse:true ListView, alignment 0.82 places the unread banner near the top of the reading area
+      const double topReadingAlignment = 0.82;
+
       // 1. If unread separator is already in view, align directly
       if (_unreadSeparatorKey.currentContext != null) {
         await Scrollable.ensureVisible(
           _unreadSeparatorKey.currentContext!,
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeOut,
-          alignment: 0.15,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+          alignment: topReadingAlignment,
         );
         return;
       }
@@ -2256,7 +2505,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
       }
 
-      // If message is beyond current loaded page, prefetch older messages (up to 4 batches)
+      // If message is beyond current loaded page, fetch around _firstUnreadMessageId directly
+      if (targetFeedIndex == -1 && _firstUnreadMessageId != null) {
+        final found = await _fetchMessagesAround(_firstUnreadMessageId!);
+        if (found && mounted) {
+          targetFeedIndex = _firstUnreadFeedIndex;
+        }
+      }
+
       int retries = 0;
       while (targetFeedIndex == -1 && _hasMoreMessages && retries < 4 && mounted) {
         await _loadMoreMessages();
@@ -2270,31 +2526,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (!mounted || !_scrollController.hasClients) return;
 
       if (targetFeedIndex == -1) {
-        // Unread messages are very far back; jump to oldest loaded message to bring user close
         if (_scrollController.position.hasContentDimensions) {
           _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
         }
         return;
       }
 
-      // 3. Approximate jump to divider position (_firstUnreadFeedIndex + 1)
-      final dividerItemIndex = targetFeedIndex + 1;
-      const estimatedItemHeight = 90.0;
+      // 3. Approximate jump to targetFeedIndex
+      const estimatedItemHeight = 92.0;
       final maxScroll = _scrollController.position.hasContentDimensions
           ? _scrollController.position.maxScrollExtent
           : 0.0;
       final targetOffset =
-          (dividerItemIndex * estimatedItemHeight).clamp(0.0, maxScroll);
+          (targetFeedIndex * estimatedItemHeight).clamp(0.0, maxScroll);
 
-      if ((_scrollController.offset - targetOffset).abs() > 1500) {
-        _scrollController.jumpTo(targetOffset);
-      } else {
-        await _scrollController.animateTo(
-          targetOffset,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
+      _scrollController.jumpTo(targetOffset);
 
       // Allow a brief frame for ListView.builder to instantiate the elements around targetOffset
       await Future.delayed(const Duration(milliseconds: 60));
@@ -2304,18 +2550,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (_unreadSeparatorKey.currentContext != null) {
         await Scrollable.ensureVisible(
           _unreadSeparatorKey.currentContext!,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-          alignment: 0.15,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          alignment: topReadingAlignment,
         );
       } else {
         final key = _messageKeys[_firstUnreadMessageId];
         if (key?.currentContext != null) {
           await Scrollable.ensureVisible(
             key!.currentContext!,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-            alignment: 0.15,
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            alignment: topReadingAlignment,
           );
         }
       }
@@ -2398,6 +2644,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     setState(() {
       _isSending = true;
       _isUploading = _attachedFiles.isNotEmpty;
+      // Clear unread banner on user sending a message (Telegram behavior)
+      _showUnreadDivider = false;
+      _firstUnreadMessageId = null;
+      _firstUnreadFeedIndex = -1;
       // Clear reply state
       _replyToMessage = null;
       _isQuote = false;
@@ -3123,30 +3373,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         ? (targetPanelHeight + bottomInset)
         : math.max(targetPanelHeight, bottomInset);
 
-    final typingIndicator = _isTyping
-        ? Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '$_chatName is typing...',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
-            ),
-          )
-        : const SizedBox.shrink();
-
     Widget buildMessageList(double bottomOffset) {
       if (_isLoading) {
         return const Center(child: CircularProgressIndicator());
@@ -3182,9 +3408,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         );
       }
 
-      final int dividerOffset =
-          (_showUnreadDivider && _firstUnreadFeedIndex != -1) ? 1 : 0;
-      final int baseCount = _feedItems.length + dividerOffset;
+      final int baseCount = _feedItems.length;
       final int totalItemCount = baseCount + (_isLoadingMore ? 1 : 0);
 
       return ListView.builder(
@@ -3212,28 +3436,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 ),
               ),
             );
-          }
-
-          // Insert unread divider between unread and read messages.
-          if (_showUnreadDivider && _firstUnreadFeedIndex != -1) {
-            final dividerPosition = _firstUnreadFeedIndex + 1;
-
-            if (index == dividerPosition) {
-              return UnreadSeparator(
-                key: _unreadSeparatorKey,
-                count: _dividerUnreadCount,
-                onTap: () {},
-              );
-            }
-            if (index < dividerPosition) {
-              return _buildFeedItem(index);
-            }
-            final adjustedIndex = index - 1;
-            if (adjustedIndex >= 0 &&
-                adjustedIndex < _feedItems.length) {
-              return _buildFeedItem(adjustedIndex);
-            }
-            return const SizedBox.shrink();
           }
 
           if (index < 0 || index >= _feedItems.length) {
@@ -3296,12 +3498,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                         onPointerUp: _handleChatPointerUp,
                         onPointerCancel: _handleChatPointerCancel,
                         behavior: HitTestBehavior.translucent,
-                        child: Column(
-                          children: [
-                            typingIndicator,
-                            Expanded(child: buildMessageList(bottomOffset)),
-                          ],
-                        ),
+                        child: buildMessageList(bottomOffset),
                       ),
                     ),
                     // Нижний scroll edge блюр: ПОД полем ввода (над сообщениями, но под полем ввода)
@@ -3321,6 +3518,40 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                           if (activeId != null) {
                             _scrollToMessage(activeId);
                           }
+                        },
+                      ),
+                    ),
+                    // Плавающая (sticky) плашка с датой по центру экрана при скролле
+                    Positioned(
+                      top: MediaQuery.paddingOf(context).top +
+                          kFloatingAppBarTotalHeight +
+                          4,
+                      left: 0,
+                      right: 0,
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _floatingDateVisibleNotifier,
+                        builder: (context, isVisible, _) {
+                          return ValueListenableBuilder<String>(
+                            valueListenable: _floatingDateLabelNotifier,
+                            builder: (context, dateLabel, _) {
+                              return ValueListenableBuilder<double>(
+                                valueListenable:
+                                    _floatingDatePushOffsetNotifier,
+                                builder: (context, pushOffset, _) {
+                                  return FloatingChatDateHeader(
+                                    dateLabel: dateLabel,
+                                    visible: isVisible,
+                                    pushOffset: pushOffset,
+                                    onTap: () {
+                                      final dt = _floatingDateValue ??
+                                          DateTime.now();
+                                      _openCalendarForDate(dt);
+                                    },
+                                  );
+                                },
+                              );
+                            },
+                          );
                         },
                       ),
                     ),
@@ -3443,8 +3674,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     );
   }
 
-
-
   Widget _buildFeedItem(int index) {
     if (index < 0 || index >= _feedItems.length) {
       return const SizedBox.shrink();
@@ -3470,7 +3699,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
-    final bool isSelected = _selectedMessageIds.contains(message.id);
+    final bool isSelected = _selectedMessageIds.contains(message.id) ||
+        album.items.any((ai) => _selectedMessageIds.contains(ai.id));
 
     Widget albumWidget = MediaAlbumWidget(
       key: key,
@@ -3493,8 +3723,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     );
 
     if (!isMe && !album.isRead) {
+      final latestAlbumItemId =
+          album.items.isNotEmpty ? album.items.last.id : message.id;
       albumWidget = VisibleMessageDetector(
-        messageId: message.id,
+        messageId: latestAlbumItemId,
         onMessageSeen: () {
           for (final ai in album.items) {
             _onMessageVisible(ai.id);
@@ -3574,7 +3806,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
+      final sepKey = _dateSeparatorKeys.putIfAbsent(index, () => GlobalKey());
+      items.add(
+        DateSeparator(
+          key: sepKey,
+          dateLabel: _formatDateLabel(currentDt),
+          onTap: () => _openCalendarForDate(currentDt),
+        ),
+      );
+    }
+
+    // Place UnreadSeparator below DateSeparator (Telegram layout: Date pill -> Unread banner -> First unread message)
+    if (_showUnreadDivider && index == _firstUnreadFeedIndex) {
+      items.add(UnreadSeparator(key: _unreadSeparatorKey));
     }
 
     items.add(albumWidget);
@@ -3714,7 +3958,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      items.add(DateSeparator(dateLabel: _formatDateLabel(currentDt)));
+      final sepKey = _dateSeparatorKeys.putIfAbsent(index, () => GlobalKey());
+      items.add(
+        DateSeparator(
+          key: sepKey,
+          dateLabel: _formatDateLabel(currentDt),
+          onTap: () => _openCalendarForDate(currentDt),
+        ),
+      );
+    }
+
+    // Place UnreadSeparator below DateSeparator (Telegram layout: Date pill -> Unread banner -> First unread message)
+    if (_showUnreadDivider && index == _firstUnreadFeedIndex) {
+      items.add(UnreadSeparator(key: _unreadSeparatorKey));
     }
 
     items.add(messageWidget);
@@ -4935,6 +5191,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _inputFocusNode.dispose();
     _emojiPanelController.dispose();
     _transitionTimer?.cancel();
+    _floatingDateHideTimer?.cancel();
+    _floatingDateLabelNotifier.dispose();
+    _floatingDateVisibleNotifier.dispose();
+    _floatingDatePushOffsetNotifier.dispose();
     _showScrollDownFabNotifier.dispose();
     _uploadProgressNotifier.dispose();
     _chatSubscription?.cancel();
@@ -5201,7 +5461,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   (DateTime, DateTime) _resolveDates(String createdAt) {
     var cached = _dateCache[createdAt];
     if (cached != null) return cached;
-    final dt = DateTime.tryParse(createdAt) ?? DateTime.now();
+    final dt = DateTimeUtils.parseUtcDateTime(createdAt) ?? DateTime.now();
     final startOfDay = _dateOnly(dt);
     cached = (dt, startOfDay);
     if (_dateCache.length > 500) _dateCache.clear();
@@ -5213,19 +5473,36 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String _formatDateLabel(DateTime dt) =>
       DateTimeUtils.formatDateSeparator(dt, context: context);
 
+  List<String> _resolveSelectionIdsForMessage(Message message) {
+    final gId = message.groupedId;
+    if (gId != null && gId.isNotEmpty) {
+      final ids = _messages
+          .where((m) => m.groupedId == gId && m.id.isNotEmpty)
+          .map((m) => m.id)
+          .toList();
+      if (ids.isNotEmpty) return ids;
+    }
+    return [message.id];
+  }
+
   void _enterSelectionMode(Message message) {
     _dismissKeyboardAndEmoji();
     HapticUtils.selection();
+    final ids = _resolveSelectionIdsForMessage(message);
     setState(() {
-      _selectedMessageIds.add(message.id);
+      _selectedMessageIds.addAll(ids);
     });
   }
 
   void _toggleMessageSelection(Message message) {
     HapticUtils.selection();
+    final ids = _resolveSelectionIdsForMessage(message);
     setState(() {
-      if (!_selectedMessageIds.remove(message.id)) {
-        _selectedMessageIds.add(message.id);
+      final anySelected = ids.any((id) => _selectedMessageIds.contains(id));
+      if (anySelected) {
+        _selectedMessageIds.removeAll(ids);
+      } else {
+        _selectedMessageIds.addAll(ids);
       }
     });
   }
@@ -5350,14 +5627,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     return closestIndex;
   }
 
-  String _feedItemPrimaryId(int index) {
+  Iterable<String> _feedItemAllIds(int index) {
     final item = _feedItems[index];
     if (item is FeedAlbumItem) {
-      return item.album.primaryMessage.id;
+      return item.album.items.map((ai) => ai.id);
     } else if (item is FeedSingleItem) {
-      return item.message.id;
+      return [item.message.id];
     }
-    return item.id;
+    return [item.id];
   }
 
   void _handleChatPointerMove(PointerMoveEvent event) {
@@ -5444,11 +5721,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         final updated = Set<String>.from(_dragSelectBaselineIds);
         for (int i = startIdx; i <= endIdx; i++) {
           if (i >= 0 && i < _feedItems.length) {
-            final msgId = _feedItemPrimaryId(i);
+            final msgIds = _feedItemAllIds(i);
             if (_dragSelectTargetState) {
-              updated.add(msgId);
+              updated.addAll(msgIds);
             } else {
-              updated.remove(msgId);
+              updated.removeAll(msgIds);
             }
           }
         }
