@@ -36,6 +36,8 @@ class VideoNoteRecorderService with ChangeNotifier {
   bool _isInitialized = false;
   bool _isRecording = false;
   bool _isPaused = false;
+  bool _isPreview = false;
+  File? _previewFile;
   bool _isFrontCamera = true;
   Duration _elapsed = Duration.zero;
   String? _errorMessage;
@@ -47,6 +49,8 @@ class VideoNoteRecorderService with ChangeNotifier {
   bool get isInitialized => _isInitialized;
   bool get isRecording => _isRecording;
   bool get isPaused => _isPaused;
+  bool get isPreview => _isPreview;
+  File? get previewFile => _previewFile;
   bool get isFrontCamera => _isFrontCamera;
   Duration get elapsed => _isRecording ? _stopwatch.elapsed : _elapsed;
   String? get errorMessage => _errorMessage;
@@ -247,6 +251,8 @@ class VideoNoteRecorderService with ChangeNotifier {
     }
 
     try {
+      _isPreview = false;
+      _previewFile = null;
       _recordedSegments.clear();
       final tempDir = await getTemporaryDirectory();
       const extension = kIsWeb ? 'webm' : 'mp4';
@@ -485,8 +491,31 @@ class VideoNoteRecorderService with ChangeNotifier {
     notifyListeners();
   }
 
+  /// Stop recording and enter preview mode so the user can review before sending
+  Future<File?> stopForPreview() async {
+    if (_isPreview && _previewFile != null) return _previewFile;
+    final file = await _stopRecordingInternal();
+    if (file != null) {
+      _previewFile = file;
+      _isPreview = true;
+      notifyListeners();
+    }
+    return file;
+  }
+
   /// Stop recording and return the finalized video file
   Future<File?> stopRecording() async {
+    if (_isPreview && _previewFile != null) {
+      final file = _previewFile;
+      _previewFile = null;
+      _isPreview = false;
+      notifyListeners();
+      return file;
+    }
+    return _stopRecordingInternal();
+  }
+
+  Future<File?> _stopRecordingInternal() async {
     if (!_isRecording) return null;
 
     _stopwatch.stop();
@@ -634,6 +663,23 @@ class VideoNoteRecorderService with ChangeNotifier {
     _timer?.cancel();
     _timer = null;
     _isRecording = false;
+    _isPreview = false;
+    if (_previewFile != null) {
+      final prevPath = _previewFile!.path;
+      final extraSegs = _multiSegmentsByPrimaryPath.remove(prevPath);
+      if (extraSegs != null) {
+        for (final seg in extraSegs) {
+          try {
+            final f = File(seg);
+            if (await f.exists()) await f.delete();
+          } catch (_) {}
+        }
+      }
+      try {
+        if (await _previewFile!.exists()) await _previewFile!.delete();
+      } catch (_) {}
+      _previewFile = null;
+    }
 
     for (final segPath in _recordedSegments) {
       try {

@@ -7,12 +7,16 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
+import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/message_context_menu_service.dart';
+import '../../utils/date_time_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/image_utils.dart';
 import '../theme/viewport_gradient_box.dart';
 import '../tiling/static_tile_cache_boundary.dart';
+import 'telegram_avatar_stack.dart';
 
 class MessageContextMenu extends StatefulWidget {
   /// Color matrix that unpremultiplies any partially-transparent edge samples
@@ -58,6 +62,8 @@ class MessageContextMenu extends StatefulWidget {
     );
   }
 
+  final Message? message;
+  final String? chatType;
   final Offset messageOffset;
   final Size messageSize;
   final bool isMe;
@@ -85,6 +91,8 @@ class MessageContextMenu extends StatefulWidget {
 
   const MessageContextMenu({
     Key? key,
+    this.message,
+    this.chatType,
     required this.messageOffset,
     required this.messageSize,
     required this.isMe,
@@ -133,6 +141,15 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
   bool _isDismissing = false;
 
+  // Read / Listened status & group readers sub-view state
+  bool _showingReadersList = false;
+  bool _loadingReaders = false;
+  List<Map<String, dynamic>> _readers = const [];
+  int _readCount = 0;
+  int _listenedCount = 0;
+  String? _fetchedReadAt;
+  String? _fetchedListenedAt;
+
   // Text selection state within the focused message
   RenderParagraph? _activeParagraph;
   TextSelection _selection = const TextSelection.collapsed(offset: -1);
@@ -150,12 +167,40 @@ class MessageContextMenuState extends State<MessageContextMenu>
   bool get _hasActiveSelection =>
       _selection.isValid && !_selection.isCollapsed && _activeParagraph != null;
 
+  bool get _shouldShowReadStatus {
+    final msg = widget.message;
+    if (!widget.isMe || msg == null) return false;
+    if (widget.sendStatus == 0 || widget.sendStatus == 2) return false;
+    if (msg.id.isEmpty || msg.id.startsWith('local_')) return false;
+    if (widget.chatType == 'channel') return false;
+    return true;
+  }
+
+  bool get _isPlayableNote {
+    final msg = widget.message;
+    if (msg == null) return false;
+    return msg.messageType == 'voice' ||
+        msg.messageType == 'audio' ||
+        msg.isRound ||
+        (msg.messageType == 'video' && msg.isRound);
+  }
+
+  bool get _isVideoNote {
+    final msg = widget.message;
+    if (msg == null) return false;
+    return msg.isRound || (msg.messageType == 'video' && msg.isRound);
+  }
+
   @override
   void initState() {
     super.initState();
     _originGradientBounds = ViewportGradientBoundsScope.resolveFromRenderObject(
       widget.messageKey?.currentContext?.findRenderObject(),
     );
+
+    if (_shouldShowReadStatus) {
+      _loadMessageReaders();
+    }
 
     _controller = AnimationController(
       vsync: this,
@@ -198,6 +243,52 @@ class MessageContextMenuState extends State<MessageContextMenu>
         }
       }
     });
+  }
+
+  Future<void> _loadMessageReaders() async {
+    final msg = widget.message;
+    if (msg == null || msg.chatId.isEmpty || msg.id.isEmpty) return;
+    setState(() => _loadingReaders = true);
+    try {
+      final res = await ChatService.getMessageReaders(
+        chatId: msg.chatId,
+        messageId: msg.id,
+      );
+      if (!mounted || _isDismissing) return;
+      if (res['success'] == true) {
+        final rawReaders = res['readers'] as List<dynamic>? ?? const [];
+        final parsedReaders = rawReaders
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        String? firstReadAt;
+        String? firstListenedAt;
+        for (final r in parsedReaders) {
+          final ra = r['read_at']?.toString();
+          if (ra != null && ra.isNotEmpty && firstReadAt == null) {
+            firstReadAt = ra;
+          }
+          final la = r['listened_at']?.toString();
+          if (la != null && la.isNotEmpty && firstListenedAt == null) {
+            firstListenedAt = la;
+          }
+        }
+        setState(() {
+          _readers = parsedReaders;
+          _readCount = (res['read_count'] as num?)?.toInt() ?? parsedReaders.length;
+          _listenedCount = (res['listened_count'] as num?)?.toInt() ?? 0;
+          if (firstReadAt != null) _fetchedReadAt = firstReadAt;
+          if (firstListenedAt != null) _fetchedListenedAt = firstListenedAt;
+          _loadingReaders = false;
+        });
+      } else {
+        setState(() => _loadingReaders = false);
+      }
+    } catch (_) {
+      if (mounted && !_isDismissing) {
+        setState(() => _loadingReaders = false);
+      }
+    }
   }
 
   @override
@@ -718,12 +809,13 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
           const double kMenuGap = 8.0;
           const double kScreenEdgeMargin = 12.0;
-          const double kDesiredMenuMaxHeight = 350.0;
+          const double kDesiredMenuMaxHeight = 360.0;
           const double kMinPanelHeight = 120.0;
           const double kMinSidePlacementChatWidth = 440.0;
-          const double kSideMenuTotalWidth = 267.0; // 44 (emoji) + 8 (gap) + 215 (actions)
+          const double kSideMenuTotalWidth = 277.0; // 44 (emoji) + 8 (gap) + 225 (actions)
 
           int actionItemCount = 4; // reply, copy, pin, delete
+          if (_shouldShowReadStatus) actionItemCount += (_isPlayableNote ? 2 : 1);
           if (widget.onQuote != null) actionItemCount++;
           if (widget.onViewPollResults != null) actionItemCount++;
           if (widget.onRetractVote != null) actionItemCount++;
@@ -805,11 +897,11 @@ class MessageContextMenuState extends State<MessageContextMenu>
                   .clamp(safeTop, math.max(safeTop, size.height - safeBottom));
             }
 
-            final double menuWidth = (size.width - 32.0).clamp(220.0, 275.0);
+            final double menuWidth = (size.width - 32.0).clamp(220.0, 285.0);
             menuLeft = widget.isMe
                 ? (size.width - menuWidth - 16.0)
                     .clamp(8.0, math.max(8.0, size.width - menuWidth - 8.0))
-                : ((size.width - 283.0) < 8.0 ? 8.0 : 16.0);
+                : ((size.width - 285.0) < 8.0 ? 8.0 : 16.0);
           }
 
           final stackBox =
@@ -1049,7 +1141,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
                             maxHeight: maxAvailableHeight,
-                            maxWidth: (size.width - 16.0).clamp(220.0, 290.0),
+                            maxWidth: (size.width - 16.0).clamp(220.0, 300.0),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
@@ -1057,8 +1149,10 @@ class MessageContextMenuState extends State<MessageContextMenu>
                                 ? CrossAxisAlignment.end
                                 : CrossAxisAlignment.start,
                             children: [
-                              _buildEmojiPanel(theme, maxAvailableHeight),
-                              const SizedBox(width: 8),
+                              if (!_showingReadersList) ...[
+                                _buildEmojiPanel(theme, maxAvailableHeight),
+                                const SizedBox(width: 8),
+                              ],
                               Flexible(
                                 child: _buildActionPanel(
                                   theme,
@@ -1200,115 +1294,544 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
   Widget _buildActionPanel(ThemeData theme, double maxHeight) {
     final bool isSending = widget.sendStatus == 0;
-    return Container(
-      width: 215,
-      constraints: BoxConstraints(maxHeight: maxHeight),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.topRight,
+      child: Container(
+        width: _showingReadersList ? 275 : 225,
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: _showingReadersList
+                ? _buildReadersListView(theme, maxHeight)
+                : ScrollConfiguration(
+                    key: const ValueKey('context_menu_actions'),
+                    behavior: ScrollConfiguration.of(context).copyWith(
+                      overscroll: false,
+                      scrollbars: false,
+                    ),
+                    child: SingleChildScrollView(
+                      physics: const ClampingScrollPhysics(),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_shouldShowReadStatus) ...[
+                            _buildReadReceiptItem(theme),
+                            const Divider(height: 1),
+                          ],
+                          _buildActionItem(
+                            (c) => iconoir.Reply(color: c, width: 20, height: 20),
+                            context.l10n.translate('chat_action_reply'),
+                            widget.onReply,
+                            theme,
+                            enabled: !isSending,
+                          ),
+                          if (widget.onQuote != null)
+                            _buildActionItem(
+                              (c) => iconoir.Quote(color: c, width: 20, height: 20),
+                              context.l10n.translate('format_quote'),
+                              widget.onQuote!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onViewPollResults != null)
+                            _buildActionItem(
+                              (c) => iconoir.StatsReport(color: c, width: 20, height: 20),
+                              context.l10n.translate('poll_view_results'),
+                              widget.onViewPollResults!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onRetractVote != null)
+                            _buildActionItem(
+                              (c) => iconoir.Undo(color: c, width: 20, height: 20),
+                              context.l10n.translate('poll_retract_vote'),
+                              widget.onRetractVote!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onStopPoll != null)
+                            _buildActionItem(
+                              (c) => Icon(Icons.stop_circle_outlined, color: c, size: 20),
+                              context.l10n.translate('poll_stop'),
+                              widget.onStopPoll!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          _buildActionItem(
+                            (c) => iconoir.Copy(color: c, width: 20, height: 20),
+                            context.l10n.translate('chat_action_copy'),
+                            widget.onCopy,
+                            theme,
+                            enabled: !isSending,
+                          ),
+                          _buildActionItem(
+                            (c) => iconoir.Pin(color: c, width: 20, height: 20),
+                            context.l10n.translate('chat_action_pin'),
+                            widget.onPin,
+                            theme,
+                            enabled: !isSending,
+                          ),
+                          if (widget.isMe && widget.onEdit != null)
+                            _buildActionItem(
+                              (c) => iconoir.EditPencil(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_edit_message'),
+                              widget.onEdit!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onSelect != null)
+                            _buildActionItem(
+                              (c) => iconoir.CheckCircle(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_action_select'),
+                              widget.onSelect!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          const Divider(height: 1),
+                          _buildActionItem(
+                            (c) => iconoir.Trash(color: c, width: 20, height: 20),
+                            context.l10n.translate('chat_action_delete'),
+                            widget.onDelete,
+                            theme,
+                            isDestructive: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReadReceiptItem(ThemeData theme) {
+    final msg = widget.message!;
+    final bool isGroup = widget.chatType == 'group';
+    final bool isPlayable = _isPlayableNote;
+    final bool isVideoNote = _isVideoNote;
+    final Color primaryColor = theme.colorScheme.primary;
+    final Color subColor = theme.colorScheme.onSurface.withValues(alpha: 0.72);
+
+    if (isGroup) {
+      final bool hasReaders = _readers.isNotEmpty || _readCount > 0;
+      final String mainText;
+      String? secondaryText;
+
+      if (_loadingReaders && !hasReaders) {
+        mainText = context.l10n.translate('msg_receipt_nobody_read');
+      } else if (!hasReaders && _listenedCount == 0) {
+        mainText = context.l10n.translate('msg_receipt_nobody_read');
+      } else if (isPlayable) {
+        mainText = context.l10n.translate(
+          'msg_receipt_read_count',
+          {'count': _readCount.toString()},
+        );
+        secondaryText = context.l10n.translate(
+          isVideoNote
+              ? 'msg_receipt_watched_count'
+              : 'msg_receipt_listened_count',
+          {'count': _listenedCount.toString()},
+        );
+      } else {
+        mainText = context.l10n.translate(
+          'msg_receipt_read_count',
+          {'count': _readCount.toString()},
+        );
+      }
+
+      return InkWell(
+        onTap: _readers.isNotEmpty
+            ? () {
+                HapticUtils.selection();
+                setState(() => _showingReadersList = true);
+              }
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            children: [
+              Icon(
+                hasReaders ? Icons.done_all_rounded : Icons.done_rounded,
+                size: 18,
+                color: hasReaders ? primaryColor : subColor,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      mainText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w500,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    if (secondaryText != null) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Icon(
+                            isVideoNote
+                                ? Icons.visibility_outlined
+                                : Icons.headset_rounded,
+                            size: 13,
+                            color: _listenedCount > 0 ? primaryColor : subColor,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              secondaryText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: subColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (_readers.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                TelegramAvatarStack(
+                  users: _readers,
+                  maxCount: 3,
+                  size: 22.0,
+                  step: 14.0,
+                  gap: 2.0,
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Private chat receipt
+    final String? effectiveReadAt =
+        (_fetchedReadAt != null && _fetchedReadAt!.isNotEmpty)
+            ? _fetchedReadAt
+            : msg.readAt;
+    final String? effectiveListenedAt =
+        (_fetchedListenedAt != null && _fetchedListenedAt!.isNotEmpty)
+            ? _fetchedListenedAt
+            : msg.listenedAt;
+    final bool isRead = msg.isRead ||
+        (effectiveReadAt != null && effectiveReadAt.isNotEmpty) ||
+        (effectiveListenedAt != null && effectiveListenedAt.isNotEmpty);
+    final bool isListened =
+        effectiveListenedAt != null && effectiveListenedAt.isNotEmpty;
+
+    final String readFormatted =
+        effectiveReadAt != null && effectiveReadAt.isNotEmpty
+            ? DateTimeUtils.formatReceiptTimestamp(effectiveReadAt, context)
+            : '';
+    final String readLine = readFormatted.isNotEmpty
+        ? context.l10n.translate('msg_receipt_read_at', {'time': readFormatted})
+        : (isRead
+            ? context.l10n.translate('msg_receipt_read')
+            : context.l10n.translate('msg_receipt_unread'));
+
+    if (!isPlayable) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              isRead ? Icons.done_all_rounded : Icons.done_rounded,
+              size: 18,
+              color: isRead ? primaryColor : subColor,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                readLine,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: subColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Voice or Round Video Note in private chat -> show BOTH Read and Listened/Watched lines
+    final String listenedFormatted = isListened
+        ? DateTimeUtils.formatReceiptTimestamp(effectiveListenedAt, context)
+        : '';
+    final String listenedLine = listenedFormatted.isNotEmpty
+        ? context.l10n.translate(
+            isVideoNote ? 'msg_receipt_watched_at' : 'msg_receipt_listened_at',
+            {'time': listenedFormatted},
+          )
+        : context.l10n.translate(
+            isVideoNote
+                ? 'msg_receipt_not_watched'
+                : 'msg_receipt_not_listened',
+          );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isRead ? Icons.done_all_rounded : Icons.done_rounded,
+                size: 16,
+                color: isRead ? primaryColor : subColor,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  readLine,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: subColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Icon(
+                isVideoNote
+                    ? Icons.visibility_outlined
+                    : Icons.headset_rounded,
+                size: 16,
+                color: isListened ? primaryColor : subColor,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  listenedLine,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: subColor,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(
-            overscroll: false,
-            scrollbars: false,
-          ),
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+    );
+  }
+
+  Widget _buildReadersListView(ThemeData theme, double maxHeight) {
+    final bool isPlayable = _isPlayableNote;
+    final bool isVideoNote = _isVideoNote;
+    final Color primaryColor = theme.colorScheme.primary;
+    final Color subColor = theme.colorScheme.onSurface.withValues(alpha: 0.68);
+
+    return Column(
+      key: const ValueKey('context_menu_readers_list'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          onTap: () {
+            HapticUtils.selection();
+            setState(() => _showingReadersList = false);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            child: Row(
               children: [
-                _buildActionItem(
-                  (c) => iconoir.Reply(color: c, width: 20, height: 20),
-                  context.l10n.translate('chat_action_reply'),
-                  widget.onReply,
-                  theme,
-                  enabled: !isSending,
+                Icon(
+                  Icons.arrow_back_ios_new_rounded,
+                  size: 16,
+                  color: theme.colorScheme.onSurface,
                 ),
-                if (widget.onQuote != null)
-                  _buildActionItem(
-                    (c) => iconoir.Quote(color: c, width: 20, height: 20),
-                    context.l10n.translate('format_quote'),
-                    widget.onQuote!,
-                    theme,
-                    enabled: !isSending,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    context.l10n.translate('msg_receipt_back'),
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface,
+                    ),
                   ),
-                if (widget.onViewPollResults != null)
-                  _buildActionItem(
-                    (c) => iconoir.StatsReport(color: c, width: 20, height: 20),
-                    context.l10n.translate('poll_view_results'),
-                    widget.onViewPollResults!,
-                    theme,
-                    enabled: !isSending,
-                  ),
-                if (widget.onRetractVote != null)
-                  _buildActionItem(
-                    (c) => iconoir.Undo(color: c, width: 20, height: 20),
-                    context.l10n.translate('poll_retract_vote'),
-                    widget.onRetractVote!,
-                    theme,
-                    enabled: !isSending,
-                  ),
-                if (widget.onStopPoll != null)
-                  _buildActionItem(
-                    (c) => Icon(Icons.stop_circle_outlined, color: c, size: 20),
-                    context.l10n.translate('poll_stop'),
-                    widget.onStopPoll!,
-                    theme,
-                    enabled: !isSending,
-                  ),
-                _buildActionItem(
-                  (c) => iconoir.Copy(color: c, width: 20, height: 20),
-                  context.l10n.translate('chat_action_copy'),
-                  widget.onCopy,
-                  theme,
-                  enabled: !isSending,
-                ),
-                _buildActionItem(
-                  (c) => iconoir.Pin(color: c, width: 20, height: 20),
-                  context.l10n.translate('chat_action_pin'),
-                  widget.onPin,
-                  theme,
-                  enabled: !isSending,
-                ),
-                if (widget.isMe && widget.onEdit != null)
-                  _buildActionItem(
-                    (c) => iconoir.EditPencil(color: c, width: 20, height: 20),
-                    context.l10n.translate('chat_edit_message'),
-                    widget.onEdit!,
-                    theme,
-                    enabled: !isSending,
-                  ),
-                if (widget.onSelect != null)
-                  _buildActionItem(
-                    (c) => iconoir.CheckCircle(color: c, width: 20, height: 20),
-                    context.l10n.translate('chat_action_select'),
-                    widget.onSelect!,
-                    theme,
-                    enabled: !isSending,
-                  ),
-                const Divider(height: 1),
-                _buildActionItem(
-                  (c) => iconoir.Trash(color: c, width: 20, height: 20),
-                  context.l10n.translate('chat_action_delete'),
-                  widget.onDelete,
-                  theme,
-                  isDestructive: true,
                 ),
               ],
             ),
           ),
         ),
-      ),
+        const Divider(height: 1),
+        Flexible(
+          child: ScrollConfiguration(
+            behavior: ScrollConfiguration.of(context).copyWith(
+              overscroll: false,
+              scrollbars: false,
+            ),
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              physics: const ClampingScrollPhysics(),
+              itemCount: _readers.length,
+              itemBuilder: (context, index) {
+                final reader = _readers[index];
+                final name = (reader['display_name'] ?? reader['username'] ?? '?')
+                    .toString()
+                    .trim();
+                final rawAvatar = reader['avatar_url']?.toString();
+                final validAvatar = getValidAvatarUrl(rawAvatar);
+                final imgProvider = validAvatar != null
+                    ? avatarImageProvider(validAvatar)
+                    : null;
+                final initial = name.isNotEmpty
+                    ? name.characters.first.toUpperCase()
+                    : '?';
+                final readAtStr = reader['read_at']?.toString();
+                final listenedAtStr = reader['listened_at']?.toString();
+                final readFormatted =
+                    readAtStr != null && readAtStr.isNotEmpty
+                        ? DateTimeUtils.formatReceiptTimestamp(readAtStr, context)
+                        : '';
+                final listenedFormatted =
+                    listenedAtStr != null && listenedAtStr.isNotEmpty
+                        ? DateTimeUtils.formatReceiptTimestamp(
+                            listenedAtStr,
+                            context,
+                          )
+                        : '';
+
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 16,
+                        backgroundColor: primaryColor.withValues(alpha: 0.2),
+                        backgroundImage: imgProvider,
+                        child: imgProvider == null
+                            ? Text(
+                                initial,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: primaryColor,
+                                ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                            if (readFormatted.isNotEmpty) ...[
+                              const SizedBox(height: 1),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.done_all_rounded,
+                                    size: 13,
+                                    color: primaryColor,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Flexible(
+                                    child: Text(
+                                      readFormatted,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        color: subColor,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (isPlayable && listenedFormatted.isNotEmpty) ...[
+                              const SizedBox(height: 1),
+                              Row(
+                                children: [
+                                  Icon(
+                                    isVideoNote
+                                        ? Icons.visibility_outlined
+                                        : Icons.headset_rounded,
+                                    size: 12.5,
+                                    color: primaryColor,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Flexible(
+                                    child: Text(
+                                      listenedFormatted,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        color: subColor,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 

@@ -114,10 +114,13 @@ class MessageContextMenuService {
     final size = renderBox.size;
 
     final originalWidget = messageKey.currentContext?.widget;
+    String? detectedChatType;
     Widget Function(GlobalKey focusedKey)? focusedMessageBuilder;
     if (originalWidget is MessageBubble) {
+      detectedChatType = originalWidget.chatType;
       focusedMessageBuilder = (focusedKey) => originalWidget.copyWithKey(focusedKey);
     } else if (originalWidget is MediaAlbumWidget) {
+      detectedChatType = originalWidget.chatType;
       focusedMessageBuilder = (focusedKey) => originalWidget.copyWithKey(focusedKey);
     }
 
@@ -202,6 +205,8 @@ class MessageContextMenuService {
     _activeOverlayEntry = OverlayEntry(
       builder: (overlayContext) => MessageContextMenu(
         key: menuKey,
+        message: message,
+        chatType: detectedChatType,
         messageOffset: offset,
         messageSize: size,
         isMe: isMe,

@@ -71,6 +71,7 @@ import '../../widgets/chat/emoji_sticker_panel.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
+import '../../services/proximity_audio_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -149,7 +150,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   final WebSocketService _wsService = WebSocketService();
   ChatSubscription? _chatSubscription;
   bool _isTyping = false;
+  String _typingAction = 'typing';
   Timer? _typingTimer;
+  Timer? _recordingActionTimer;
   String? _typingUserName;
   String? _typingUserId;
 
@@ -326,7 +329,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         onScrollToMessage: (id) => _scrollToMessage(id),
         onPlayNext: _playNextMediaNote,
         onBuildPlaylist: (id) => _buildPlaylistFrom(id),
+        onMessageListenedLocally: _onLocalMessageListened,
       ),
+    );
+    ProximityAudioService.instance.registerOpenChat(
+      widget.chatId,
+      onRaiseToListenFirstUnplayed: _onRaiseToListenFirstUnplayed,
     );
     NotificationService().addActiveChat(widget.chatId);
 
@@ -773,6 +781,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onMessageDeleted: _onMessageDeleted,
       onReactionUpdated: _onMessageReactionUpdated,
       onMessageRead: _onMessageRead,
+      onMessageListened: _onMessageListened,
       onTyping: _onTypingIndicator,
       onUserStatus: _onUserStatusUpdate,
       onUnreadCountUpdated: _onUnreadCountUpdated,
@@ -1156,12 +1165,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final typingUserId = event.data['user_id']?.toString();
     if (typingUserId == _currentUserId) return;
 
-    final bool isTyping = event.data['is_typing'] != false;
+    final action = event.data['action']?.toString() ?? 'typing';
+    final bool isTyping = event.data['is_typing'] != false && action != 'stop';
     if (!isTyping) {
       if (mounted && _typingUserId == typingUserId) {
         _typingTimer?.cancel();
         setState(() {
           _isTyping = false;
+          _typingAction = 'typing';
           _typingUserId = null;
           _typingUserName = null;
         });
@@ -1188,6 +1199,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _typingUserId = typingUserId;
         _typingUserName = name;
         _isTyping = true;
+        _typingAction = action;
       });
 
       // Clear typing indicator after 4 seconds (Telegram-like smooth window)
@@ -1196,6 +1208,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted) {
           setState(() {
             _isTyping = false;
+            _typingAction = 'typing';
             _typingUserId = null;
             _typingUserName = null;
           });
@@ -1259,7 +1272,27 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _typingKeepAliveTimer = null;
     if (_amITyping) {
       _amITyping = false;
-      _wsService.sendTypingIndicator(widget.chatId, isTyping: false);
+      _wsService.sendTypingIndicator(widget.chatId, isTyping: false, action: 'stop');
+    }
+  }
+
+  void _startRecordingActionBroadcast(String action) {
+    _recordingActionTimer?.cancel();
+    _wsService.sendTypingIndicator(widget.chatId, isTyping: true, action: action);
+    _recordingActionTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (mounted && (_isVoiceRecording || _isVideoRecording)) {
+        _wsService.sendTypingIndicator(widget.chatId, isTyping: true, action: action);
+      } else {
+        _stopRecordingActionBroadcast();
+      }
+    });
+  }
+
+  void _stopRecordingActionBroadcast() {
+    if (_recordingActionTimer != null) {
+      _recordingActionTimer?.cancel();
+      _recordingActionTimer = null;
+      _wsService.sendTypingIndicator(widget.chatId, isTyping: false, action: 'stop');
     }
   }
 
@@ -1268,17 +1301,92 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final readerId = event.data['reader_id']?.toString();
     if (readerId == _currentUserId) return;
 
+    final readAt = event.data['read_at']?.toString() ?? DateTime.now().toUtc().toIso8601String();
+    final upToMessageId = event.data['up_to_message_id']?.toString();
+
     if (mounted) {
       setState(() {
-        // Mark all messages sent by current user as read
-        for (int i = 0; i < _messages.length; i++) {
+        int upToIndex = 0;
+        if (upToMessageId != null && upToMessageId.isNotEmpty) {
+          final foundIndex = _messages.indexWhere((m) => m.id == upToMessageId);
+          if (foundIndex >= 0) {
+            upToIndex = foundIndex;
+          }
+        }
+        // Messages list is newest-first (index 0 is newest)
+        for (int i = upToIndex; i < _messages.length; i++) {
           if (_messages[i].senderId == _currentUserId) {
-            _messages[i] = _messages[i].copyWith(isRead: true);
+            _messages[i] = _messages[i].copyWith(
+              isRead: true,
+              readAt: _messages[i].readAt ?? readAt,
+            );
           }
         }
         _updateFeedItems();
       });
+
+      if (_currentUserId != null) {
+        context
+            .read<AppDatabase>()
+            .markMessagesAsRead(widget.chatId, _currentUserId!, readAt: readAt);
+      }
     }
+  }
+
+  void _onMessageListened(WebSocketEvent event) {
+    final chatId = event.data['chat_id']?.toString();
+    if (chatId != widget.chatId) return;
+
+    final messageId = event.data['message_id']?.toString() ?? '';
+    if (messageId.isEmpty) return;
+
+    final listenedAt = event.data['listened_at']?.toString() ??
+        DateTime.now().toUtc().toIso8601String();
+    final readAt = event.data['read_at']?.toString() ?? listenedAt;
+
+    if (mounted) {
+      setState(() {
+        final index = _messages.indexWhere((m) => m.id == messageId);
+        if (index >= 0) {
+          _messages[index] = _messages[index].copyWith(
+            isRead: true,
+            isListened: true,
+            readAt: _messages[index].readAt ?? readAt,
+            listenedAt: _messages[index].listenedAt ?? listenedAt,
+          );
+          _updateFeedItems();
+        }
+      });
+
+      context.read<AppDatabase>().updateMessageReadAndListened(
+            messageId,
+            readAt: readAt,
+            listenedAt: listenedAt,
+            isListened: true,
+          );
+    }
+  }
+
+  void _onLocalMessageListened(String messageId, String listenedAt) {
+    if (!mounted) return;
+    setState(() {
+      final index = _messages.indexWhere((m) => m.id == messageId);
+      if (index >= 0) {
+        _messages[index] = _messages[index].copyWith(
+          isRead: true,
+          isListened: true,
+          readAt: _messages[index].readAt ?? listenedAt,
+          listenedAt: _messages[index].listenedAt ?? listenedAt,
+        );
+        _updateFeedItems();
+      }
+    });
+    context.read<AppDatabase>().updateMessageReadAndListened(
+          messageId,
+          readAt: listenedAt,
+          listenedAt: listenedAt,
+          isListened: true,
+        );
   }
 
   Future<void> _markMessagesAsRead() async {
@@ -1664,9 +1772,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       linkPreviewOptions: msg.linkPreviewOptions != null
           ? Value(jsonEncode(msg.linkPreviewOptions!.toJson()))
           : const Value.absent(),
-      mediaPayload: msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty
-          ? Value(jsonEncode(msg.mediaPayload))
-          : const Value.absent(),
+      mediaPayload: (() {
+        final mergedPayload = <String, dynamic>{
+          if (msg.mediaPayload != null) ...msg.mediaPayload!,
+          if (msg.readAt != null && msg.readAt!.isNotEmpty)
+            'read_at': msg.readAt,
+          if (msg.listenedAt != null && msg.listenedAt!.isNotEmpty)
+            'listened_at': msg.listenedAt,
+          if (msg.isListened) 'is_listened': true,
+        };
+        return mergedPayload.isNotEmpty
+            ? Value<String?>(jsonEncode(mergedPayload))
+            : const Value<String?>.absent();
+      })(),
       invertMedia: Value(msg.invertMedia),
       isForward: Value(msg.isForward),
       forwardFromId: Value(msg.forwardFromId),
@@ -2874,6 +2992,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _showScrollDownFabNotifier.dispose();
     _uploadProgressNotifier.dispose();
     _stopMyTyping();
+    _stopRecordingActionBroadcast();
     _tabController.dispose();
     _messageController.dispose();
     _scrollController.dispose();
@@ -2904,8 +3023,46 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _voiceRecorderService.dispose();
 
     MediaPlaybackCoordinator.instance.unregisterChat(widget.chatId);
+    ProximityAudioService.instance.unregisterOpenChat(widget.chatId);
 
     super.dispose();
+  }
+
+  Future<bool> _onRaiseToListenFirstUnplayed() async {
+    if (!mounted || _isVoiceRecording || _isVideoRecording) return false;
+    // Find the chronologically oldest unlistened incoming voice message
+    for (int i = _messages.length - 1; i >= 0; i--) {
+      final m = _messages[i];
+      if (m.senderId != _currentUserId &&
+          m.messageType == 'voice' &&
+          !m.isListened) {
+        final rawUrl = m.fileUrl ?? '';
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        if (resolvedUrl.isEmpty) continue;
+
+        final track = PlaybackTrack(
+          messageId: m.id,
+          chatId: widget.chatId,
+          chatType: 'group',
+          mediaType: 'voice',
+          mediaUrl: resolvedUrl,
+          senderName: m.senderName,
+          chatTitle: widget.groupName,
+          duration: m.duration != null && m.duration! > 0
+              ? Duration(seconds: m.duration!)
+              : null,
+          waveform: m.waveform,
+        );
+        final remainingQueue = _buildPlaylistFrom(m.id);
+        await MediaPlaybackCoordinator.instance.startPlayback(
+          track: track,
+          remainingQueue: remainingQueue,
+          isIncomingUnplayed: true,
+        );
+        return true;
+      }
+    }
+    return false;
   }
 
   List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {
@@ -3010,8 +3167,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final int onlineCount = _participants.where((p) => p.isOnline).length;
     final String statusSubtitle;
     if (_isTyping && _typingUserName != null && _typingUserName!.isNotEmpty) {
+      final String l10nKey;
+      if (_typingAction == 'record_voice') {
+        l10nKey = 'chat_user_recording_voice';
+      } else if (_typingAction == 'record_round') {
+        l10nKey = 'chat_user_recording_round';
+      } else {
+        l10nKey = 'chat_user_typing';
+      }
       statusSubtitle = context.l10n
-          .translate('chat_user_typing')
+          .translate(l10nKey)
           .replaceAll('{name}', _typingUserName!);
     } else if (onlineCount >= 1) {
       statusSubtitle = context.l10n
@@ -3037,6 +3202,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           } else if (_isVideoRecording) {
             _onVideoRecordingCancelled();
           } else if (_isVoiceRecording) {
+            _stopRecordingActionBroadcast();
             _voiceRecorderService.cancelRecording();
             setState(() => _isVoiceRecording = false);
           }
@@ -3397,12 +3563,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 child: VoiceRecordingOverlay(
                   key: _voiceOverlayKey,
                   recorderService: _voiceRecorderService,
-                  onCancel: () => setState(() => _isVoiceRecording = false),
+                  onCancel: () {
+                    _stopRecordingActionBroadcast();
+                    setState(() => _isVoiceRecording = false);
+                  },
                   onSend: (res) async {
+                    _stopRecordingActionBroadcast();
                     setState(() => _isVoiceRecording = false);
                     await _sendVoiceMessage(res);
                   },
                   onTooShort: () {
+                    _stopRecordingActionBroadcast();
                     setState(() => _isVoiceRecording = false);
                     HapticFeedback.selectionClick();
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -3516,6 +3687,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       album: album,
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
+      chatType: 'group',
       senderName: isMe ? null : message.senderName,
       formatTime: _formatTime,
       onFileTap: (url, name, type) => _openFile(url, name, type),
@@ -3865,6 +4037,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     HapticFeedback.heavyImpact();
     setState(() => _isVideoRecording = true);
+    _startRecordingActionBroadcast('record_round');
     final ok = await _videoRecorderService.startRecording();
     if (!_isVideoPointerDown && ok) {
       await _videoRecorderService.cancelRecording();
@@ -3874,6 +4047,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       return;
     }
     if (!ok && mounted) {
+      _stopRecordingActionBroadcast();
       setState(() => _isVideoRecording = false);
       final isPermDenied =
           _videoRecorderService.errorMessage == 'permission_denied';
@@ -3915,15 +4089,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (!_isVideoRecording) return;
     final state = _videoOverlayKey.currentState as dynamic;
     if (state?.isLocked == true) return;
+    _stopRecordingActionBroadcast();
     _videoRecorderService.cancelRecording();
     setState(() => _isVideoRecording = false);
   }
 
   void _onVideoRecordingCancelled() {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
   }
 
   void _onVideoRecordingTooShort() {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
     HapticFeedback.selectionClick();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -3937,6 +4114,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _onVideoRecordingSend(File file) async {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
     await _sendRoundVideoMessage(file);
   }
@@ -3996,6 +4174,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
     if (started && mounted) {
       setState(() => _isVoiceRecording = true);
+      _startRecordingActionBroadcast('record_voice');
     }
   }
 
@@ -4017,6 +4196,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (!_isVoiceRecording) return;
     final state = _voiceOverlayKey.currentState as dynamic;
     if (state?.isLocked == true) return;
+    _stopRecordingActionBroadcast();
     _voiceRecorderService.cancelRecording();
     setState(() => _isVoiceRecording = false);
   }

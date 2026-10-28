@@ -23,6 +23,7 @@ class SettingsService {
   static const String _notificationSettingsKey = 'notification_settings';
   static const String _chatNotificationSettingsKey = 'chat_notification_settings';
   static const String _sendByEnterKey = 'chat_send_by_enter';
+  static const String _raiseToListenKey = 'chat_raise_to_listen';
 
   // Кэшированные данные
   UserProfile? _cachedProfile;
@@ -36,6 +37,7 @@ class SettingsService {
   GlobalNotificationSettings? _cachedNotificationSettings;
   Map<String, ChatNotificationSettings>? _cachedChatNotificationSettings;
   final ValueNotifier<bool> sendByEnterNotifier = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> raiseToListenNotifier = ValueNotifier<bool>(true);
 
   /// Инициализация сервиса
   Future<void> init() async {
@@ -122,6 +124,7 @@ class SettingsService {
     }
 
     sendByEnterNotifier.value = _prefs.getBool(_sendByEnterKey) ?? true;
+    raiseToListenNotifier.value = _prefs.getBool(_raiseToListenKey) ?? true;
   }
 
   // ============ Профиль ============
@@ -399,6 +402,17 @@ class SettingsService {
     } catch (_) {}
   }
 
+  /// Поднести к уху для прослушивания голосовых сообщений через разговорный динамик
+  bool get raiseToListen => raiseToListenNotifier.value;
+
+  /// Сохранить настройку «Поднести для прослушивания»
+  Future<void> setRaiseToListen(bool value) async {
+    raiseToListenNotifier.value = value;
+    try {
+      await _prefs.setBool(_raiseToListenKey, value);
+    } catch (_) {}
+  }
+
   /// Очистить все настройки (при выходе из аккаунта)
   Future<void> clearAllSettings() async {
     _cachedProfile = null;
@@ -412,6 +426,7 @@ class SettingsService {
     _cachedNotificationSettings = null;
     _cachedChatNotificationSettings = null;
     sendByEnterNotifier.value = true;
+    raiseToListenNotifier.value = true;
     await _prefs.remove(_profileKey);
     await _prefs.remove(_foldersKey);
     await _prefs.remove(_storageSettingsKey);
@@ -423,6 +438,7 @@ class SettingsService {
     await _prefs.remove(_notificationSettingsKey);
     await _prefs.remove(_chatNotificationSettingsKey);
     await _prefs.remove(_sendByEnterKey);
+    await _prefs.remove(_raiseToListenKey);
   }
 }
 

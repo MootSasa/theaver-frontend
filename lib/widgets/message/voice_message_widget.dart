@@ -23,6 +23,7 @@ class VoiceMessageWidget extends StatefulWidget {
   final List<int>? waveform;
   final bool isMe;
   final bool isRead;
+  final bool isListened;
   final int sendStatus;
   final String? timeText;
   final String? senderName;
@@ -41,6 +42,7 @@ class VoiceMessageWidget extends StatefulWidget {
     this.waveform,
     this.isMe = false,
     this.isRead = false,
+    this.isListened = false,
     this.sendStatus = 1,
     this.timeText,
     this.senderName,
@@ -255,6 +257,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
         chatTitle: widget.chatTitle ?? widget.senderName,
         duration: widget.duration,
         waveform: widget.waveform,
+        isMe: widget.isMe,
       ),
     );
   }
@@ -280,6 +283,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
           chatTitle: widget.chatTitle ?? widget.senderName,
           duration: widget.duration,
           waveform: widget.waveform,
+          isMe: widget.isMe,
         ),
       ).then((_) {
         _playbackService.seekVoice(Duration(milliseconds: targetMs));
@@ -336,7 +340,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
         : (duration > Duration.zero ? _formatDuration(duration) : '0:00');
 
     final bool showUnplayedDot =
-        !widget.isMe && !widget.isRead && !_hasBeenPlayedLocally && !_isThisActive;
+        !widget.isMe && !widget.isListened && !_hasBeenPlayedLocally && !_isThisActive;
 
     return Container(
       constraints: const BoxConstraints(minWidth: 200, maxWidth: 260),

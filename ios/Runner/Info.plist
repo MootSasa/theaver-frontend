@@ -72,5 +72,10 @@
 	<string>Theaver needs photo library access to select photos for your avatar</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Theaver needs microphone access for voice messages, video messages, and calls</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>remote-notification</string>
+	</array>
 	</dict>
 	</plist>

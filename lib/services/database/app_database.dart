@@ -818,14 +818,88 @@ class AppDatabase extends _$AppDatabase {
     await (delete(messages)..where((t) => t.chatId.equals(chatId))).go();
   }
 
-  /// Пометить сообщения как прочитанные (отправителя в чате)
-  Future<void> markMessagesAsRead(String chatId, String senderId) async {
-    await (update(messages)
+  /// Пометить сообщения как прочитанные (отправителя в чате) с сохранением времени прочтения read_at
+  Future<void> markMessagesAsRead(
+    String chatId,
+    String senderId, {
+    String? readAt,
+  }) async {
+    await ensureInitialized();
+    final effectiveReadAt = readAt ?? DateTime.now().toUtc().toIso8601String();
+    final unreadMsgs = await (select(messages)
           ..where((t) =>
               t.chatId.equals(chatId) &
               t.senderId.equals(senderId) &
               t.isRead.equals(false)))
-        .write(const MessagesCompanion(isRead: Value(true)));
+        .get();
+
+    if (unreadMsgs.isEmpty) return;
+
+    await batch((b) {
+      for (final msg in unreadMsgs) {
+        Map<String, dynamic> mp = {};
+        if (msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(msg.mediaPayload!);
+            if (decoded is Map) {
+              mp = Map<String, dynamic>.from(decoded);
+            }
+          } catch (_) {}
+        }
+        mp['read_at'] ??= effectiveReadAt;
+        b.update(
+          messages,
+          MessagesCompanion(
+            isRead: const Value(true),
+            mediaPayload: Value(jsonEncode(mp)),
+          ),
+          where: (t) => t.localId.equals(msg.localId),
+        );
+      }
+    });
+  }
+
+  /// Обновить время прочтения (read_at) и/или прослушивания (listened_at) конкретного сообщения
+  Future<void> updateMessageReadAndListened(
+    String messageId, {
+    bool? isRead,
+    String? readAt,
+    String? listenedAt,
+    bool? isListened,
+  }) async {
+    await ensureInitialized();
+    final existing = await (select(messages)
+          ..where(
+              (t) => t.serverId.equals(messageId) | t.localId.equals(messageId)))
+        .getSingleOrNull();
+    if (existing == null) return;
+
+    Map<String, dynamic> mp = {};
+    if (existing.mediaPayload != null && existing.mediaPayload!.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(existing.mediaPayload!);
+        if (decoded is Map) {
+          mp = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    if (readAt != null && readAt.isNotEmpty) {
+      mp['read_at'] ??= readAt;
+    }
+    if (listenedAt != null && listenedAt.isNotEmpty) {
+      mp['listened_at'] ??= listenedAt;
+    }
+    if (isListened != null) {
+      mp['is_listened'] = isListened;
+    }
+
+    await (update(messages)..where((t) => t.localId.equals(existing.localId)))
+        .write(MessagesCompanion(
+      isRead: isRead != null
+          ? Value(isRead)
+          : (readAt != null ? const Value(true) : const Value.absent()),
+      mediaPayload: Value(jsonEncode(mp)),
+    ));
   }
 
   // === SYNC STATE ===

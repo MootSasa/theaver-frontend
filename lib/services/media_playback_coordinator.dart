@@ -9,6 +9,8 @@ import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/private_chat_screen.dart';
 import '../widgets/message/video_message_widget.dart';
 import '../utils/swipe_back_route.dart';
+import 'chat_service.dart';
+import 'database/app_database.dart';
 import 'deep_link_service.dart';
 import 'media_cache_manager.dart';
 import 'tiling_layout_controller.dart';
@@ -26,6 +28,7 @@ class PlaybackTrack {
   final String? chatTitle;
   final Duration? duration;
   final List<int>? waveform;
+  final bool isMe;
 
   const PlaybackTrack({
     required this.messageId,
@@ -37,6 +40,7 @@ class PlaybackTrack {
     this.chatTitle,
     this.duration,
     this.waveform,
+    this.isMe = false,
   });
 
   bool get isVoice => mediaType == 'voice';
@@ -48,11 +52,13 @@ class ChatPlaybackCallbacks {
   final void Function(String messageId) onScrollToMessage;
   final void Function(String currentMessageId) onPlayNext;
   final List<PlaybackTrack> Function(String startMessageId) onBuildPlaylist;
+  final void Function(String messageId, String listenedAt)? onMessageListenedLocally;
 
   const ChatPlaybackCallbacks({
     required this.onScrollToMessage,
     required this.onPlayNext,
     required this.onBuildPlaylist,
+    this.onMessageListenedLocally,
   });
 
   void Function(String messageId) get onScrollToMessageRequested =>
@@ -191,6 +197,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
   Future<void> startPlayback({
     required PlaybackTrack track,
     List<PlaybackTrack>? remainingQueue,
+    bool isIncomingUnplayed = false,
   }) async {
     _activeTrack = track;
     final chatCb = _chatCallbacks[track.chatId];
@@ -202,6 +209,28 @@ class MediaPlaybackCoordinator with ChangeNotifier {
       _queue = onBuildPlaylistRequested!(track.messageId);
     }
     notifyListeners();
+
+    if ((!track.isMe || isIncomingUnplayed) &&
+        track.chatId.isNotEmpty &&
+        track.messageId.isNotEmpty &&
+        !track.messageId.startsWith('local_') &&
+        track.chatType != 'channel') {
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      chatCb?.onMessageListenedLocally?.call(track.messageId, nowIso);
+      unawaited(
+        AppDatabase().updateMessageReadAndListened(
+          track.messageId,
+          listenedAt: nowIso,
+          isListened: true,
+        ),
+      );
+      unawaited(
+        ChatService.markMessageListened(
+          chatId: track.chatId,
+          messageId: track.messageId,
+        ),
+      );
+    }
 
     final resolvedUrl = AppConfig.resolveMediaUrl(track.mediaUrl) ?? track.mediaUrl;
 

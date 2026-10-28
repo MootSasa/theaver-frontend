@@ -11,6 +11,7 @@ import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../chat/telegram_avatar_stack.dart';
 
 /// Interactive Telegram-style Poll / Quiz widget rendered inside a message bubble.
 class PollMessageWidget extends StatefulWidget {
@@ -940,79 +941,14 @@ class _VoterAvatarStack extends StatelessWidget {
     required this.borderColor,
   }) : super(key: key);
 
-  static const List<Color> _fallbackColors = [
-    Color(0xFF3B82F6),
-    Color(0xFF10B981),
-    Color(0xFFF59E0B),
-    Color(0xFFEC4899),
-    Color(0xFF8B5CF6),
-    Color(0xFF06B6D4),
-  ];
-
   @override
   Widget build(BuildContext context) {
-    final displayVoters = voters.take(maxCount).toList();
-    if (displayVoters.isEmpty) return const SizedBox.shrink();
-
-    final double overlap = size * 0.32;
-    final double step = size - overlap;
-    final double totalWidth = size + (displayVoters.length - 1) * step;
-
-    return SizedBox(
-      width: totalWidth,
-      height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (int i = 0; i < displayVoters.length; i++)
-            Positioned(
-              left: i * step,
-              top: 0,
-              child: _buildSingleAvatar(displayVoters[i], i),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSingleAvatar(Map<String, dynamic> voter, int index) {
-    final rawAvatar = voter['avatar_url']?.toString();
-    final validAvatar = getValidAvatarUrl(rawAvatar);
-    final imgProvider =
-        validAvatar != null ? avatarImageProvider(validAvatar) : null;
-    final name = (voter['display_name'] ?? voter['username'] ?? '?')
-        .toString()
-        .trim();
-    final initial = name.isNotEmpty ? name.characters.first.toUpperCase() : '?';
-    final uidHash = (voter['user_id'] ?? voter['id'] ?? index).hashCode.abs();
-    final fallbackColor = _fallbackColors[uidHash % _fallbackColors.length];
-
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: borderColor, width: 1.4),
-        color: fallbackColor,
-        image: imgProvider != null
-            ? DecorationImage(
-                image: imgProvider,
-                fit: BoxFit.cover,
-              )
-            : null,
-      ),
-      alignment: Alignment.center,
-      child: imgProvider == null
-          ? Text(
-              initial,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: size * 0.48,
-                fontWeight: FontWeight.w700,
-                height: 1.0,
-              ),
-            )
-          : null,
+    return TelegramAvatarStack(
+      users: voters,
+      maxCount: maxCount,
+      size: size,
+      step: size * 0.68,
+      gap: 1.5,
     );
   }
 }

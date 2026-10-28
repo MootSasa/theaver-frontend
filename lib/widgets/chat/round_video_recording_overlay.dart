@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/media_playback_coordinator.dart';
@@ -19,7 +21,7 @@ import 'message_context_menu.dart';
 /// - Cinematic backdrop blur (`BackdropFilter`) dimming the chat behind the circle.
 /// - 1:1 circular live viewfinder (`ClipOval`) with breathing pulse aura and no time limit.
 /// - Elapsed timer badge with pulsating red recording dot.
-/// - Swipe up to lock (hands-free mode) with flip camera, pause, trash, and send actions.
+/// - Swipe up to lock (hands-free mode) with flip camera, pause, stop-to-preview, trash, and send actions.
 /// - Slide to cancel with Telegram trash can animation (shrinking & flying into trash).
 /// - Short-press (< 1s) discard with hint tooltip.
 class RoundVideoRecordingOverlay extends StatefulWidget {
@@ -63,6 +65,8 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   bool get isLocked => _isLocked;
   bool _isSending = false;
   bool _isCancelling = false;
+  bool _isStoppingToPreview = false;
+  VideoPlayerController? _previewVideoController;
   double _dragOffsetX = 0.0;
   double _dragOffsetY = 0.0;
   double _currentZoom = 1.0;
@@ -146,13 +150,40 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
     if (mounted) setState(() {});
   }
 
+  void _onPreviewVideoChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _disposePreviewVideoController() async {
+    final ctrl = _previewVideoController;
+    _previewVideoController = null;
+    if (ctrl != null) {
+      ctrl.removeListener(_onPreviewVideoChanged);
+      try {
+        await ctrl.pause();
+      } catch (_) {}
+      try {
+        await ctrl.dispose();
+      } catch (_) {}
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _releaseBackdropIsolation?.call();
     _releaseBackdropIsolation = null;
     widget.recorderService.removeListener(_onRecorderUpdate);
-    if (!_isSending && (widget.recorderService.isRecording || widget.recorderService.isInitialized)) {
+    final ctrl = _previewVideoController;
+    _previewVideoController = null;
+    if (ctrl != null) {
+      ctrl.removeListener(_onPreviewVideoChanged);
+      ctrl.dispose();
+    }
+    if (!_isSending &&
+        (widget.recorderService.isRecording ||
+            widget.recorderService.isInitialized ||
+            widget.recorderService.isPreview)) {
       widget.recorderService.cancelRecording();
     }
     _fadeController.dispose();
@@ -187,7 +218,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
         _triggerTrashCancel();
         return;
       }
-    } else {
+    } else if (!widget.recorderService.isPreview) {
       // Once locked, dragging further up adjusts zoom (1.0x to 3.0x)
       if (dy <= _kLockThreshold) {
         final zoomFraction = ((-dy - (-_kLockThreshold)) / 150.0).clamp(0.0, 1.0);
@@ -211,11 +242,60 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
     }
   }
 
+  Future<void> _stopToPreview() async {
+    if (_isSending ||
+        _isCancelling ||
+        _isStoppingToPreview ||
+        widget.recorderService.isPreview) {
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _isStoppingToPreview = true;
+      _currentZoom = 1.0;
+    });
+    final file = await widget.recorderService.stopForPreview();
+    if (!mounted) return;
+    if (file == null) {
+      setState(() => _isStoppingToPreview = false);
+      return;
+    }
+    try {
+      final ctrl = kIsWeb
+          ? VideoPlayerController.networkUrl(Uri.parse(file.path))
+          : VideoPlayerController.file(file);
+      _previewVideoController = ctrl;
+      await ctrl.initialize();
+      await ctrl.setLooping(true);
+      await ctrl.setVolume(1.0);
+      ctrl.addListener(_onPreviewVideoChanged);
+      await ctrl.play();
+    } catch (e) {
+      debugPrint('RoundVideoRecordingOverlay: Preview controller init error: $e');
+    }
+    if (mounted) {
+      setState(() => _isStoppingToPreview = false);
+    }
+  }
+
+  Future<void> _togglePreviewPlayback() async {
+    final ctrl = _previewVideoController;
+    if (ctrl == null || !ctrl.value.isInitialized) return;
+    HapticFeedback.selectionClick();
+    if (ctrl.value.isPlaying) {
+      await ctrl.pause();
+    } else {
+      await ctrl.play();
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> _triggerTrashCancel() async {
     _isCancelling = true;
     HapticFeedback.heavyImpact();
     setState(() {});
 
+    await _disposePreviewVideoController();
     await _trashController.forward();
     await widget.recorderService.cancelRecording();
     widget.onCancel();
@@ -223,6 +303,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
 
   Future<void> _discardTooShort() async {
     _isCancelling = true;
+    await _disposePreviewVideoController();
     await widget.recorderService.cancelRecording();
     widget.onTooShort();
   }
@@ -231,6 +312,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
     if (_isSending) return;
     setState(() => _isSending = true);
 
+    await _disposePreviewVideoController();
     final file = await widget.recorderService.stopRecording();
     if (file != null && mounted) {
       widget.onSend(file);
@@ -249,6 +331,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   }
 
   Future<void> _flipCamera() async {
+    if (widget.recorderService.isPreview) return;
     _flipController.forward(from: 0.0);
     HapticFeedback.selectionClick();
     _setZoom(1.0);
@@ -410,6 +493,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
 
   /// Circular camera viewfinder with pulse aura, top timer badge and bottom zoom badge
   Widget _buildCameraViewfinder(double diameter, ThemeData theme) {
+    final isPreview = widget.recorderService.isPreview;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -424,8 +508,8 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
             // Camera Circle Preview
             _buildCameraCircle(diameter),
 
-            // Sending indicator overlay
-            if (_isSending)
+            // Sending or stopping-to-preview indicator overlay
+            if (_isSending || _isStoppingToPreview)
               Container(
                 width: diameter,
                 height: diameter,
@@ -443,7 +527,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
           ],
         ),
         const SizedBox(height: 10),
-        _buildZoomBadge(),
+        if (!isPreview) _buildZoomBadge(),
       ],
     );
   }
@@ -491,6 +575,68 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   }
 
   Widget _buildCameraCircle(double diameter) {
+    final isPreview = widget.recorderService.isPreview;
+    final previewCtrl = _previewVideoController;
+    if (isPreview) {
+      return GestureDetector(
+        onTap: _togglePreviewPlayback,
+        child: Container(
+          width: diameter,
+          height: diameter,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.35),
+              width: 2.0,
+            ),
+          ),
+          child: ClipOval(
+            child: previewCtrl != null && previewCtrl.value.isInitialized
+                ? Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(
+                          width: previewCtrl.value.size.width > 0
+                              ? previewCtrl.value.size.width
+                              : diameter,
+                          height: previewCtrl.value.size.height > 0
+                              ? previewCtrl.value.size.height
+                              : diameter,
+                          child: VideoPlayer(previewCtrl),
+                        ),
+                      ),
+                      if (!previewCtrl.value.isPlaying)
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: const BoxDecoration(
+                            color: Colors.black54,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                    ],
+                  )
+                : Container(
+                    color: Colors.black87,
+                    child: const Center(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      );
+    }
+
     return Listener(
       onPointerSignal: (event) {
         if (event is PointerScrollEvent) {
@@ -594,6 +740,48 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
 
   /// Floating timer badge at top of circle with pulsing red dot
   Widget _buildTimerBadge() {
+    final isPreview = widget.recorderService.isPreview;
+    final previewCtrl = _previewVideoController;
+    if (isPreview && previewCtrl != null && previewCtrl.value.isInitialized) {
+      final pos = previewCtrl.value.position;
+      final total = previewCtrl.value.duration.inMilliseconds > 0
+          ? previewCtrl.value.duration
+          : widget.recorderService.elapsed;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.65),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.15),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              previewCtrl.value.isPlaying
+                  ? Icons.play_arrow_rounded
+                  : Icons.pause_rounded,
+              color: const Color(0xFF2EA6FF),
+              size: 16,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              '${_formatDuration(pos)} / ${_formatDuration(total)}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return AnimatedBuilder(
       animation: _pulseController,
       builder: (context, child) {
@@ -612,7 +800,9 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
             children: [
               // Pulsing Red Recording Dot
               Opacity(
-                opacity: 0.4 + (_pulseController.value * 0.6),
+                opacity: widget.recorderService.isPaused
+                    ? 0.4
+                    : 0.4 + (_pulseController.value * 0.6),
                 child: Container(
                   width: 9,
                   height: 9,
@@ -731,6 +921,11 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
     ThemeData theme,
     Size size,
   ) {
+    final isPreview = widget.recorderService.isPreview;
+    final previewCtrl = _previewVideoController;
+    final isPlayingPreview =
+        previewCtrl != null && previewCtrl.value.isInitialized && previewCtrl.value.isPlaying;
+
     return Positioned(
       bottom: size.height * 0.04,
       left: size.width * 0.08,
@@ -778,25 +973,100 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
               ),
             ),
 
-            // Flip Camera Button
-            GestureDetector(
-              onTap: _flipCamera,
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.18),
+            if (isPreview)
+              // Play / Pause Preview Button
+              GestureDetector(
+                onTap: _togglePreviewPlayback,
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.18),
+                  ),
+                  child: Center(
+                    child: Icon(
+                      isPlayingPreview
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                      size: 24,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
-                child: const Center(
-                  child: iconoir.Refresh(
-                    width: 22,
-                    height: 22,
-                    color: Colors.white,
+              )
+            else ...[
+              // Flip Camera Button
+              GestureDetector(
+                onTap: _flipCamera,
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.18),
+                  ),
+                  child: const Center(
+                    child: iconoir.Refresh(
+                      width: 20,
+                      height: 20,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
-            ),
+
+              // Pause / Resume Recording Button
+              GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  if (widget.recorderService.isPaused) {
+                    widget.recorderService.resumeRecording();
+                  } else {
+                    widget.recorderService.pauseRecording();
+                  }
+                },
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.18),
+                  ),
+                  child: Center(
+                    child: Icon(
+                      widget.recorderService.isPaused
+                          ? Icons.fiber_manual_record_rounded
+                          : Icons.pause_rounded,
+                      size: 22,
+                      color: widget.recorderService.isPaused
+                          ? Colors.redAccent
+                          : Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+
+              // Stop Recording to Preview Button
+              GestureDetector(
+                onTap: _stopToPreview,
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.18),
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.stop_rounded,
+                      size: 24,
+                      color: Colors.redAccent,
+                    ),
+                  ),
+                ),
+              ),
+            ],
 
             // Send Video Note Button
             GestureDetector(

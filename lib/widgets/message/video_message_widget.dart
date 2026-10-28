@@ -734,6 +734,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
             senderName: widget.isMe ? null : widget.senderName,
             chatTitle: widget.chatTitle ?? (widget.isMe ? null : widget.senderName),
             duration: widget.duration,
+            isMe: widget.isMe,
           ),
         );
       } else if (!_isPlayingWithSound && _isCached && _controller != null) {

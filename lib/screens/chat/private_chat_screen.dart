@@ -63,6 +63,7 @@ import '../../services/media_cache_manager.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
+import '../../services/proximity_audio_service.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import 'package:path/path.dart' as p;
@@ -147,7 +148,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   final WebSocketService _wsService = WebSocketService();
   ChatSubscription? _chatSubscription;
   bool _isTyping = false;
+  String _typingAction = 'typing';
   Timer? _typingTimer;
+  Timer? _recordingActionTimer;
   // ignore: unused_field
   String? _typingUserId;
   String? _watchingEmoji;
@@ -324,7 +327,24 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         onScrollToMessage: (id) => _scrollToMessage(id),
         onPlayNext: _playNextMediaNote,
         onBuildPlaylist: (id) => _buildPlaylistFrom(id),
+        onMessageListenedLocally: (messageId, listenedAt) {
+          if (!mounted) return;
+          setState(() {
+            final idx = _messages.indexWhere((m) => m.id == messageId);
+            if (idx != -1) {
+              _messages[idx] = _messages[idx].copyWith(
+                isListened: true,
+                listenedAt: _messages[idx].listenedAt ?? listenedAt,
+              );
+              _updateFeedItems();
+            }
+          });
+        },
       ),
+    );
+    ProximityAudioService.instance.registerOpenChat(
+      widget.chatId,
+      onRaiseToListenFirstUnplayed: _onRaiseToListenFirstUnplayed,
     );
     NotificationService().addActiveChat(widget.chatId);
 
@@ -686,6 +706,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onMessageDeleted: _onMessageDeleted,
       onReactionUpdated: _onMessageReactionUpdated,
       onMessageRead: _onMessageRead,
+      onMessageListened: _onMessageListened,
       onTyping: _onTypingIndicator,
       onEmojiInteraction: _onEmojiInteraction,
       onUserStatus: _onUserStatusUpdate,
@@ -987,13 +1008,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (typingUserId == _currentUserId) return;
 
     final bool isTyping = event.data['is_typing'] != false;
+    final String action = event.data['action']?.toString() ?? 'typing';
 
     if (mounted) {
-      if (!isTyping) {
-        // User stopped typing / cleared input field
+      if (!isTyping || action == 'stop') {
+        // User stopped typing / recording
         _typingTimer?.cancel();
         setState(() {
           _isTyping = false;
+          _typingAction = 'typing';
           _typingUserId = null;
         });
         return;
@@ -1002,6 +1025,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       setState(() {
         _typingUserId = typingUserId;
         _isTyping = true;
+        _typingAction = action;
       });
 
       // Clear typing indicator after 4 seconds (Telegram-like smooth safety window)
@@ -1010,6 +1034,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         if (mounted) {
           setState(() {
             _isTyping = false;
+            _typingAction = 'typing';
             _typingUserId = null;
           });
         }
@@ -1292,30 +1317,85 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  void _startRecordingActionBroadcast(String action) {
+    _recordingActionTimer?.cancel();
+    _wsService.sendTypingIndicator(widget.chatId, isTyping: true, action: action);
+    _recordingActionTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if ((_isVoiceRecording && !_voiceRecorderService.isPreview) ||
+          (_isVideoRecording && !_videoRecorderService.isPreview)) {
+        _wsService.sendTypingIndicator(widget.chatId, isTyping: true, action: action);
+      } else {
+        _stopRecordingActionBroadcast();
+      }
+    });
+  }
+
+  void _stopRecordingActionBroadcast() {
+    if (_recordingActionTimer != null) {
+      _recordingActionTimer?.cancel();
+      _recordingActionTimer = null;
+      _wsService.sendTypingIndicator(widget.chatId, isTyping: false, action: 'stop');
+    }
+  }
+
   void _onMessageRead(WebSocketEvent event) {
     // Handle read status update - mark all our messages in this chat as read
     final readerId = event.data['reader_id']?.toString();
     if (readerId == _currentUserId) return; // We are the reader, not the sender
+    final readAt = event.data['read_at']?.toString() ??
+        DateTime.now().toUtc().toIso8601String();
 
     if (mounted) {
       setState(() {
         // Mark all messages sent by current user as read
         for (int i = 0; i < _messages.length; i++) {
           if (_messages[i].senderId == _currentUserId) {
-            _messages[i] = _messages[i].copyWith(isRead: true);
+            _messages[i] = _messages[i].copyWith(
+              isRead: true,
+              readAt: _messages[i].readAt ?? readAt,
+            );
           }
         }
         _updateFeedItems();
       });
 
-      // Обновить статус isRead в Drift для персистенции
+      // Обновить статус isRead и read_at в Drift для персистенции
       final db = AppDatabase();
       try {
-        db.markMessagesAsRead(widget.chatId, _currentUserId ?? '');
+        db.markMessagesAsRead(widget.chatId, _currentUserId ?? '', readAt: readAt);
       } catch (e) {
         debugPrint('Drift markMessagesAsRead error: $e');
       }
     }
+  }
+
+  void _onMessageListened(WebSocketEvent event) {
+    final messageId = event.data['message_id']?.toString();
+    final listenedAt = event.data['listened_at']?.toString() ??
+        DateTime.now().toUtc().toIso8601String();
+    if (messageId == null || !mounted) return;
+
+    setState(() {
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
+          isListened: true,
+          listenedAt: _messages[idx].listenedAt ?? listenedAt,
+          isRead: true,
+          readAt: _messages[idx].readAt ?? listenedAt,
+        );
+        _updateFeedItems();
+      }
+    });
+    try {
+      AppDatabase().updateMessageReadAndListened(
+        messageId,
+        isRead: true,
+        readAt: listenedAt,
+        isListened: true,
+        listenedAt: listenedAt,
+      );
+    } catch (_) {}
   }
 
   /// Called by VisibleMessageDetector when an unread incoming message becomes visible.
@@ -2130,8 +2210,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       linkPreviewOptions: msg.linkPreviewOptions != null
           ? Value(jsonEncode(msg.linkPreviewOptions!.toJson()))
           : const Value.absent(),
-      mediaPayload: msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty
-          ? Value(jsonEncode(msg.mediaPayload))
+      mediaPayload: (msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty) ||
+              msg.readAt != null ||
+              msg.listenedAt != null ||
+              msg.isListened
+          ? Value(jsonEncode({
+              if (msg.mediaPayload != null) ...msg.mediaPayload!,
+              if (msg.readAt != null) 'read_at': msg.readAt,
+              if (msg.listenedAt != null) 'listened_at': msg.listenedAt,
+              if (msg.isListened) 'is_listened': true,
+            }))
           : const Value.absent(),
       invertMedia: Value(msg.invertMedia),
       isForward: Value(msg.isForward),
@@ -2901,7 +2989,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 lastSeen: _otherUserLastSeen,
                 statusText: _watchingEmoji != null
                     ? context.l10n.translate('chat_watching_emoji', {'emoji': _watchingEmoji!})
-                    : (_isTyping ? context.l10n.translate('chat_typing') : null),
+                    : (_isTyping
+                        ? (_typingAction == 'record_voice'
+                            ? context.l10n.translate('chat_status_recording_voice')
+                            : (_typingAction == 'record_round'
+                                ? context.l10n.translate('chat_status_recording_round')
+                                : context.l10n.translate('chat_typing')))
+                        : null),
                 isChannel: false,
                 isMuted: _isMuted,
                 heroTag: heroTag,
@@ -3311,12 +3405,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                         child: VoiceRecordingOverlay(
                           key: _voiceOverlayKey,
                           recorderService: _voiceRecorderService,
-                          onCancel: () => setState(() => _isVoiceRecording = false),
+                          onCancel: () {
+                            _stopRecordingActionBroadcast();
+                            setState(() => _isVoiceRecording = false);
+                          },
                           onSend: (res) async {
+                            _stopRecordingActionBroadcast();
                             setState(() => _isVoiceRecording = false);
                             await _sendVoiceMessage(res);
                           },
                           onTooShort: () {
+                            _stopRecordingActionBroadcast();
                             setState(() => _isVoiceRecording = false);
                             HapticFeedback.selectionClick();
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -3748,7 +3847,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
       return;
     }
-    if (!ok && mounted) {
+    if (ok && mounted) {
+      _startRecordingActionBroadcast('record_round');
+    } else if (!ok && mounted) {
       setState(() => _isVideoRecording = false);
       final isPermDenied =
           _videoRecorderService.errorMessage == 'permission_denied';
@@ -3790,15 +3891,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (!_isVideoRecording) return;
     final state = _videoOverlayKey.currentState as dynamic;
     if (state?.isLocked == true) return;
+    _stopRecordingActionBroadcast();
     _videoRecorderService.cancelRecording();
     setState(() => _isVideoRecording = false);
   }
 
   void _onVideoRecordingCancelled() {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
   }
 
   void _onVideoRecordingTooShort() {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
     HapticFeedback.selectionClick();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -3812,6 +3916,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _onVideoRecordingSend(File file) async {
+    _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
     await _sendRoundVideoMessage(file);
   }
@@ -3871,6 +3976,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
     if (started && mounted) {
       setState(() => _isVoiceRecording = true);
+      _startRecordingActionBroadcast('record_voice');
     }
   }
 
@@ -3892,6 +3998,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (!_isVoiceRecording) return;
     final state = _voiceOverlayKey.currentState as dynamic;
     if (state?.isLocked == true) return;
+    _stopRecordingActionBroadcast();
     _voiceRecorderService.cancelRecording();
     setState(() => _isVoiceRecording = false);
   }
@@ -4812,8 +4919,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
     _syncDebounceTimer?.cancel();
 
-    // Stop typing indicator if active
+    // Stop typing / recording indicator if active
     _stopMyTyping();
+    _stopRecordingActionBroadcast();
 
     // Flush any pending mark-as-read and draft before leaving
     _markReadTimer?.cancel();
@@ -4857,8 +4965,46 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _voiceRecorderService.dispose();
 
     MediaPlaybackCoordinator.instance.unregisterChat(widget.chatId);
+    ProximityAudioService.instance.unregisterOpenChat(widget.chatId);
 
     super.dispose();
+  }
+
+  Future<bool> _onRaiseToListenFirstUnplayed() async {
+    if (!mounted || _isVoiceRecording || _isVideoRecording) return false;
+    // Find the chronologically oldest unlistened incoming voice message
+    for (int i = _messages.length - 1; i >= 0; i--) {
+      final m = _messages[i];
+      if (m.senderId != _currentUserId &&
+          m.messageType == 'voice' &&
+          !m.isListened) {
+        final rawUrl = m.fileUrl ?? '';
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        if (resolvedUrl.isEmpty) continue;
+
+        final track = PlaybackTrack(
+          messageId: m.id,
+          chatId: widget.chatId,
+          chatType: 'private',
+          mediaType: 'voice',
+          mediaUrl: resolvedUrl,
+          senderName: m.senderName,
+          chatTitle: widget.otherUserName,
+          duration: m.duration != null && m.duration! > 0
+              ? Duration(seconds: m.duration!)
+              : null,
+          waveform: m.waveform,
+        );
+        final remainingQueue = _buildPlaylistFrom(m.id);
+        await MediaPlaybackCoordinator.instance.startPlayback(
+          track: track,
+          remainingQueue: remainingQueue,
+          isIncomingUnplayed: true,
+        );
+        return true;
+      }
+    }
+    return false;
   }
 
   List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {

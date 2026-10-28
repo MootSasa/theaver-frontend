@@ -407,6 +407,8 @@ class Message {
   final String? replyToMessageId;
   final bool isRead;
   final String? readAt;
+  final String? listenedAt;
+  final bool isListened;
 
   // Reply / Quote fields
   final bool isQuote; // true = quote (partial text), false = full reply
@@ -463,6 +465,8 @@ class Message {
     this.replyToMessageId,
     this.isRead = false,
     this.readAt,
+    this.listenedAt,
+    this.isListened = false,
     this.isQuote = false,
     this.quoteText,
     this.quoteOffset = 0,
@@ -599,6 +603,14 @@ class Message {
               })()
             : null);
 
+    final String? parsedReadAt =
+        json['read_at']?.toString() ?? parsedMediaPayload?['read_at']?.toString();
+    final String? parsedListenedAt = json['listened_at']?.toString() ??
+        parsedMediaPayload?['listened_at']?.toString();
+    final bool parsedIsListened = json['is_listened'] == true ||
+        parsedMediaPayload?['is_listened'] == true ||
+        parsedListenedAt != null;
+
     return Message(
       id: json['id']?.toString() ?? '',
       chatId: json['chat_id']?.toString() ?? '',
@@ -618,8 +630,10 @@ class Message {
         return (raw != null && raw.isNotEmpty) ? raw : null;
       }(),
       replyToMessageId: json['reply_to_message_id']?.toString(),
-      isRead: json['is_read'] ?? false,
-      readAt: json['read_at']?.toString(),
+      isRead: (json['is_read'] ?? false) || parsedReadAt != null,
+      readAt: parsedReadAt,
+      listenedAt: parsedListenedAt,
+      isListened: parsedIsListened,
       isQuote: (json['is_quote'] == true) ||
           (parsedMediaPayload?['is_quote'] == true),
       quoteText: json['quote_text']?.toString() ??
@@ -781,6 +795,11 @@ class Message {
       } catch (_) {}
     }
 
+    final dbReadAt = dbMediaPayload?['read_at']?.toString();
+    final dbListenedAt = dbMediaPayload?['listened_at']?.toString();
+    final dbIsListened =
+        dbMediaPayload?['is_listened'] == true || dbListenedAt != null;
+
     return Message(
       id: model.serverId ?? model.localId,
       chatId: model.chatId,
@@ -798,7 +817,10 @@ class Message {
           ? model.fileName!.trim()
           : null,
       replyToMessageId: model.replyToMessageId,
-      isRead: model.isRead,
+      isRead: model.isRead || dbReadAt != null,
+      readAt: dbReadAt,
+      listenedAt: dbListenedAt,
+      isListened: dbIsListened,
       isQuote: model.isQuote || (dbMediaPayload?['is_quote'] == true),
       quoteText: model.quoteText ?? dbMediaPayload?['quote_text']?.toString(),
       quoteOffset: model.quoteOffset != 0
@@ -830,6 +852,17 @@ class Message {
   MessagesCompanion toCompanion({String? fallbackChatId}) {
     final effectiveChatId = chatId.isNotEmpty ? chatId : (fallbackChatId ?? '');
     final hasServerId = sendStatus == 1 && id.isNotEmpty;
+
+    final Map<String, dynamic> effectiveMediaPayload = {
+      if (mediaPayload != null) ...mediaPayload!,
+      if (waveform != null && waveform!.isNotEmpty) 'waveform': waveform,
+      if (duration != null && duration! > 0) 'duration': duration,
+      if (readAt != null && readAt!.isNotEmpty) 'read_at': readAt,
+      if (listenedAt != null && listenedAt!.isNotEmpty)
+        'listened_at': listenedAt,
+      if (isListened) 'is_listened': true,
+    };
+
     return MessagesCompanion(
       serverId: hasServerId ? drift.Value(id) : const drift.Value.absent(),
       localId: drift.Value(localId ?? id),
@@ -868,8 +901,8 @@ class Message {
       linkPreviewOptions: linkPreviewOptions != null
           ? drift.Value(jsonEncode(linkPreviewOptions!.toJson()))
           : const drift.Value.absent(),
-      mediaPayload: mediaPayload != null && mediaPayload!.isNotEmpty
-          ? drift.Value(jsonEncode(mediaPayload))
+      mediaPayload: effectiveMediaPayload.isNotEmpty
+          ? drift.Value(jsonEncode(effectiveMediaPayload))
           : const drift.Value.absent(),
     );
   }
@@ -890,6 +923,8 @@ class Message {
     String? replyToMessageId,
     bool? isRead,
     String? readAt,
+    String? listenedAt,
+    bool? isListened,
     bool? isQuote,
     String? quoteText,
     int? quoteOffset,
@@ -928,6 +963,8 @@ class Message {
       replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       isRead: isRead ?? this.isRead,
       readAt: readAt ?? this.readAt,
+      listenedAt: listenedAt ?? this.listenedAt,
+      isListened: isListened ?? this.isListened,
       isQuote: isQuote ?? this.isQuote,
       quoteText: quoteText ?? this.quoteText,
       quoteOffset: quoteOffset ?? this.quoteOffset,
@@ -2234,6 +2271,82 @@ class ChatService {
     } catch (e) {
       debugPrint('Get reactions error: $e');
       return {'success': false, 'reactions': []};
+    }
+  }
+
+  /// Marks a voice message or round video message as listened/watched.
+  static Future<Map<String, dynamic>> markMessageListened({
+    required String chatId,
+    required String messageId,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.post(
+        Uri.parse(
+            '${AppConfig.baseUrl}/api/chats/$chatId/messages/$messageId/listened'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final data = jsonDecode(response.body);
+        final readAt = data['read_at']?.toString();
+        final listenedAt = data['listened_at']?.toString();
+        try {
+          await AppDatabase().updateMessageReadAndListened(
+            messageId,
+            readAt: readAt,
+            listenedAt: listenedAt,
+            isListened: true,
+          );
+        } catch (_) {}
+        return data is Map<String, dynamic>
+            ? data
+            : {'success': true, 'read_at': readAt, 'listened_at': listenedAt};
+      }
+      return {'success': false, 'message': 'Server error: ${response.statusCode}'};
+    } catch (e) {
+      debugPrint('Mark message listened error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Gets the list of users who read and/or listened/watched a message with exact timestamps.
+  static Future<Map<String, dynamic>> getMessageReaders({
+    required String chatId,
+    required String messageId,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'readers': []};
+      }
+
+      final response = await http.get(
+        Uri.parse(
+            '${AppConfig.baseUrl}/api/chats/$chatId/messages/$messageId/readers'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic>) {
+          return data;
+        }
+      }
+      return {'success': false, 'readers': []};
+    } catch (e) {
+      debugPrint('Get message readers error: $e');
+      return {'success': false, 'readers': []};
     }
   }
 }

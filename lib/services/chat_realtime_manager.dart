@@ -17,6 +17,7 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onMessageDeleted;
   final void Function(WebSocketEvent event)? onReactionUpdated;
   final void Function(WebSocketEvent event)? onMessageRead;
+  final void Function(WebSocketEvent event)? onMessageListened;
   final void Function(WebSocketEvent event)? onTyping;
   final void Function(WebSocketEvent event)? onEmojiInteraction;
   final void Function(WebSocketEvent event)? onUserStatus;
@@ -32,6 +33,7 @@ class ChatSubscription {
     this.onMessageDeleted,
     this.onReactionUpdated,
     this.onMessageRead,
+    this.onMessageListened,
     this.onTyping,
     this.onEmojiInteraction,
     this.onUserStatus,
@@ -83,6 +85,7 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onMessageDeleted,
     void Function(WebSocketEvent event)? onReactionUpdated,
     void Function(WebSocketEvent event)? onMessageRead,
+    void Function(WebSocketEvent event)? onMessageListened,
     void Function(WebSocketEvent event)? onTyping,
     void Function(WebSocketEvent event)? onEmojiInteraction,
     void Function(WebSocketEvent event)? onUserStatus,
@@ -102,6 +105,7 @@ class ChatRealtimeManager {
       onMessageDeleted: onMessageDeleted,
       onReactionUpdated: onReactionUpdated,
       onMessageRead: onMessageRead,
+      onMessageListened: onMessageListened,
       onTyping: onTyping,
       onEmojiInteraction: onEmojiInteraction,
       onUserStatus: onUserStatus,
@@ -151,7 +155,39 @@ class ChatRealtimeManager {
 
       case WebSocketEventType.messageRead:
         final readChatId = event.data['chat_id']?.toString();
+        final readerId = event.data['reader_id']?.toString();
+        final readAt = event.data['read_at']?.toString();
+        final myUserId = WebSocketService().currentUserId;
+        if (readChatId != null &&
+            myUserId != null &&
+            readerId != myUserId) {
+          try {
+            await AppDatabase().markMessagesAsRead(
+              readChatId,
+              myUserId,
+              readAt: readAt,
+            );
+          } catch (_) {}
+        }
         _dispatchForChat(readChatId, (s) => s.onMessageRead?.call(event));
+        break;
+
+      case WebSocketEventType.messageListened:
+        final listenedChatId = event.data['chat_id']?.toString();
+        final listenedMsgId = event.data['message_id']?.toString();
+        final listenedReadAt = event.data['read_at']?.toString();
+        final listenedAt = event.data['listened_at']?.toString();
+        if (listenedMsgId != null) {
+          try {
+            await AppDatabase().updateMessageReadAndListened(
+              listenedMsgId,
+              readAt: listenedReadAt,
+              listenedAt: listenedAt,
+            );
+          } catch (_) {}
+        }
+        _dispatchForChat(
+            listenedChatId, (s) => s.onMessageListened?.call(event));
         break;
 
       case WebSocketEventType.typing:

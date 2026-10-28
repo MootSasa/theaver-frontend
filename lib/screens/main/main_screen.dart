@@ -104,6 +104,8 @@ class _MainScreenState extends State<MainScreen>
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
   String? _currentUserId;
   final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
+  final Map<String, ({String action, String? userName, Timer timer})>
+      _chatTypingStates = {};
 
   void _initChatsStream() {
     _chatsStreamSubscription?.cancel();
@@ -390,6 +392,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.subscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.subscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.subscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.subscribe(WebSocketEventType.typing, _onChatTyping);
 
     // Now connect — the 'connected' event will be caught by our listeners
     await _wsService.connect();
@@ -398,6 +401,43 @@ class _MainScreenState extends State<MainScreen>
     // (in case the broadcast event was still missed)
     if (_wsService.isConnected && mounted) {
       setState(() => _isWsConnected = true);
+    }
+  }
+
+  void _onChatTyping(WebSocketEvent event) {
+    final chatId = event.data['chat_id']?.toString();
+    if (chatId == null || chatId.isEmpty) return;
+
+    final typingUserId = event.data['user_id']?.toString();
+    if (typingUserId != null && typingUserId == _currentUserId) return;
+
+    final action = event.data['action']?.toString() ?? 'typing';
+    final bool isTyping = event.data['is_typing'] != false && action != 'stop';
+
+    if (!isTyping) {
+      final existing = _chatTypingStates.remove(chatId);
+      existing?.timer.cancel();
+      if (mounted && existing != null) {
+        setState(() {});
+      }
+      return;
+    }
+
+    final userName = event.data['user_name']?.toString();
+    _chatTypingStates[chatId]?.timer.cancel();
+    final timer = Timer(const Duration(seconds: 4), () {
+      _chatTypingStates.remove(chatId);
+      if (mounted) {
+        setState(() {});
+      }
+    });
+    _chatTypingStates[chatId] = (
+      action: action,
+      userName: userName,
+      timer: timer,
+    );
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -474,6 +514,8 @@ class _MainScreenState extends State<MainScreen>
     final messageData = event.data['message'] as Map<String, dynamic>?;
 
     if (chatId != null && mounted) {
+      final existingTyping = _chatTypingStates.remove(chatId);
+      existingTyping?.timer.cancel();
       // NOTE: UnreadCountProvider already increments via its own _onNewMessage
       // subscriber (initialized in initialize()). Do NOT call provider.increment()
       // here — that would cause double-counting.
@@ -1035,6 +1077,11 @@ class _MainScreenState extends State<MainScreen>
     _wsService.unsubscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.unsubscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.unsubscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.unsubscribe(WebSocketEventType.typing, _onChatTyping);
+    for (final state in _chatTypingStates.values) {
+      state.timer.cancel();
+    }
+    _chatTypingStates.clear();
     // Remove UnreadCountProvider listener
     try {
       context.read<UnreadCountProvider>().removeListener(_onUnreadCountProviderChanged);
@@ -1053,6 +1100,10 @@ class _MainScreenState extends State<MainScreen>
     debugPrint('[MainScreen] Active account changed: $_currentUserId -> $newUserId. Refreshing state and WS...');
     _currentUserId = newUserId;
     _liveUserPresence.clear();
+    for (final state in _chatTypingStates.values) {
+      state.timer.cancel();
+    }
+    _chatTypingStates.clear();
     AppDatabase.setActiveUser(newUserId);
 
     setState(() {
@@ -2550,6 +2601,49 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Widget? _buildChatSubtitle(Chat chat, bool hasUnread) {
+    final typingState = _chatTypingStates[chat.id];
+    if (typingState != null) {
+      final loc = AppLocalizations.of(context);
+      final isGroup = chat.chatType == 'group';
+      final userName = typingState.userName;
+      final String statusText;
+      if (isGroup && userName != null && userName.isNotEmpty) {
+        final String key;
+        if (typingState.action == 'record_voice') {
+          key = 'chat_user_recording_voice';
+        } else if (typingState.action == 'record_round') {
+          key = 'chat_user_recording_round';
+        } else {
+          key = 'chat_user_typing';
+        }
+        statusText =
+            (loc?.translate(key) ?? '$userName typing...').replaceAll('{name}', userName);
+      } else {
+        final String key;
+        if (typingState.action == 'record_voice') {
+          key = 'chat_status_recording_voice';
+        } else if (typingState.action == 'record_round') {
+          key = 'chat_status_recording_round';
+        } else {
+          key = 'chat_status_typing';
+        }
+        statusText = loc?.translate(key) ?? 'typing...';
+      }
+      final accentColor = Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF5CB8E6)
+          : Theme.of(context).colorScheme.primary;
+      return Text(
+        statusText,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: accentColor,
+          fontWeight: FontWeight.w500,
+          fontSize: 14,
+        ),
+      );
+    }
+
     final draft = DraftService().getPublishedDraft(chat.id);
     if (draft != null && draft.isNotEmpty) {
       final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft') ?? 'Черновик';
