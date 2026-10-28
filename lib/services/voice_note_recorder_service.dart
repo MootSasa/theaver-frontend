@@ -22,6 +22,7 @@ class VoiceRecordResult {
 /// Service managing audio recording, live amplitude streaming, and hands-free locking.
 class VoiceNoteRecorderService with ChangeNotifier {
   final AudioRecorder _recorder = AudioRecorder();
+  final Stopwatch _stopwatch = Stopwatch();
   Timer? _timer;
   StreamSubscription<Amplitude>? _amplitudeSubscription;
 
@@ -37,7 +38,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
   bool get isRecording => _isRecording;
   bool get isPaused => _isPaused;
   bool get isLocked => _isLocked;
-  Duration get elapsed => _elapsed;
+  Duration get elapsed => _isRecording ? _stopwatch.elapsed : _elapsed;
   String? get currentFilePath => _currentFilePath;
   List<double> get liveAmplitudes => List.unmodifiable(_liveAmplitudes);
   String? get errorMessage => _errorMessage;
@@ -124,6 +125,9 @@ class VoiceNoteRecorderService with ChangeNotifier {
       _isPaused = false;
       _isLocked = false;
       _elapsed = Duration.zero;
+      _stopwatch
+        ..reset()
+        ..start();
       _liveAmplitudes.clear();
       _allAmplitudes.clear();
 
@@ -135,6 +139,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
       debugPrint('[VoiceNoteRecorderService] startRecording error: $e');
       _errorMessage = e.toString();
       _isRecording = false;
+      _stopwatch.stop();
       if (_currentFilePath != null) {
         try {
           final file = File(_currentFilePath!);
@@ -153,7 +158,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       if (_isRecording && !_isPaused) {
-        _elapsed += const Duration(milliseconds: 200);
+        _elapsed = _stopwatch.elapsed;
         notifyListeners();
       }
     });
@@ -193,6 +198,8 @@ class VoiceNoteRecorderService with ChangeNotifier {
     if (!_isRecording || _isPaused) return;
     try {
       await _recorder.pause();
+      _stopwatch.stop();
+      _elapsed = _stopwatch.elapsed;
       _isPaused = true;
       notifyListeners();
     } catch (e) {
@@ -205,6 +212,7 @@ class VoiceNoteRecorderService with ChangeNotifier {
     if (!_isRecording || !_isPaused) return;
     try {
       await _recorder.resume();
+      _stopwatch.start();
       _isPaused = false;
       notifyListeners();
     } catch (e) {
@@ -216,6 +224,8 @@ class VoiceNoteRecorderService with ChangeNotifier {
   Future<VoiceRecordResult?> stopRecording() async {
     if (!_isRecording) return null;
 
+    _stopwatch.stop();
+    _elapsed = _stopwatch.elapsed;
     _timer?.cancel();
     _timer = null;
     await _amplitudeSubscription?.cancel();

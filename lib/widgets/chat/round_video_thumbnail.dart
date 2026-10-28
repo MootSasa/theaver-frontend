@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 import '../../config/app_config.dart';
+import '../../services/media_cache_manager.dart';
 
 /// Реальная размытая миниатюра «кружка» (видеосообщения) размером с иконку для списка чатов.
 class RoundVideoThumbnail extends StatefulWidget {
@@ -46,66 +47,69 @@ class _RoundVideoThumbnailState extends State<RoundVideoThumbnail> {
 
   Future<void> _loadThumbnail() async {
     final rawUrl = widget.videoUrl;
-    if (rawUrl == null || rawUrl.isEmpty) return;
+    if (rawUrl == null || rawUrl.isEmpty || kIsWeb) return;
 
     try {
-      if (!kIsWeb) {
-        // 1. Check if local .thumb.jpg exists directly for local path
-        if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
-          final localPath =
-              rawUrl.startsWith('file://') ? Uri.parse(rawUrl).toFilePath() : rawUrl;
-          final directThumb = File('$localPath.thumb.jpg');
-          if (await directThumb.exists()) {
-            if (mounted) setState(() => _cachedThumbFile = directThumb);
-            return;
-          }
+      // 1. Check if local .thumb.jpg exists directly for local path
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        final localPath =
+            rawUrl.startsWith('file://') ? Uri.parse(rawUrl).toFilePath() : rawUrl;
+        final directThumb = File('$localPath.thumb.jpg');
+        if (await directThumb.exists()) {
+          if (mounted) setState(() => _cachedThumbFile = directThumb);
+          return;
+        }
+      }
+
+      // 2. Check temporary directory for cached thumbnail by filename
+      final uri = Uri.tryParse(rawUrl);
+      final fileName = uri != null && uri.pathSegments.isNotEmpty
+          ? uri.pathSegments.last
+          : rawUrl.split(Platform.pathSeparator).last;
+
+      if (fileName.isNotEmpty) {
+        final tempDir = await getTemporaryDirectory();
+        final candidate = File('${tempDir.path}/$fileName.thumb.jpg');
+        if (await candidate.exists()) {
+          if (mounted) setState(() => _cachedThumbFile = candidate);
+          return;
         }
 
-        // 2. Check temporary directory for cached thumbnail by filename
-        final uri = Uri.tryParse(rawUrl);
-        final fileName = uri != null && uri.pathSegments.isNotEmpty
-            ? uri.pathSegments.last
-            : rawUrl.split(Platform.pathSeparator).last;
-
-        if (fileName.isNotEmpty) {
-          final tempDir = await getTemporaryDirectory();
-          final candidate = File('${tempDir.path}/$fileName.thumb.jpg');
-          if (await candidate.exists()) {
-            if (mounted) setState(() => _cachedThumbFile = candidate);
+        final localVideoCandidate = File('${tempDir.path}/$fileName');
+        if (await localVideoCandidate.exists()) {
+          final candidateThumb = File('${localVideoCandidate.path}.thumb.jpg');
+          if (await candidateThumb.exists()) {
+            if (mounted) setState(() => _cachedThumbFile = candidateThumb);
             return;
-          }
-
-          // Also check if local video file exists in tempDir
-          final localVideoCandidate = File('${tempDir.path}/$fileName');
-          if (await localVideoCandidate.exists()) {
-            final candidateThumb = File('${localVideoCandidate.path}.thumb.jpg');
-            if (await candidateThumb.exists()) {
-              if (mounted) setState(() => _cachedThumbFile = candidateThumb);
-              return;
-            }
           }
         }
       }
 
-      // 3. If no image file found, initialize lightweight VideoPlayerController to show first frame
-      final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-      final resolvedUri = Uri.tryParse(resolvedUrl);
-
-      VideoPlayerController controller;
-      if (resolvedUri != null &&
-          (resolvedUri.scheme == 'http' || resolvedUri.scheme == 'https')) {
-        controller = VideoPlayerController.networkUrl(resolvedUri);
-      } else if (!kIsWeb) {
-        final filePath = resolvedUrl.startsWith('file://')
-            ? Uri.parse(resolvedUrl).toFilePath()
-            : resolvedUrl;
-        final file = File(filePath);
-        if (!await file.exists()) return;
-        controller = VideoPlayerController.file(file);
+      // 3. Only initialize a lightweight VideoPlayerController if the video file is already on local disk
+      File? localFile;
+      if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+        localFile = await MediaCacheManager.instance.getCachedFile(rawUrl);
       } else {
+        final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+        if (!resolvedUrl.startsWith('http://') && !resolvedUrl.startsWith('https://')) {
+          final filePath = resolvedUrl.startsWith('file://')
+              ? Uri.parse(resolvedUrl).toFilePath()
+              : resolvedUrl;
+          localFile = File(filePath);
+        } else {
+          localFile = await MediaCacheManager.instance.getCachedFile(resolvedUrl);
+        }
+      }
+
+      if (localFile == null || !await localFile.exists()) return;
+
+      final cachedThumb = File('${localFile.path}.thumb.jpg');
+      if (await cachedThumb.exists()) {
+        if (mounted) setState(() => _cachedThumbFile = cachedThumb);
         return;
       }
 
+      final controller = VideoPlayerController.file(localFile);
       await controller.initialize();
       await controller.setVolume(0.0);
 

@@ -60,6 +60,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   VoidCallback? _releaseBackdropIsolation;
 
   bool _isLocked = false;
+  bool get isLocked => _isLocked;
   bool _isSending = false;
   bool _isCancelling = false;
   double _dragOffsetX = 0.0;

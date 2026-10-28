@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -23,13 +24,46 @@ import '../tiling/tile_viewport_scope.dart';
 class VideoNoteControllerPool {
   static final Map<String, VideoPlayerController> _pool = {};
   static final List<String> _order = [];
+  static final Map<String, Set<VoidCallback>> _evictionCallbacks = {};
   static const int _maxControllers = 4;
 
-  static VideoPlayerController? get(String url) => _pool[url];
+  static String _normKey(String url) => AppConfig.resolveMediaUrl(url) ?? url;
+
+  static void registerEvictionCallback(String url, VoidCallback cb) {
+    final key = _normKey(url);
+    _evictionCallbacks.putIfAbsent(key, () => <VoidCallback>{}).add(cb);
+  }
+
+  static void unregisterEvictionCallback(String url, VoidCallback cb) {
+    final key = _normKey(url);
+    final set = _evictionCallbacks[key];
+    if (set != null) {
+      set.remove(cb);
+      if (set.isEmpty) {
+        _evictionCallbacks.remove(key);
+      }
+    }
+  }
+
+  static VideoPlayerController? get(String url) {
+    final key = _normKey(url);
+    final ctrl = _pool[key];
+    if (ctrl != null) {
+      _order.remove(key);
+      _order.add(key);
+    }
+    return ctrl;
+  }
 
   static void put(String url, VideoPlayerController controller) {
-    if (_pool.containsKey(url)) return;
-    final activeUrl = VideoNotePlaybackService().activeVideoUrl;
+    final key = _normKey(url);
+    if (_pool.containsKey(key)) {
+      _order.remove(key);
+      _order.add(key);
+      if (_pool[key] == controller) return;
+    }
+    final rawActiveUrl = VideoNotePlaybackService().activeVideoUrl;
+    final activeUrl = rawActiveUrl != null ? _normKey(rawActiveUrl) : null;
     final activeCtrl = VideoNotePlaybackService().activeController;
 
     while (_order.length >= _maxControllers) {
@@ -47,12 +81,24 @@ class VideoNoteControllerPool {
       }
       final oldest = _order.removeAt(evictIndex);
       final oldCtrl = _pool.remove(oldest);
-      try {
-        oldCtrl?.dispose();
-      } catch (_) {}
+      final callbacks = _evictionCallbacks[oldest]?.toList();
+      if (callbacks != null) {
+        for (final cb in callbacks) {
+          try {
+            cb();
+          } catch (_) {}
+        }
+      }
+      if (oldCtrl != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          try {
+            oldCtrl.dispose();
+          } catch (_) {}
+        });
+      }
     }
-    _pool[url] = controller;
-    _order.add(url);
+    _pool[key] = controller;
+    _order.add(key);
   }
 }
 
@@ -133,9 +179,20 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   @override
   bool get wantKeepAlive => true;
 
+  void _onControllerEvicted() {
+    if (_controller == null) return;
+    _controller?.removeListener(_onVideoUpdate);
+    _controller = null;
+    _isPlayingWithSound = false;
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    VideoNoteControllerPool.registerEvictionCallback(widget.videoUrl, _onControllerEvicted);
     _playbackService.addListener(_onPlaybackServiceUpdate);
     _initializeVideoPlayer();
   }
@@ -144,6 +201,8 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   void didUpdateWidget(VideoMessageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoUrl != widget.videoUrl) {
+      VideoNoteControllerPool.unregisterEvictionCallback(oldWidget.videoUrl, _onControllerEvicted);
+      VideoNoteControllerPool.registerEvictionCallback(widget.videoUrl, _onControllerEvicted);
       _initSession++;
       _detachProgressListener();
       _controller?.removeListener(_onVideoUpdate);
@@ -251,9 +310,19 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       return;
     }
 
-    final url = widget.videoUrl;
+    final url = AppConfig.resolveMediaUrl(widget.videoUrl) ?? widget.videoUrl;
     final uri = Uri.tryParse(url);
-    final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+    final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https' || uri.scheme == 'blob');
+
+    if (kIsWeb) {
+      if (uri != null) {
+        _isCached = true;
+        await _initControllerFromNetwork(uri, currentSession);
+      } else if (mounted && currentSession == _initSession) {
+        setState(() => _hasError = true);
+      }
+      return;
+    }
 
     if (!isNetwork) {
       final filePath = url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
@@ -282,7 +351,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     }
 
     // Check disk cache
-    final cachedDiskFile = await MediaCacheManager.instance.getCachedFile(url);
+    final cachedDiskFile = await MediaCacheManager.instance.getCachedFile(widget.videoUrl);
     if (cachedDiskFile != null && await cachedDiskFile.exists()) {
       _isCached = true;
       await _initControllerFromFile(cachedDiskFile, currentSession);
@@ -292,9 +361,9 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     _isCached = false;
 
     // Check if in-flight download exists
-    if (MediaCacheManager.instance.isDownloading(url)) {
+    if (MediaCacheManager.instance.isDownloading(widget.videoUrl)) {
       _detachProgressListener();
-      _progressNotifier = MediaCacheManager.instance.getProgressNotifier(url);
+      _progressNotifier = MediaCacheManager.instance.getProgressNotifier(widget.videoUrl);
       _progressNotifier?.addListener(_onDownloadProgress);
       if (mounted && currentSession == _initSession) {
         setState(() {
@@ -306,7 +375,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
     }
 
     // Check auto-download policy
-    final autoDownload = !MediaCacheManager.instance.wasCancelledByUser(url) &&
+    final autoDownload = !MediaCacheManager.instance.wasCancelledByUser(widget.videoUrl) &&
         MediaCacheManager.instance.shouldAutoDownload(
           messageType: 'video',
           fileSize: widget.fileSize,
@@ -325,6 +394,15 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
 
   Future<void> _startDownload([int? session]) async {
     final currentSession = session ?? _initSession;
+    if (kIsWeb) {
+      final url = AppConfig.resolveMediaUrl(widget.videoUrl) ?? widget.videoUrl;
+      final uri = Uri.tryParse(url);
+      if (uri != null) {
+        _isCached = true;
+        await _initControllerFromNetwork(uri, currentSession);
+      }
+      return;
+    }
     if (_isDownloading) return;
     setState(() {
       _isDownloading = true;
@@ -361,6 +439,44 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
       setState(() {
         _isDownloading = false;
       });
+    }
+  }
+
+  Future<void> _initControllerFromNetwork(Uri uri, int session) async {
+    try {
+      final controller = VideoPlayerController.networkUrl(uri);
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.setVolume(0.0);
+
+      if (!mounted || session != _initSession) {
+        await controller.dispose();
+        return;
+      }
+
+      _controller = controller;
+      _controller!.addListener(_onVideoUpdate);
+      VideoNoteControllerPool.put(widget.videoUrl, controller);
+
+      final isCurrentlyActive = (widget.messageId != null && _playbackService.activeMessageId == widget.messageId) ||
+          _playbackService.activeController == controller;
+      if (isCurrentlyActive) {
+        _isPlayingWithSound = true;
+        await controller.setLooping(false);
+        await controller.setVolume(1.0);
+      }
+
+      setState(() {
+        _hasError = false;
+      });
+      if (isCurrentlyActive || !_playbackService.hasActiveVideo) {
+        _controller!.play();
+      }
+    } catch (e) {
+      debugPrint('[VideoMessageWidget] Network controller init failed: $e');
+      if (mounted && session == _initSession) {
+        setState(() => _hasError = true);
+      }
     }
   }
 
@@ -564,6 +680,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   @override
   void dispose() {
     _initSession++;
+    VideoNoteControllerPool.unregisterEvictionCallback(widget.videoUrl, _onControllerEvicted);
     _playbackService.removeListener(_onPlaybackServiceUpdate);
     if (widget.messageId != null) {
       _playbackService.setInView(widget.messageId!, false);
@@ -619,8 +736,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
             duration: widget.duration,
           ),
         );
-      }
-      if (!_isPlayingWithSound && _isCached && _controller != null) {
+      } else if (!_isPlayingWithSound && _isCached && _controller != null) {
         _startSoundPlayback(restart: true);
       }
     }
@@ -777,6 +893,10 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
         _isInView = inView;
         if (widget.messageId != null) {
           _playbackService.setInView(widget.messageId!, inView);
+        }
+        if (inView && _controller == null && _isCached && !_isDownloading && !_hasError) {
+          _initializeVideoPlayer();
+          return;
         }
         // Pause muted background video decoding when scrolled off-screen
         // to prevent multiple concurrent hardware decoders from degrading scroll performance.

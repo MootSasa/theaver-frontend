@@ -17,6 +17,7 @@ import AVFoundation
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    setupMediaMuxer(messenger: engineBridge.applicationRegistrar.messenger())
   }
 
   private func setupMediaMuxer(messenger: FlutterBinaryMessenger) {

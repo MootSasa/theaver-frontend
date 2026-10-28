@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -49,6 +50,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
   late AnimationController _lockSlideController;
 
   bool _isLocked = false;
+  bool get isLocked => _isLocked;
   bool _isSending = false;
   bool _isCancelling = false;
   double _dragOffsetX = 0.0;
@@ -152,7 +154,11 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
 
     try {
       final result = await widget.recorderService.stopRecording();
-      if (result != null && result.file.existsSync() && await result.file.length() > 0) {
+      final isValidFile = result != null &&
+          (kIsWeb
+              ? result.file.path.isNotEmpty
+              : (result.file.existsSync() && await result.file.length() > 0));
+      if (isValidFile) {
         widget.onSend(result);
       } else {
         widget.onCancel();

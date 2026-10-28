@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../models/theav_theme.dart';
@@ -101,7 +102,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   Future<void> _checkCacheStatus() async {
     if (widget.audioUrl.isEmpty) return;
 
-    if (widget.isMe || !widget.audioUrl.startsWith('http')) {
+    if (kIsWeb || widget.isMe || !widget.audioUrl.startsWith('http')) {
       if (mounted) {
         setState(() {
           _isCached = true;

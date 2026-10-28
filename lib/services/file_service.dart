@@ -12,6 +12,7 @@ import '../config/app_config.dart';
 import 'auth_service.dart';
 import 'media_cache_manager.dart';
 import 'settings_service.dart';
+import 'video_note_recorder_service.dart';
 
 /// Service for handling file operations with MinIO backend
 class FileService {
@@ -23,8 +24,8 @@ class FileService {
   })  : baseUrl = baseUrl ?? AppConfig.baseUrl,
         _dio = Dio(BaseOptions(
           connectTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(minutes: 5),
-          sendTimeout: const Duration(minutes: 5),
+          receiveTimeout: const Duration(minutes: 15),
+          sendTimeout: const Duration(minutes: 15),
         ));
 
   /// Get authorization headers
@@ -45,10 +46,15 @@ class FileService {
   }) async {
     final fileName = path.basename(file.path);
     final fileLength = await file.length();
-    
+
+    // Automatically use chunked upload for large voice/media files (> 10 MB) so unlimited size works reliably
+    if (fileLength > 10 * 1024 * 1024) {
+      return uploadFileChunked(file, onProgress: onProgress);
+    }
+
     // Determine mime type from file extension
     final mimeType = _getMimeType(fileName);
-    
+
     final formData = FormData.fromMap({
       'file': MultipartFile.fromStream(
         () => file.openRead(),
@@ -65,8 +71,8 @@ class FileService {
         data: formData,
         options: Options(
           headers: headers,
-          sendTimeout: const Duration(minutes: 5),
-          receiveTimeout: const Duration(minutes: 5),
+          sendTimeout: const Duration(minutes: 15),
+          receiveTimeout: const Duration(minutes: 15),
         ),
         onSendProgress: (sent, total) {
           if (onProgress != null && total > 0) {
@@ -94,17 +100,105 @@ class FileService {
   }
 
   /// Upload a file in chunks to allow progressive processing and streaming.
-  /// Used for uploading files in chunks.
+  /// Also handles multi-segment video notes recorded when flipping the camera.
   Future<UploadResult> uploadFileChunked(
     File file, {
     void Function(double progress)? onProgress,
-    int chunkSize = 256 * 1024, // 256 KB per chunk
+    int chunkSize = 256 * 1024, // default 256 KB per chunk for small files
+  }) async {
+    final multiSegments = VideoNoteRecorderService.takeRecordedSegments(file.path);
+    if (multiSegments != null && multiSegments.length > 1) {
+      return _uploadAndConcatVideoSegments(multiSegments, onProgress: onProgress);
+    }
+
+    return _uploadSingleFileChunked(
+      file,
+      onProgress: onProgress,
+      chunkSize: chunkSize,
+      seedCache: true,
+    );
+  }
+
+  Future<UploadResult> _uploadAndConcatVideoSegments(
+    List<String> segmentPaths, {
+    void Function(double progress)? onProgress,
+  }) async {
+    final List<String> objectNames = [];
+    final int segCount = segmentPaths.length;
+
+    for (int idx = 0; idx < segCount; idx++) {
+      final segFile = File(segmentPaths[idx]);
+      if (!await segFile.exists() || await segFile.length() == 0) continue;
+
+      final segResult = await _uploadSingleFileChunked(
+        segFile,
+        seedCache: false,
+        onProgress: (p) {
+          if (onProgress != null) {
+            onProgress(((idx + p) / segCount) * 0.9);
+          }
+        },
+      );
+      if (segResult.objectName.isNotEmpty) {
+        objectNames.add(segResult.objectName);
+      }
+    }
+
+    if (objectNames.isEmpty) {
+      throw FileUploadException('No valid video segments to upload');
+    }
+
+    final headers = await _getHeaders();
+    final concatResp = await _dio.post(
+      '$baseUrl/api/files/upload/concat',
+      data: {
+        'object_names': objectNames,
+        'file_name': 'video_note_${DateTime.now().millisecondsSinceEpoch}.mp4',
+      },
+      options: Options(
+        headers: headers,
+        sendTimeout: const Duration(minutes: 15),
+        receiveTimeout: const Duration(minutes: 15),
+      ),
+    );
+
+    for (final sp in segmentPaths) {
+      try {
+        final f = File(sp);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
+
+    if (concatResp.statusCode == 200 && concatResp.data['success'] == true) {
+      onProgress?.call(1.0);
+      return UploadResult.fromJson(concatResp.data);
+    } else {
+      throw FileUploadException(
+        concatResp.data['message'] ?? 'Failed to stitch video segments',
+      );
+    }
+  }
+
+  Future<UploadResult> _uploadSingleFileChunked(
+    File file, {
+    void Function(double progress)? onProgress,
+    int chunkSize = 256 * 1024,
+    bool seedCache = true,
   }) async {
     final fileName = path.basename(file.path);
     final rawSize = await file.length();
     final totalSize = math.max(rawSize, 1);
     final mimeType = _getMimeType(fileName);
-    final partsCount = (totalSize / chunkSize).ceil().clamp(1, 10000);
+
+    // Scale chunk size dynamically for large files (> 4MB -> 1MB, > 32MB -> 2MB) and never truncate
+    int effectiveChunkSize = chunkSize;
+    if (totalSize > 32 * 1024 * 1024) {
+      effectiveChunkSize = math.max(effectiveChunkSize, 2 * 1024 * 1024);
+    } else if (totalSize > 4 * 1024 * 1024) {
+      effectiveChunkSize = math.max(effectiveChunkSize, 1024 * 1024);
+    }
+    effectiveChunkSize = math.max(effectiveChunkSize, (totalSize / 40000).ceil());
+    final partsCount = (totalSize / effectiveChunkSize).ceil().clamp(1, 50000);
 
     final headers = await _getHeaders();
 
@@ -132,10 +226,10 @@ class FileService {
     final raf = await file.open(mode: FileMode.read);
     try {
       for (int i = 0; i < partsCount; i++) {
-        final start = i * chunkSize;
-        final currentChunkSize = (start + chunkSize > totalSize)
+        final start = i * effectiveChunkSize;
+        final currentChunkSize = (start + effectiveChunkSize > totalSize)
             ? (totalSize - start)
-            : chunkSize;
+            : effectiveChunkSize;
 
         await raf.setPosition(start);
         final chunkBytes = await raf.read(currentChunkSize);
@@ -197,12 +291,16 @@ class FileService {
       data: {
         'upload_id': uploadId,
       },
-      options: Options(headers: headers),
+      options: Options(
+        headers: headers,
+        sendTimeout: const Duration(minutes: 15),
+        receiveTimeout: const Duration(minutes: 15),
+      ),
     );
 
     if (completeResponse.statusCode == 200 && completeResponse.data['success'] == true) {
       final result = UploadResult.fromJson(completeResponse.data);
-      if (result.url.isNotEmpty) {
+      if (seedCache && result.url.isNotEmpty) {
         await MediaCacheManager.instance.seedCacheFromFile(result.url, file);
       }
       return result;
@@ -622,7 +720,11 @@ class FileService {
 
   /// Get mime type from file extension
   String _getMimeType(String fileName) {
-    final ext = path.extension(fileName).toLowerCase();
+    final lowerName = path.basename(fileName).toLowerCase();
+    final ext = path.extension(lowerName);
+    if (lowerName.startsWith('voice_note_') && ext == '.webm') {
+      return 'audio/webm';
+    }
     final mimeTypes = {
       // Images
       '.jpg': 'image/jpeg',
