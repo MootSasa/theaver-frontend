@@ -34,6 +34,7 @@ import 'package:drift/drift.dart' show Value;
 import '../../utils/image_utils.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
+import '../../services/media_cache_manager.dart';
 import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
@@ -4136,6 +4137,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
 
       if (sendResult['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
         final sentMessage = sendResult['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
@@ -4323,6 +4328,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
 
       if (result['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {

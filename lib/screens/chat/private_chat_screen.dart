@@ -59,6 +59,7 @@ import '../../widgets/chat/round_video_recording_overlay.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../config/app_config.dart';
 import '../../services/media_playback_coordinator.dart';
+import '../../services/media_cache_manager.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
@@ -4012,6 +4013,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       );
 
       if (sendResult['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
         final sentMessage = sendResult['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
@@ -4199,6 +4204,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       );
 
       if (result['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {

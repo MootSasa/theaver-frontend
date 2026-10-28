@@ -52,7 +52,7 @@ class RoundVideoRecordingOverlay extends StatefulWidget {
 }
 
 class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _fadeController;
   late AnimationController _pulseController;
   late AnimationController _trashController;
@@ -87,6 +87,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     // Release active audio/video decoders to prevent hardware starvation and crashes during camera recording
     MediaPlaybackCoordinator.instance.stopAll();
@@ -115,6 +116,26 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if ((state == AppLifecycleState.paused ||
+            state == AppLifecycleState.inactive) &&
+        !_isSending &&
+        !_isCancelling &&
+        widget.recorderService.isRecording) {
+      if (!_isLocked && mounted) {
+        setState(() {
+          _isLocked = true;
+          _dragOffsetX = 0.0;
+          _dragOffsetY = 0.0;
+        });
+      }
+      if (!widget.recorderService.isPaused) {
+        widget.recorderService.pauseRecording();
+      }
+    }
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _releaseBackdropIsolation ??=
@@ -127,6 +148,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _releaseBackdropIsolation?.call();
     _releaseBackdropIsolation = null;
     widget.recorderService.removeListener(_onRecorderUpdate);

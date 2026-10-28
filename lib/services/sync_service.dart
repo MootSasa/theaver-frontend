@@ -7,6 +7,7 @@ import 'auth_service.dart';
 import 'avatar_sync_service.dart';
 import 'chat_service.dart';
 import 'file_service.dart';
+import 'media_cache_manager.dart';
 import 'websocket_service.dart';
 import 'database/app_database.dart';
 
@@ -514,6 +515,7 @@ class SyncService {
         } catch (_) {}
       }
 
+      File? uploadedLocalFile;
       if (remoteFileUrl != null &&
           remoteFileUrl.isNotEmpty &&
           !remoteFileUrl.startsWith('http://') &&
@@ -528,6 +530,7 @@ class SyncService {
             ? await fileService.uploadFile(localFile)
             : await fileService.uploadFileChunked(localFile);
 
+        uploadedLocalFile = localFile;
         remoteFileUrl = uploadResult.url;
         mediaPayload = uploadResult.toMediaPayload();
         if ((duration == null || duration <= 0) && uploadResult.duration > 0) {
@@ -555,6 +558,13 @@ class SyncService {
       );
 
       if (result['success'] == true) {
+        if (!kIsWeb &&
+            uploadedLocalFile != null &&
+            remoteFileUrl != null &&
+            remoteFileUrl.isNotEmpty) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(remoteFileUrl, uploadedLocalFile);
+        }
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
         if (serverId != null && serverId.isNotEmpty) {

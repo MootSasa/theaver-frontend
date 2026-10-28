@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:video_player/video_player.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_playback_coordinator.dart';
 
 /// Inline video player for chat messages
 /// Shows a thumbnail with play button, expands to play inline
@@ -29,7 +30,16 @@ class _InlineVideoPlayerState extends State<InlineVideoPlayer> {
   @override
   void initState() {
     super.initState();
+    MediaPlaybackCoordinator.instance.addListener(_onCoordinatorChanged);
     _initController();
+  }
+
+  void _onCoordinatorChanged() {
+    if (!mounted) return;
+    if (MediaPlaybackCoordinator.instance.hasActiveMedia &&
+        (_controller?.value.isPlaying ?? false)) {
+      _controller?.pause();
+    }
   }
 
   Future<void> _initController() async {
@@ -60,6 +70,8 @@ class _InlineVideoPlayerState extends State<InlineVideoPlayer> {
         _error = null;
       });
       if (widget.autoplay) {
+        await MediaPlaybackCoordinator.instance.stopAll();
+        if (!mounted || widget.url != currentUrl) return;
         controller.play();
         _isPlaying = true;
       }
@@ -82,6 +94,7 @@ class _InlineVideoPlayerState extends State<InlineVideoPlayer> {
 
   @override
   void dispose() {
+    MediaPlaybackCoordinator.instance.removeListener(_onCoordinatorChanged);
     _controller?.removeListener(_onVideoUpdate);
     _controller?.dispose();
     super.dispose();
@@ -101,8 +114,12 @@ class _InlineVideoPlayerState extends State<InlineVideoPlayer> {
 
   void _togglePlayPause() {
     if (_controller == null || !_isInitialized) return;
+    final wasPlaying = _controller!.value.isPlaying;
+    if (!wasPlaying) {
+      MediaPlaybackCoordinator.instance.stopAll();
+    }
     setState(() {
-      if (_controller!.value.isPlaying) {
+      if (wasPlaying) {
         _controller!.pause();
       } else {
         _controller!.play();

@@ -44,7 +44,7 @@ class VoiceRecordingOverlay extends StatefulWidget {
 }
 
 class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _fadeController;
   late AnimationController _pulseController;
   late AnimationController _lockSlideController;
@@ -62,6 +62,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _fadeController = AnimationController(
       vsync: this,
@@ -81,12 +82,29 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     widget.recorderService.addListener(_onRecorderUpdate);
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if ((state == AppLifecycleState.paused ||
+            state == AppLifecycleState.inactive) &&
+        !_isSending &&
+        !_isCancelling &&
+        widget.recorderService.isRecording) {
+      if (!_isLocked) {
+        _lockRecording();
+      }
+      if (!widget.recorderService.isPaused) {
+        widget.recorderService.pauseRecording();
+      }
+    }
+  }
+
   void _onRecorderUpdate() {
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.recorderService.removeListener(_onRecorderUpdate);
     if (!_isSending && widget.recorderService.isRecording) {
       widget.recorderService.cancelRecording();

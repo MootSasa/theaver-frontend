@@ -35,6 +35,7 @@ class VideoNoteRecorderService with ChangeNotifier {
 
   bool _isInitialized = false;
   bool _isRecording = false;
+  bool _isPaused = false;
   bool _isFrontCamera = true;
   Duration _elapsed = Duration.zero;
   String? _errorMessage;
@@ -45,6 +46,7 @@ class VideoNoteRecorderService with ChangeNotifier {
   bool get isCameraController => _cameraController != null;
   bool get isInitialized => _isInitialized;
   bool get isRecording => _isRecording;
+  bool get isPaused => _isPaused;
   bool get isFrontCamera => _isFrontCamera;
   Duration get elapsed => _isRecording ? _stopwatch.elapsed : _elapsed;
   String? get errorMessage => _errorMessage;
@@ -442,6 +444,47 @@ class VideoNoteRecorderService with ChangeNotifier {
     }
   }
 
+  /// Pause an active video note recording (e.g. when app goes to background)
+  Future<void> pauseRecording() async {
+    if (!_isRecording || _isPaused) return;
+    _isPaused = true;
+    _stopwatch.stop();
+    _elapsed = _stopwatch.elapsed;
+    try {
+      if (_cameraController != null &&
+          _cameraController!.value.isRecordingVideo &&
+          !_cameraController!.value.isRecordingPaused) {
+        await _cameraController!.pauseVideoRecording();
+      }
+    } catch (e) {
+      debugPrint('VideoNoteRecorderService: pauseVideoRecording error: $e');
+    }
+    try {
+      await _audioRecorder?.pause();
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Resume a paused video note recording
+  Future<void> resumeRecording() async {
+    if (!_isRecording || !_isPaused) return;
+    _isPaused = false;
+    _stopwatch.start();
+    try {
+      if (_cameraController != null &&
+          _cameraController!.value.isRecordingVideo &&
+          _cameraController!.value.isRecordingPaused) {
+        await _cameraController!.resumeVideoRecording();
+      }
+    } catch (e) {
+      debugPrint('VideoNoteRecorderService: resumeVideoRecording error: $e');
+    }
+    try {
+      await _audioRecorder?.resume();
+    } catch (_) {}
+    notifyListeners();
+  }
+
   /// Stop recording and return the finalized video file
   Future<File?> stopRecording() async {
     if (!_isRecording) return null;
@@ -451,6 +494,7 @@ class VideoNoteRecorderService with ChangeNotifier {
     _timer?.cancel();
     _timer = null;
     _isRecording = false;
+    _isPaused = false;
 
     // 1. CameraController path
     if (_cameraController != null) {

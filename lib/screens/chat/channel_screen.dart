@@ -45,12 +45,19 @@ import '../../l10n/app_localizations.dart';
 import '../../utils/date_time_utils.dart';
 import '../../config/app_config.dart';
 import '../../services/media_playback_coordinator.dart';
+import '../../services/media_cache_manager.dart';
+import '../../services/file_service.dart';
+import '../../services/video_note_recorder_service.dart';
 import '../../services/video_note_playback_service.dart';
+import '../../services/voice_note_recorder_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/media_note_player_header.dart';
+import '../../widgets/chat/round_video_recording_overlay.dart';
+import '../../widgets/chat/voice_recording_overlay.dart';
 import '../../widgets/message/video_message_widget.dart';
 import '../../widgets/message/voice_message_widget.dart';
 import '../../widgets/message/poll_message_widget.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/glass_toast_service.dart';
@@ -160,6 +167,19 @@ class _ChannelScreenState extends State<ChannelScreen>
   // Edit message state
   bool _isEditing = false;
   String? _editingMessageId;
+
+  // File upload & voice/video note recording state
+  final FileService _fileService = FileService();
+  final ValueNotifier<double> _uploadProgressNotifier = ValueNotifier<double>(0.0);
+  bool _isUploading = false;
+  final VideoNoteRecorderService _videoRecorderService = VideoNoteRecorderService();
+  final GlobalKey _videoOverlayKey = GlobalKey();
+  bool _isVideoRecording = false;
+  final VoiceNoteRecorderService _voiceRecorderService = VoiceNoteRecorderService();
+  final GlobalKey _voiceOverlayKey = GlobalKey();
+  bool _isVoiceRecording = false;
+  bool _isVideoPointerDown = false;
+  bool _isVoicePointerDown = false;
 
   // WebSocket & Realtime
   final WebSocketService _wsService = WebSocketService();
@@ -1659,6 +1679,16 @@ class _ChannelScreenState extends State<ChannelScreen>
       );
     }
 
+    if (_isVoiceRecording) {
+      _voiceRecorderService.cancelRecording();
+    }
+    if (_isVideoRecording) {
+      _videoRecorderService.cancelRecording();
+    }
+    _videoRecorderService.dispose();
+    _voiceRecorderService.dispose();
+    _uploadProgressNotifier.dispose();
+
     MediaPlaybackCoordinator.instance.unregisterChat(widget.channelId);
 
     _updateInputHeight();
@@ -1986,6 +2016,48 @@ class _ChannelScreenState extends State<ChannelScreen>
                     child: _buildMessageInput(),
                   ),
                 ),
+              if (_isVideoRecording)
+                Positioned.fill(
+                  child: RoundVideoRecordingOverlay(
+                    key: _videoOverlayKey,
+                    recorderService: _videoRecorderService,
+                    onCancel: _onVideoRecordingCancelled,
+                    onSend: _onVideoRecordingSend,
+                    onTooShort: _onVideoRecordingTooShort,
+                    replyToMessage: _replyToMessage,
+                    isQuote: _isQuote,
+                    quoteText: _quoteText,
+                    onCancelReply: _cancelReply,
+                  ),
+                ),
+              if (_isVoiceRecording)
+                Positioned.fill(
+                  child: VoiceRecordingOverlay(
+                    key: _voiceOverlayKey,
+                    recorderService: _voiceRecorderService,
+                    onCancel: () => setState(() => _isVoiceRecording = false),
+                    onSend: (res) async {
+                      setState(() => _isVoiceRecording = false);
+                      await _sendVoiceMessage(res);
+                    },
+                    onTooShort: () {
+                      setState(() => _isVoiceRecording = false);
+                      HapticFeedback.selectionClick();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            context.l10n.translate('chat_voice_too_short'),
+                          ),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    replyToMessage: _replyToMessage,
+                    isQuote: _isQuote,
+                    quoteText: _quoteText,
+                    onCancelReply: _cancelReply,
+                  ),
+                ),
             ],
           );
         },
@@ -2198,6 +2270,32 @@ class _ChannelScreenState extends State<ChannelScreen>
                     sendStatus: message.sendStatus,
                     timeText: _formatTime(message.createdAt),
                     senderName: _channelName,
+                    onRetry: () => _retryMessage(message),
+                    chatId: widget.channelId,
+                    chatType: 'channel',
+                    chatTitle: _channelName,
+                  ),
+                )
+              else if (message.messageType == 'audio' && message.fileUrl != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8.0),
+                  child: VoiceMessageWidget(
+                    key: ValueKey('audio_${message.id}'),
+                    messageId: message.id,
+                    audioUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
+                    title: message.fileName ?? 'Audio',
+                    duration: (message.duration ?? message.mediaDuration) != null &&
+                            (message.duration ?? message.mediaDuration)! > 0
+                        ? Duration(seconds: (message.duration ?? message.mediaDuration)!)
+                        : null,
+                    waveform: message.waveform,
+                    fileSize: message.mediaFileSize,
+                    isMe: false,
+                    isRead: true,
+                    sendStatus: message.sendStatus,
+                    timeText: _formatTime(message.createdAt),
+                    senderName: _channelName,
+                    onRetry: () => _retryMessage(message),
                     chatId: widget.channelId,
                     chatType: 'channel',
                     chatTitle: _channelName,
@@ -2222,6 +2320,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                       sendStatus: message.sendStatus,
                       timeText: _formatTime(message.createdAt),
                       senderName: _channelName,
+                      onRetry: () => _retryMessage(message),
                       chatId: widget.channelId,
                       chatType: 'channel',
                       chatTitle: _channelName,
@@ -2257,6 +2356,15 @@ class _ChannelScreenState extends State<ChannelScreen>
                 ),
               LayoutBuilder(
                 builder: (context, constraints) {
+                  final bool isMediaNoteWithoutText =
+                      message.messageType == 'voice' ||
+                          message.isRound ||
+                          message.messageType == 'round' ||
+                          (message.messageType == 'audio' &&
+                              (message.content.trim().isEmpty ||
+                                  message.content.trim() == message.fileName));
+                  final String displayContent =
+                      isMediaNoteWithoutText ? '' : message.content;
                   final textStyle = Theme.of(context).textTheme.bodyMedium;
                   // Conservative estimate for metadata width (Views + Time + Icons + Padding)
                   const double metadataWidth = 85.0;
@@ -2264,7 +2372,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                   final double maxContentWidth = constraints.maxWidth;
 
                   final TextPainter textPainter = TextPainter(
-                    text: TextSpan(text: message.content, style: textStyle),
+                    text: TextSpan(text: displayContent, style: textStyle),
                     textDirection: TextDirection.ltr,
                   )..layout(maxWidth: maxContentWidth);
 
@@ -2274,8 +2382,8 @@ class _ChannelScreenState extends State<ChannelScreen>
 
                   // Check if content ends with a block element (Code block, LaTeX, or Poll)
                   final bool endsWithBlock = message.messageType == 'poll' ||
-                                             message.content.trim().endsWith('```') ||
-                                             message.content.trim().endsWith('\$\$');
+                                             displayContent.trim().endsWith('```') ||
+                                             displayContent.trim().endsWith('\$\$');
 
                   // Strict check for inline fitting
                   // But NEVER fit inline if it ends with a block element.
@@ -2336,62 +2444,63 @@ class _ChannelScreenState extends State<ChannelScreen>
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          if (message.messageType == 'poll')
-                            PollMessageWidget(
-                              chatId: message.chatId.isNotEmpty
-                                  ? message.chatId
-                                  : widget.channelId,
-                              messageId: message.id,
-                              questionFallback: message.content,
-                              pollData: message.mediaPayload,
-                              isMe: false,
-                              isDark: Theme.of(context).brightness ==
-                                  Brightness.dark,
-                              textColor: Theme.of(context).brightness ==
-                                      Brightness.dark
-                                  ? Colors.white
-                                  : Colors.black87,
-                              subtextColor: Theme.of(context).brightness ==
-                                      Brightness.dark
-                                  ? Colors.grey[400]!
-                                  : Colors.grey[600]!,
-                              accentColor:
-                                  Theme.of(context).colorScheme.primary,
-                              currentUserId: _currentUserId ?? '',
-                            )
-                          else
-                            MetaData(
-                              metaData: 'message_selectable_content',
-                              behavior: HitTestBehavior.translucent,
-                              child: TextMessageWidget(
-                                text: message.content,
+                      if (!isMediaNoteWithoutText)
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            if (message.messageType == 'poll')
+                              PollMessageWidget(
+                                chatId: message.chatId.isNotEmpty
+                                    ? message.chatId
+                                    : widget.channelId,
+                                messageId: message.id,
+                                questionFallback: message.content,
+                                pollData: message.mediaPayload,
                                 isMe: false,
+                                isDark: Theme.of(context).brightness ==
+                                    Brightness.dark,
+                                textColor: Theme.of(context).brightness ==
+                                        Brightness.dark
+                                    ? Colors.white
+                                    : Colors.black87,
+                                subtextColor: Theme.of(context).brightness ==
+                                        Brightness.dark
+                                    ? Colors.grey[400]!
+                                    : Colors.grey[600]!,
+                                accentColor:
+                                    Theme.of(context).colorScheme.primary,
+                                currentUserId: _currentUserId ?? '',
+                              )
+                            else
+                              MetaData(
+                                metaData: 'message_selectable_content',
+                                behavior: HitTestBehavior.translucent,
+                                child: TextMessageWidget(
+                                  text: displayContent,
+                                  isMe: false,
+                                ),
                               ),
-                            ),
-                          if (fitsInline)
-                            Opacity(
-                              opacity: 0,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  // Replicate text width
-                                  SizedBox(width: lastLineWidth),
-                                  SizedBox(width: metadataWidth),
-                                ],
+                            if (fitsInline)
+                              Opacity(
+                                opacity: 0,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Replicate text width
+                                    SizedBox(width: lastLineWidth),
+                                    SizedBox(width: metadataWidth),
+                                  ],
+                                ),
                               ),
-                            ),
-                          if (fitsInline)
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: metadataRow,
-                            ),
-                        ],
-                      ),
-                      if (!fitsInline)
+                            if (fitsInline)
+                              Positioned(
+                                bottom: 0,
+                                right: 0,
+                                child: metadataRow,
+                              ),
+                          ],
+                        ),
+                      if (isMediaNoteWithoutText || !fitsInline)
                         Align(
                           alignment: Alignment.bottomRight,
                           child: Padding(
@@ -2941,6 +3050,8 @@ class _ChannelScreenState extends State<ChannelScreen>
       focusNode: _inputFocusNode,
       hintText: AppLocalizations.of(context)?.translate('channel_write_post') ??
           'Write a post...',
+      isUploading: _isUploading,
+      uploadProgressNotifier: _uploadProgressNotifier,
       replyToMessage: _replyToMessage,
       isQuote: _isQuote,
       quoteText: _quoteText,
@@ -2963,8 +3074,614 @@ class _ChannelScreenState extends State<ChannelScreen>
           invertMedia: invertMedia,
         );
       },
+      onStartVideoRecord: _onStartVideoRecord,
+      onVideoRecordMove: _onVideoRecordMove,
+      onVideoRecordEnd: _onVideoRecordEnd,
+      onVideoRecordCancel: _onVideoRecordCancel,
+      onStartVoiceRecord: _onStartVoiceRecord,
+      onVoiceRecordMove: _onVoiceRecordMove,
+      onVoiceRecordEnd: _onVoiceRecordEnd,
+      onVoiceRecordCancel: _onVoiceRecordCancel,
       currentUserId: _currentUserId,
       isSending: _isSending,
     );
+  }
+
+  Future<void> _onStartVideoRecord() async {
+    _isVideoPointerDown = true;
+    _dismissKeyboardAndEmoji();
+    final hasPerms = await _videoRecorderService.hasPermissions();
+    if (!hasPerms) {
+      _isVideoPointerDown = false;
+      final permanentlyDenied =
+          await _videoRecorderService.isPermanentlyDenied();
+      if (permanentlyDenied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.l10n.translate('chat_video_note_permission_denied'),
+              ),
+              action: SnackBarAction(
+                label: context.l10n.translate('settings_title'),
+                onPressed: () => openAppSettings(),
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      final granted = await _videoRecorderService.requestPermissions();
+      if (!granted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.l10n.translate('chat_video_note_permission_denied'),
+              ),
+              action: SnackBarAction(
+                label: context.l10n.translate('settings_title'),
+                onPressed: () => openAppSettings(),
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.l10n.translate('chat_video_note_hold_hint'),
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!_isVideoPointerDown) return;
+
+    HapticFeedback.heavyImpact();
+    setState(() => _isVideoRecording = true);
+    final ok = await _videoRecorderService.startRecording();
+    if (!_isVideoPointerDown && ok) {
+      await _videoRecorderService.cancelRecording();
+      if (mounted) {
+        _onVideoRecordingTooShort();
+      }
+      return;
+    }
+    if (!ok && mounted) {
+      setState(() => _isVideoRecording = false);
+      final isPermDenied =
+          _videoRecorderService.errorMessage == 'permission_denied';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isPermDenied
+                ? context.l10n.translate('chat_video_note_permission_denied')
+                : (_videoRecorderService.errorMessage ??
+                    context.l10n
+                        .translate('chat_video_note_permission_denied')),
+          ),
+          action: isPermDenied
+              ? SnackBarAction(
+                  label: context.l10n.translate('settings_title'),
+                  onPressed: () => openAppSettings(),
+                )
+              : null,
+        ),
+      );
+    }
+  }
+
+  void _onVideoRecordMove(Offset offset) {
+    if (!_isVideoRecording) return;
+    final state = _videoOverlayKey.currentState as dynamic;
+    state?.updatePointerOffset(offset.dx, offset.dy);
+  }
+
+  void _onVideoRecordEnd() {
+    _isVideoPointerDown = false;
+    if (!_isVideoRecording) return;
+    final state = _videoOverlayKey.currentState as dynamic;
+    state?.handlePointerUp();
+  }
+
+  void _onVideoRecordCancel() {
+    _isVideoPointerDown = false;
+    if (!_isVideoRecording) return;
+    final state = _videoOverlayKey.currentState as dynamic;
+    if (state?.isLocked == true) return;
+    _videoRecorderService.cancelRecording();
+    setState(() => _isVideoRecording = false);
+  }
+
+  void _onVideoRecordingCancelled() {
+    setState(() => _isVideoRecording = false);
+  }
+
+  void _onVideoRecordingTooShort() {
+    setState(() => _isVideoRecording = false);
+    HapticFeedback.selectionClick();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          context.l10n.translate('chat_video_note_too_short'),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _onVideoRecordingSend(File file) async {
+    setState(() => _isVideoRecording = false);
+    await _sendRoundVideoMessage(file);
+  }
+
+  Future<void> _onStartVoiceRecord() async {
+    _isVoicePointerDown = true;
+    _dismissKeyboardAndEmoji();
+    final hasPerm = await _voiceRecorderService.hasPermission();
+    if (!hasPerm) {
+      _isVoicePointerDown = false;
+      final isPermanentlyDenied =
+          await _voiceRecorderService.isPermanentlyDenied();
+      if (isPermanentlyDenied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.l10n.translate('chat_voice_permission_denied'),
+              ),
+              action: SnackBarAction(
+                label: context.l10n.translate('settings_title'),
+                onPressed: () => openAppSettings(),
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      final granted = await _voiceRecorderService.requestPermissions();
+      if (!granted) return;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.l10n.translate('chat_video_note_hold_hint'),
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!_isVoicePointerDown) return;
+
+    VoicePlaybackService().stopVoice();
+    VideoNotePlaybackService().stopActivePlayback();
+
+    final started = await _voiceRecorderService.startRecording();
+    if (!_isVoicePointerDown) {
+      if (started) {
+        await _voiceRecorderService.cancelRecording();
+      }
+      if (mounted) {
+        setState(() => _isVoiceRecording = false);
+      }
+      return;
+    }
+    if (started && mounted) {
+      setState(() => _isVoiceRecording = true);
+    }
+  }
+
+  void _onVoiceRecordMove(Offset offset) {
+    if (!_isVoiceRecording) return;
+    final state = _voiceOverlayKey.currentState as dynamic;
+    state?.updatePointerOffset(offset.dx, offset.dy);
+  }
+
+  void _onVoiceRecordEnd() {
+    _isVoicePointerDown = false;
+    if (!_isVoiceRecording) return;
+    final state = _voiceOverlayKey.currentState as dynamic;
+    state?.handlePointerUp();
+  }
+
+  void _onVoiceRecordCancel() {
+    _isVoicePointerDown = false;
+    if (!_isVoiceRecording) return;
+    final state = _voiceOverlayKey.currentState as dynamic;
+    if (state?.isLocked == true) return;
+    _voiceRecorderService.cancelRecording();
+    setState(() => _isVoiceRecording = false);
+  }
+
+  Future<void> _sendVoiceMessage(VoiceRecordResult result) async {
+    final file = result.file;
+    final voiceLabel =
+        AppLocalizations.of(context)?.translate('chat_voice_message') ??
+            'Voice message';
+    if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
+      debugPrint('Voice file is empty or does not exist');
+      return;
+    }
+
+    final replyTo = _replyToMessage;
+    final replyIsQuote = _isQuote;
+    final replyQuoteText = _quoteText;
+    final replyQuoteOffset = _quoteOffset;
+    final replyQuoteLength = _quoteLength;
+    _cancelReply();
+
+    final syncService = SyncService();
+    String? pendingLocalId;
+    DbMessage? pendingMsg;
+
+    try {
+      final fileName = kIsWeb
+          ? 'voice_${DateTime.now().millisecondsSinceEpoch}.webm'
+          : file.path.split(Platform.pathSeparator).last;
+      try {
+        pendingMsg = await syncService.createPendingMessage(
+          chatId: widget.channelId,
+          senderId: _currentUserId ?? '',
+          content: voiceLabel,
+          messageType: 'voice',
+          fileUrl: file.path,
+          fileName: fileName,
+          replyToMessageId: replyTo?.id,
+          isQuote: replyIsQuote,
+          quoteText: replyQuoteText,
+          quoteOffset: replyQuoteOffset,
+          quoteLength: replyQuoteLength,
+          replyToSenderId: replyTo?.senderId,
+          replyToSenderName: replyTo?.senderName,
+          replyToContent: replyTo?.content,
+          replyToMessageType: replyTo?.messageType ?? 'text',
+          waveform: result.waveform,
+          duration: result.duration.inSeconds,
+        );
+      } catch (e) {
+        debugPrint('SyncService createPendingMessage voice error in channel: $e');
+      }
+
+      if (pendingMsg != null) {
+        pendingLocalId = pendingMsg.localId;
+        final profileTheme = context.read<ProfileThemeProvider>();
+        var message = Message.fromDbMessage(pendingMsg).copyWith(
+          waveform: result.waveform,
+          duration: result.duration.inSeconds,
+        );
+        if (replyTo != null) {
+          final isReplyToMe = replyTo.senderId == _currentUserId;
+          message = message.copyWith(
+            replyInfo: ReplyInfo(
+              messageId: replyTo.id,
+              senderId: replyTo.senderId,
+              senderName: replyTo.senderName,
+              content: replyTo.content,
+              messageType: replyTo.messageType,
+              entities: replyTo.entities,
+              nameColorPresetId: isReplyToMe
+                  ? profileTheme.currentNameColorPreset.id
+                  : (replyTo.senderNameColorId ?? 'name_red'),
+              replyStripStyle: isReplyToMe
+                  ? profileTheme.currentStripStyle.name
+                  : (replyTo.senderReplyStripStyle ?? 'solid'),
+            ),
+          );
+        }
+        if (mounted) {
+          setState(() {
+            _messages.insert(0, message);
+          });
+          _scrollToBottom();
+        }
+      }
+
+      setState(() => _isUploading = true);
+      final uploadResult = await _fileService.uploadFile(
+        file,
+        onProgress: (progress) {
+          if (mounted) _uploadProgressNotifier.value = progress;
+        },
+      );
+
+      final effectiveDuration = uploadResult.duration > 0
+          ? uploadResult.duration
+          : result.duration.inSeconds;
+
+      final sendResult = await ChatService.sendMessage(
+        chatId: widget.channelId,
+        content: voiceLabel,
+        messageType: 'voice',
+        localId: pendingLocalId,
+        fileUrl: uploadResult.url,
+        fileName: uploadResult.fileName,
+        mediaPayload: uploadResult.toMediaPayload(),
+        replyToMessageId: replyTo?.id,
+        isQuote: replyIsQuote,
+        quoteText: replyQuoteText,
+        quoteOffset: replyQuoteOffset,
+        quoteLength: replyQuoteLength,
+        waveform: result.waveform,
+        duration: effectiveDuration,
+      );
+
+      if (sendResult['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
+        final sentMessage = sendResult['message'];
+        final serverId = sentMessage is Message ? sentMessage.id : null;
+        if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
+          await syncService.confirmMessageSent(pendingLocalId, serverId,
+              remoteFileUrl: uploadResult.url);
+          if (mounted) {
+            setState(() {
+              final idx =
+                  _messages.indexWhere((m) => m.localId == pendingLocalId);
+              if (idx != -1) {
+                if (sentMessage is Message) {
+                  _messages[idx] = sentMessage.copyWith(
+                    localId: pendingLocalId,
+                    replyInfo: _messages[idx].replyInfo,
+                    waveform: sentMessage.waveform ?? _messages[idx].waveform,
+                    duration: sentMessage.duration ?? effectiveDuration,
+                    fileUrl: uploadResult.url,
+                  );
+                } else {
+                  _messages[idx] = _messages[idx].copyWith(
+                    id: serverId,
+                    sendStatus: 1,
+                    duration: effectiveDuration,
+                    fileUrl: uploadResult.url,
+                  );
+                }
+              }
+            });
+          }
+        }
+      } else {
+        if (pendingLocalId != null) {
+          await syncService.markMessageFailed(pendingLocalId);
+          if (mounted) {
+            setState(() {
+              final idx =
+                  _messages.indexWhere((m) => m.localId == pendingLocalId);
+              if (idx != -1) {
+                _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Voice message send error in channel: $e');
+      if (pendingLocalId != null) {
+        await syncService.markMessageFailed(pendingLocalId);
+        if (mounted) {
+          setState(() {
+            final idx =
+                _messages.indexWhere((m) => m.localId == pendingLocalId);
+            if (idx != -1) {
+              _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+            }
+          });
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+          _uploadProgressNotifier.value = 0.0;
+        });
+      }
+    }
+  }
+
+  Future<void> _sendRoundVideoMessage(File file) async {
+    final videoNoteLabel =
+        AppLocalizations.of(context)?.translate('chat_video_note') ??
+            'Video message';
+    if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
+      debugPrint('Video file is empty or does not exist');
+      return;
+    }
+
+    final recordedDurationSec =
+        math.max(1, _videoRecorderService.elapsed.inSeconds);
+    final replyTo = _replyToMessage;
+    final replyIsQuote = _isQuote;
+    final replyQuoteText = _quoteText;
+    final replyQuoteOffset = _quoteOffset;
+    final replyQuoteLength = _quoteLength;
+    _cancelReply();
+
+    final syncService = SyncService();
+    String? pendingLocalId;
+    DbMessage? pendingMsg;
+
+    try {
+      final fileName = kIsWeb
+          ? 'video_note_${DateTime.now().millisecondsSinceEpoch}.webm'
+          : file.path.split(Platform.pathSeparator).last;
+      try {
+        pendingMsg = await syncService.createPendingMessage(
+          chatId: widget.channelId,
+          senderId: _currentUserId ?? '',
+          content: videoNoteLabel,
+          messageType: 'video',
+          fileUrl: file.path,
+          fileName: fileName,
+          isRound: true,
+          duration: recordedDurationSec,
+          replyToMessageId: replyTo?.id,
+          isQuote: replyIsQuote,
+          quoteText: replyQuoteText,
+          quoteOffset: replyQuoteOffset,
+          quoteLength: replyQuoteLength,
+          replyToSenderId: replyTo?.senderId,
+          replyToSenderName: replyTo?.senderName,
+          replyToContent: replyTo?.content,
+          replyToMessageType: replyTo?.messageType ?? 'text',
+        );
+      } catch (e) {
+        debugPrint('SyncService createPendingMessage video error in channel: $e');
+      }
+
+      if (pendingMsg != null) {
+        pendingLocalId = pendingMsg.localId;
+        final profileTheme = context.read<ProfileThemeProvider>();
+        var message = Message.fromDbMessage(pendingMsg).copyWith(
+          duration: recordedDurationSec,
+        );
+        if (replyTo != null) {
+          final isReplyToMe = replyTo.senderId == _currentUserId;
+          message = message.copyWith(
+            replyInfo: ReplyInfo(
+              messageId: replyTo.id,
+              senderId: replyTo.senderId,
+              senderName: replyTo.senderName,
+              content: replyTo.content,
+              messageType: replyTo.messageType,
+              entities: replyTo.entities,
+              nameColorPresetId: isReplyToMe
+                  ? profileTheme.currentNameColorPreset.id
+                  : (replyTo.senderNameColorId ?? 'name_red'),
+              replyStripStyle: isReplyToMe
+                  ? profileTheme.currentStripStyle.name
+                  : (replyTo.senderReplyStripStyle ?? 'solid'),
+            ),
+          );
+        }
+        if (mounted) {
+          setState(() {
+            _messages.insert(0, message);
+          });
+          _scrollToBottom();
+        }
+      }
+
+      setState(() => _isUploading = true);
+      final uploadResult = await _fileService.uploadFileChunked(
+        file,
+        onProgress: (progress) {
+          if (mounted) _uploadProgressNotifier.value = progress;
+        },
+      );
+
+      final effectiveDuration = uploadResult.duration > 0
+          ? uploadResult.duration
+          : recordedDurationSec;
+
+      final result = await ChatService.sendMessage(
+        chatId: widget.channelId,
+        content: videoNoteLabel,
+        messageType: 'video',
+        localId: pendingLocalId,
+        fileUrl: uploadResult.url,
+        fileName: uploadResult.fileName,
+        mediaPayload: uploadResult.toMediaPayload(),
+        isRound: true,
+        duration: effectiveDuration,
+        replyToMessageId: replyTo?.id,
+        isQuote: replyIsQuote,
+        quoteText: replyQuoteText,
+        quoteOffset: replyQuoteOffset,
+        quoteLength: replyQuoteLength,
+      );
+
+      if (result['success'] == true) {
+        if (!kIsWeb) {
+          await MediaCacheManager.instance
+              .seedCacheFromFile(uploadResult.url, file);
+        }
+        final sentMessage = result['message'];
+        final serverId = sentMessage is Message ? sentMessage.id : null;
+        if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
+          await syncService.confirmMessageSent(pendingLocalId, serverId,
+              remoteFileUrl: uploadResult.url);
+          if (mounted) {
+            setState(() {
+              final idx =
+                  _messages.indexWhere((m) => m.localId == pendingLocalId);
+              if (idx != -1) {
+                if (sentMessage is Message) {
+                  _messages[idx] = sentMessage.copyWith(
+                    localId: pendingLocalId,
+                    replyInfo: _messages[idx].replyInfo,
+                    sendStatus: 1,
+                    isRound: true,
+                    duration: sentMessage.duration ?? effectiveDuration,
+                    fileUrl: uploadResult.url,
+                  );
+                } else {
+                  _messages[idx] = _messages[idx].copyWith(
+                    id: serverId,
+                    sendStatus: 1,
+                    isRound: true,
+                    duration: effectiveDuration,
+                    fileUrl: uploadResult.url,
+                  );
+                }
+              }
+            });
+          }
+        }
+      } else {
+        if (pendingLocalId != null) {
+          await syncService.markMessageFailed(pendingLocalId);
+          if (mounted) {
+            setState(() {
+              final idx =
+                  _messages.indexWhere((m) => m.localId == pendingLocalId);
+              if (idx != -1) {
+                _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error sending round video message in channel: $e');
+      if (pendingLocalId != null) {
+        await syncService.markMessageFailed(pendingLocalId);
+        if (mounted) {
+          setState(() {
+            final idx =
+                _messages.indexWhere((m) => m.localId == pendingLocalId);
+            if (idx != -1) {
+              _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+            }
+          });
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.l10n.translate('chat_upload_error'),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+          _uploadProgressNotifier.value = 0.0;
+        });
+      }
+    }
   }
 }
