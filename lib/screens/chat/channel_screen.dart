@@ -30,6 +30,7 @@ import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/chat_input_bar.dart';
 import '../../widgets/chat/chat_messages_list_view.dart';
+import '../../widgets/chat/chat_scroll_navigator.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../../widgets/message/text_message_widget.dart';
@@ -115,6 +116,12 @@ class _ChannelScreenState extends State<ChannelScreen>
   Timer? _syncDebounceTimer;
   bool _hasMoreMessages = true;
   bool _isLoadingMore = false;
+  bool _isProgrammaticJump = false;
+  bool _isDetachedHistoryWindow = false;
+  bool _hasMoreNewerMessages = false;
+  bool _isLoadingNewer = false;
+  List<Message> _detachedLatestBackup = [];
+  bool _detachedBackupHasMoreOlder = true;
   bool _isSending = false;
   String? _currentUserId;
   String _channelName = '';
@@ -240,12 +247,21 @@ class _ChannelScreenState extends State<ChannelScreen>
       if (!_scrollController.hasClients || _messages.isEmpty) return;
 
       // Пагинация: когда пользователь проскроллил вверх — загрузить ещё
-      if (_hasMoreMessages && !_isLoadingMore) {
+      if (!_isProgrammaticJump && _hasMoreMessages && !_isLoadingMore) {
         final maxScroll = _scrollController.position.maxScrollExtent;
         final currentScroll = _scrollController.offset;
         if (maxScroll > 0 && (currentScroll >= maxScroll * 0.75 || (maxScroll - currentScroll) < 600)) {
           _loadMoreMessages();
         }
+      }
+
+      // Пагинация вниз к настоящему при просмотре окна истории
+      if (!_isProgrammaticJump &&
+          _isDetachedHistoryWindow &&
+          _hasMoreNewerMessages &&
+          !_isLoadingNewer &&
+          _scrollController.offset < 500) {
+        _loadNewerMessages();
       }
 
       final offset = _scrollController.offset;
@@ -263,7 +279,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       final isScrollingDown = _scrollController.position.userScrollDirection == ScrollDirection.forward;
       
       // Clear jump history when near bottom
-      if (offset < 100 && _jumpHistory.isNotEmpty) {
+      if (!_isDetachedHistoryWindow && offset < 100 && _jumpHistory.isNotEmpty) {
         _jumpHistory.clear();
       }
 
@@ -279,10 +295,10 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
       
       bool shouldShow = _showScrollDownFab;
-      if (offset <= threshold) {
-        shouldShow = false;
-      } else if (_jumpHistory.isNotEmpty) {
+      if (_isDetachedHistoryWindow || _jumpHistory.isNotEmpty) {
         shouldShow = true;
+      } else if (offset <= threshold) {
+        shouldShow = false;
       } else if (delta < 0 && _accumulatedScrollDown >= 80.0 && isScrollingDown) {
         shouldShow = true;
       } else if (delta > 0 && _accumulatedScrollUp >= 120.0) {
@@ -674,29 +690,28 @@ class _ChannelScreenState extends State<ChannelScreen>
         final serverMessages = result['messages'] as List<Message>;
         final db = AppDatabase();
 
-        setState(() {
-          final Map<String, Message> merged = {};
-          for (final m in _messages) {
-            merged[m.id] = m;
-          }
-          for (final m in serverMessages) {
-            merged[m.id] = m;
-          }
-
-          _messages.clear();
-          _messages.addAll(merged.values);
-          _messages.sort((a, b) {
-            try {
-              final ta = DateTime.parse(a.createdAt);
-              final tb = DateTime.parse(b.createdAt);
-              final cmp = tb.compareTo(ta);
-              if (cmp != 0) return cmp;
-              return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-            } catch (_) {
-              return 0;
+        if (_isDetachedHistoryWindow) {
+          final Map<String, Message> mergedBackup = {
+            for (final m in _detachedLatestBackup) m.id: m,
+            for (final m in serverMessages) m.id: m,
+          };
+          _detachedLatestBackup = mergedBackup.values.toList();
+          _sortMessagesDescending(_detachedLatestBackup);
+        } else {
+          setState(() {
+            final Map<String, Message> merged = {};
+            for (final m in _messages) {
+              merged[m.id] = m;
             }
+            for (final m in serverMessages) {
+              merged[m.id] = m;
+            }
+
+            _messages.clear();
+            _messages.addAll(merged.values);
+            _sortMessagesDescending(_messages);
           });
-        });
+        }
 
         try {
           db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
@@ -824,9 +839,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     } catch (_) {}
 
     if (mounted) {
-      setState(() {
-        _messages.insert(0, message);
-      });
+      if (_isDetachedHistoryWindow) {
+        if (!_detachedLatestBackup.any((m) => m.id == message.id)) {
+          _detachedLatestBackup.insert(0, message);
+        }
+      } else {
+        setState(() {
+          _messages.insert(0, message);
+        });
+      }
       if (message.senderId != _currentUserId) {
         unawaited(_markMessagesAsRead());
       }
@@ -1035,46 +1056,9 @@ class _ChannelScreenState extends State<ChannelScreen>
     setState(() => _isLoadingMore = true);
 
     final lastMessage = _messages.isNotEmpty ? _messages.last : null;
-
-    // Сначала попробовать загрузить из Drift
     final db = AppDatabase();
-    try {
-      final localMessages = await db.getMessages(
-        widget.channelId,
-        beforeCreatedAt: lastMessage?.createdAt,
-        limit: 50,
-      );
 
-      if (localMessages.isNotEmpty) {
-        setState(() {
-          for (final m
-              in localMessages.map((m) => Message.fromDbMessage(m))) {
-            if (!_messages.any((existing) =>
-                existing.id == m.id ||
-                (m.localId != null && existing.localId == m.localId))) {
-              _messages.add(m);
-            }
-          }
-          final dateMap = <String, int>{};
-          for (final m in _messages) {
-            dateMap[m.id] = DateTime.tryParse(m.createdAt)?.millisecondsSinceEpoch ?? 0;
-          }
-          _messages.sort((a, b) {
-            final ta = dateMap[a.id] ?? 0;
-            final tb = dateMap[b.id] ?? 0;
-            final cmp = tb.compareTo(ta);
-            if (cmp != 0) return cmp;
-            return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-          });
-          _isLoadingMore = false;
-        });
-        return;
-      }
-    } catch (e) {
-      debugPrint('Channel: Drift loadMore error: $e');
-    }
-
-    // Если в Drift нет — найти самый старый числовой serverId и загрузить с сервера
+    // Найти самый старый числовой serverId и загрузить с сервера (во избежание дыр в локальном кэше)
     String? beforeServerId;
     for (int i = _messages.length - 1; i >= 0; i--) {
       if (int.tryParse(_messages[i].id) != null) {
@@ -1094,11 +1078,13 @@ class _ChannelScreenState extends State<ChannelScreen>
       final newMessages = result['messages'] as List<Message>;
       _hasMoreMessages = result['has_more'] as bool? ?? (newMessages.length >= 50);
 
-      try {
-        db.saveMessages(
-            newMessages.map((m) => _messageToCompanion(m)).toList());
-      } catch (e) {
-        debugPrint('Channel: Drift saveMessages error: $e');
+      if (!_isDetachedHistoryWindow) {
+        try {
+          db.saveMessages(
+              newMessages.map((m) => _messageToCompanion(m)).toList());
+        } catch (e) {
+          debugPrint('Channel: Drift saveMessages error: $e');
+        }
       }
 
       setState(() {
@@ -1107,20 +1093,40 @@ class _ChannelScreenState extends State<ChannelScreen>
             _messages.add(m);
           }
         }
-        final dateMap = <String, int>{};
-        for (final m in _messages) {
-          dateMap[m.id] = DateTime.tryParse(m.createdAt)?.millisecondsSinceEpoch ?? 0;
-        }
-        _messages.sort((a, b) {
-          final ta = dateMap[a.id] ?? 0;
-          final tb = dateMap[b.id] ?? 0;
-          final cmp = tb.compareTo(ta);
-          if (cmp != 0) return cmp;
-          return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-        });
+        _sortMessagesDescending(_messages);
         _isLoadingMore = false;
       });
-    } else if (mounted) {
+      return;
+    }
+
+    // Оффлайн-фоллбэк: если сервер недоступен, подгрузить из Drift
+    try {
+      final localMessages = await db.getMessages(
+        widget.channelId,
+        beforeCreatedAt: lastMessage?.createdAt,
+        limit: 50,
+      );
+
+      if (localMessages.isNotEmpty && mounted) {
+        setState(() {
+          for (final m
+              in localMessages.map((m) => Message.fromDbMessage(m))) {
+            if (!_messages.any((existing) =>
+                existing.id == m.id ||
+                (m.localId != null && existing.localId == m.localId))) {
+              _messages.add(m);
+            }
+          }
+          _sortMessagesDescending(_messages);
+          _isLoadingMore = false;
+        });
+        return;
+      }
+    } catch (e) {
+      debugPrint('Channel: Drift loadMore error: $e');
+    }
+
+    if (mounted) {
       setState(() => _isLoadingMore = false);
     }
   }
@@ -1177,51 +1183,279 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
-  /// Scroll to a specific message and highlight it
-  Future<void> _scrollToMessage(String messageId, {int retryCount = 0}) async {
+  void _sortMessagesDescending(List<Message> list) {
+    final dateMap = <String, int>{};
+    for (final m in list) {
+      dateMap[m.id] =
+          DateTimeUtils.parseUtcDateTime(m.createdAt)?.millisecondsSinceEpoch ??
+              0;
+    }
+    list.sort((a, b) {
+      final ta = dateMap[a.id] ?? 0;
+      final tb = dateMap[b.id] ?? 0;
+      final cmp = tb.compareTo(ta);
+      if (cmp != 0) return cmp;
+      return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+    });
+  }
+
+  Future<void> _restoreLatestMessagesTail({bool scrollToBottom = false}) async {
+    if (!_isDetachedHistoryWindow || !mounted) return;
+    setState(() {
+      if (_detachedLatestBackup.isNotEmpty) {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+      }
+      _isDetachedHistoryWindow = false;
+      _hasMoreNewerMessages = false;
+      _detachedLatestBackup = [];
+      _showScrollDownFab = false;
+    });
+    if (scrollToBottom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) return;
+        _scrollController.jumpTo(0);
+      });
+    }
+  }
+
+  Future<void> _fetchMessagesAround(String targetMessageId) async {
+    try {
+      if (_isDetachedHistoryWindow &&
+          _detachedLatestBackup.any((m) => m.id == targetMessageId)) {
+        await _restoreLatestMessagesTail();
+        return;
+      }
+
+      final targetInt = int.tryParse(targetMessageId);
+      int? oldestLoadedInt;
+      for (int i = _messages.length - 1; i >= 0; i--) {
+        final parsed = int.tryParse(_messages[i].id);
+        if (parsed != null) {
+          oldestLoadedInt = parsed;
+          break;
+        }
+      }
+
+      if (!_isDetachedHistoryWindow &&
+          targetInt != null &&
+          oldestLoadedInt != null &&
+          targetInt < oldestLoadedInt &&
+          (oldestLoadedInt - targetInt) <= 160) {
+        final bridgeLimit = ((oldestLoadedInt - targetInt) + 30).clamp(60, 200);
+        final bridgeRes = await ChatService.getMessages(
+          chatId: widget.channelId,
+          beforeMessageId: oldestLoadedInt.toString(),
+          limit: bridgeLimit,
+        );
+        if (bridgeRes['success'] == true && mounted) {
+          final bridged = bridgeRes['messages'] as List<Message>;
+          if (bridged.any((m) => m.id == targetMessageId)) {
+            _hasMoreMessages = bridgeRes['has_more'] as bool? ??
+                (bridged.length >= bridgeLimit);
+            try {
+              AppDatabase().saveMessages(
+                bridged.map((m) => _messageToCompanion(m)).toList(),
+              );
+            } catch (_) {}
+            setState(() {
+              for (final m in bridged) {
+                if (!_messages.any((existing) => existing.id == m.id)) {
+                  _messages.add(m);
+                }
+              }
+              _sortMessagesDescending(_messages);
+            });
+            return;
+          }
+        }
+      }
+
+      final result = await ChatService.getMessages(
+        chatId: widget.channelId,
+        limit: 60,
+        aroundMessageId: targetMessageId,
+      );
+      if (result['success'] == true && mounted) {
+        final fetched = result['messages'] as List<Message>;
+        if (fetched.isEmpty) return;
+
+        final existingIds = <String>{for (final m in _messages) m.id};
+        final bool overlapsCurrent =
+            fetched.any((m) => existingIds.contains(m.id));
+
+        setState(() {
+          if (overlapsCurrent && !_isDetachedHistoryWindow) {
+            for (final m in fetched) {
+              if (!existingIds.contains(m.id)) {
+                _messages.add(m);
+              }
+            }
+            _sortMessagesDescending(_messages);
+          } else {
+            if (!_isDetachedHistoryWindow) {
+              _detachedLatestBackup = List<Message>.from(_messages);
+              _detachedBackupHasMoreOlder = _hasMoreMessages;
+            }
+            _isDetachedHistoryWindow = true;
+            _hasMoreMessages =
+                result['has_more'] as bool? ?? (fetched.length >= 30);
+            _hasMoreNewerMessages =
+                result['has_more_newer'] as bool? ?? true;
+            _messages
+              ..clear()
+              ..addAll(fetched);
+            _sortMessagesDescending(_messages);
+            _showScrollDownFab = true;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching channel messages around $targetMessageId: $e');
+    }
+  }
+
+  Future<void> _loadNewerMessages() async {
+    if (!_isDetachedHistoryWindow ||
+        _isLoadingNewer ||
+        !_hasMoreNewerMessages ||
+        _messages.isEmpty) {
+      return;
+    }
+
+    String? newestServerId;
+    for (int i = 0; i < _messages.length; i++) {
+      if (int.tryParse(_messages[i].id) != null) {
+        newestServerId = _messages[i].id;
+        break;
+      }
+    }
+    if (newestServerId == null) return;
+
+    setState(() => _isLoadingNewer = true);
+
+    String? anchorMsgId;
+    double? anchorScreenDy;
+    for (int i = 0; i < _messages.length; i++) {
+      final key = _messageKeys[_messages[i].id];
+      final box = key?.currentContext?.findRenderObject() as RenderBox?;
+      if (box != null && box.attached && box.hasSize) {
+        anchorMsgId = _messages[i].id;
+        anchorScreenDy = box.localToGlobal(Offset.zero).dy;
+        break;
+      }
+    }
+
+    try {
+      final result = await ChatService.getMessages(
+        chatId: widget.channelId,
+        afterMessageId: newestServerId,
+        limit: 50,
+      );
+      if (result['success'] == true && mounted) {
+        final newerMessages = result['messages'] as List<Message>;
+        final hasMoreNewer = result['has_more_newer'] as bool? ?? false;
+
+        final backupIds = <String>{
+          for (final m in _detachedLatestBackup) m.id,
+        };
+        final bool reachedLatestBackup = !hasMoreNewer ||
+            newerMessages.isEmpty ||
+            newerMessages.any((m) => backupIds.contains(m.id));
+
+        setState(() {
+          final Map<String, Message> merged = {
+            for (final m in _messages) m.id: m,
+            for (final m in newerMessages) m.id: m,
+          };
+          if (reachedLatestBackup) {
+            for (final m in _detachedLatestBackup) {
+              merged[m.id] = m;
+            }
+            _isDetachedHistoryWindow = false;
+            _hasMoreNewerMessages = false;
+            _detachedLatestBackup = [];
+          } else {
+            _hasMoreNewerMessages = hasMoreNewer;
+          }
+
+          _messages
+            ..clear()
+            ..addAll(merged.values);
+          _sortMessagesDescending(_messages);
+          _isLoadingNewer = false;
+        });
+
+        if (anchorMsgId != null && anchorScreenDy != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_scrollController.hasClients) return;
+            final key = _messageKeys[anchorMsgId];
+            final box = key?.currentContext?.findRenderObject() as RenderBox?;
+            if (box != null && box.attached && box.hasSize) {
+              final newDy = box.localToGlobal(Offset.zero).dy;
+              final delta = newDy - anchorScreenDy!;
+              if (delta.abs() > 1.0) {
+                final pos = _scrollController.position;
+                final adjusted = (pos.pixels - delta)
+                    .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+                _scrollController.jumpTo(adjusted);
+              }
+            }
+          });
+        }
+      } else if (mounted) {
+        setState(() => _isLoadingNewer = false);
+      }
+    } catch (e) {
+      debugPrint('Error loading newer channel messages: $e');
+      if (mounted) {
+        setState(() => _isLoadingNewer = false);
+      }
+    }
+  }
+
+  /// Scroll to a specific message and highlight it using RenderObject-guided seek
+  Future<void> _scrollToMessage(String messageId) async {
     if (!mounted) return;
 
-    final key = _messageKeys[messageId];
-    if (key?.currentContext != null) {
-      await Scrollable.ensureVisible(
-        key!.currentContext!,
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeOut,
+    if (_isDetachedHistoryWindow &&
+        !_messages.any((m) => m.id == messageId) &&
+        _detachedLatestBackup.any((m) => m.id == messageId)) {
+      await _restoreLatestMessagesTail();
+    }
+
+    int index = _messages.indexWhere((m) => m.id == messageId);
+    if (index == -1) {
+      await _fetchMessagesAround(messageId);
+      if (!mounted) return;
+      index = _messages.indexWhere((m) => m.id == messageId);
+      int loadRetries = 0;
+      while (index == -1 && _hasMoreMessages && loadRetries < 3 && mounted) {
+        await _loadMoreMessages();
+        loadRetries++;
+        index = _messages.indexWhere((m) => m.id == messageId);
+      }
+      if (index == -1) return;
+    }
+
+    _isProgrammaticJump = true;
+    try {
+      final reached = await ChatScrollNavigator.scrollToTarget(
+        scrollController: _scrollController,
+        targetIndex: index,
+        itemCount: _messages.length,
+        isMounted: () => mounted,
+        keyForIndex: (i) => _messageKeys[_messages[i].id],
+        resolveTargetKey: () => _messageKeys[messageId],
         alignment: 0.5,
       );
-      _setHighlight(messageId);
-      return;
-    }
-
-    final index = _messages.indexWhere((m) => m.id == messageId);
-    if (index == -1) {
-      if (_hasMoreMessages && retryCount < 12) {
-        await _loadMoreMessages();
-        return _scrollToMessage(messageId, retryCount: retryCount + 1);
+      if (reached && mounted) {
+        _setHighlight(messageId);
       }
-      return;
-    }
-
-    const estimatedItemHeight = 120.0;
-    final maxScroll = _scrollController.position.hasContentDimensions
-        ? _scrollController.position.maxScrollExtent
-        : 0.0;
-    final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
-
-    if ((_scrollController.offset - targetOffset).abs() > 2000) {
-      _scrollController.jumpTo(targetOffset);
-    } else {
-      await _scrollController.animateTo(
-        targetOffset,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
-
-    await Future.delayed(const Duration(milliseconds: 100));
-    
-    if (retryCount < 15) {
-      return _scrollToMessage(messageId, retryCount: retryCount + 1);
+    } finally {
+      _isProgrammaticJump = false;
     }
   }
 
@@ -1930,6 +2164,8 @@ class _ChannelScreenState extends State<ChannelScreen>
           if (_jumpHistory.isNotEmpty) {
             final lastId = _jumpHistory.removeLast();
             _scrollToMessage(lastId);
+          } else if (_isDetachedHistoryWindow) {
+            _restoreLatestMessagesTail(scrollToBottom: true);
           } else {
             _scrollController.animateTo(
               0,

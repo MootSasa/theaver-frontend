@@ -1238,6 +1238,7 @@ class ChatService {
     String? beforeCreatedAt,
     String? untilMessageId,
     String? aroundMessageId,
+    String? afterMessageId,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -1250,7 +1251,9 @@ class ChatService {
       }
 
       var url = '${AppConfig.baseUrl}/api/chats/$chatId/messages?limit=$limit';
-      if (aroundMessageId != null && aroundMessageId.isNotEmpty) {
+      if (afterMessageId != null && afterMessageId.isNotEmpty) {
+        url += '&after_message_id=$afterMessageId';
+      } else if (aroundMessageId != null && aroundMessageId.isNotEmpty) {
         url += '&around_message_id=$aroundMessageId';
       } else {
         if (beforeMessageId != null && beforeMessageId.isNotEmpty) {
@@ -1292,6 +1295,7 @@ class ChatService {
           'success': true,
           'messages': messages,
           'has_more': data['has_more'] ?? (messages.length >= limit),
+          'has_more_newer': data['has_more_newer'] ?? false,
         };
       } else {
         return {
