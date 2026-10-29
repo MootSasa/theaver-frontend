@@ -48,6 +48,7 @@ import '../../widgets/chat/visible_message_detector.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
 import '../../widgets/chat/chat_history_calendar.dart';
+import '../../widgets/chat/chat_scroll_navigator.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../../models/media_album.dart';
 import '../../widgets/message/media_album_widget.dart';
@@ -141,6 +142,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   double _inputHeight = 90.0;
   Timer? _highlightTimer;
   final List<String> _jumpHistory = [];
+  bool _isProgrammaticJump = false;
+  bool _isDetachedHistoryWindow = false;
+  bool _hasMoreNewerMessages = false;
+  bool _isLoadingNewer = false;
+  List<Message> _detachedLatestBackup = [];
+  bool _detachedBackupHasMoreOlder = true;
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
   final Set<String> _pendingMarkRead = {};
@@ -249,8 +256,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _pruneMessageKeys() {
-    if (_messageKeys.length > 300) {
-      final activeIds = _messages.take(150).map((m) => m.id).toSet();
+    if (_messageKeys.length > _messages.length * 2 + 200) {
+      final activeIds = <String>{
+        for (final m in _messages) m.id,
+        for (final m in _messages)
+          if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+      };
       _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
     }
   }
@@ -371,12 +382,25 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _scrollController.addListener(() {
       if (!_scrollController.hasClients || _messages.isEmpty) return;
 
-      // Пагинация: когда пользователь проскроллил вверх — загрузить ещё
-      if (_hasMoreMessages && !_isLoadingMore) {
-        final maxScroll = _scrollController.position.maxScrollExtent;
-        final currentScroll = _scrollController.offset;
-        if (maxScroll > 0 && (currentScroll >= maxScroll * 0.75 || (maxScroll - currentScroll) < 600)) {
-          _loadMoreMessages();
+      final maxScroll = _scrollController.position.maxScrollExtent;
+      final currentScroll = _scrollController.offset;
+
+      if (!_isProgrammaticJump) {
+        // Пагинация вверх: загрузить старые сообщения
+        if (_hasMoreMessages && !_isLoadingMore) {
+          if (maxScroll > 0 &&
+              (currentScroll >= maxScroll * 0.75 ||
+                  (maxScroll - currentScroll) < 600)) {
+            _loadMoreMessages();
+          }
+        }
+
+        // Пагинация вниз в режиме «Окна истории»: загрузить более новые сообщения
+        if (_isDetachedHistoryWindow &&
+            _hasMoreNewerMessages &&
+            !_isLoadingNewer &&
+            currentScroll < 500) {
+          _loadNewerMessages();
         }
       }
 
@@ -394,13 +418,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
       final isScrollingDown = _scrollController.position.userScrollDirection == ScrollDirection.forward;
       
-      // Clear jump history when near bottom
-      if (offset < 100 && _jumpHistory.isNotEmpty) {
+      // Clear jump history only when near the real bottom of the chat
+      if (!_isDetachedHistoryWindow && offset < 100 && _jumpHistory.isNotEmpty) {
         _jumpHistory.clear();
       }
 
       // Dynamic threshold: cached height of newest message
-      if (offset < 50 && _messages.isNotEmpty) {
+      if (!_isDetachedHistoryWindow && offset < 50 && _messages.isNotEmpty) {
         final firstMsgId = _messages.first.id;
         final key = _messageKeys[firstMsgId];
         final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
@@ -415,10 +439,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       
       final bool currentFabVisible = _showScrollDownFabNotifier.value;
       bool shouldShow = currentFabVisible;
-      if (offset <= threshold) {
-        shouldShow = false;
-      } else if (_jumpHistory.isNotEmpty) {
+      if (_isDetachedHistoryWindow || _jumpHistory.isNotEmpty) {
         shouldShow = true;
+      } else if (offset <= threshold) {
+        shouldShow = false;
       } else if (delta < 0 && _accumulatedScrollDown >= 80.0 && isScrollingDown) {
         shouldShow = true;
       } else if (delta > 0 && _accumulatedScrollUp >= 120.0) {
@@ -873,61 +897,59 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         final serverMessages = result['messages'] as List<Message>;
         final db = AppDatabase();
 
-        setState(() {
-          final pendingMessages = _messages
-              .where((m) => m.sendStatus != 1 && m.localId != null)
-              .toList();
+        if (_isDetachedHistoryWindow) {
+          final Map<String, Message> mergedBackup = {
+            for (final m in _detachedLatestBackup) m.id: m,
+            for (final m in serverMessages) m.id: m,
+          };
+          _detachedLatestBackup = mergedBackup.values.toList();
+          _sortMessagesDescending(_detachedLatestBackup);
+        } else {
+          setState(() {
+            final pendingMessages = _messages
+                .where((m) => m.sendStatus != 1 && m.localId != null)
+                .toList();
 
-          final Map<String, Message> merged = {};
-          for (final m in _messages) {
-            merged[m.id] = m;
-            if (m.localId != null && m.localId!.isNotEmpty) {
-              merged[m.localId!] = m;
+            final Map<String, Message> merged = {};
+            for (final m in _messages) {
+              merged[m.id] = m;
+              if (m.localId != null && m.localId!.isNotEmpty) {
+                merged[m.localId!] = m;
+              }
             }
-          }
-          for (final m in serverMessages) {
-            merged[m.id] = m;
-            if (m.localId != null && m.localId!.isNotEmpty) {
-              merged[m.localId!] = m;
+            for (final m in serverMessages) {
+              merged[m.id] = m;
+              if (m.localId != null && m.localId!.isNotEmpty) {
+                merged[m.localId!] = m;
+              }
             }
-          }
-          for (final pending in pendingMessages) {
-            final key = pending.localId ?? pending.id;
-            if (!merged.containsKey(key)) {
-              merged[key] = pending;
+            for (final pending in pendingMessages) {
+              final key = pending.localId ?? pending.id;
+              if (!merged.containsKey(key)) {
+                merged[key] = pending;
+              }
             }
-          }
 
-          _messages.clear();
-          final Map<String, Message> dedupedById = {};
-          for (final m in merged.values) {
-            dedupedById[m.id] = m;
-          }
-          _messages.addAll(dedupedById.values);
+            _messages.clear();
+            final Map<String, Message> dedupedById = {};
+            for (final m in merged.values) {
+              dedupedById[m.id] = m;
+            }
+            _messages.addAll(dedupedById.values);
 
-          for (final m in _messages) {
-            if (m.reactions.isNotEmpty) {
-              _messageReactions[m.id] = Map.from(m.reactions);
+            for (final m in _messages) {
+              if (m.reactions.isNotEmpty) {
+                _messageReactions[m.id] = Map.from(m.reactions);
+              }
+              if (m.myReactions.isNotEmpty) {
+                _myReactions[m.id] = Set.from(m.myReactions);
+              }
             }
-            if (m.myReactions.isNotEmpty) {
-              _myReactions[m.id] = Set.from(m.myReactions);
-            }
-          }
 
-          _messages.sort((a, b) {
-            try {
-              final ta = DateTime.parse(a.createdAt);
-              final tb = DateTime.parse(b.createdAt);
-              final cmp = tb.compareTo(ta);
-              if (cmp != 0) return cmp;
-              return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-            } catch (_) {
-              return 0;
-            }
+            _sortMessagesDescending(_messages);
+            _updateFeedItems();
           });
-
-          _updateFeedItems();
-        });
+        }
 
         try {
           db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
@@ -1167,8 +1189,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     if (mounted) {
       final bool isFromOther = message.senderId != _currentUserId;
-      final bool isNearBottom =
-          !_scrollController.hasClients || _scrollController.offset <= 150.0;
+      final bool isNearBottom = !_isDetachedHistoryWindow &&
+          (!_scrollController.hasClients || _scrollController.offset <= 150.0);
 
       setState(() {
         if (_typingUserId == message.senderId || _isTyping) {
@@ -1177,11 +1199,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _typingUserId = null;
           _typingUserName = null;
         }
-        _messages.insert(0, message);
-        if (isFromOther && !isNearBottom) {
-          _unreadCount++;
+        if (_isDetachedHistoryWindow) {
+          if (!_detachedLatestBackup.any((m) => m.id == message.id)) {
+            _detachedLatestBackup.insert(0, message);
+          }
+          if (isFromOther) {
+            _unreadCount++;
+          }
+        } else {
+          _messages.insert(0, message);
+          if (isFromOther && !isNearBottom) {
+            _unreadCount++;
+          }
+          _updateFeedItems();
         }
-        _updateFeedItems();
       });
       if (isFromOther && isNearBottom) {
         _onMessageVisible(message.id);
@@ -1652,56 +1683,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     setState(() => _isLoadingMore = true);
 
     final lastMessage = _messages.isNotEmpty ? _messages.last : null;
-
-    // Сначала попробовать загрузить из Drift
     final db = AppDatabase();
-    try {
-      final localMessages = await db.getMessages(
-        widget.chatId,
-        beforeCreatedAt: lastMessage?.createdAt,
-        limit: 50,
-      );
 
-      if (localMessages.isNotEmpty) {
-        setState(() {
-          final existingIds = <String>{
-            for (final m in _messages) m.id,
-            for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
-          };
-          for (final m in localMessages.map((m) => Message.fromDbMessage(m))) {
-            if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
-              _messages.add(m);
-              existingIds.add(m.id);
-              if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
-              if (m.reactions.isNotEmpty) {
-                _messageReactions[m.id] = Map.from(m.reactions);
-              }
-              if (m.myReactions.isNotEmpty) {
-                _myReactions[m.id] = Set.from(m.myReactions);
-              }
-            }
-          }
-          final dateMap = <String, int>{};
-          for (final m in _messages) {
-            dateMap[m.id] = DateTime.tryParse(m.createdAt)?.millisecondsSinceEpoch ?? 0;
-          }
-          _messages.sort((a, b) {
-            final ta = dateMap[a.id] ?? 0;
-            final tb = dateMap[b.id] ?? 0;
-            final cmp = tb.compareTo(ta);
-            if (cmp != 0) return cmp;
-            return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-          });
-          _updateFeedItems();
-          _isLoadingMore = false;
-        });
-        return;
-      }
-    } catch (e) {
-      debugPrint('GroupChat: Drift loadMore error: $e');
-    }
-
-    // Если в Drift нет — найти самый старый числовой serverId и загрузить с сервера
+    // Найти самый старый числовой serverId и загрузить с сервера (во избежание дыр в локальном кэше)
     String? beforeServerId;
     for (int i = _messages.length - 1; i >= 0; i--) {
       if (int.tryParse(_messages[i].id) != null) {
@@ -1721,11 +1705,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       final newMessages = result['messages'] as List<Message>;
       _hasMoreMessages = result['has_more'] as bool? ?? (newMessages.length >= 50);
 
-      try {
-        db.saveMessages(
-            newMessages.map((m) => _messageToCompanion(m)).toList());
-      } catch (e) {
-        debugPrint('GroupChat: Drift saveMessages error: $e');
+      if (!_isDetachedHistoryWindow) {
+        try {
+          db.saveMessages(
+              newMessages.map((m) => _messageToCompanion(m)).toList());
+        } catch (e) {
+          debugPrint('GroupChat: Drift saveMessages error: $e');
+        }
       }
 
       setState(() {
@@ -1746,21 +1732,51 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             }
           }
         }
-        final dateMap = <String, int>{};
-        for (final m in _messages) {
-          dateMap[m.id] = DateTime.tryParse(m.createdAt)?.millisecondsSinceEpoch ?? 0;
-        }
-        _messages.sort((a, b) {
-          final ta = dateMap[a.id] ?? 0;
-          final tb = dateMap[b.id] ?? 0;
-          final cmp = tb.compareTo(ta);
-          if (cmp != 0) return cmp;
-          return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-        });
+        _sortMessagesDescending(_messages);
         _updateFeedItems();
         _isLoadingMore = false;
       });
-    } else if (mounted) {
+      return;
+    }
+
+    // Оффлайн-фоллбэк: если сервер недоступен, подгрузить из Drift
+    try {
+      final localMessages = await db.getMessages(
+        widget.chatId,
+        beforeCreatedAt: lastMessage?.createdAt,
+        limit: 50,
+      );
+
+      if (localMessages.isNotEmpty && mounted) {
+        setState(() {
+          final existingIds = <String>{
+            for (final m in _messages) m.id,
+            for (final m in _messages) if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+          };
+          for (final m in localMessages.map((m) => Message.fromDbMessage(m))) {
+            if (!existingIds.contains(m.id) && (m.localId == null || !existingIds.contains(m.localId))) {
+              _messages.add(m);
+              existingIds.add(m.id);
+              if (m.localId != null && m.localId!.isNotEmpty) existingIds.add(m.localId!);
+              if (m.reactions.isNotEmpty) {
+                _messageReactions[m.id] = Map.from(m.reactions);
+              }
+              if (m.myReactions.isNotEmpty) {
+                _myReactions[m.id] = Set.from(m.myReactions);
+              }
+            }
+          }
+          _sortMessagesDescending(_messages);
+          _updateFeedItems();
+          _isLoadingMore = false;
+        });
+        return;
+      }
+    } catch (e) {
+      debugPrint('GroupChat: Drift loadMore error: $e');
+    }
+
+    if (mounted) {
       setState(() => _isLoadingMore = false);
     }
   }
@@ -1898,6 +1914,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _stopMyTyping();
     DraftService().deleteDraft(widget.chatId);
     _messageController.clear();
+    if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+      _messages
+        ..clear()
+        ..addAll(_detachedLatestBackup);
+      _hasMoreMessages = _detachedBackupHasMoreOlder;
+      _isDetachedHistoryWindow = false;
+      _hasMoreNewerMessages = false;
+      _detachedLatestBackup = [];
+    }
     setState(() {
       _isSending = true;
       _isUploading = _attachedFiles.isNotEmpty;
@@ -2725,52 +2750,88 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
-  /// Scroll to the first unread message with multi-batch prefetch and GlobalKey alignment
+  int _findFeedIndexForMessage(String messageId) {
+    return _feedItems.indexWhere((item) =>
+        item.id == messageId ||
+        (item is FeedAlbumItem &&
+            item.album.items.any((ai) => ai.id == messageId)));
+  }
+
+  void _sortMessagesDescending(List<Message> list) {
+    final dateMap = <String, int>{};
+    for (final m in list) {
+      dateMap[m.id] =
+          DateTimeUtils.parseUtcDateTime(m.createdAt)?.millisecondsSinceEpoch ??
+              0;
+    }
+    list.sort((a, b) {
+      final ta = dateMap[a.id] ?? 0;
+      final tb = dateMap[b.id] ?? 0;
+      final cmp = tb.compareTo(ta);
+      if (cmp != 0) return cmp;
+      return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
+    });
+  }
+
+  /// Restores the contiguous latest messages tail when exiting a detached history window.
+  Future<void> _restoreLatestMessagesTail({bool scrollToBottom = false}) async {
+    if (!_isDetachedHistoryWindow || !mounted) return;
+    setState(() {
+      if (_detachedLatestBackup.isNotEmpty) {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+      }
+      _isDetachedHistoryWindow = false;
+      _hasMoreNewerMessages = false;
+      _detachedLatestBackup = [];
+      _updateFeedItems();
+    });
+    if (scrollToBottom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) return;
+        _scrollController.jumpTo(0);
+      });
+    }
+  }
+
+  /// Scroll to the first unread message using exact RenderObject-guided seek
   Future<void> _scrollToFirstUnread() async {
     if (_firstUnreadMessageId == null || _hasScrolledToUnread) return;
     _hasScrolledToUnread = true;
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || !_scrollController.hasClients) return;
+      final targetId = _firstUnreadMessageId;
+      if (targetId == null) return;
 
-      // 1. If unread separator is already in view, align near the top of the viewport
-      // In a reverse: true ListView, alignment ~0.82 places the widget near the top of the screen
       if (_unreadSeparatorKey.currentContext != null) {
         await Scrollable.ensureVisible(
           _unreadSeparatorKey.currentContext!,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
           alignment: 0.82,
         );
         return;
       }
 
-      // 2. Find target index in _feedItems
       int targetFeedIndex = _firstUnreadFeedIndex;
-      if (targetFeedIndex == -1 && _firstUnreadMessageId != null) {
-        targetFeedIndex = _feedItems.indexWhere((item) =>
-            item.id == _firstUnreadMessageId ||
-            (item is FeedAlbumItem &&
-                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      if (targetFeedIndex == -1) {
+        targetFeedIndex = _findFeedIndexForMessage(targetId);
       }
 
-      // If message is beyond current loaded page, fetch around it from server
-      if (targetFeedIndex == -1 && _firstUnreadMessageId != null && mounted) {
-        await _fetchMessagesAround(_firstUnreadMessageId!);
-        targetFeedIndex = _feedItems.indexWhere((item) =>
-            item.id == _firstUnreadMessageId ||
-            (item is FeedAlbumItem &&
-                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+      if (targetFeedIndex == -1 && mounted) {
+        await _fetchMessagesAround(targetId);
+        targetFeedIndex = _findFeedIndexForMessage(targetId);
       }
 
       int retries = 0;
-      while (targetFeedIndex == -1 && _hasMoreMessages && retries < 4 && mounted) {
+      while (
+          targetFeedIndex == -1 && _hasMoreMessages && retries < 3 && mounted) {
         await _loadMoreMessages();
         retries++;
-        targetFeedIndex = _feedItems.indexWhere((item) =>
-            item.id == _firstUnreadMessageId ||
-            (item is FeedAlbumItem &&
-                item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+        targetFeedIndex = _findFeedIndexForMessage(targetId);
       }
 
       if (!mounted || !_scrollController.hasClients) return;
@@ -2782,52 +2843,102 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         return;
       }
 
-      // 3. Approximate jump to target item position
-      const estimatedItemHeight = 90.0;
-      final maxScroll = _scrollController.position.hasContentDimensions
-          ? _scrollController.position.maxScrollExtent
-          : 0.0;
-      final targetOffset =
-          (targetFeedIndex * estimatedItemHeight).clamp(0.0, maxScroll);
-
-      if ((_scrollController.offset - targetOffset).abs() > 1500) {
-        _scrollController.jumpTo(targetOffset);
-      } else {
-        await _scrollController.animateTo(
-          targetOffset,
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOut,
-        );
-      }
-
-      await Future.delayed(const Duration(milliseconds: 60));
-      if (!mounted) return;
-
-      // 4. Precision alignment: ensureVisible on unread separator or first unread bubble near top (alignment: 0.82)
-      if (_unreadSeparatorKey.currentContext != null) {
-        await Scrollable.ensureVisible(
-          _unreadSeparatorKey.currentContext!,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
+      _isProgrammaticJump = true;
+      try {
+        await ChatScrollNavigator.scrollToTarget(
+          scrollController: _scrollController,
+          targetIndex: targetFeedIndex,
+          itemCount: _feedItems.length,
+          isMounted: () => mounted,
+          keyForIndex: (index) => _messageKeys[_feedItems[index].id],
+          resolveTargetKey: () {
+            if (_unreadSeparatorKey.currentContext != null) {
+              return _unreadSeparatorKey;
+            }
+            final idx = _findFeedIndexForMessage(targetId);
+            if (idx != -1) {
+              return _messageKeys[_feedItems[idx].id];
+            }
+            return _messageKeys[targetId];
+          },
           alignment: 0.82,
         );
-      } else {
-        final key = _messageKeys[_firstUnreadMessageId];
-        if (key?.currentContext != null) {
-          await Scrollable.ensureVisible(
-            key!.currentContext!,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-            alignment: 0.82,
-          );
-        }
+      } finally {
+        _isProgrammaticJump = false;
       }
     });
   }
 
-  /// Fetch messages around a specific target message ID when jumping to a distant date or unread message
+  /// Fetch messages around a specific target message ID without creating missing message gaps.
+  /// - If target is in `_detachedLatestBackup`, restores the latest tail.
+  /// - If target is close enough (`<= 160` IDs from the oldest loaded message), bridges contiguously.
+  /// - If target is far in history, switches to an isolated history window (`_isDetachedHistoryWindow = true`).
   Future<void> _fetchMessagesAround(String targetMessageId) async {
     try {
+      if (_isDetachedHistoryWindow &&
+          _detachedLatestBackup.any((m) => m.id == targetMessageId)) {
+        await _restoreLatestMessagesTail();
+        return;
+      }
+
+      final targetInt = int.tryParse(targetMessageId);
+      int? oldestLoadedInt;
+      for (int i = _messages.length - 1; i >= 0; i--) {
+        final parsed = int.tryParse(_messages[i].id);
+        if (parsed != null) {
+          oldestLoadedInt = parsed;
+          break;
+        }
+      }
+
+      if (!_isDetachedHistoryWindow &&
+          targetInt != null &&
+          oldestLoadedInt != null &&
+          targetInt < oldestLoadedInt &&
+          (oldestLoadedInt - targetInt) <= 160) {
+        final bridgeLimit = ((oldestLoadedInt - targetInt) + 30).clamp(60, 200);
+        final bridgeRes = await ChatService.getMessages(
+          chatId: widget.chatId,
+          beforeMessageId: oldestLoadedInt.toString(),
+          limit: bridgeLimit,
+        );
+        if (bridgeRes['success'] == true && mounted) {
+          final bridged = bridgeRes['messages'] as List<Message>;
+          if (bridged.any((m) => m.id == targetMessageId)) {
+            _hasMoreMessages = bridgeRes['has_more'] as bool? ??
+                (bridged.length >= bridgeLimit);
+            try {
+              AppDatabase().saveMessages(
+                bridged.map((m) => _messageToCompanion(m)).toList(),
+              );
+            } catch (_) {}
+            setState(() {
+              final existingIds = <String>{
+                for (final m in _messages) m.id,
+                for (final m in _messages)
+                  if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+              };
+              for (final m in bridged) {
+                if (!existingIds.contains(m.id) &&
+                    (m.localId == null || !existingIds.contains(m.localId))) {
+                  _messages.add(m);
+                  existingIds.add(m.id);
+                  if (m.reactions.isNotEmpty) {
+                    _messageReactions[m.id] = Map.from(m.reactions);
+                  }
+                  if (m.myReactions.isNotEmpty) {
+                    _myReactions[m.id] = Set.from(m.myReactions);
+                  }
+                }
+              }
+              _sortMessagesDescending(_messages);
+              _updateFeedItems();
+            });
+            return;
+          }
+        }
+      }
+
       final result = await ChatService.getMessages(
         chatId: widget.chatId,
         limit: 60,
@@ -2836,35 +2947,52 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       if (result['success'] == true && mounted) {
         final fetched = result['messages'] as List<Message>;
         if (fetched.isEmpty) return;
+
+        final existingIds = <String>{
+          for (final m in _messages) m.id,
+          for (final m in _messages)
+            if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+        };
+        final bool overlapsCurrent =
+            fetched.any((m) => existingIds.contains(m.id));
+
         setState(() {
-          final existingIds = <String>{
-            for (final m in _messages) m.id,
-            for (final m in _messages)
-              if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
-          };
           for (final m in fetched) {
-            if (!existingIds.contains(m.id) &&
-                (m.localId == null || !existingIds.contains(m.localId))) {
-              _messages.add(m);
-              existingIds.add(m.id);
-              if (m.reactions.isNotEmpty) {
-                _messageReactions[m.id] = Map.from(m.reactions);
-              }
-              if (m.myReactions.isNotEmpty) {
-                _myReactions[m.id] = Set.from(m.myReactions);
-              }
+            if (m.reactions.isNotEmpty) {
+              _messageReactions[m.id] = Map.from(m.reactions);
+            }
+            if (m.myReactions.isNotEmpty) {
+              _myReactions[m.id] = Set.from(m.myReactions);
             }
           }
-          _messages.sort((a, b) {
-            final ta = DateTimeUtils.parseUtcDateTime(a.createdAt) ??
-                DateTime.fromMillisecondsSinceEpoch(0);
-            final tb = DateTimeUtils.parseUtcDateTime(b.createdAt) ??
-                DateTime.fromMillisecondsSinceEpoch(0);
-            final cmp = tb.compareTo(ta);
-            if (cmp != 0) return cmp;
-            return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-          });
-          _updateFeedItems();
+
+          if (overlapsCurrent && !_isDetachedHistoryWindow) {
+            for (final m in fetched) {
+              if (!existingIds.contains(m.id) &&
+                  (m.localId == null || !existingIds.contains(m.localId))) {
+                _messages.add(m);
+                existingIds.add(m.id);
+              }
+            }
+            _sortMessagesDescending(_messages);
+            _updateFeedItems();
+          } else {
+            if (!_isDetachedHistoryWindow) {
+              _detachedLatestBackup = List<Message>.from(_messages);
+              _detachedBackupHasMoreOlder = _hasMoreMessages;
+            }
+            _isDetachedHistoryWindow = true;
+            _hasMoreMessages =
+                result['has_more'] as bool? ?? (fetched.length >= 30);
+            _hasMoreNewerMessages =
+                result['has_more_newer'] as bool? ?? true;
+            _messages
+              ..clear()
+              ..addAll(fetched);
+            _sortMessagesDescending(_messages);
+            _updateFeedItems();
+            _showScrollDownFabNotifier.value = true;
+          }
         });
       }
     } catch (e) {
@@ -2872,80 +3000,166 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
-  /// Scroll to a specific message and highlight it
+  /// Loads newer messages when scrolling down towards the present inside a detached history window.
+  Future<void> _loadNewerMessages() async {
+    if (!_isDetachedHistoryWindow ||
+        _isLoadingNewer ||
+        !_hasMoreNewerMessages ||
+        _messages.isEmpty) {
+      return;
+    }
+
+    String? newestServerId;
+    for (int i = 0; i < _messages.length; i++) {
+      if (int.tryParse(_messages[i].id) != null) {
+        newestServerId = _messages[i].id;
+        break;
+      }
+    }
+    if (newestServerId == null) return;
+
+    setState(() => _isLoadingNewer = true);
+
+    String? anchorFeedId;
+    double? anchorScreenDy;
+    for (int i = 0; i < _feedItems.length; i++) {
+      final key = _messageKeys[_feedItems[i].id];
+      final box = key?.currentContext?.findRenderObject() as RenderBox?;
+      if (box != null && box.attached && box.hasSize) {
+        anchorFeedId = _feedItems[i].id;
+        anchorScreenDy = box.localToGlobal(Offset.zero).dy;
+        break;
+      }
+    }
+
+    try {
+      final result = await ChatService.getMessages(
+        chatId: widget.chatId,
+        afterMessageId: newestServerId,
+        limit: 50,
+      );
+      if (result['success'] == true && mounted) {
+        final newerMessages = result['messages'] as List<Message>;
+        final hasMoreNewer = result['has_more_newer'] as bool? ?? false;
+
+        final backupIds = <String>{
+          for (final m in _detachedLatestBackup) m.id,
+        };
+        final bool reachedLatestBackup = !hasMoreNewer ||
+            newerMessages.isEmpty ||
+            newerMessages.any((m) => backupIds.contains(m.id));
+
+        setState(() {
+          final Map<String, Message> merged = {
+            for (final m in _messages) m.id: m,
+            for (final m in newerMessages) m.id: m,
+          };
+          if (reachedLatestBackup) {
+            for (final m in _detachedLatestBackup) {
+              merged[m.id] = m;
+            }
+            _isDetachedHistoryWindow = false;
+            _hasMoreNewerMessages = false;
+            _detachedLatestBackup = [];
+          } else {
+            _hasMoreNewerMessages = hasMoreNewer;
+          }
+
+          for (final m in newerMessages) {
+            if (m.reactions.isNotEmpty) {
+              _messageReactions[m.id] = Map.from(m.reactions);
+            }
+            if (m.myReactions.isNotEmpty) {
+              _myReactions[m.id] = Set.from(m.myReactions);
+            }
+          }
+
+          _messages
+            ..clear()
+            ..addAll(merged.values);
+          _sortMessagesDescending(_messages);
+          _updateFeedItems();
+          _isLoadingNewer = false;
+        });
+
+        if (anchorFeedId != null && anchorScreenDy != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_scrollController.hasClients) return;
+            final key = _messageKeys[anchorFeedId];
+            final box = key?.currentContext?.findRenderObject() as RenderBox?;
+            if (box != null && box.attached && box.hasSize) {
+              final newDy = box.localToGlobal(Offset.zero).dy;
+              final delta = newDy - anchorScreenDy!;
+              if (delta.abs() > 1.0) {
+                final pos = _scrollController.position;
+                final adjusted = (pos.pixels - delta)
+                    .clamp(pos.minScrollExtent, pos.maxScrollExtent);
+                _scrollController.jumpTo(adjusted);
+              }
+            }
+          });
+        }
+      } else if (mounted) {
+        setState(() => _isLoadingNewer = false);
+      }
+    } catch (e) {
+      debugPrint('Error loading newer group messages: $e');
+      if (mounted) {
+        setState(() => _isLoadingNewer = false);
+      }
+    }
+  }
+
+  /// Scroll to a specific message and highlight it using RenderObject-guided seek
   Future<void> _scrollToMessage(
     String messageId, {
-    int retryCount = 0,
     double alignment = 0.5,
     bool highlight = true,
   }) async {
     if (!mounted) return;
 
-    final key = _messageKeys[messageId];
-    if (key?.currentContext != null) {
-      await Scrollable.ensureVisible(
-        key!.currentContext!,
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeOut,
+    if (_isDetachedHistoryWindow &&
+        _findFeedIndexForMessage(messageId) == -1 &&
+        _detachedLatestBackup.any((m) => m.id == messageId)) {
+      await _restoreLatestMessagesTail();
+    }
+
+    int index = _findFeedIndexForMessage(messageId);
+    if (index == -1) {
+      await _fetchMessagesAround(messageId);
+      if (!mounted) return;
+      index = _findFeedIndexForMessage(messageId);
+      int loadRetries = 0;
+      while (index == -1 && _hasMoreMessages && loadRetries < 3 && mounted) {
+        await _loadMoreMessages();
+        loadRetries++;
+        index = _findFeedIndexForMessage(messageId);
+      }
+      if (index == -1) return;
+    }
+
+    _isProgrammaticJump = true;
+    try {
+      final reached = await ChatScrollNavigator.scrollToTarget(
+        scrollController: _scrollController,
+        targetIndex: index,
+        itemCount: _feedItems.length,
+        isMounted: () => mounted,
+        keyForIndex: (i) => _messageKeys[_feedItems[i].id],
+        resolveTargetKey: () {
+          final idx = _findFeedIndexForMessage(messageId);
+          if (idx != -1) {
+            return _messageKeys[_feedItems[idx].id];
+          }
+          return _messageKeys[messageId];
+        },
         alignment: alignment,
       );
-      if (highlight) {
+      if (reached && highlight && mounted) {
         _setHighlight(messageId);
       }
-      return;
-    }
-
-    int index = _feedItems.indexWhere((item) =>
-        item.id == messageId ||
-        (item is FeedAlbumItem &&
-            item.album.items.any((ai) => ai.id == messageId)));
-    if (index == -1) {
-      if (retryCount == 0) {
-        await _fetchMessagesAround(messageId);
-        index = _feedItems.indexWhere((item) =>
-            item.id == messageId ||
-            (item is FeedAlbumItem &&
-                item.album.items.any((ai) => ai.id == messageId)));
-      }
-      if (index == -1) {
-        if (_hasMoreMessages && retryCount < 8) {
-          await _loadMoreMessages();
-          return _scrollToMessage(
-            messageId,
-            retryCount: retryCount + 1,
-            alignment: alignment,
-            highlight: highlight,
-          );
-        }
-        return;
-      }
-    }
-
-    const estimatedItemHeight = 110.0;
-    final maxScroll = _scrollController.position.hasContentDimensions
-        ? _scrollController.position.maxScrollExtent
-        : 0.0;
-    final targetOffset = (index * estimatedItemHeight).clamp(0.0, maxScroll);
-
-    if ((_scrollController.offset - targetOffset).abs() > 2000) {
-      _scrollController.jumpTo(targetOffset);
-    } else {
-      await _scrollController.animateTo(
-        targetOffset,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
-
-    await Future.delayed(const Duration(milliseconds: 100));
-
-    if (retryCount < 12) {
-      return _scrollToMessage(
-        messageId,
-        retryCount: retryCount + 1,
-        alignment: alignment,
-        highlight: highlight,
-      );
+    } finally {
+      _isProgrammaticJump = false;
     }
   }
 
@@ -3048,9 +3262,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Future<void> _jumpToCalendarDay(ChatCalendarDayInfo dayInfo) async {
     if (!mounted || dayInfo.firstMessageId.isEmpty) return;
 
-    // Record current bottom/visible message in _jumpHistory so ScrollDownFab can return back
-    if (_messages.isNotEmpty) {
-      final currentAnchorId = _messages.first.id;
+    // Record current visible message in _jumpHistory so ScrollDownFab can return back
+    if (_feedItems.isNotEmpty) {
+      String currentAnchorId = _feedItems.first.id;
+      for (int i = 0; i < _feedItems.length; i++) {
+        final key = _messageKeys[_feedItems[i].id];
+        final box = key?.currentContext?.findRenderObject() as RenderBox?;
+        if (box != null && box.attached && box.hasSize) {
+          currentAnchorId = _feedItems[i].id;
+          break;
+        }
+      }
       if (_jumpHistory.isEmpty || _jumpHistory.last != currentAnchorId) {
         _jumpHistory.add(currentAnchorId);
         _showScrollDownFabNotifier.value = true;
@@ -3740,6 +3962,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     if (_jumpHistory.isNotEmpty) {
                       final lastId = _jumpHistory.removeLast();
                       _scrollToMessage(lastId);
+                    } else if (_isDetachedHistoryWindow) {
+                      _restoreLatestMessagesTail(scrollToBottom: true);
                     } else {
                       _scrollController.animateTo(
                         0,
