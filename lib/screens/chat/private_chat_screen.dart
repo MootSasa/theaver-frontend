@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/gestures.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart'
     show RenderAbstractViewport, ScrollDirection;
@@ -177,7 +178,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   List<FeedItem> _feedItems = [];
   int _firstUnreadFeedIndex = -1;
   final GlobalKey _unreadSeparatorKey = GlobalKey();
-  final Map<DateTime, GlobalKey> _dateSeparatorKeys = {};
+  final Map<String, GlobalKey> _dateSeparatorKeys = {};
   final GlobalKey _stickyDateSlotKey = GlobalKey();
   final ValueNotifier<StickyDateState> _stickyDateStateNotifier =
       ValueNotifier<StickyDateState>(StickyDateState.empty);
@@ -185,6 +186,31 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _daySpans = [];
   bool _stickyDatePostFrameScheduled = false;
   double _newestMessageHeight = 150.0;
+
+  GlobalKey _dateSeparatorKeyFor(DateTime day, Message primaryMessage) {
+    final stableId = (primaryMessage.localId != null &&
+            primaryMessage.localId!.isNotEmpty)
+        ? primaryMessage.localId!
+        : primaryMessage.id;
+    return _dateSeparatorKeys.putIfAbsent(
+      '${day.millisecondsSinceEpoch}_$stableId',
+      () => GlobalKey(),
+    );
+  }
+
+  GlobalKey _dateSeparatorKeyForFeedIndex(DateTime day, int feedIndex) {
+    if (feedIndex < 0 || feedIndex >= _feedItems.length) {
+      return _dateSeparatorKeys.putIfAbsent(
+        '${day.millisecondsSinceEpoch}',
+        () => GlobalKey(),
+      );
+    }
+    final item = _feedItems[feedIndex];
+    final msg = item is FeedAlbumItem
+        ? item.album.primaryMessage
+        : (item as FeedSingleItem).message;
+    return _dateSeparatorKeyFor(day, msg);
+  }
 
   void _updateFeedItems() {
     _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
@@ -201,7 +227,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         <({DateTime day, DateTime sampleDt, int newestIdx, int oldestIdx})>[];
     for (int i = 0; i < _feedItems.length; i++) {
       final (dt, day) = _resolveDates(_feedItems[i].createdAt);
-      _dateSeparatorKeys.putIfAbsent(day, () => GlobalKey());
       if (spans.isEmpty || spans.last.day != day) {
         spans.add((day: day, sampleDt: dt, newestIdx: i, oldestIdx: i));
       } else {
@@ -213,6 +238,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           oldestIdx: i,
         ));
       }
+    }
+    for (final span in spans) {
+      _dateSeparatorKeyForFeedIndex(span.day, span.oldestIdx);
     }
     _daySpans = spans;
 
@@ -2220,6 +2248,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   /// Exact inline-vs-sticky visibility and push-handoff are evaluated during
   /// flushPaint() by InlineChatDateHeader and FloatingChatDateHeader.
   void _updateFloatingDateOnScroll() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      _scheduleStickyDateUpdate();
+      return;
+    }
+
     if (!mounted || _daySpans.isEmpty) {
       if (_stickyDateStateNotifier.value != StickyDateState.empty) {
         _stickyDateStateNotifier.value = StickyDateState.empty;
@@ -2235,30 +2270,54 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
     final stickyTopY = stickyBox.localToGlobal(Offset.zero).dy;
 
-    int? mountedRefIdx;
+    int? minActiveIdx;
+    int? maxActiveIdx;
     for (int i = 0; i < _feedItems.length; i++) {
       final key = _messageKeys[_feedItems[i].id];
       final box = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (box != null && box.attached && box.hasSize) {
-        mountedRefIdx = i;
-        break;
+      if (isChatRenderBoxActivelyLaidOut(box)) {
+        minActiveIdx ??= i;
+        maxActiveIdx = i;
       }
     }
 
     int? activeSpanIdx;
     for (int s = 0; s < _daySpans.length; s++) {
       final span = _daySpans[s];
-      final sepKey = _dateSeparatorKeys[span.day];
-      final sepBox = sepKey?.currentContext?.findRenderObject() as RenderBox?;
+      final sepKey = _dateSeparatorKeyForFeedIndex(span.day, span.oldestIdx);
+      final sepBox = sepKey.currentContext?.findRenderObject() as RenderBox?;
 
       bool isAtOrAboveSticky;
-      if (sepBox != null && sepBox.attached && sepBox.hasSize) {
-        final sepTopY = sepBox.localToGlobal(Offset.zero).dy;
+      if (isChatRenderBoxActivelyLaidOut(sepBox)) {
+        final sepTopY = sepBox!.localToGlobal(Offset.zero).dy;
         isAtOrAboveSticky = sepTopY <= stickyTopY + 0.5;
-      } else if (mountedRefIdx != null) {
-        isAtOrAboveSticky = span.oldestIdx > mountedRefIdx;
       } else {
-        isAtOrAboveSticky = false;
+        final oldestItemKey = _messageKeys[_feedItems[span.oldestIdx].id];
+        final oldestItemBox =
+            oldestItemKey?.currentContext?.findRenderObject() as RenderBox?;
+        if (isChatRenderBoxActivelyLaidOut(oldestItemBox)) {
+          final itemTopY = oldestItemBox!.localToGlobal(Offset.zero).dy;
+          isAtOrAboveSticky = itemTopY <= stickyTopY + 0.5;
+        } else if (maxActiveIdx != null && minActiveIdx != null) {
+          if (span.oldestIdx > maxActiveIdx) {
+            isAtOrAboveSticky = true;
+          } else if (span.oldestIdx < minActiveIdx) {
+            isAtOrAboveSticky = false;
+          } else {
+            isAtOrAboveSticky = false;
+            for (int i = span.oldestIdx; i >= minActiveIdx; i--) {
+              final k = _messageKeys[_feedItems[i].id];
+              final b = k?.currentContext?.findRenderObject() as RenderBox?;
+              if (isChatRenderBoxActivelyLaidOut(b)) {
+                isAtOrAboveSticky =
+                    b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
+                break;
+              }
+            }
+          }
+        } else {
+          isAtOrAboveSticky = false;
+        }
       }
 
       if (isAtOrAboveSticky) {
@@ -2275,10 +2334,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final nextState = StickyDateState(
       day: activeSpan.day,
       label: _formatDateLabel(activeSpan.sampleDt),
-      sameDaySepKey: _dateSeparatorKeys[activeSpan.day],
+      sameDaySepKey:
+          _dateSeparatorKeyForFeedIndex(activeSpan.day, activeSpan.oldestIdx),
       nextDaySepKey: nextNewerSpan != null
-          ? _dateSeparatorKeys[nextNewerSpan.day]
+          ? _dateSeparatorKeyForFeedIndex(
+              nextNewerSpan.day,
+              nextNewerSpan.oldestIdx,
+            )
           : null,
+      hasOlderDay: effectiveSpanIdx < _daySpans.length - 1,
     );
 
     if (_stickyDateStateNotifier.value != nextState) {
@@ -3828,6 +3892,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                               scrollListenable: _scrollController,
                               hiddenBySelectionMode: _isSelectionMode,
                               onTapDay: _openCalendarForDate,
+                              onNeedsSync: _scheduleStickyDateUpdate,
                             );
                           },
                         ),
@@ -4086,8 +4151,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      final sepKey =
-          _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
+      final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
         InlineChatDateHeader(
           key: sepKey,
@@ -4095,6 +4159,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           scrollListenable: _scrollController,
           stickySlotKey: _stickyDateSlotKey,
           stickyStateListenable: _stickyDateStateNotifier,
+          onNeedsSync: _scheduleStickyDateUpdate,
           child: DateSeparator(
             key: ValueKey<DateTime>(currentDate),
             dateLabel: _formatDateLabel(currentDt),
@@ -4246,8 +4311,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final items = <Widget>[];
     if (currentDate != prevDate) {
-      final sepKey =
-          _dateSeparatorKeys.putIfAbsent(currentDate, () => GlobalKey());
+      final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
         InlineChatDateHeader(
           key: sepKey,
@@ -4255,6 +4319,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           scrollListenable: _scrollController,
           stickySlotKey: _stickyDateSlotKey,
           stickyStateListenable: _stickyDateStateNotifier,
+          onNeedsSync: _scheduleStickyDateUpdate,
           child: DateSeparator(
             key: ValueKey<DateTime>(currentDate),
             dateLabel: _formatDateLabel(currentDt),
