@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'unread_separator.dart' show isChatRenderBoxActivelyLaidOut;
 
 /// Telegram-style scroll navigator for variable-height reverse/forward chat lists.
 ///
@@ -41,14 +42,16 @@ class ChatScrollNavigator {
       }
     }
 
-    // Fast path: Target widget is already mounted in the viewport or cacheExtent.
+    // Fast path: Target widget is already actively laid out in the viewport or cacheExtent.
     final initialCtx = resolveTargetKey()?.currentContext;
     if (initialCtx != null && initialCtx.mounted) {
       final ro = initialCtx.findRenderObject();
-      final viewport = ro != null ? RenderAbstractViewport.maybeOf(ro) : null;
-      if (ro != null && viewport != null) {
+      final box = ro is RenderBox ? ro : null;
+      final viewport =
+          isChatRenderBoxActivelyLaidOut(box) ? RenderAbstractViewport.maybeOf(box!) : null;
+      if (box != null && viewport != null) {
         final desiredOffset = viewport
-            .getOffsetToReveal(ro, alignment)
+            .getOffsetToReveal(box, alignment)
             .offset
             .clamp(
               scrollController.position.minScrollExtent,
@@ -104,7 +107,10 @@ class ChatScrollNavigator {
 
       final targetCtx = resolveTargetKey()?.currentContext;
       if (targetCtx != null && targetCtx.mounted) {
-        break;
+        final targetRo = targetCtx.findRenderObject();
+        if (targetRo is RenderBox && isChatRenderBoxActivelyLaidOut(targetRo)) {
+          break;
+        }
       }
 
       // Collect all currently mounted item anchors in the viewport/cacheExtent
@@ -116,7 +122,7 @@ class ChatScrollNavigator {
         final ctx = key?.currentContext;
         if (ctx == null || !ctx.mounted) continue;
         final ro = ctx.findRenderObject();
-        if (ro is! RenderBox || !ro.attached || !ro.hasSize) continue;
+        if (ro is! RenderBox || !isChatRenderBoxActivelyLaidOut(ro)) continue;
         viewport ??= RenderAbstractViewport.maybeOf(ro);
         if (viewport == null) continue;
 

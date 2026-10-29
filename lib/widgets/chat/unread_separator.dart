@@ -158,6 +158,24 @@ class DateSeparator extends StatelessWidget {
   }
 }
 
+/// Проверяет, что [box] прикреплён к дереву, имеет размер и находится
+/// в активном окне отрисовки SliverList (а не в `_keepAliveBucket`
+/// из-за `AutomaticKeepAliveClientMixin`, например у видеосообщений).
+bool isChatRenderBoxActivelyLaidOut(RenderBox? box) {
+  if (box == null || !box.attached || !box.hasSize) return false;
+  RenderObject? current = box;
+  while (current != null) {
+    final pd = current.parentData;
+    if (pd is SliverMultiBoxAdaptorParentData) {
+      if (pd.keptAlive) return false;
+      return pd.layoutOffset != null;
+    }
+    final parent = current.parent;
+    current = parent is RenderObject ? parent : null;
+  }
+  return true;
+}
+
 /// Состояние верхней закреплённой (sticky) плашки с датой в чате.
 @immutable
 class StickyDateState {
@@ -165,12 +183,14 @@ class StickyDateState {
   final String label;
   final GlobalKey? sameDaySepKey;
   final GlobalKey? nextDaySepKey;
+  final bool hasOlderDay;
 
   const StickyDateState({
     required this.day,
     required this.label,
     this.sameDaySepKey,
     this.nextDaySepKey,
+    this.hasOlderDay = false,
   });
 
   static const StickyDateState empty = StickyDateState(day: null, label: '');
@@ -182,11 +202,18 @@ class StickyDateState {
         other.day == day &&
         other.label == label &&
         other.sameDaySepKey == sameDaySepKey &&
-        other.nextDaySepKey == nextDaySepKey;
+        other.nextDaySepKey == nextDaySepKey &&
+        other.hasOlderDay == hasOlderDay;
   }
 
   @override
-  int get hashCode => Object.hash(day, label, sameDaySepKey, nextDaySepKey);
+  int get hashCode => Object.hash(
+        day,
+        label,
+        sameDaySepKey,
+        nextDaySepKey,
+        hasOlderDay,
+      );
 }
 
 /// Обёртка для инлайновой плашки даты внутри списка сообщений.
@@ -199,6 +226,7 @@ class InlineChatDateHeader extends SingleChildRenderObjectWidget {
   final Listenable scrollListenable;
   final GlobalKey stickySlotKey;
   final ValueListenable<StickyDateState> stickyStateListenable;
+  final VoidCallback? onNeedsSync;
 
   const InlineChatDateHeader({
     Key? key,
@@ -206,6 +234,7 @@ class InlineChatDateHeader extends SingleChildRenderObjectWidget {
     required this.scrollListenable,
     required this.stickySlotKey,
     required this.stickyStateListenable,
+    this.onNeedsSync,
     required Widget child,
   }) : super(key: key, child: child);
 
@@ -216,6 +245,7 @@ class InlineChatDateHeader extends SingleChildRenderObjectWidget {
       scrollListenable: scrollListenable,
       stickySlotKey: stickySlotKey,
       stickyStateListenable: stickyStateListenable,
+      onNeedsSync: onNeedsSync,
     );
   }
 
@@ -228,7 +258,8 @@ class InlineChatDateHeader extends SingleChildRenderObjectWidget {
       ..day = day
       ..scrollListenable = scrollListenable
       ..stickySlotKey = stickySlotKey
-      ..stickyStateListenable = stickyStateListenable;
+      ..stickyStateListenable = stickyStateListenable
+      ..onNeedsSync = onNeedsSync;
   }
 }
 
@@ -237,16 +268,19 @@ class RenderInlineChatDateHeader extends RenderProxyBox {
   Listenable _scrollListenable;
   GlobalKey _stickySlotKey;
   ValueListenable<StickyDateState> _stickyStateListenable;
+  VoidCallback? _onNeedsSync;
 
   RenderInlineChatDateHeader({
     required DateTime day,
     required Listenable scrollListenable,
     required GlobalKey stickySlotKey,
     required ValueListenable<StickyDateState> stickyStateListenable,
+    VoidCallback? onNeedsSync,
   })  : _day = day,
         _scrollListenable = scrollListenable,
         _stickySlotKey = stickySlotKey,
-        _stickyStateListenable = stickyStateListenable;
+        _stickyStateListenable = stickyStateListenable,
+        _onNeedsSync = onNeedsSync;
 
   set day(DateTime value) {
     if (_day == value) return;
@@ -278,6 +312,10 @@ class RenderInlineChatDateHeader extends RenderProxyBox {
     _stickyStateListenable = value;
   }
 
+  set onNeedsSync(VoidCallback? value) {
+    _onNeedsSync = value;
+  }
+
   @override
   void attach(PipelineOwner owner) {
     super.attach(owner);
@@ -294,7 +332,7 @@ class RenderInlineChatDateHeader extends RenderProxyBox {
 
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
-    if (child == null || !hasSize) return false;
+    if (child == null || !isChatRenderBoxActivelyLaidOut(this)) return false;
     final stickyBox =
         _stickySlotKey.currentContext?.findRenderObject() as RenderBox?;
     if (stickyBox != null && stickyBox.attached && stickyBox.hasSize) {
@@ -309,7 +347,7 @@ class RenderInlineChatDateHeader extends RenderProxyBox {
 
   @override
   void paint(PaintingContext context, Offset offset) {
-    if (child == null) return;
+    if (child == null || !isChatRenderBoxActivelyLaidOut(this)) return;
     final stickyBox =
         _stickySlotKey.currentContext?.findRenderObject() as RenderBox?;
     if (stickyBox != null && stickyBox.attached && stickyBox.hasSize) {
@@ -321,6 +359,7 @@ class RenderInlineChatDateHeader extends RenderProxyBox {
           // Плашка уже примагничена к верху чата (или вытеснена более новой датой)
           return;
         }
+        _onNeedsSync?.call();
         // Переходный кадр в момент пересечения границы: фиксируем ровно на stickyTopY
         context.paintChild(child!, offset + Offset(0, stickyTopY - myTopY));
         return;
@@ -339,6 +378,7 @@ class FloatingChatDateHeader extends StatelessWidget {
   final Listenable scrollListenable;
   final bool hiddenBySelectionMode;
   final ValueChanged<DateTime>? onTapDay;
+  final VoidCallback? onNeedsSync;
 
   const FloatingChatDateHeader({
     Key? key,
@@ -346,6 +386,7 @@ class FloatingChatDateHeader extends StatelessWidget {
     required this.scrollListenable,
     this.hiddenBySelectionMode = false,
     this.onTapDay,
+    this.onNeedsSync,
   }) : super(key: key);
 
   @override
@@ -355,6 +396,7 @@ class FloatingChatDateHeader extends StatelessWidget {
       state: state,
       scrollListenable: scrollListenable,
       hiddenBySelectionMode: hiddenBySelectionMode,
+      onNeedsSync: onNeedsSync,
       child: DateSeparator(
         dateLabel: state.label,
         onTap: (day != null && onTapDay != null) ? () => onTapDay!(day) : null,
@@ -367,12 +409,14 @@ class _StickyChatDateRenderWidget extends SingleChildRenderObjectWidget {
   final StickyDateState state;
   final Listenable scrollListenable;
   final bool hiddenBySelectionMode;
+  final VoidCallback? onNeedsSync;
 
   const _StickyChatDateRenderWidget({
     Key? key,
     required this.state,
     required this.scrollListenable,
     required this.hiddenBySelectionMode,
+    this.onNeedsSync,
     required Widget child,
   }) : super(key: key, child: child);
 
@@ -382,6 +426,7 @@ class _StickyChatDateRenderWidget extends SingleChildRenderObjectWidget {
       state: state,
       scrollListenable: scrollListenable,
       hiddenBySelectionMode: hiddenBySelectionMode,
+      onNeedsSync: onNeedsSync,
     );
   }
 
@@ -393,7 +438,8 @@ class _StickyChatDateRenderWidget extends SingleChildRenderObjectWidget {
     renderObject
       ..state = state
       ..scrollListenable = scrollListenable
-      ..hiddenBySelectionMode = hiddenBySelectionMode;
+      ..hiddenBySelectionMode = hiddenBySelectionMode
+      ..onNeedsSync = onNeedsSync;
   }
 }
 
@@ -401,14 +447,17 @@ class _RenderStickyChatDateHeader extends RenderProxyBox {
   StickyDateState _state;
   Listenable _scrollListenable;
   bool _hiddenBySelectionMode;
+  VoidCallback? _onNeedsSync;
 
   _RenderStickyChatDateHeader({
     required StickyDateState state,
     required Listenable scrollListenable,
     required bool hiddenBySelectionMode,
+    VoidCallback? onNeedsSync,
   })  : _state = state,
         _scrollListenable = scrollListenable,
-        _hiddenBySelectionMode = hiddenBySelectionMode;
+        _hiddenBySelectionMode = hiddenBySelectionMode,
+        _onNeedsSync = onNeedsSync;
 
   set state(StickyDateState value) {
     if (_state == value) return;
@@ -429,6 +478,10 @@ class _RenderStickyChatDateHeader extends RenderProxyBox {
     if (_hiddenBySelectionMode == value) return;
     _hiddenBySelectionMode = value;
     markNeedsPaint();
+  }
+
+  set onNeedsSync(VoidCallback? value) {
+    _onNeedsSync = value;
   }
 
   @override
@@ -455,9 +508,12 @@ class _RenderStickyChatDateHeader extends RenderProxyBox {
     // она рисует себя сама в потоке сообщений — верхнюю плашку рисовать не нужно.
     final sameDayBox =
         _state.sameDaySepKey?.currentContext?.findRenderObject() as RenderBox?;
-    if (sameDayBox != null && sameDayBox.attached && sameDayBox.hasSize) {
-      final sameDayTopY = sameDayBox.localToGlobal(Offset.zero).dy;
+    if (isChatRenderBoxActivelyLaidOut(sameDayBox)) {
+      final sameDayTopY = sameDayBox!.localToGlobal(Offset.zero).dy;
       if (sameDayTopY > stickyTopY + 0.5) {
+        if (_state.hasOlderDay) {
+          _onNeedsSync?.call();
+        }
         return null;
       }
     }
@@ -466,10 +522,11 @@ class _RenderStickyChatDateHeader extends RenderProxyBox {
     // плавно сдвигаем текущую верхнюю плашку вверх.
     final nextDayBox =
         _state.nextDaySepKey?.currentContext?.findRenderObject() as RenderBox?;
-    if (nextDayBox != null && nextDayBox.attached && nextDayBox.hasSize) {
-      final nextTopY = nextDayBox.localToGlobal(Offset.zero).dy;
+    if (isChatRenderBoxActivelyLaidOut(nextDayBox)) {
+      final nextTopY = nextDayBox!.localToGlobal(Offset.zero).dy;
       final h = size.height;
       if (nextTopY <= stickyTopY + 0.5) {
+        _onNeedsSync?.call();
         return null;
       }
       if (nextTopY < stickyTopY + h) {
