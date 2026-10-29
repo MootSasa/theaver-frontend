@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "570829623438",
-    "project_id": "theaver-f2656",
-    "storage_bucket": "theaver-f2656.firebasestorage.app"
+    "project_number": "000000000000",
+    "project_id": "theaver-example",
+    "storage_bucket": "theaver-example.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:570829623438:android:41fd973584364a3755f9df",
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
         "android_client_info": {
           "package_name": "app.theaver.messenger"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDOPdJpnxaTONpBeIZBtXPMkmTJ2vC0GuQ"
+          "current_key": "YOUR_GOOGLE_API_KEY_HERE"
         }
       ],
       "services": {

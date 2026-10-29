@@ -93,9 +93,13 @@ jobs:
         run: |
           if [ -n "$GOOGLE_SERVICES" ]; then
             echo "$GOOGLE_SERVICES" > android/app/google-services.json
+          elif [ ! -f android/app/google-services.json ] && [ -f android/app/google-services.json.example ]; then
+            cp android/app/google-services.json.example android/app/google-services.json
           fi
           if [ -n "$AGCONNECT_SERVICES" ]; then
             echo "$AGCONNECT_SERVICES" > android/app/agconnect-services.json
+          elif [ ! -f android/app/agconnect-services.json ] && [ -f android/app/agconnect-services.json.example ]; then
+            cp android/app/agconnect-services.json.example android/app/agconnect-services.json
           fi
           if [ -n "$DEBUG_KEYSTORE_B64" ]; then
             mkdir -p ~/.android

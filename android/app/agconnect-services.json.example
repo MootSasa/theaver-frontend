@@ -1,0 +1,18 @@
+{
+  "client": {
+    "cp_id": "00000000000000000",
+    "product_id": "000000000000000000",
+    "client_id": "0000000000000000000",
+    "client_secret": "YOUR_HUAWEI_CLIENT_SECRET_HERE",
+    "project_id": "000000000000000000",
+    "app_id": "000000000",
+    "api_key": "YOUR_HUAWEI_API_KEY_HERE",
+    "package_name": "app.theaver.messenger"
+  },
+  "app_info": {
+    "app_id": "000000000",
+    "package_name": "app.theaver.messenger"
+  },
+  "region": "DE",
+  "configuration_version": "3.0"
+}

@@ -111,6 +111,7 @@ class AuthService {
   static Future<Map<String, dynamic>> login({
     required String usernameOrEmail,
     required String password,
+    String? twoFactorPassword,
   }) async {
     try {
       // Get device info for session tracking
@@ -118,6 +119,20 @@ class AuthService {
       final deviceInfo = await accountManager.getCurrentDeviceInfo();
       final deviceId = accountManager.currentDeviceId ??
           'device_${DateTime.now().millisecondsSinceEpoch}';
+
+      final bodyMap = <String, dynamic>{
+        'username_or_email': usernameOrEmail,
+        'password': password,
+        'device_id': deviceId,
+        'device_name': deviceInfo.deviceName,
+        'device_type': deviceInfo.deviceType.name,
+        'os_name': deviceInfo.os,
+        'os_version': deviceInfo.osVersion,
+        'app_version': '1.0.0',
+      };
+      if (twoFactorPassword != null && twoFactorPassword.isNotEmpty) {
+        bodyMap['two_factor_password'] = twoFactorPassword;
+      }
 
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/login'),
@@ -130,16 +145,7 @@ class AuthService {
           'X-OS-Version': deviceInfo.osVersion,
           'X-App-Version': '1.0.0',
         },
-        body: jsonEncode({
-          'username_or_email': usernameOrEmail,
-          'password': password,
-          'device_id': deviceId,
-          'device_name': deviceInfo.deviceName,
-          'device_type': deviceInfo.deviceType.name,
-          'os_name': deviceInfo.os,
-          'os_version': deviceInfo.osVersion,
-          'app_version': '1.0.0',
-        }),
+        body: jsonEncode(bodyMap),
       );
  
   	if (response.statusCode == 200) {
@@ -175,6 +181,8 @@ class AuthService {
   	} else {
   		return {
   		'success': false,
+  		'requires_2fa': data['requires_2fa'] == true,
+  		'temp_2fa_token': data['temp_2fa_token'],
   		'message': data['message'] ?? 'Login failed',
   		};
   	}
@@ -183,7 +191,11 @@ class AuthService {
   	final data = jsonDecode(response.body);
   	return {
   		'success': false,
-  		'message': _getErrorMessage(response.statusCode, data['message']),
+  		'requires_2fa': data['requires_2fa'] == true,
+  		'temp_2fa_token': data['temp_2fa_token'],
+  		'message': data['requires_2fa'] == true
+  		    ? (data['message'] ?? 'Two-factor authentication password required')
+  		    : _getErrorMessage(response.statusCode, data['message']),
   	};
   	}
   } catch (e) {
