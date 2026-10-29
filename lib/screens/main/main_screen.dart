@@ -27,6 +27,7 @@ import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/cache_service.dart';
+import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
@@ -696,8 +697,11 @@ class _MainScreenState extends State<MainScreen>
   /// Handle real-time avatar updates for current user or contacts
   void _onUserAvatarUpdated(WebSocketEvent event) {
     final userId = event.data['user_id']?.toString();
-    final avatarUrl = event.data['avatar_url']?.toString();
+    final rawAvatarUrl = event.data['avatar_url']?.toString();
     if (userId == null) return;
+    final avatarUrl = (rawAvatarUrl != null && rawAvatarUrl.isNotEmpty)
+        ? (getValidAvatarUrl(rawAvatarUrl) ?? rawAvatarUrl)
+        : rawAvatarUrl;
 
     debugPrint('[MainScreen] user_avatar_updated for user $userId: $avatarUrl');
 
@@ -714,6 +718,8 @@ class _MainScreenState extends State<MainScreen>
         avatarUrl: avatarUrl,
       );
     }
+
+    ProfileInstantCache.instance.updateUserAvatar(userId, avatarUrl);
 
     if (mounted) {
       setState(() {

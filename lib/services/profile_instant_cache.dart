@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
+import '../utils/image_utils.dart';
 import '../widgets/profile/profile_content_tabs.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
@@ -122,6 +123,7 @@ class CachedUserProfileSnapshot {
       };
 
   factory CachedUserProfileSnapshot.fromJson(Map<String, dynamic> json) {
+    final rawAvatar = json['avatarUrl']?.toString();
     return CachedUserProfileSnapshot(
       userId: (json['userId'] ?? '').toString(),
       name: (json['name'] ?? '').toString(),
@@ -133,10 +135,13 @@ class CachedUserProfileSnapshot {
       birthday: json['birthday'] != null
           ? DateTime.tryParse(json['birthday'].toString())
           : null,
-      avatarUrl: json['avatarUrl']?.toString(),
+      avatarUrl: rawAvatar != null && rawAvatar.isNotEmpty
+          ? (getValidAvatarUrl(rawAvatar) ?? rawAvatar)
+          : rawAvatar,
       avatarUrls: (json['avatarUrls'] as List?)
               ?.map((e) => e.toString())
               .where((s) => s.isNotEmpty)
+              .map((s) => getValidAvatarUrl(s) ?? s)
               .toList() ??
           const [],
       avatarIds: (json['avatarIds'] as List?)
@@ -473,6 +478,67 @@ class ProfileInstantCache {
     _persistGroupSnapshot(snapshot);
   }
 
+  /// Мгновенно обновляет аватар пользователя в in-memory и persistent кэше профилей и групп.
+  void updateUserAvatar(String userId, String? avatarUrl) {
+    if (userId.isEmpty) return;
+    final normalized = (avatarUrl != null && avatarUrl.isNotEmpty)
+        ? (getValidAvatarUrl(avatarUrl) ?? avatarUrl)
+        : '';
+
+    final existing = _userSnapshots[userId];
+    if (existing != null) {
+      final updatedUrls = <String>[
+        if (normalized.isNotEmpty) normalized,
+        ...existing.avatarUrls.where((u) => u.isNotEmpty && u != normalized),
+      ];
+      final updated = existing.copyWith(
+        avatarUrl: normalized,
+        avatarUrls: normalized.isEmpty ? const [] : updatedUrls,
+      );
+      _userSnapshots[userId] = updated;
+      _persistUserSnapshot(updated);
+    }
+
+    for (final entry in _groupSnapshots.entries.toList()) {
+      final snap = entry.value;
+      bool changed = false;
+      final updatedMembers = snap.members.map((m) {
+        if (m.userId == userId && m.avatarUrl != normalized) {
+          changed = true;
+          return ProfileMemberItem(
+            userId: m.userId,
+            name: m.name,
+            surname: m.surname,
+            username: m.username,
+            avatarUrl: normalized.isEmpty ? null : normalized,
+            role: m.role,
+            isOnline: m.isOnline,
+            lastSeen: m.lastSeen,
+          );
+        }
+        return m;
+      }).toList();
+      if (changed) {
+        final updatedGroup = CachedGroupProfileSnapshot(
+          chatId: snap.chatId,
+          name: snap.name,
+          description: snap.description,
+          inviteLink: snap.inviteLink,
+          isPublic: snap.isPublic,
+          historyForNew: snap.historyForNew,
+          slowModeInterval: snap.slowModeInterval,
+          memberCount: snap.memberCount,
+          myRole: snap.myRole,
+          avatarUrl: snap.avatarUrl,
+          members: updatedMembers,
+          isMuted: snap.isMuted,
+        );
+        _groupSnapshots[entry.key] = updatedGroup;
+        _persistGroupSnapshot(updatedGroup);
+      }
+    }
+  }
+
   void putSharedContent(String chatId, CachedSharedContentSnapshot content) {
     if (chatId.isEmpty) return;
     _sharedContentSnapshots[chatId] = content;
@@ -533,7 +599,10 @@ class ProfileInstantCache {
         if (user['avatars'] is List) {
           for (final a in (user['avatars'] as List)) {
             if (a is Map) {
-              final u = a['avatar_url']?.toString() ?? '';
+              final rawU = a['avatar_url']?.toString() ?? '';
+              final u = rawU.isNotEmpty
+                  ? (getValidAvatarUrl(rawU) ?? rawU)
+                  : '';
               if (u.isNotEmpty) serverUrls.add(u);
               final idVal = a['id'];
               if (idVal is num) serverIds.add(idVal.toInt());
@@ -547,9 +616,13 @@ class ProfileInstantCache {
         for (final s in serverUrls) {
           if (s.isNotEmpty && !combined.contains(s)) combined.add(s);
         }
+        final rawSrvAvatar = user['avatar_url']?.toString();
+        final normalizedSrvAvatar = (rawSrvAvatar != null && rawSrvAvatar.isNotEmpty)
+            ? (getValidAvatarUrl(rawSrvAvatar) ?? rawSrvAvatar)
+            : acc.avatarUrl;
         final primaryAvatar = localHistory.isNotEmpty
             ? localHistory.first
-            : (user['avatar_url']?.toString() ?? acc.avatarUrl);
+            : normalizedSrvAvatar;
         if (primaryAvatar != null &&
             primaryAvatar.isNotEmpty &&
             !combined.contains(primaryAvatar)) {
@@ -648,14 +721,20 @@ class ProfileInstantCache {
         if (u['avatars'] is List) {
           for (final a in (u['avatars'] as List)) {
             if (a is Map) {
-              final urlStr = a['avatar_url']?.toString() ?? '';
+              final rawStr = a['avatar_url']?.toString() ?? '';
+              final urlStr = rawStr.isNotEmpty
+                  ? (getValidAvatarUrl(rawStr) ?? rawStr)
+                  : '';
               if (urlStr.isNotEmpty && !urls.contains(urlStr)) {
                 urls.add(urlStr);
               }
             }
           }
         }
-        final srvAvatar = u['avatar_url']?.toString();
+        final rawSrvAvatar = u['avatar_url']?.toString();
+        final srvAvatar = (rawSrvAvatar != null && rawSrvAvatar.isNotEmpty)
+            ? (getValidAvatarUrl(rawSrvAvatar) ?? rawSrvAvatar)
+            : null;
         if (srvAvatar != null &&
             srvAvatar.isNotEmpty &&
             !urls.contains(srvAvatar)) {

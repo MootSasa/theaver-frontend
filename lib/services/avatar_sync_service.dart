@@ -198,19 +198,21 @@ class AvatarSyncService extends ChangeNotifier {
             pendingList.removeAt(0);
             await prefs.setStringList(_pendingKey(userId), pendingList);
 
+            final normalizedRemoteUrl =
+                getValidAvatarUrl(remoteAvatarUrl) ?? remoteAvatarUrl;
+
             // Кэшируем байты в DefaultCacheManager, чтобы CachedNetworkImageProvider
             // мог мгновенно отображать аватарку оффлайн
             try {
               final bytes = await pendingFile.readAsBytes();
               await DefaultCacheManager().putFile(
-                remoteAvatarUrl,
+                normalizedRemoteUrl,
                 bytes,
                 fileExtension: 'jpg',
               );
-              final validRemote = getValidAvatarUrl(remoteAvatarUrl);
-              if (validRemote != null && validRemote != remoteAvatarUrl) {
+              if (normalizedRemoteUrl != remoteAvatarUrl) {
                 await DefaultCacheManager().putFile(
-                  validRemote,
+                  remoteAvatarUrl,
                   bytes,
                   fileExtension: 'jpg',
                 );
@@ -223,7 +225,7 @@ class AvatarSyncService extends ChangeNotifier {
             final historyList = prefs.getStringList(_historyKey(userId)) ?? [];
             final idx = historyList.indexOf(pendingPath);
             if (idx != -1) {
-              historyList[idx] = remoteAvatarUrl;
+              historyList[idx] = normalizedRemoteUrl;
               await prefs.setStringList(_historyKey(userId), historyList);
             }
 
@@ -232,12 +234,12 @@ class AvatarSyncService extends ChangeNotifier {
             if (currentAcc != null && (currentAcc.avatarUrl == pendingPath || pendingList.isEmpty)) {
               await _accountManager.updateAccountProfile(
                 userId,
-                avatarUrl: remoteAvatarUrl,
+                avatarUrl: normalizedRemoteUrl,
                 localAvatarPath: pendingPath,
               );
             }
 
-            debugPrint('[AvatarSyncService] Successfully synced queued avatar for userId=$userId -> $remoteAvatarUrl');
+            debugPrint('[AvatarSyncService] Successfully synced queued avatar for userId=$userId -> $normalizedRemoteUrl');
             notifyListeners();
           } else {
             break;

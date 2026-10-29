@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart'
     show RenderAbstractViewport, ScrollDirection;
 import '../../utils/haptic_utils.dart';
+import '../../utils/image_utils.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -775,13 +776,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onUserAppearanceUpdated: _onUserAppearanceUpdated,
       onUserAvatarUpdated: (event) {
         final userId = event.data['user_id']?.toString();
-        final avatarUrl = event.data['avatar_url']?.toString();
-        if ((userId == widget.otherUserId || userId == _otherUserId) &&
-            mounted) {
+        final rawAvatarUrl = event.data['avatar_url']?.toString();
+        if (userId == null || !mounted) return;
+        final avatarUrl = (rawAvatarUrl != null && rawAvatarUrl.isNotEmpty)
+            ? (getValidAvatarUrl(rawAvatarUrl) ?? rawAvatarUrl)
+            : rawAvatarUrl;
+        ProfileInstantCache.instance.updateUserAvatar(userId, avatarUrl);
+        if (userId == widget.otherUserId || userId == _otherUserId) {
           PaintingBinding.instance.imageCache.clear();
           PaintingBinding.instance.imageCache.clearLiveImages();
           setState(() {
             _chatAvatar = avatarUrl;
+            for (int i = 0; i < _messages.length; i++) {
+              if (_messages[i].senderId == userId) {
+                _messages[i] =
+                    _messages[i].copyWith(senderAvatarUrl: avatarUrl);
+              }
+            }
           });
         }
       },

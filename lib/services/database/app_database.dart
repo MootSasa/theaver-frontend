@@ -556,6 +556,10 @@ class AppDatabase extends _$AppDatabase {
   /// Обновить аватар пользователя в чатах и сообщениях
   Future<void> updateUserAvatarInChats(String userId, String? avatarUrl) async {
     await ensureInitialized();
+    await (update(chats)
+          ..where((t) =>
+              t.chatType.equals('private') & t.otherUserId.equals(userId)))
+        .write(ChatsCompanion(avatarUrl: Value(avatarUrl)));
     await (update(messages)..where((t) => t.senderId.equals(userId)))
         .write(MessagesCompanion(senderAvatarUrl: Value(avatarUrl)));
   }
