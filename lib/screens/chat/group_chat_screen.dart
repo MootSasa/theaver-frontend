@@ -843,6 +843,28 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onUserStatus: _onUserStatusUpdate,
       onUnreadCountUpdated: _onUnreadCountUpdated,
       onEmojiInteraction: _onEmojiInteraction,
+      onUserAvatarUpdated: (event) {
+        final userId = event.data['user_id']?.toString();
+        final rawAvatarUrl = event.data['avatar_url']?.toString();
+        if (userId == null || !mounted) return;
+        final avatarUrl = (rawAvatarUrl != null && rawAvatarUrl.isNotEmpty)
+            ? (getValidAvatarUrl(rawAvatarUrl) ?? rawAvatarUrl)
+            : rawAvatarUrl;
+        ProfileInstantCache.instance.updateUserAvatar(userId, avatarUrl);
+        bool updatedAny = false;
+        setState(() {
+          for (int i = 0; i < _messages.length; i++) {
+            if (_messages[i].senderId == userId) {
+              _messages[i] = _messages[i].copyWith(senderAvatarUrl: avatarUrl);
+              updatedAny = true;
+            }
+          }
+        });
+        if (updatedAny) {
+          PaintingBinding.instance.imageCache.clear();
+          PaintingBinding.instance.imageCache.clearLiveImages();
+        }
+      },
       onReconnect: _triggerSilentSync,
     );
   }

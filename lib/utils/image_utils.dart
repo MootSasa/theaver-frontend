@@ -21,6 +21,20 @@ String? getValidAvatarUrl(String? url) {
   } else if (url.contains('miptgram.ru')) {
     url = url.replaceAll('miptgram.ru', 'theaver.app');
   }
+
+  // Rewrite internal/local MinIO URLs (localhost:9000 / 127.0.0.1:9000 / minio:9000) to public storageUrl
+  if (url.startsWith('http://localhost:9000') ||
+      url.startsWith('http://127.0.0.1:9000') ||
+      url.startsWith('http://minio:9000') ||
+      url.startsWith('https://localhost:9000') ||
+      url.startsWith('https://127.0.0.1:9000') ||
+      url.startsWith('https://minio:9000')) {
+    final base = AppConfig.storageUrl.replaceAll(RegExp(r'/+$'), '');
+    final parsed = Uri.tryParse(url);
+    if (parsed != null) {
+      url = '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
+    }
+  }
   
   // Local file path or file:// URI
   if (!kIsWeb && url.startsWith('file://')) {
@@ -34,8 +48,10 @@ String? getValidAvatarUrl(String? url) {
       final file = File(url);
       if (file.existsSync()) return url;
     }
-    // Relative URL on backend (e.g. /avatars/xyz.jpg or /api/...)
-    final base = AppConfig.baseUrl;
+    // Relative URL on storage or backend (e.g. /avatars/xyz.jpg or /api/...)
+    final base = url.startsWith('/avatars/')
+        ? AppConfig.storageUrl
+        : AppConfig.baseUrl;
     final cleanBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
     return '$cleanBase$url';
   }
