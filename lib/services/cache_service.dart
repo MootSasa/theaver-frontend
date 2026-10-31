@@ -155,7 +155,7 @@ class CacheService {
 
     try {
       final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(p.join(docDir.path, 'miptgram_media'));
+      final legacyMediaDir = Directory(p.join(docDir.path, 'theaver_media'));
       if (await legacyMediaDir.exists()) {
         addUniqueDir(legacyMediaDir);
       }
@@ -492,7 +492,7 @@ class CacheService {
     if (kIsWeb) return;
     try {
       final docDir = await getApplicationDocumentsDirectory();
-      for (final folder in ['avatars', 'wallpapers', 'imported_wallpapers', 'miptgram_media']) {
+      for (final folder in ['avatars', 'wallpapers', 'imported_wallpapers', 'theaver_media']) {
         try {
           final d = Directory(p.join(docDir.path, folder));
           if (await d.exists()) {

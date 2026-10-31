@@ -3,7 +3,7 @@ import 'package:drift/wasm.dart';
 
 QueryExecutor openConnection([String? name]) {
   return LazyDatabase(() async {
-    final dbName = (name != null && name.isNotEmpty) ? name : 'miptgram_db';
+    final dbName = (name != null && name.isNotEmpty) ? name : 'theaver_db';
     final result = await WasmDatabase.open(
       databaseName: dbName,
       sqlite3Uri: Uri.parse('sqlite3.wasm'),

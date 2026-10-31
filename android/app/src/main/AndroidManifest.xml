@@ -79,18 +79,12 @@ android:networkSecurityConfig="@xml/network_security_config">
                 <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/u/"/>
                 <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/join/"/>
                 <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/c/"/>
-                <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/u/"/>
-                <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/join/"/>
-                <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/c/"/>
             </intent-filter>
-            <!-- Deep link: theaver:// and miptgram:// schemes -->
+            <!-- Deep link: theaver:// scheme -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="theaver" android:host="u" android:pathPrefix="/"/>
-                <data android:scheme="theaver" android:host="join" android:pathPrefix="/"/>
-                <data android:scheme="theaver" android:host="c" android:pathPrefix="/"/>
                 <data android:scheme="theaver" android:host="u" android:pathPrefix="/"/>
                 <data android:scheme="theaver" android:host="join" android:pathPrefix="/"/>
                 <data android:scheme="theaver" android:host="c" android:pathPrefix="/"/>

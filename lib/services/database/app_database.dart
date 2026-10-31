@@ -153,8 +153,8 @@ class AppDatabase extends _$AppDatabase {
 
   static QueryExecutor _openConnection(String userId) {
     final dbName = (userId.isNotEmpty && userId != 'default')
-        ? 'miptgram_$userId'
-        : 'miptgram';
+        ? 'theaver_$userId'
+        : 'theaver';
     return impl.openConnection(dbName);
   }
 
@@ -167,8 +167,8 @@ class AppDatabase extends _$AppDatabase {
       } catch (_) {}
     }
     final dbName = (userId.isNotEmpty && userId != 'default')
-        ? 'miptgram_$userId'
-        : 'miptgram';
+        ? 'theaver_$userId'
+        : 'theaver';
     try {
       await impl.deleteDatabaseFile(dbName);
     } catch (_) {}

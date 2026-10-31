@@ -556,7 +556,7 @@ class AuthService {
       username: testUsername,
       displayName: testDisplayName,
       lastLogin: DateTime.now(),
-      email: 'admin@miptgram.local',
+      email: 'admin@theaver.local',
       phone: null,
       name: 'Test',
       surname: 'Admin',

@@ -758,10 +758,8 @@ jobs:
       - name: Deploy to Theaver API & MinIO Storage
         continue-on-error: true
         env:
-          THEAVER_API_URL: ${{ secrets.THEAVER_API_URL || secrets.MIPTGRAM_API_URL }}
-          THEAVER_ADMIN_SECRET: ${{ secrets.THEAVER_ADMIN_SECRET || secrets.MIPTGRAM_ADMIN_SECRET }}
-          MIPTGRAM_API_URL: ${{ secrets.THEAVER_API_URL || secrets.MIPTGRAM_API_URL }}
-          MIPTGRAM_ADMIN_SECRET: ${{ secrets.THEAVER_ADMIN_SECRET || secrets.MIPTGRAM_ADMIN_SECRET }}
+          THEAVER_API_URL: ${{ secrets.THEAVER_API_URL }}
+          THEAVER_ADMIN_SECRET: ${{ secrets.THEAVER_ADMIN_SECRET }}
         run: |
           FORCE_FLAG=""
           if [ "${{ inputs.force_update }}" = "true" ]; then

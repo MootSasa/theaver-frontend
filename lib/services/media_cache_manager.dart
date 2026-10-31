@@ -151,10 +151,10 @@ class MediaCacheManager {
     // Note: Do NOT reset notifiers to 0 so the paused progress state remains displayed
   }
 
-  /// Returns the primary cache directory for media (`getApplicationCacheDirectory() / miptgram_media`)
+  /// Returns the primary cache directory for media (`getApplicationCacheDirectory() / theaver_media`)
   Future<Directory> getMediaCacheDirectory() async {
     final cacheDir = await getApplicationCacheDirectory();
-    final dir = Directory(path.join(cacheDir.path, 'miptgram_media'));
+    final dir = Directory(path.join(cacheDir.path, 'theaver_media'));
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -219,7 +219,7 @@ class MediaCacheManager {
       // 1. Check primary application cache directory
       try {
         final cacheDir = await getApplicationCacheDirectory();
-        final targetPath = path.join(cacheDir.path, 'miptgram_media', fname);
+        final targetPath = path.join(cacheDir.path, 'theaver_media', fname);
         final f = File(targetPath);
         if (await f.exists()) {
           if (await f.length() > 0) {
@@ -235,7 +235,7 @@ class MediaCacheManager {
       // 2. Check legacy documents directory
       try {
         final docDir = await getApplicationDocumentsDirectory();
-        final targetPath = path.join(docDir.path, 'miptgram_media', fname);
+        final targetPath = path.join(docDir.path, 'theaver_media', fname);
         final f = File(targetPath);
         if (await f.exists()) {
           if (await f.length() > 0) {
@@ -264,7 +264,7 @@ class MediaCacheManager {
       for (final fname in filenamesToCheck) {
         try {
           final dir = await dirGetter();
-          final tempPath = path.join(dir.path, 'miptgram_media', '$fname.tmp');
+          final tempPath = path.join(dir.path, 'theaver_media', '$fname.tmp');
           final tempFile = File(tempPath);
           if (await tempFile.exists()) {
             final len = await tempFile.length();
@@ -307,7 +307,7 @@ class MediaCacheManager {
     if (kIsWeb) return;
     try {
       final cacheDir = await getApplicationCacheDirectory();
-      final mediaCacheDir = Directory(path.join(cacheDir.path, 'miptgram_media'));
+      final mediaCacheDir = Directory(path.join(cacheDir.path, 'theaver_media'));
       if (await mediaCacheDir.exists()) {
         await mediaCacheDir.delete(recursive: true);
       }
@@ -317,7 +317,7 @@ class MediaCacheManager {
 
     try {
       final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(path.join(docDir.path, 'miptgram_media'));
+      final legacyMediaDir = Directory(path.join(docDir.path, 'theaver_media'));
       if (await legacyMediaDir.exists()) {
         await legacyMediaDir.delete(recursive: true);
       }
@@ -399,12 +399,12 @@ class MediaCacheManager {
     for (final name in filenamesToCheck) {
       try {
         final cacheDir = await getApplicationCacheDirectory();
-        final f1 = File(path.join(cacheDir.path, 'miptgram_media', name));
+        final f1 = File(path.join(cacheDir.path, 'theaver_media', name));
         if (await f1.exists()) {
           freedBytes += await f1.length();
           await f1.delete();
         }
-        final tmp1 = File(path.join(cacheDir.path, 'miptgram_media', '$name.tmp'));
+        final tmp1 = File(path.join(cacheDir.path, 'theaver_media', '$name.tmp'));
         if (await tmp1.exists()) {
           freedBytes += await tmp1.length();
           await tmp1.delete();
@@ -413,12 +413,12 @@ class MediaCacheManager {
 
       try {
         final docDir = await getApplicationDocumentsDirectory();
-        final f2 = File(path.join(docDir.path, 'miptgram_media', name));
+        final f2 = File(path.join(docDir.path, 'theaver_media', name));
         if (await f2.exists()) {
           freedBytes += await f2.length();
           await f2.delete();
         }
-        final tmp2 = File(path.join(docDir.path, 'miptgram_media', '$name.tmp'));
+        final tmp2 = File(path.join(docDir.path, 'theaver_media', '$name.tmp'));
         if (await tmp2.exists()) {
           freedBytes += await tmp2.length();
           await tmp2.delete();
@@ -437,7 +437,7 @@ class MediaCacheManager {
     int total = 0;
     try {
       final cacheDir = await getApplicationCacheDirectory();
-      final mediaCacheDir = Directory(path.join(cacheDir.path, 'miptgram_media'));
+      final mediaCacheDir = Directory(path.join(cacheDir.path, 'theaver_media'));
       if (await mediaCacheDir.exists()) {
         await for (final entity in mediaCacheDir.list(recursive: true)) {
           if (entity is File) {
@@ -449,7 +449,7 @@ class MediaCacheManager {
 
     try {
       final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(path.join(docDir.path, 'miptgram_media'));
+      final legacyMediaDir = Directory(path.join(docDir.path, 'theaver_media'));
       if (await legacyMediaDir.exists()) {
         await for (final entity in legacyMediaDir.list(recursive: true)) {
           if (entity is File) {

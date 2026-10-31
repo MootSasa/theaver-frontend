@@ -38,19 +38,19 @@ class ParsedDeepLink {
 ///   `https://theaver.app/u/{userId}`
 ///   `http://<ip-or-domain>[:port]/u/{userId}`
 ///   `http://<ip-or-domain>[:port]/#/u/{userId}`
-///   `theaver://u/{userId}` or `miptgram://u/{userId}`
+///   `theaver://u/{userId}`
 ///
 /// - Group / Channel Invites:
 ///   `https://theaver.app/join/{inviteCode}`
 ///   `http://<ip-or-domain>[:port]/join/{inviteCode}`
 ///   `http://<ip-or-domain>[:port]/#/join/{inviteCode}`
-///   `theaver://join/{inviteCode}` or `miptgram://join/{inviteCode}`
+///   `theaver://join/{inviteCode}`
 ///
 /// - Channels:
 ///   `https://theaver.app/c/{channelName}`
 ///   `http://<ip-or-domain>[:port]/c/{channelName}`
 ///   `http://<ip-or-domain>[:port]/#/c/{channelName}`
-///   `theaver://c/{channelName}` or `miptgram://c/{channelName}`
+///   `theaver://c/{channelName}`
 class DeepLinkService {
   DeepLinkService._();
   static final DeepLinkService _instance = DeepLinkService._();
@@ -90,8 +90,8 @@ class DeepLinkService {
       } catch (_) {}
     }
 
-    // 2. Check custom scheme: theaver:// or miptgram://
-    if (uri.scheme == 'theaver' || uri.scheme == 'miptgram') {
+    // 2. Check custom scheme: theaver://
+    if (uri.scheme == 'theaver') {
       final host = uri.host.toLowerCase();
       if (host == 'u' || host == 'user') {
         final id = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : uri.queryParameters['id'];
