@@ -3886,6 +3886,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     context: context,
                     chatId: widget.chatId,
                     chatName: displayName,
+                    onMessageSelected: (msgId) => _scrollToMessage(msgId),
                   );
                 },
                 onToggleMute: () {

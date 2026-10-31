@@ -1529,7 +1529,7 @@ class ProfileScreenState extends State<ProfileScreen>
   void _handleSearchInChat() {
     HapticUtils.tap();
     if (widget.onSearchInChat != null) {
-      Navigator.maybePop(context);
+      Navigator.of(context).pop();
       widget.onSearchInChat!();
       return;
     }
@@ -1539,6 +1539,12 @@ class ProfileScreenState extends State<ProfileScreen>
         context: context,
         chatId: cid,
         chatName: _getDisplayName(),
+        onMessageSelected: (msgId) {
+          if (widget.onJumpToMessageId != null) {
+            Navigator.of(context).pop();
+            widget.onJumpToMessageId!(msgId);
+          }
+        },
       );
     }
   }

@@ -783,9 +783,22 @@ class Message {
       sendStatus: (json['send_status'] as num?)?.toInt() ?? 1,
       senderNameColorId: json['sender_name_color_id']?.toString(),
       senderReplyStripStyle: json['sender_reply_strip_style']?.toString(),
-      isForward: json['is_forward'] ?? false,
-      forwardFromId: json['forward_from_id']?.toString(),
-      forwardFromName: json['forward_from_name']?.toString(),
+      isForward: (json['is_forward'] == true) ||
+          (json['is_forwarded'] == true) ||
+          json['forward_from_id'] != null ||
+          json['forwarded_from_user_id'] != null ||
+          json['forwarded_from_chat_id'] != null ||
+          (json['forward_from_name'] != null &&
+              json['forward_from_name'].toString().isNotEmpty) ||
+          (json['forwarded_from_name'] != null &&
+              json['forwarded_from_name'].toString().isNotEmpty),
+      forwardFromId: (json['forward_from_id'] ??
+              json['forwarded_from_user_id'] ??
+              json['forwarded_from_chat_id'])
+          ?.toString(),
+      forwardFromName:
+          (json['forward_from_name'] ?? json['forwarded_from_name'])
+              ?.toString(),
       groupedId: json['grouped_id']?.toString(),
       entities: () {
         final raw = json['entities'];
@@ -1021,6 +1034,10 @@ class Message {
       senderName: drift.Value(senderName),
       senderAvatarUrl: drift.Value(senderAvatarUrl),
       createdAt: drift.Value(createdAt),
+      isForward: drift.Value(isForward),
+      forwardFromId: drift.Value(forwardFromId),
+      forwardFromName: drift.Value(forwardFromName),
+      invertMedia: drift.Value(invertMedia),
       reactions: reactions.isNotEmpty || myReactions.isNotEmpty
           ? drift.Value(jsonEncode({
               'reactions': reactions,
@@ -1559,8 +1576,10 @@ class ChatService {
         return {
           'success': true,
           'events': data['events'] ?? [],
-          'max_usn': data['max_usn'] ?? sinceUsn,
+          'max_usn': data['max_usn'] ?? data['current_usn'] ?? sinceUsn,
+          'current_usn': data['current_usn'] ?? data['max_usn'] ?? sinceUsn,
           'has_more': data['has_more'] ?? false,
+          'too_long': data['too_long'] == true,
         };
       } else {
         return {
@@ -1669,13 +1688,8 @@ class ChatService {
         body['invert_media'] = true;
       }
 
-      // Try WebSocket RPC first for standard messages when connected
-      final canUseWsRpc = WebSocketService().isConnected &&
-          !isQuote &&
-          linkPreviewOptions == null &&
-          !invertMedia &&
-          (groupedId == null || groupedId.isEmpty);
-      if (canUseWsRpc) {
+      // Try WebSocket RPC first when connected
+      if (WebSocketService().isConnected) {
         try {
           final rpcPayload = <String, dynamic>{
             'chat_id': chatId,
@@ -1687,9 +1701,21 @@ class ChatService {
           );
           final rawMsg = rpcResult['message'];
           if (rawMsg is Map) {
-            final parsedMessage = Message.fromJson(
+            var parsedMessage = Message.fromJson(
               Map<String, dynamic>.from(rawMsg),
             );
+            if (isQuote && !parsedMessage.isQuote) {
+              parsedMessage = parsedMessage.copyWith(
+                isQuote: true,
+                quoteText: parsedMessage.quoteText ?? quoteText,
+                quoteOffset: parsedMessage.quoteOffset != 0
+                    ? parsedMessage.quoteOffset
+                    : quoteOffset,
+                quoteLength: parsedMessage.quoteLength != 0
+                    ? parsedMessage.quoteLength
+                    : quoteLength,
+              );
+            }
             return {
               'success': true,
               'message': parsedMessage,

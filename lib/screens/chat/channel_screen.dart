@@ -2171,6 +2171,7 @@ class _ChannelScreenState extends State<ChannelScreen>
             context: context,
             chatId: widget.channelId,
             chatName: displayName,
+            onMessageSelected: (msgId) => _scrollToMessage(msgId),
           );
         },
         onToggleMute: () {

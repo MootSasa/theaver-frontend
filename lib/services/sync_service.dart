@@ -46,12 +46,26 @@ class SyncService {
         return;
       }
 
+      final tooLong = result['too_long'] == true;
       final events = result['events'] as List<dynamic>? ?? [];
-      final maxUsn = result['max_usn'] as int? ?? lastUsn;
+      final maxUsn = (result['max_usn'] as num?)?.toInt() ??
+          (result['current_usn'] as num?)?.toInt() ??
+          lastUsn;
       final hasMore = result['has_more'] as bool? ?? false;
 
+      if (tooLong) {
+        debugPrint(
+            'SyncService: Server returned too_long=true, advancing USN to $maxUsn');
+        await _db.setLastKnownUsn(userId, maxUsn);
+        return;
+      }
+
       for (final event in events) {
-        await _applyEvent(event as Map<String, dynamic>);
+        if (event is Map<String, dynamic>) {
+          await _applyEvent(event);
+        } else if (event is Map) {
+          await _applyEvent(Map<String, dynamic>.from(event));
+        }
       }
 
       // Обновить USN
@@ -72,7 +86,8 @@ class SyncService {
   Future<void> _applyEvent(Map<String, dynamic> event) async {
     final eventType = event['event_type'] as String?;
     final payload = event['payload'] as Map<String, dynamic>? ?? {};
-    final chatId = event['chat_id']?.toString();
+    final chatId =
+        event['chat_id']?.toString() ?? payload['chat_id']?.toString();
 
     switch (eventType) {
       case 'new_message':
@@ -90,6 +105,8 @@ class SyncService {
       case 'message_read':
       case 'unread_count_updated':
         await _applyReadStatus(payload);
+        break;
+      case 'message_listened':
         break;
       case 'message_pinned':
       case 'pin_message':
@@ -117,13 +134,27 @@ class SyncService {
         await _applyNewChat(payload);
         break;
       case 'chat_update':
-        await _applyChatUpdate(payload);
+      case 'chat_updated':
+      case 'chat_pinned':
+        await _applyChatUpdate({
+          if (chatId != null) 'chat_id': chatId,
+          ...payload,
+        });
         break;
       case 'delete_chat':
+      case 'chat_deleted':
         if (chatId != null) {
           await _db.deleteChat(chatId);
           await _db.deleteMessagesForChat(chatId);
         }
+        break;
+      case 'history_cleared':
+        if (chatId != null) {
+          await _db.deleteMessagesForChat(chatId);
+          await _db.refreshChatLastMessageFromDb(chatId);
+        }
+        break;
+      case 'draft_updated':
         break;
       default:
         debugPrint('SyncService: Unknown event type: $eventType');
@@ -131,7 +162,8 @@ class SyncService {
   }
 
   Future<void> _applyNewMessage(Map<String, dynamic> payload) async {
-    final serverId = payload['message_id']?.toString();
+    final serverId =
+        (payload['message_id'] ?? payload['id'])?.toString();
     final chatId = payload['chat_id']?.toString();
     if (serverId == null || chatId == null) return;
 
@@ -223,11 +255,21 @@ class SyncService {
       createdAt: Value(payload['created_at']?.toString() ??
           DateTime.now().toIso8601String()),
       isForward: Value(payload['is_forward'] == true ||
+          payload['is_forwarded'] == true ||
           payload['forward_from_id'] != null ||
+          payload['forwarded_from_user_id'] != null ||
+          payload['forwarded_from_chat_id'] != null ||
           (payload['forward_from_name'] != null &&
-              payload['forward_from_name'].toString().isNotEmpty)),
-      forwardFromId: Value(payload['forward_from_id']?.toString()),
-      forwardFromName: Value(payload['forward_from_name']?.toString()),
+              payload['forward_from_name'].toString().isNotEmpty) ||
+          (payload['forwarded_from_name'] != null &&
+              payload['forwarded_from_name'].toString().isNotEmpty)),
+      forwardFromId: Value((payload['forward_from_id'] ??
+              payload['forwarded_from_user_id'] ??
+              payload['forwarded_from_chat_id'])
+          ?.toString()),
+      forwardFromName: Value(
+          (payload['forward_from_name'] ?? payload['forwarded_from_name'])
+              ?.toString()),
       entities: Value(entitiesStr),
       linkPreviewOptions: Value(linkPreviewOptionsStr),
       mediaPayload: Value(mediaPayloadStr),

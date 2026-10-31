@@ -396,7 +396,7 @@ class SearchService {
     int offset = 0,
   }) async {
     final trimmed = query.trim();
-    if (trimmed.isEmpty) {
+    if (trimmed.isEmpty && type != 'users') {
       return const UnifiedSearchResult();
     }
 
@@ -440,42 +440,12 @@ class SearchService {
   }
 
   /// Searches for users and bots matching the query using `GET /api/search?type=users`.
-  /// When [query] is empty, returns users from existing local private chats as initial suggestions.
+  /// When [query] is empty, queries the server for initial users and merges with local private chat peers.
   static Future<List<SearchResultUser>> searchUsers({
     required String query,
     int limit = 20,
   }) async {
     final trimmed = query.trim();
-    if (trimmed.isEmpty) {
-      try {
-        final localChats = await AppDatabase().getChats();
-        final seen = <String>{};
-        final contacts = <SearchResultUser>[];
-        for (final c in localChats) {
-          if (c.chatType == 'private' &&
-              c.otherUserId != null &&
-              c.otherUserId!.isNotEmpty &&
-              !seen.contains(c.otherUserId)) {
-            seen.add(c.otherUserId!);
-            contacts.add(
-              SearchResultUser(
-                id: c.otherUserId!,
-                name: c.name,
-                email: '',
-                username: '',
-                avatarUrl: c.avatarUrl,
-                chatId: c.chatId,
-                isMyPeer: true,
-              ),
-            );
-          }
-        }
-        return contacts;
-      } catch (_) {
-        return [];
-      }
-    }
-
     final result = await search(query: trimmed, type: 'users', limit: limit);
     final users = <SearchResultUser>[];
     final seenIds = <String>{};
@@ -489,6 +459,30 @@ class SearchService {
       if (p.isUser && seenIds.add(p.id)) {
         users.add(SearchResultUser.fromPeer(p, isMyPeer: false));
       }
+    }
+
+    if (trimmed.isEmpty) {
+      try {
+        final localChats = await AppDatabase().getChats();
+        for (final c in localChats) {
+          if (c.chatType == 'private' &&
+              c.otherUserId != null &&
+              c.otherUserId!.isNotEmpty &&
+              seenIds.add(c.otherUserId!)) {
+            users.add(
+              SearchResultUser(
+                id: c.otherUserId!,
+                name: c.name,
+                email: '',
+                username: '',
+                avatarUrl: c.avatarUrl,
+                chatId: c.chatId,
+                isMyPeer: true,
+              ),
+            );
+          }
+        }
+      } catch (_) {}
     }
     return users;
   }

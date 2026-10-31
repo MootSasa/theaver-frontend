@@ -2510,8 +2510,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       // Find the other participant for private chat
       for (var participant in chat.participants) {
         if (participant.id != _currentUserId) {
+          final unameLower = participant.username.toLowerCase();
+          final dnameLower = participant.displayName.toLowerCase();
           final isBotPeer = participant.isBot ||
-              participant.username.toLowerCase().endsWith('bot');
+              unameLower == 'botmother' ||
+              dnameLower == 'botmother' ||
+              unameLower.endsWith('bot');
+          final isVerifiedPeer =
+              participant.isVerified || chat.isVerified || unameLower == 'botmother';
           setState(() {
             _chatName = participant.displayName.isNotEmpty
                 ? participant.displayName
@@ -2522,7 +2528,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             _isOtherUserOnline = participant.isOnline;
             _otherUserLastSeen = participant.lastSeen;
             _isBot = isBotPeer;
-            _isVerified = participant.isVerified;
+            _isVerified = isVerifiedPeer;
           });
           if (isBotPeer && participant.id.isNotEmpty) {
             unawaited(BotService.getBotInfo(participant.id).then((info) {
@@ -4570,6 +4576,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       context,
       fromChatId: widget.chatId,
       messageIds: messageIds,
+      onForwarded: (targetChatId) {
+        if (targetChatId == widget.chatId) {
+          _triggerSilentSync();
+        }
+      },
     );
   }
 
@@ -5328,13 +5339,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Open search screen for this chat
   void _searchMessages() {
-    Navigator.pushNamed(
-      context,
-      '/search',
-      arguments: {
-        'chatId': widget.chatId,
-        'chatName': _chatName,
-      },
+    ChatActionsHelper.openSearch(
+      context: context,
+      chatId: widget.chatId,
+      chatName: _chatName,
+      onMessageSelected: (msgId) => _scrollToMessage(msgId),
     );
   }
 

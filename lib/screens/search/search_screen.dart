@@ -115,6 +115,8 @@ class _SearchScreenState extends State<SearchScreen> {
     final l10n = context.l10n;
     final isInChatSearch = widget.initialChatId != null;
 
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+
     return Scaffold(
       appBar: AppBar(
         title: TextField(
@@ -124,9 +126,9 @@ class _SearchScreenState extends State<SearchScreen> {
                 ? 'Поиск в чате ${widget.initialChatName ?? ''}...'
                 : l10n.translate('search_hint'),
             border: InputBorder.none,
-            hintStyle: const TextStyle(color: Colors.white70),
+            hintStyle: TextStyle(color: onSurface.withValues(alpha: 0.55)),
           ),
-          style: const TextStyle(color: Colors.white),
+          style: TextStyle(color: onSurface),
           autofocus: true,
         ),
         actions: [

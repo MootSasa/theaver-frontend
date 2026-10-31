@@ -37,6 +37,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'screens/call/voice_call_screen.dart';
 import 'screens/call/video_call_screen.dart';
 import 'screens/chat/user_profile_screen.dart';
+import 'screens/search/search_screen.dart';
 import 'utils/swipe_back_route.dart';
 import 'widgets/chat/floating_video_note_overlay.dart';
 import 'package:fvp/fvp.dart' as fvp;
@@ -250,6 +251,18 @@ class TheaverApp extends StatelessWidget {
                     userId: userId,
                     initialName: name,
                     initialAvatarUrl: avatarUrl,
+                  ),
+                  settings: settings,
+                );
+              }
+              if (settings.name == '/search') {
+                final args = settings.arguments as Map<String, dynamic>? ?? {};
+                final chatId = args['chatId']?.toString();
+                final chatName = args['chatName']?.toString();
+                return SwipeBackPageRoute(
+                  builder: (_) => SearchScreen(
+                    initialChatId: chatId,
+                    initialChatName: chatName,
                   ),
                   settings: settings,
                 );
