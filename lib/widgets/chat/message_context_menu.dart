@@ -79,7 +79,9 @@ class MessageContextMenu extends StatefulWidget {
   final VoidCallback? onQuote;
   final void Function(String selectedText, int offset, int length)? onQuotePartial;
   final VoidCallback onCopy;
-  final VoidCallback onPin;
+  final VoidCallback? onPin;
+  final bool isPinned;
+  final VoidCallback? onForward;
   final VoidCallback? onEdit;
   final VoidCallback? onSelect;
   final VoidCallback? onViewPollResults;
@@ -108,7 +110,9 @@ class MessageContextMenu extends StatefulWidget {
     this.onQuote,
     this.onQuotePartial,
     required this.onCopy,
-    required this.onPin,
+    this.onPin,
+    this.isPinned = false,
+    this.onForward,
     this.onEdit,
     this.onSelect,
     this.onViewPollResults,
@@ -1400,13 +1404,24 @@ class MessageContextMenuState extends State<MessageContextMenu>
                             theme,
                             enabled: !isSending,
                           ),
-                          _buildActionItem(
-                            (c) => iconoir.Pin(color: c, width: 20, height: 20),
-                            context.l10n.translate('chat_action_pin'),
-                            widget.onPin,
-                            theme,
-                            enabled: !isSending,
-                          ),
+                          if (widget.onPin != null)
+                            _buildActionItem(
+                              (c) => iconoir.Pin(color: c, width: 20, height: 20),
+                              widget.isPinned
+                                  ? 'Открепить'
+                                  : context.l10n.translate('chat_action_pin'),
+                              widget.onPin!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onForward != null)
+                            _buildActionItem(
+                              (c) => iconoir.ForwardMessage(color: c, width: 20, height: 20),
+                              'Переслать',
+                              widget.onForward!,
+                              theme,
+                              enabled: !isSending,
+                            ),
                           if (widget.isMe && widget.onEdit != null)
                             _buildActionItem(
                               (c) => iconoir.EditPencil(color: c, width: 20, height: 20),

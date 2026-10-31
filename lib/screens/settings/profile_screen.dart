@@ -29,6 +29,7 @@ import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/search_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/avatar_crop_utils.dart';
 import '../../utils/date_time_utils.dart';
@@ -1768,17 +1769,13 @@ class ProfileScreenState extends State<ProfileScreen>
       final dio = Dio();
       String targetUserId = query.replaceFirst('@', '');
 
-      // Если введён username — ищем пользователя через поиск
-      final searchResp = await dio.get(
-        '${AppConfig.baseUrl}/api/users/search',
-        queryParameters: {'q': targetUserId},
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
-      );
-      if (searchResp.statusCode == 200 && searchResp.data is Map) {
-        final users = searchResp.data['users'] as List?;
-        if (users != null && users.isNotEmpty) {
-          targetUserId = (users.first['id'] ?? users.first['user_id']).toString();
-        }
+      // Если введён username — ищем пользователя через единый поиск
+      final foundUsers = await SearchService.searchUsers(query: targetUserId);
+      if (foundUsers.isNotEmpty) {
+        final exact = foundUsers.where(
+          (u) => u.username.toLowerCase() == targetUserId.toLowerCase() || u.id == targetUserId,
+        );
+        targetUserId = exact.isNotEmpty ? exact.first.id : foundUsers.first.id;
       }
 
       await dio.post(

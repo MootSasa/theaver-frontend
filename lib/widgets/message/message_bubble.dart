@@ -35,6 +35,7 @@ import 'poll_message_widget.dart';
 import 'unsupported_message_widget.dart';
 import 'dice_message_widget.dart';
 import 'message_interactive_state.dart';
+import 'inline_keyboard_widget.dart';
 import '../tiling/tile_viewport_scope.dart';
 import '../../utils/date_time_utils.dart';
 
@@ -1134,9 +1135,14 @@ class MessageBubble extends StatelessWidget {
           message.replyInfo?.chatId,
         ),
       );
-    } else if (chatType == 'saved' && (message.forwardFromName?.isNotEmpty ?? false || message.senderName.isNotEmpty)) {
+    } else if ((message.forwardFromName != null &&
+            message.forwardFromName!.isNotEmpty) ||
+        (chatType == 'saved' && message.senderName.isNotEmpty)) {
       replyWidget = MessageReplyInfo.forwarded(
-        authorName: message.forwardFromName ?? message.senderName,
+        authorName: (message.forwardFromName != null &&
+                message.forwardFromName!.isNotEmpty)
+            ? message.forwardFromName!
+            : message.senderName,
         isMe: isMe,
       );
     }
@@ -1514,23 +1520,36 @@ class MessageBubble extends StatelessWidget {
       child: bubbleCore,
     );
 
-    // Reactions row below message bubble if present
+    // Reactions row and/or Inline Keyboard below message bubble if present
     final effectiveReactions = reactions ?? (message.reactions.isNotEmpty ? message.reactions : null);
-    if (effectiveReactions != null && effectiveReactions.isNotEmpty) {
+    final hasReactions = effectiveReactions != null && effectiveReactions.isNotEmpty;
+    final hasInlineKeyboard = message.inlineKeyboard.isNotEmpty && message.id.isNotEmpty;
+    if (hasReactions || hasInlineKeyboard) {
       final effectiveMyReactions = myReactions ?? (myReaction != null && myReaction!.isNotEmpty ? {myReaction!} : message.myReactions);
       alignedBubble = Column(
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           alignedBubble,
-          Padding(
-            padding: const EdgeInsets.only(top: 4.0, left: 12, right: 12),
-            child: MessageReactionsRow(
-              reactions: effectiveReactions,
-              myReactions: effectiveMyReactions,
-              myReaction: myReaction,
-              onTap: onReactionTap,
+          if (hasReactions)
+            Padding(
+              padding: const EdgeInsets.only(top: 4.0, left: 12, right: 12),
+              child: MessageReactionsRow(
+                reactions: effectiveReactions,
+                myReactions: effectiveMyReactions,
+                myReaction: myReaction,
+                onTap: onReactionTap,
+              ),
             ),
-          ),
+          if (hasInlineKeyboard)
+            Padding(
+              padding: const EdgeInsets.only(top: 2.0, left: 8.0, right: 8.0),
+              child: InlineKeyboardWidget(
+                chatId: message.chatId,
+                messageId: message.id,
+                rows: message.inlineKeyboard,
+                maxWidth: maxOuterBubbleWidth,
+              ),
+            ),
         ],
       );
     }

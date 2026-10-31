@@ -6,6 +6,7 @@ import '../config/app_config.dart';
 import 'auth_service.dart';
 import 'database/app_database.dart';
 import 'notification_service.dart';
+import 'websocket_service.dart';
 import '../utils/date_time_utils.dart';
 import '../models/chat_draft.dart';
 import '../utils/emoji_utils.dart';
@@ -29,6 +30,14 @@ class Chat {
   final String? otherUserId;
   final String? lastMessageGroupedId;
   final ChatDraft? draft;
+  final int lastReadInboxMessageId;
+  final int lastReadOutboxMessageId;
+  final int? pinnedMessageId;
+  final Message? pinnedMessage;
+  final String? username;
+  final bool isPublic;
+  final bool isBot;
+  final bool isVerified;
 
   Chat({
     required this.id,
@@ -48,6 +57,14 @@ class Chat {
     this.otherUserId,
     this.lastMessageGroupedId,
     this.draft,
+    this.lastReadInboxMessageId = 0,
+    this.lastReadOutboxMessageId = 0,
+    this.pinnedMessageId,
+    this.pinnedMessage,
+    this.username,
+    this.isPublic = false,
+    this.isBot = false,
+    this.isVerified = false,
   });
 
   /// Whether this chat has been manually marked as unread (represented by unreadCount == -1).
@@ -91,6 +108,18 @@ class Chat {
         msgType == 'round' ||
         (json['is_round'] == true);
 
+    Message? parsedPinnedMessage;
+    int? parsedPinnedMessageId = (json['pinned_message_id'] as num?)?.toInt() ??
+        int.tryParse(json['pinned_message_id']?.toString() ?? '');
+    if (json['pinned_message'] is Map) {
+      try {
+        parsedPinnedMessage = Message.fromJson(
+          Map<String, dynamic>.from(json['pinned_message'] as Map),
+        );
+        parsedPinnedMessageId ??= int.tryParse(parsedPinnedMessage.id);
+      } catch (_) {}
+    }
+
     return Chat(
       id: json['id']?.toString() ?? json['chat_id']?.toString() ?? '',
       chatType: json['chat_type']?.toString() ?? 'private',
@@ -112,6 +141,20 @@ class Chat {
       draft: json['draft'] != null && json['draft'] is Map<String, dynamic>
           ? ChatDraft.fromJson(json['draft'] as Map<String, dynamic>)
           : null,
+      lastReadInboxMessageId:
+          (json['last_read_inbox_message_id'] as num?)?.toInt() ??
+              int.tryParse(json['last_read_inbox_message_id']?.toString() ?? '') ??
+              0,
+      lastReadOutboxMessageId:
+          (json['last_read_outbox_message_id'] as num?)?.toInt() ??
+              int.tryParse(json['last_read_outbox_message_id']?.toString() ?? '') ??
+              0,
+      pinnedMessageId: parsedPinnedMessageId,
+      pinnedMessage: parsedPinnedMessage,
+      username: json['username']?.toString(),
+      isPublic: json['is_public'] == true,
+      isBot: json['is_bot'] == true,
+      isVerified: json['is_verified'] == true,
     );
   }
 
@@ -133,6 +176,14 @@ class Chat {
     String? otherUserId,
     String? lastMessageGroupedId,
     ChatDraft? draft,
+    int? lastReadInboxMessageId,
+    int? lastReadOutboxMessageId,
+    int? pinnedMessageId,
+    Message? pinnedMessage,
+    String? username,
+    bool? isPublic,
+    bool? isBot,
+    bool? isVerified,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -152,6 +203,16 @@ class Chat {
       otherUserId: otherUserId ?? this.otherUserId,
       lastMessageGroupedId: lastMessageGroupedId ?? this.lastMessageGroupedId,
       draft: draft ?? this.draft,
+      lastReadInboxMessageId:
+          lastReadInboxMessageId ?? this.lastReadInboxMessageId,
+      lastReadOutboxMessageId:
+          lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
+      pinnedMessageId: pinnedMessageId ?? this.pinnedMessageId,
+      pinnedMessage: pinnedMessage ?? this.pinnedMessage,
+      username: username ?? this.username,
+      isPublic: isPublic ?? this.isPublic,
+      isBot: isBot ?? this.isBot,
+      isVerified: isVerified ?? this.isVerified,
     );
   }
 }
@@ -520,6 +581,66 @@ class Message {
   int? get mediaDuration => (mediaPayload?['duration'] as num?)?.toInt();
   int? get mediaFileSize => (mediaPayload?['file_size'] as num?)?.toInt();
 
+  Map<String, dynamic>? get replyMarkup {
+    final raw = mediaPayload?['reply_markup'];
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  List<List<Map<String, dynamic>>> get inlineKeyboard {
+    final rm = replyMarkup;
+    final rows = rm?['inline_keyboard'];
+    if (rows is! List) return const [];
+    final result = <List<Map<String, dynamic>>>[];
+    for (final row in rows) {
+      if (row is List) {
+        final parsedRow = <Map<String, dynamic>>[];
+        for (final btn in row) {
+          if (btn is Map) {
+            parsedRow.add(Map<String, dynamic>.from(btn));
+          }
+        }
+        if (parsedRow.isNotEmpty) {
+          result.add(parsedRow);
+        }
+      }
+    }
+    return result;
+  }
+
+  List<List<Map<String, dynamic>>> get replyKeyboard {
+    final rm = replyMarkup;
+    final rows = rm?['keyboard'];
+    if (rows is! List) return const [];
+    final result = <List<Map<String, dynamic>>>[];
+    for (final row in rows) {
+      if (row is List) {
+        final parsedRow = <Map<String, dynamic>>[];
+        for (final btn in row) {
+          if (btn is Map) {
+            parsedRow.add(Map<String, dynamic>.from(btn));
+          } else if (btn is String) {
+            parsedRow.add({'text': btn});
+          }
+        }
+        if (parsedRow.isNotEmpty) {
+          result.add(parsedRow);
+        }
+      }
+    }
+    return result;
+  }
+
+  bool get removeReplyKeyboard => replyMarkup?['remove_keyboard'] == true;
+  bool get oneTimeReplyKeyboard => replyMarkup?['one_time_keyboard'] == true;
+
   factory Message.fromJson(Map<String, dynamic> json) {
     // Parse replyInfo from nested object or flat fields
     ReplyInfo? replyInfo;
@@ -590,7 +711,7 @@ class Message {
       duration = (json['media_payload']['duration'] as num).toInt();
     }
 
-    final Map<String, dynamic>? parsedMediaPayload = json['media_payload'] is Map
+    Map<String, dynamic>? parsedMediaPayload = json['media_payload'] is Map
         ? Map<String, dynamic>.from(json['media_payload'] as Map)
         : (json['media_payload'] is String && (json['media_payload'] as String).isNotEmpty
             ? (() {
@@ -602,6 +723,19 @@ class Message {
                 }
               })()
             : null);
+
+    if (json['reply_markup'] != null) {
+      parsedMediaPayload ??= <String, dynamic>{};
+      parsedMediaPayload['reply_markup'] = json['reply_markup'];
+    }
+    if (json['via_bot_id'] != null) {
+      parsedMediaPayload ??= <String, dynamic>{};
+      parsedMediaPayload['via_bot_id'] = json['via_bot_id'];
+    }
+    if (json['via_bot_username'] != null) {
+      parsedMediaPayload ??= <String, dynamic>{};
+      parsedMediaPayload['via_bot_username'] = json['via_bot_username'];
+    }
 
     final String? parsedReadAt =
         json['read_at']?.toString() ?? parsedMediaPayload?['read_at']?.toString();
@@ -1009,6 +1143,14 @@ class ChatDetails {
   final String createdAt;
   final String updatedAt;
   final List<ChatParticipant> participants;
+  final int lastReadInboxMessageId;
+  final int lastReadOutboxMessageId;
+  final int? pinnedMessageId;
+  final Message? pinnedMessage;
+  final String? username;
+  final bool isPublic;
+  final bool isVerified;
+  final String? description;
 
   ChatDetails({
     required this.id,
@@ -1019,6 +1161,14 @@ class ChatDetails {
     required this.createdAt,
     required this.updatedAt,
     required this.participants,
+    this.lastReadInboxMessageId = 0,
+    this.lastReadOutboxMessageId = 0,
+    this.pinnedMessageId,
+    this.pinnedMessage,
+    this.username,
+    this.isPublic = false,
+    this.isVerified = false,
+    this.description,
   });
 
   factory ChatDetails.fromJson(Map<String, dynamic> json) {
@@ -1028,6 +1178,18 @@ class ChatDetails {
         participantsList.add(ChatParticipant.fromJson(p));
       }
     }
+    Message? parsedPinnedMessage;
+    int? parsedPinnedMessageId = (json['pinned_message_id'] as num?)?.toInt() ??
+        int.tryParse(json['pinned_message_id']?.toString() ?? '');
+    if (json['pinned_message'] is Map) {
+      try {
+        parsedPinnedMessage = Message.fromJson(
+          Map<String, dynamic>.from(json['pinned_message'] as Map),
+        );
+        parsedPinnedMessageId ??= int.tryParse(parsedPinnedMessage.id);
+      } catch (_) {}
+    }
+
     return ChatDetails(
       id: json['id']?.toString() ?? '',
       chatType: json['chat_type']?.toString() ?? 'private',
@@ -1037,6 +1199,20 @@ class ChatDetails {
       createdAt: json['created_at']?.toString() ?? '',
       updatedAt: json['updated_at']?.toString() ?? '',
       participants: participantsList,
+      lastReadInboxMessageId:
+          (json['last_read_inbox_message_id'] as num?)?.toInt() ??
+              int.tryParse(json['last_read_inbox_message_id']?.toString() ?? '') ??
+              0,
+      lastReadOutboxMessageId:
+          (json['last_read_outbox_message_id'] as num?)?.toInt() ??
+              int.tryParse(json['last_read_outbox_message_id']?.toString() ?? '') ??
+              0,
+      pinnedMessageId: parsedPinnedMessageId,
+      pinnedMessage: parsedPinnedMessage,
+      username: json['username']?.toString(),
+      isPublic: json['is_public'] == true,
+      isVerified: json['is_verified'] == true,
+      description: json['description']?.toString(),
     );
   }
 }
@@ -1050,6 +1226,8 @@ class ChatParticipant {
   final String role;
   final bool isOnline;
   final DateTime? lastSeen;
+  final bool isBot;
+  final bool isVerified;
 
   ChatParticipant({
     required this.id,
@@ -1059,6 +1237,8 @@ class ChatParticipant {
     required this.role,
     this.isOnline = false,
     this.lastSeen,
+    this.isBot = false,
+    this.isVerified = false,
   });
 
   ChatParticipant copyWith({
@@ -1069,6 +1249,8 @@ class ChatParticipant {
     String? role,
     bool? isOnline,
     DateTime? lastSeen,
+    bool? isBot,
+    bool? isVerified,
   }) {
     return ChatParticipant(
       id: id ?? this.id,
@@ -1078,6 +1260,8 @@ class ChatParticipant {
       role: role ?? this.role,
       isOnline: isOnline ?? this.isOnline,
       lastSeen: lastSeen ?? this.lastSeen,
+      isBot: isBot ?? this.isBot,
+      isVerified: isVerified ?? this.isVerified,
     );
   }
 
@@ -1090,12 +1274,35 @@ class ChatParticipant {
       role: json['role']?.toString() ?? 'member',
       isOnline: json['is_online'] == true,
       lastSeen: DateTimeUtils.parseUtcDateTime(json['last_seen']),
+      isBot: json['is_bot'] == true,
+      isVerified: json['is_verified'] == true,
     );
   }
 }
 
 /// ChatService handles all chat-related API operations.
 class ChatService {
+  static String _extractErrorMessage(dynamic data, [String fallback = 'Request failed']) {
+    if (data is Map) {
+      final desc = data['description']?.toString();
+      if (desc != null && desc.isNotEmpty) return desc;
+      final msg = data['message']?.toString();
+      if (msg != null && msg.isNotEmpty) return msg;
+      final err = data['error']?.toString();
+      if (err != null && err.isNotEmpty) return err;
+    }
+    return fallback;
+  }
+
+  static int? _extractRetryAfter(dynamic data) {
+    if (data is Map && data['parameters'] is Map) {
+      final ra = data['parameters']['retry_after'];
+      if (ra is int) return ra;
+      if (ra != null) return int.tryParse(ra.toString());
+    }
+    return null;
+  }
+
   /// Creates a new chat.
   ///
   /// [chatType] - Type of chat: 'private', 'group', or 'channel'
@@ -1104,6 +1311,9 @@ class ChatService {
   static Future<Map<String, dynamic>> createChat({
     required String chatType,
     String? name,
+    String? description,
+    String? username,
+    bool? isPublic,
     required List<String> participantIds,
   }) async {
     try {
@@ -1112,17 +1322,22 @@ class ChatService {
         return {'success': false, 'message': 'Not authenticated'};
       }
 
+      final payload = <String, dynamic>{
+        'chat_type': chatType,
+        'name': name,
+        'participant_ids': participantIds,
+        if (description != null && description.isNotEmpty) 'description': description,
+        if (username != null && username.isNotEmpty) 'username': username,
+        if (isPublic != null) 'is_public': isPublic,
+      };
+
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/chats'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({
-          'chat_type': chatType,
-          'name': name,
-          'participant_ids': participantIds,
-        }),
+        body: jsonEncode(payload),
       );
 
       final data = jsonDecode(response.body);
@@ -1135,7 +1350,9 @@ class ChatService {
       } else {
         return {
           'success': false,
-          'message': data['message'] ?? 'Failed to create chat',
+          'message': _extractErrorMessage(data, 'Failed to create chat'),
+          'error_code': data is Map ? data['code'] ?? data['error'] : null,
+          'retry_after': _extractRetryAfter(data),
         };
       }
     } catch (e) {
@@ -1452,6 +1669,50 @@ class ChatService {
         body['invert_media'] = true;
       }
 
+      // Try WebSocket RPC first for standard messages when connected
+      final canUseWsRpc = WebSocketService().isConnected &&
+          !isQuote &&
+          linkPreviewOptions == null &&
+          !invertMedia &&
+          (groupedId == null || groupedId.isEmpty);
+      if (canUseWsRpc) {
+        try {
+          final rpcPayload = <String, dynamic>{
+            'chat_id': chatId,
+            ...body,
+          };
+          final rpcResult = await WebSocketService().sendRpc(
+            'send_message',
+            rpcPayload,
+          );
+          final rawMsg = rpcResult['message'];
+          if (rawMsg is Map) {
+            final parsedMessage = Message.fromJson(
+              Map<String, dynamic>.from(rawMsg),
+            );
+            return {
+              'success': true,
+              'message': parsedMessage,
+              'deduplicated': rpcResult['deduplicated'] == true,
+            };
+          }
+        } on WsRpcException catch (e) {
+          // 503 (WS disconnected) or 504 (timeout) -> fall back to HTTP REST
+          if (e.statusCode != 503 && e.statusCode != 504) {
+            return {
+              'success': false,
+              'message': e.description,
+              'error_code': e.errorCode,
+              'status_code': e.statusCode,
+              if (e.retryAfter != null) 'retry_after': e.retryAfter,
+            };
+          }
+          debugPrint('WS RPC send_message fallback to HTTP: $e');
+        } catch (e) {
+          debugPrint('WS RPC send_message unexpected error, fallback to HTTP: $e');
+        }
+      }
+
       if (AppConfig.enableDebugLogging) {
         debugPrint(
             'SendMessage: POST ${AppConfig.baseUrl}/api/chats/$chatId/messages');
@@ -1514,9 +1775,13 @@ class ChatService {
           'message': parsedMessage,
         };
       } else {
+        final retryAfter = _extractRetryAfter(data);
         return {
           'success': false,
-          'message': data['message'] ?? 'Failed to send message',
+          'message': _extractErrorMessage(data, 'Failed to send message'),
+          'error_code': data is Map ? data['error']?.toString() : null,
+          'status_code': response.statusCode,
+          if (retryAfter != null) 'retry_after': retryAfter,
         };
       }
     } catch (e) {
@@ -1744,7 +2009,7 @@ class ChatService {
     }
   }
 
-  /// Save chat draft to server
+  /// Save chat draft to server (PUT /api/chats/:id/draft)
   static Future<Map<String, dynamic>> saveDraft({
     required String chatId,
     required String text,
@@ -1758,7 +2023,7 @@ class ChatService {
         return {'success': false, 'message': 'Not authenticated'};
       }
 
-      final response = await http.post(
+      final response = await http.put(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/draft'),
         headers: {
           'Content-Type': 'application/json',
@@ -1817,12 +2082,13 @@ class ChatService {
       final token = await AuthService.getToken();
       if (token == null) return;
 
-      await http.delete(
+      await http.put(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/draft'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
+        body: jsonEncode({'text': ''}),
       );
     } catch (e) {
       debugPrint('Delete draft error: $e');
@@ -2004,6 +2270,35 @@ class ChatService {
         return {'success': false, 'message': 'Not authenticated'};
       }
 
+      if (WebSocketService().isConnected) {
+        try {
+          final rpcResult = await WebSocketService().sendRpc(
+            'read_history',
+            {
+              'chat_id': chatId,
+              'max_id': messageId,
+            },
+          );
+          return {
+            'success': true,
+            'marked_count': rpcResult['marked_count'] ?? 0,
+            'unread_count': rpcResult['unread_count'] ?? 0,
+            'last_read_inbox_message_id':
+                rpcResult['last_read_inbox_message_id'] ??
+                    int.tryParse(messageId) ??
+                    0,
+            'message': 'Messages marked as read',
+          };
+        } on WsRpcException catch (e) {
+          if (e.statusCode != 503 && e.statusCode != 504) {
+            return {
+              'success': false,
+              'message': e.description,
+            };
+          }
+        } catch (_) {}
+      }
+
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/messages/read-up-to'),
         headers: {
@@ -2019,6 +2314,10 @@ class ChatService {
           'success': true,
           'marked_count': data['marked_count'] ?? 0,
           'unread_count': data['unread_count'] ?? 0,
+          'last_read_inbox_message_id':
+              data['last_read_inbox_message_id'] ??
+                  int.tryParse(messageId) ??
+                  0,
           'message': data['message'] ?? 'Messages marked as read',
         };
       } else {
@@ -2062,6 +2361,9 @@ class ChatService {
           'first_unread_message_id': data['first_unread_message_id'],
           'first_unread_message_created_at':
               data['first_unread_message_created_at'],
+          'last_read_inbox_message_id': data['last_read_inbox_message_id'] ?? 0,
+          'last_read_outbox_message_id':
+              data['last_read_outbox_message_id'] ?? 0,
         };
       } else {
         return {
@@ -2406,6 +2708,275 @@ class ChatService {
       debugPrint('Get chat calendar error: $e');
     }
     return {};
+  }
+
+  /// Server-side message forwarding (POST /api/chats/:toChatId/messages/forward)
+  static Future<Map<String, dynamic>> forwardMessages({
+    required String toChatId,
+    required String fromChatId,
+    required List<String> messageIds,
+    bool hideSender = false,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final parsedIds = messageIds
+          .map((id) => int.tryParse(id) ?? id)
+          .toList();
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$toChatId/messages/forward'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'from_chat_id': int.tryParse(fromChatId) ?? fromChatId,
+          'message_ids': parsedIds,
+          'hide_sender': hideSender,
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        final rawList = data['messages'] as List<dynamic>? ?? [];
+        final messages = <Message>[];
+        for (final item in rawList) {
+          if (item is Map) {
+            try {
+              messages.add(Message.fromJson(Map<String, dynamic>.from(item)));
+            } catch (_) {}
+          }
+        }
+        return {
+          'success': true,
+          'messages': messages,
+          'forwarded_count': data['forwarded_count'] ?? messages.length,
+        };
+      } else {
+        final retryAfter = _extractRetryAfter(data);
+        return {
+          'success': false,
+          'message': _extractErrorMessage(data, 'Не удалось переслать сообщения'),
+          if (retryAfter != null) 'retry_after': retryAfter,
+        };
+      }
+    } catch (e) {
+      debugPrint('Forward messages error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Pin a message inside a chat (POST /api/chats/:chatId/messages/:messageId/pin)
+  static Future<Map<String, dynamic>> pinMessage({
+    required String chatId,
+    required String messageId,
+    bool notify = true,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.post(
+        Uri.parse(
+            '${AppConfig.baseUrl}/api/chats/$chatId/messages/$messageId/pin'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'notify': notify}),
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return {
+          'success': true,
+          'pinned_message_id':
+              (data['pinned_message_id'] as num?)?.toInt() ??
+                  int.tryParse(messageId),
+        };
+      } else {
+        return {
+          'success': false,
+          'message': _extractErrorMessage(data, 'Не удалось закрепить сообщение'),
+        };
+      }
+    } catch (e) {
+      debugPrint('Pin message error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Unpin a message inside a chat (DELETE /api/chats/:chatId/messages/:messageId/pin)
+  static Future<Map<String, dynamic>> unpinMessage({
+    required String chatId,
+    required String messageId,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.delete(
+        Uri.parse(
+            '${AppConfig.baseUrl}/api/chats/$chatId/messages/$messageId/pin'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return {
+          'success': true,
+          'pinned_message_id': (data['pinned_message_id'] as num?)?.toInt(),
+        };
+      } else {
+        return {
+          'success': false,
+          'message': _extractErrorMessage(data, 'Не удалось открепить сообщение'),
+        };
+      }
+    } catch (e) {
+      debugPrint('Unpin message error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Get all pinned messages in a chat (GET /api/chats/:chatId/pinned-messages)
+  static Future<List<Message>> getPinnedMessages({
+    required String chatId,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) return [];
+
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/pinned-messages'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final rawList = (data['pinned_messages'] ?? data['messages']) as List<dynamic>? ?? [];
+        final result = <Message>[];
+        for (final item in rawList) {
+          if (item is Map) {
+            try {
+              result.add(Message.fromJson(Map<String, dynamic>.from(item)));
+            } catch (_) {}
+          }
+        }
+        return result;
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Get pinned messages error: $e');
+      return [];
+    }
+  }
+
+  /// Preview an invite link code without joining (GET /api/chats/invite/:code)
+  static Future<Map<String, dynamic>> checkInviteLink(String code) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/invite/${Uri.encodeComponent(code)}'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return Map<String, dynamic>.from(data);
+      } else {
+        return {
+          'success': false,
+          'message': _extractErrorMessage(data, 'Ссылка-приглашение недействительна'),
+        };
+      }
+    } catch (e) {
+      debugPrint('Check invite link error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Join a chat by invite link code (POST /api/chats/join/:code)
+  static Future<Map<String, dynamic>> joinByInviteLink(String code) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/join/${Uri.encodeComponent(code)}'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return Map<String, dynamic>.from(data);
+      } else {
+        return {
+          'success': false,
+          'message': _extractErrorMessage(data, 'Не удалось вступить по ссылке'),
+        };
+      }
+    } catch (e) {
+      debugPrint('Join by invite link error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Join a public group or channel by chat ID (POST /api/chats/:chatId/join)
+  static Future<Map<String, dynamic>> joinPublicChat(String chatId) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/join'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return Map<String, dynamic>.from(data);
+      } else {
+        return {
+          'success': false,
+          'message': _extractErrorMessage(data, 'Не удалось вступить в чат'),
+        };
+      }
+    } catch (e) {
+      debugPrint('Join public chat error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
   }
 }
 

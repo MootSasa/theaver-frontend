@@ -4,6 +4,7 @@ import '../../services/chat_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/image_utils.dart';
+import '../../widgets/common/peer_badges_widget.dart';
 import 'private_chat_screen.dart';
 import '../../utils/swipe_back_route.dart';
 
@@ -233,8 +234,18 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
                   )
                 : null,
           ),
-          title: Text(user.name),
-          subtitle: Text('@${user.username}'),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  user.name,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              PeerBadgesRow(isBot: user.isBot, isVerified: user.isVerified),
+            ],
+          ),
+          subtitle: Text(user.username.isNotEmpty ? '@${user.username}' : ''),
           trailing: const Icon(Icons.chevron_right),
           onTap: _isCreating ? null : () => _onUserTap(user),
         );

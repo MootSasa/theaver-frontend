@@ -6,7 +6,6 @@ import 'chat_service.dart';
 import 'search_service.dart';
 import 'account_manager.dart';
 import 'tiling_layout_controller.dart';
-import '../config/app_config.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/profile/user_profile_popup.dart';
 import '../screens/chat/private_chat_screen.dart';
@@ -209,51 +208,130 @@ class DeepLinkService {
       return;
     }
 
+    final previewRes = await ChatService.checkInviteLink(inviteCode);
+    if (!context.mounted) return;
+
     final l10n = context.l10n;
+    final preview = previewRes['success'] == true
+        ? (previewRes['chat'] as Map<String, dynamic>? ?? previewRes)
+        : null;
+
+    final chatName = preview?['name']?.toString() ?? 'Чат по приглашению';
+    final chatDesc = preview?['description']?.toString() ?? '';
+    final chatType = preview?['chat_type']?.toString() ?? 'group';
+    final memberCount = preview?['member_count'] ?? preview?['participants_count'];
+    final alreadyMember = preview?['already_member'] == true;
+    final previewChatId = preview?['id']?.toString() ?? preview?['chat_id']?.toString();
+
+    if (alreadyMember && previewChatId != null && previewChatId.isNotEmpty) {
+      _openGroupOrChannel(context, previewChatId, chatType, chatName);
+      return;
+    }
 
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(l10n.translate('invite_link_title') ?? 'Приглашение в группу'),
+        title: Text(chatName),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.translate('invite_join_prompt') ?? 'Вы хотите присоединиться по ссылке-приглашению?'),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(8),
+            if (memberCount != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  chatType == 'channel'
+                      ? 'Канал • $memberCount подписчиков'
+                      : 'Группа • $memberCount участников',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
-              child: Text(
-                inviteCode,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+            if (chatDesc.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(chatDesc),
+              )
+            else
+              Text(
+                l10n.translate('invite_join_prompt'),
               ),
-            ),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(l10n.translate('profile_cancel') ?? 'Отмена'),
+            child: Text(l10n.translate('profile_cancel')),
           ),
           FilledButton(
             onPressed: () async {
               Navigator.of(dialogContext).pop();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(l10n.translate('joining_chat') ?? 'Подключение к чату...'),
-                  duration: const Duration(seconds: 2),
-                ),
-              );
+              final joinRes = await ChatService.joinByInviteLink(inviteCode);
+              if (!context.mounted) return;
+              if (joinRes['success'] == true) {
+                final joinedChat = joinRes['chat'];
+                final joinedId = joinedChat is Chat
+                    ? joinedChat.id
+                    : (joinRes['chat_id']?.toString() ?? previewChatId ?? '');
+                final joinedType = joinedChat is Chat ? joinedChat.chatType : chatType;
+                final joinedName = joinedChat is Chat ? joinedChat.name : chatName;
+                if (joinedId.isNotEmpty) {
+                  _openGroupOrChannel(context, joinedId, joinedType, joinedName);
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      joinRes['message']?.toString() ??
+                          'Не удалось присоединиться по ссылке',
+                    ),
+                  ),
+                );
+              }
             },
-            child: Text(l10n.translate('join') ?? 'Присоединиться'),
+            child: Text(l10n.translate('join')),
           ),
         ],
       ),
     );
+  }
+
+  void _openGroupOrChannel(
+    BuildContext context,
+    String chatId,
+    String chatType,
+    String chatName,
+  ) {
+    if (TilingLayoutController.instance.isWorkspaceMounted) {
+      TilingLayoutController.instance.openChatInActiveTile(
+        chatId: chatId,
+        chatType: chatType,
+        chatName: chatName,
+      );
+      return;
+    }
+    if (chatType == 'channel') {
+      Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: (_) => ChannelScreen(
+            channelId: chatId,
+            channelName: chatName,
+          ),
+        ),
+      );
+    } else {
+      Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: (_) => GroupChatScreen(
+            chatId: chatId,
+            groupName: chatName,
+          ),
+        ),
+      );
+    }
   }
 
   /// Handles channel deep link (`/c/{channelName}`).
@@ -268,25 +346,14 @@ class DeepLinkService {
       final channels = await SearchService.searchChannels(query: channelName);
       if (channels.isNotEmpty && context.mounted) {
         final match = channels.firstWhere(
-          (c) => c.name.toLowerCase() == channelName.toLowerCase(),
+          (c) =>
+              (c.username.toLowerCase() == channelName.toLowerCase()) ||
+              c.name.toLowerCase() == channelName.toLowerCase(),
           orElse: () => channels.first,
         );
-        if (TilingLayoutController.instance.isWorkspaceMounted) {
-          TilingLayoutController.instance.openChatInActiveTile(
-            chatId: match.id,
-            chatType: 'channel',
-            chatName: match.name,
-          );
-          return;
-        }
-        Navigator.of(context).push(
-          SwipeBackPageRoute(
-            builder: (_) => ChannelScreen(
-              channelId: match.id,
-              channelName: match.name,
-            ),
-          ),
-        );
+        await ChatService.joinPublicChat(match.id);
+        if (!context.mounted) return;
+        _openGroupOrChannel(context, match.id, match.chatType, match.name);
         return;
       }
     } catch (e) {
@@ -297,7 +364,7 @@ class DeepLinkService {
       final l10n = context.l10n;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(l10n.translate('channel_not_found') ?? 'Канал "$channelName" не найден'),
+          content: Text(l10n.translate('channel_not_found')),
         ),
       );
     }

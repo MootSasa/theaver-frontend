@@ -33,6 +33,7 @@ class EditGroupChannelScreen extends StatefulWidget {
   final String initialDescription;
   final String? initialAvatarUrl;
   final bool initialIsPublic;
+  final String? initialUsername;
   final bool initialHistoryForNew;
   final int initialSlowModeInterval;
   final String? inviteLink;
@@ -45,6 +46,7 @@ class EditGroupChannelScreen extends StatefulWidget {
     this.initialDescription = '',
     this.initialAvatarUrl,
     this.initialIsPublic = false,
+    this.initialUsername,
     this.initialHistoryForNew = true,
     this.initialSlowModeInterval = 0,
     this.inviteLink,
@@ -57,6 +59,7 @@ class EditGroupChannelScreen extends StatefulWidget {
 class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   late final TextEditingController _nameController;
   late final TextEditingController _descriptionController;
+  late final TextEditingController _usernameController;
 
   String? _avatarUrl;
   File? _pickedAvatarFile;
@@ -70,6 +73,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     super.initState();
     _nameController = TextEditingController(text: widget.initialName);
     _descriptionController = TextEditingController(text: widget.initialDescription);
+    _usernameController = TextEditingController(text: widget.initialUsername ?? '');
     _avatarUrl = widget.initialAvatarUrl;
     _isPublic = widget.initialIsPublic;
     _historyForNew = widget.initialHistoryForNew;
@@ -80,6 +84,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   void dispose() {
     _nameController.dispose();
     _descriptionController.dispose();
+    _usernameController.dispose();
     super.dispose();
   }
 
@@ -127,6 +132,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         finalAvatarUrl = uploadRes.url;
       }
 
+      final cleanUsername = _usernameController.text.trim().replaceAll('@', '');
       final token = await AuthService.getToken();
       final dio = Dio();
       await dio.put(
@@ -136,6 +142,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           'description': _descriptionController.text.trim(),
           if (finalAvatarUrl != null) 'avatar_url': finalAvatarUrl,
           'is_public': _isPublic,
+          'username': _isPublic ? cleanUsername : '',
           'history_for_new': _historyForNew,
           'slow_mode_interval': _slowModeInterval,
         },
@@ -153,6 +160,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         'description': _descriptionController.text.trim(),
         'avatar_url': finalAvatarUrl,
         'is_public': _isPublic,
+        'username': _isPublic ? cleanUsername : '',
         'history_for_new': _historyForNew,
         'slow_mode_interval': _slowModeInterval,
       });
@@ -397,6 +405,25 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                   value: _isPublic,
                   onChanged: (v) => setState(() => _isPublic = v),
                 ),
+                if (_isPublic) ...[
+                  Divider(
+                    height: 1,
+                    indent: 16,
+                    color: isDark ? Colors.white12 : Colors.black12,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: TextField(
+                      controller: _usernameController,
+                      style: TextStyle(fontSize: 15, color: textColor),
+                      decoration: InputDecoration(
+                        labelText: 'Публичный @username',
+                        prefixText: '@',
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ],
                 if (!widget.isChannel) ...[
                   Divider(
                     height: 1,

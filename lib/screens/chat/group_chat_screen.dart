@@ -71,6 +71,8 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
+import '../../widgets/chat/forward_chat_picker_sheet.dart';
+import '../../widgets/chat/pinned_message_banner.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -132,6 +134,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   String? _currentUserId;
   String _groupName = '';
   String? _groupAvatar;
+  bool _isVerified = false;
+  Message? _pinnedMessage;
+  int _slowmodeRemainingSeconds = 0;
+  Timer? _slowmodeTimer;
   List<ChatParticipant> _participants = [];
   final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
   double _lastScrollOffset = 0;
@@ -867,6 +873,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onReactionUpdated: _onMessageReactionUpdated,
       onMessageRead: _onMessageRead,
       onMessageListened: _onMessageListened,
+      onMessagePinned: _onMessagePinned,
+      onMessageUnpinned: _onMessageUnpinned,
+      onCallbackQueryAnswer: _onCallbackQueryAnswer,
       onTyping: _onTypingIndicator,
       onUserStatus: _onUserStatusUpdate,
       onUnreadCountUpdated: _onUnreadCountUpdated,
@@ -895,6 +904,57 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       },
       onReconnect: _triggerSilentSync,
     );
+  }
+
+  void _onMessagePinned(WebSocketEvent event) {
+    if (!mounted) return;
+    final msgRaw = event.data['message'] ?? event.data['pinned_message'];
+    final msgId = event.data['message_id']?.toString() ??
+        event.data['pinned_message_id']?.toString();
+    if (msgRaw is Map<String, dynamic>) {
+      setState(() => _pinnedMessage = Message.fromJson(msgRaw));
+    } else if (msgId != null && msgId.isNotEmpty) {
+      final found = _messages.where((m) => m.id == msgId);
+      if (found.isNotEmpty) {
+        setState(() => _pinnedMessage = found.first);
+      }
+    }
+  }
+
+  void _onMessageUnpinned(WebSocketEvent event) {
+    if (!mounted) return;
+    setState(() => _pinnedMessage = null);
+  }
+
+  void _onCallbackQueryAnswer(WebSocketEvent event) {
+    if (!mounted) return;
+    final text = event.data['text']?.toString();
+    final showAlert = event.data['show_alert'] == true;
+    final url = event.data['url']?.toString();
+    if (url != null && url.isNotEmpty) {
+      final uri = Uri.tryParse(url);
+      if (uri != null) {
+        launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    }
+    if (text == null || text.isEmpty) return;
+    if (showAlert) {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Уведомление'),
+          content: Text(text),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      GlassToastService().show(context, text, icon: Icons.info_outline);
+    }
   }
 
   @override
@@ -1536,7 +1596,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _groupName = chat.name;
         _groupAvatar = chat.avatarUrl;
         _participants = chat.participants;
+        _isVerified = chat.isVerified;
+        if (chat.pinnedMessage != null) {
+          _pinnedMessage = chat.pinnedMessage;
+        }
       });
+      if (chat.pinnedMessage == null && chat.pinnedMessageId != null) {
+        unawaited(ChatService.getPinnedMessages(chatId: widget.chatId).then((list) {
+          if (!mounted) return;
+          if (list.isNotEmpty) {
+            setState(() => _pinnedMessage = list.first);
+          }
+        }));
+      }
     }
 
     // Get unread info before loading messages
@@ -2371,6 +2443,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             }
           } else {
             final errMsg = result['message']?.toString() ?? 'Failed to send message';
+            final retryAfter = result['retry_after'];
+            if (retryAfter is int && retryAfter > 0) {
+              _startSlowmodeCountdown(retryAfter);
+            }
             debugPrint('ChatService.sendMessage in group returned false: $errMsg');
             await syncService.markMessageFailed(pendingLocalId);
             if (mounted) {
@@ -2383,8 +2459,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   _updateFeedItems();
                 }
               });
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(errMsg)),
+              GlassToastService().show(
+                context,
+                retryAfter is int && retryAfter > 0
+                    ? 'Подождите $retryAfter сек. перед отправкой'
+                    : errMsg,
+                icon: Icons.error_outline,
               );
             }
           }
@@ -3542,6 +3622,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _inputFocusNode.dispose();
     _chatSubscription?.cancel();
     _typingTimer?.cancel();
+    _slowmodeTimer?.cancel();
 
     if (_registeredTileId != null) {
       TilingLayoutController.instance.unregisterTileBackHandler(
@@ -3757,6 +3838,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             name: displayName,
                 avatarUrl: widget.groupAvatar ?? _groupAvatar,
                 isOnline: false, // Group itself doesn't have online status
+                isVerified: _isVerified,
                 statusText: statusSubtitle,
                 statusColor: _isTyping
                     ? (Theme.of(context).brightness == Brightness.dark
@@ -3849,6 +3931,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (_pinnedMessage != null)
+                  PinnedMessageBanner(
+                    message: _pinnedMessage!,
+                    onTap: () => _scrollToMessage(_pinnedMessage!.id),
+                    onUnpin: () async {
+                      final msgId = _pinnedMessage!.id;
+                      setState(() => _pinnedMessage = null);
+                      await ChatService.unpinMessage(
+                        chatId: widget.chatId,
+                        messageId: msgId,
+                      );
+                    },
+                  ),
                 MediaNotePlayerHeader(
                   chatId: widget.chatId,
                   onScrollToActive: () {
@@ -4488,6 +4583,74 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     return RepaintBoundary(child: Column(children: items));
   }
 
+  void _startSlowmodeCountdown(int seconds) {
+    if (seconds <= 0) return;
+    _slowmodeTimer?.cancel();
+    if (mounted) {
+      setState(() => _slowmodeRemainingSeconds = seconds);
+    }
+    _slowmodeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_slowmodeRemainingSeconds <= 1) {
+        timer.cancel();
+        setState(() => _slowmodeRemainingSeconds = 0);
+      } else {
+        setState(() => _slowmodeRemainingSeconds--);
+      }
+    });
+  }
+
+  Future<void> _togglePinMessage(Message message) async {
+    final isCurrentlyPinned = _pinnedMessage?.id == message.id;
+    if (isCurrentlyPinned) {
+      setState(() => _pinnedMessage = null);
+      final res = await ChatService.unpinMessage(
+        chatId: widget.chatId,
+        messageId: message.id,
+      );
+      if (res['success'] == true && mounted) {
+        GlassToastService().show(
+          context,
+          'Сообщение откреплено',
+          iconWidget: iconoir.PinSlash(
+            width: 20,
+            height: 20,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+        );
+      }
+    } else {
+      setState(() => _pinnedMessage = message);
+      final res = await ChatService.pinMessage(
+        chatId: widget.chatId,
+        messageId: message.id,
+      );
+      if (res['success'] == true && mounted) {
+        GlassToastService().show(
+          context,
+          'Сообщение закреплено',
+          iconWidget: iconoir.Pin(
+            width: 20,
+            height: 20,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _forwardMessagesToPickedChat(List<String> messageIds) async {
+    if (messageIds.isEmpty) return;
+    await ForwardChatPickerSheet.show(
+      context,
+      fromChatId: widget.chatId,
+      messageIds: messageIds,
+    );
+  }
+
   Widget _buildMessageInput() {
     return ChatInputBar(
       controller: _messageController,
@@ -4534,6 +4697,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onVoiceRecordCancel: _onVoiceRecordCancel,
       currentUserId: _currentUserId,
       isSending: _isSending,
+      slowmodeRemainingSeconds: _slowmodeRemainingSeconds,
     );
   }
 
@@ -5329,12 +5493,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   void _forwardSelectedMessages() {
     if (_selectedMessageIds.isEmpty) return;
-    GlassToastService().show(
-      context,
-      'Пересылка скоро появится',
-      icon: Icons.forward,
-    );
+    final ids = _selectedMessageIds.toList();
     _clearSelection();
+    _forwardMessagesToPickedChat(ids);
   }
 
   void _deleteSelectedMessages() {
@@ -5624,7 +5785,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           ? null
           : (selectedText, offset, length) =>
               _startQuote(message, selectedText, offset, length),
-      onPin: () {},
+      onPin: () => _togglePinMessage(message),
+      isPinned: _pinnedMessage?.id == message.id,
+      onForward: () => _forwardMessagesToPickedChat([message.id]),
       onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
         setState(() {
           _cancelReply();

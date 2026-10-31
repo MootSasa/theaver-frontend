@@ -33,6 +33,30 @@ enum WebSocketEventType {
   emojiInteraction,
   appUpdateAvailable,
   messageListened,
+  messagePinned,
+  messageUnpinned,
+  callbackQueryAnswer,
+  rpcResult,
+  rpcError,
+}
+
+/// Exception thrown when a WebSocket RPC call returns an rpc_error or fails.
+class WsRpcException implements Exception {
+  final int statusCode;
+  final String errorCode;
+  final String description;
+  final int? retryAfter;
+
+  const WsRpcException({
+    required this.statusCode,
+    required this.errorCode,
+    required this.description,
+    this.retryAfter,
+  });
+
+  @override
+  String toString() =>
+      'WsRpcException($statusCode $errorCode: $description${retryAfter != null ? ', retryAfter=${retryAfter}s' : ''})';
 }
 
 /// WebSocket event data
@@ -48,9 +72,22 @@ class WebSocketEvent {
   });
 
   factory WebSocketEvent.fromJson(Map<String, dynamic> json) {
+    final parsedType = _parseEventType(json['type'] as String?);
+    final rawData = json['data'];
+    Map<String, dynamic> eventData;
+    if (rawData is Map<String, dynamic>) {
+      eventData = rawData;
+    } else if (rawData is Map) {
+      eventData = Map<String, dynamic>.from(rawData);
+    } else if (parsedType == WebSocketEventType.rpcResult ||
+        parsedType == WebSocketEventType.rpcError) {
+      eventData = Map<String, dynamic>.from(json);
+    } else {
+      eventData = <String, dynamic>{};
+    }
     return WebSocketEvent(
-      type: _parseEventType(json['type'] as String?),
-      data: json['data'] as Map<String, dynamic>? ?? {},
+      type: parsedType,
+      data: eventData,
       timestamp: json['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     );
   }
@@ -100,6 +137,16 @@ class WebSocketEvent {
         return WebSocketEventType.appUpdateAvailable;
       case 'message_listened':
         return WebSocketEventType.messageListened;
+      case 'message_pinned':
+        return WebSocketEventType.messagePinned;
+      case 'message_unpinned':
+        return WebSocketEventType.messageUnpinned;
+      case 'callback_query_answer':
+        return WebSocketEventType.callbackQueryAnswer;
+      case 'rpc_result':
+        return WebSocketEventType.rpcResult;
+      case 'rpc_error':
+        return WebSocketEventType.rpcError;
       default:
         return WebSocketEventType.connected;
     }
@@ -325,9 +372,30 @@ class WebSocketService {
     }
   }
 
+  final Map<String, Completer<Map<String, dynamic>>> _pendingRpcs = {};
+  int _rpcSeq = 0;
+
+  void _failAllPendingRpcs(String reason) {
+    if (_pendingRpcs.isEmpty) return;
+    final pending = List<Completer<Map<String, dynamic>>>.from(_pendingRpcs.values);
+    _pendingRpcs.clear();
+    for (final c in pending) {
+      if (!c.isCompleted) {
+        c.completeError(
+          WsRpcException(
+            statusCode: 503,
+            errorCode: 'WS_DISCONNECTED',
+            description: reason,
+          ),
+        );
+      }
+    }
+  }
+
   /// Disconnect from WebSocket server
   void disconnect() {
     debugPrint('WebSocket: Disconnecting');
+    _failAllPendingRpcs('WebSocket disconnected');
     _pingTimer?.cancel();
     _pingTimer = null;
     _onlineRefreshTimer?.cancel();
@@ -369,6 +437,7 @@ class WebSocketService {
       onError: (error) {
         debugPrint('WebSocket: Stream error: $error');
         _setConnected(false);
+        _failAllPendingRpcs('WebSocket stream error');
         if (!_isSessionTerminated) {
           _scheduleReconnect();
         }
@@ -376,6 +445,7 @@ class WebSocketService {
       onDone: () {
         debugPrint('WebSocket: Stream closed. CloseCode: ${_channel?.closeCode}');
         _setConnected(false);
+        _failAllPendingRpcs('WebSocket stream closed');
         if (_channel?.closeCode == 4001 || _isSessionTerminated) {
           _isSessionTerminated = true;
           _reconnectTimer?.cancel();
@@ -391,6 +461,53 @@ class WebSocketService {
   void _handleMessage(dynamic message) {
     try {
       final json = jsonDecode(message as String) as Map<String, dynamic>;
+      final rawType = json['type'] as String?;
+
+      if (rawType == 'rpc_result' || rawType == 'rpc_error') {
+        final reqId = json['req_id']?.toString() ??
+            (json['data'] is Map ? json['data']['req_id']?.toString() : null);
+        if (reqId != null && _pendingRpcs.containsKey(reqId)) {
+          final completer = _pendingRpcs.remove(reqId)!;
+          if (!completer.isCompleted) {
+            if (rawType == 'rpc_result' && json['ok'] != false) {
+              final res = json['result'];
+              if (res is Map<String, dynamic>) {
+                completer.complete(res);
+              } else if (res is Map) {
+                completer.complete(Map<String, dynamic>.from(res));
+              } else {
+                completer.complete({'result': res});
+              }
+            } else {
+              final statusCode = json['error_code'] is int
+                  ? json['error_code'] as int
+                  : (int.tryParse(json['error_code']?.toString() ?? '') ?? 400);
+              final errorCode = json['error']?.toString() ?? 'RPC_ERROR';
+              final description = json['description']?.toString() ??
+                  json['message']?.toString() ??
+                  errorCode;
+              int? retryAfter;
+              if (json['parameters'] is Map) {
+                final ra = json['parameters']['retry_after'];
+                if (ra is int) {
+                  retryAfter = ra;
+                } else if (ra != null) {
+                  retryAfter = int.tryParse(ra.toString());
+                }
+              }
+              completer.completeError(
+                WsRpcException(
+                  statusCode: statusCode,
+                  errorCode: errorCode,
+                  description: description,
+                  retryAfter: retryAfter,
+                ),
+              );
+            }
+          }
+        }
+      }
+
       final event = WebSocketEvent.fromJson(json);
       
       debugPrint('WebSocket: Received event: ${event.type}');
@@ -491,18 +608,65 @@ class WebSocketService {
   }
 
   /// Send message to server
-  void sendMessage(String type, Map<String, dynamic> data) {
+  void sendMessage(String type, Map<String, dynamic> data, {String? reqId}) {
     if (!_isConnected || _channel == null) {
       debugPrint('WebSocket: Cannot send message - not connected');
       return;
     }
 
-    final message = jsonEncode({
+    final payload = <String, dynamic>{
       'type': type,
       'data': data,
-    });
+    };
+    if (reqId != null && reqId.isNotEmpty) {
+      payload['req_id'] = reqId;
+    }
 
-    _channel!.sink.add(message);
+    _channel!.sink.add(jsonEncode(payload));
+  }
+
+  /// Send a bidirectional WebSocket RPC call and wait for `rpc_result` / `rpc_error`.
+  /// Throws [WsRpcException] on server error, disconnect, or timeout.
+  Future<Map<String, dynamic>> sendRpc(
+    String type,
+    Map<String, dynamic> data, {
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    if (!_isConnected || _channel == null) {
+      throw const WsRpcException(
+        statusCode: 503,
+        errorCode: 'WS_NOT_CONNECTED',
+        description: 'WebSocket is not connected',
+      );
+    }
+
+    _rpcSeq++;
+    final reqId = 'rpc_${DateTime.now().millisecondsSinceEpoch}_$_rpcSeq';
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingRpcs[reqId] = completer;
+
+    try {
+      sendMessage(type, {...data, 'req_id': reqId}, reqId: reqId);
+    } catch (e) {
+      _pendingRpcs.remove(reqId);
+      throw WsRpcException(
+        statusCode: 503,
+        errorCode: 'WS_SEND_FAILED',
+        description: e.toString(),
+      );
+    }
+
+    return completer.future.timeout(
+      timeout,
+      onTimeout: () {
+        _pendingRpcs.remove(reqId);
+        throw const WsRpcException(
+          statusCode: 504,
+          errorCode: 'WS_RPC_TIMEOUT',
+          description: 'WebSocket RPC timed out',
+        );
+      },
+    );
   }
 
   /// Send typing or recording indicator ('typing', 'record_voice', 'record_round', 'stop')
@@ -535,19 +699,19 @@ class WebSocketService {
 
   /// Send message read event
   void sendMessageRead(String chatId, {int markedCount = 0}) {
-  	sendMessage('message_read', {
-  		'chat_id': chatId,
-  		'marked_count': markedCount,
-  	});
+    sendMessage('message_read', {
+      'chat_id': chatId,
+      'marked_count': markedCount,
+    });
   }
  
   /// Send message read up to event (for progressive read tracking)
   void sendMessageReadUpTo(String chatId, String messageId, {int markedCount = 0}) {
-  	sendMessage('message_read_up_to', {
-  		'chat_id': chatId,
-  		'message_id': messageId,
-  		'marked_count': markedCount,
-  	});
+    sendMessage('message_read_up_to', {
+      'chat_id': chatId,
+      'message_id': messageId,
+      'marked_count': markedCount,
+    });
   }
 
   /// Notify server about the currently open chat on this device,

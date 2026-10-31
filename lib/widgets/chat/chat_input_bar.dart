@@ -66,6 +66,13 @@ class ChatInputBar extends StatefulWidget {
   final VoidCallback? onEditLastMessage;
   final bool isEmojiPanelOpen;
   final VoidCallback? onTapInputWhenEmojiOpen;
+  final bool showBotCommandsButton;
+  final bool isBotCommandsOpen;
+  final VoidCallback? onToggleBotCommands;
+  final bool hasReplyKeyboard;
+  final bool isReplyKeyboardOpen;
+  final VoidCallback? onToggleReplyKeyboard;
+  final int slowmodeRemainingSeconds;
 
   const ChatInputBar({
     Key? key,
@@ -112,6 +119,13 @@ class ChatInputBar extends StatefulWidget {
     this.onEditLastMessage,
     this.isEmojiPanelOpen = false,
     this.onTapInputWhenEmojiOpen,
+    this.showBotCommandsButton = false,
+    this.isBotCommandsOpen = false,
+    this.onToggleBotCommands,
+    this.hasReplyKeyboard = false,
+    this.isReplyKeyboardOpen = false,
+    this.onToggleReplyKeyboard,
+    this.slowmodeRemainingSeconds = 0,
   }) : super(key: key);
 
   @override
@@ -470,6 +484,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 onEditLastMessage: widget.isEditing ? null : widget.onEditLastMessage,
                 isEmojiPanelOpen: widget.isEmojiPanelOpen,
                 onTapInputWhenEmojiOpen: widget.onTapInputWhenEmojiOpen,
+                showBotCommandsButton: widget.showBotCommandsButton,
+                isBotCommandsOpen: widget.isBotCommandsOpen,
+                onToggleBotCommands: widget.onToggleBotCommands,
+                hasReplyKeyboard: widget.hasReplyKeyboard,
+                isReplyKeyboardOpen: widget.isReplyKeyboardOpen,
+                onToggleReplyKeyboard: widget.onToggleReplyKeyboard,
+                slowmodeRemainingSeconds: widget.slowmodeRemainingSeconds,
               ),
             ),
             if (widget.trailing != null) widget.trailing!,

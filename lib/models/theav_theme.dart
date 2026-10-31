@@ -788,6 +788,9 @@ class TheavThemeExtension extends ThemeExtension<TheavThemeExtension> {
     required this.bubbleRadius,
   });
 
+  Color get glassSurfaceColor => palette.surface.withValues(alpha: 0.86);
+  Color get glassBorderColor => palette.onSurface.withValues(alpha: 0.14);
+
   @override
   ThemeExtension<TheavThemeExtension> copyWith({
     TheavPalette? palette,

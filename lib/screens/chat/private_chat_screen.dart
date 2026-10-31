@@ -77,6 +77,12 @@ import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
+import '../../services/bot_service.dart';
+import '../../widgets/chat/pinned_message_banner.dart';
+import '../../widgets/chat/forward_chat_picker_sheet.dart';
+import '../../widgets/chat/bot_welcome_card.dart';
+import '../../widgets/chat/bot_commands_popup.dart';
+import '../../widgets/chat/reply_keyboard_panel.dart';
 
 class PrivateChatScreen extends StatefulWidget {
   final String chatId;
@@ -116,9 +122,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String _chatName = '';
   String? _chatAvatar;
   String? _otherUserId;
+  String? _otherUsername;
   String _chatType = 'private'; // 'private', 'saved'
   bool _isOtherUserOnline = false;
   DateTime? _otherUserLastSeen;
+  bool _isBot = false;
+  bool _isVerified = false;
+  BotInfo? _botInfo;
+  bool _isBotCommandsOpen = false;
+  bool _isReplyKeyboardOpen = true;
+  Message? _pinnedMessage;
+  int _slowmodeRemainingSeconds = 0;
+  Timer? _slowmodeTimer;
   bool _showEmojiPanel = false;
   bool _isKeyboardRising = false;
   bool _isKeyboardFalling = false;
@@ -802,6 +817,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onUserStatus: _onUserStatusUpdate,
       onUnreadCountUpdated: _onUnreadCountUpdated,
       onUserAppearanceUpdated: _onUserAppearanceUpdated,
+      onMessagePinned: _onMessagePinned,
+      onMessageUnpinned: _onMessageUnpinned,
+      onCallbackQueryAnswer: _onCallbackQueryAnswer,
       onUserAvatarUpdated: (event) {
         final userId = event.data['user_id']?.toString();
         final rawAvatarUrl = event.data['avatar_url']?.toString();
@@ -826,6 +844,66 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       },
       onReconnect: _triggerSilentSync,
     );
+  }
+
+  void _onMessagePinned(WebSocketEvent event) {
+    if (!mounted) return;
+    final msgMap = event.data['message'] is Map
+        ? Map<String, dynamic>.from(event.data['message'] as Map)
+        : null;
+    final msgId = event.data['message_id']?.toString() ??
+        msgMap?['id']?.toString();
+    setState(() {
+      if (msgMap != null) {
+        _pinnedMessage = Message.fromJson(msgMap);
+      } else if (msgId != null && msgId.isNotEmpty) {
+        final idx = _messages.indexWhere((m) => m.id == msgId);
+        if (idx != -1) {
+          _pinnedMessage = _messages[idx];
+        }
+      }
+    });
+  }
+
+  void _onMessageUnpinned(WebSocketEvent event) {
+    if (!mounted) return;
+    setState(() {
+      _pinnedMessage = null;
+    });
+  }
+
+  void _onCallbackQueryAnswer(WebSocketEvent event) {
+    if (!mounted) return;
+    final text = event.data['text']?.toString();
+    final showAlert = event.data['show_alert'] == true;
+    final url = event.data['url']?.toString();
+    if (url != null && url.isNotEmpty) {
+      final uri = Uri.tryParse(url);
+      if (uri != null) {
+        launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    }
+    if (text != null && text.isNotEmpty) {
+      if (showAlert) {
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            content: Text(text),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        GlassToastService().show(context, text);
+      }
+    }
   }
 
   Future<void> _saveKeyboardHeight(double height) async {
@@ -1402,6 +1480,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         quoteText: _quoteText,
         isQuote: _isQuote,
       );
+    }
+
+    if (_isBot && (_botInfo?.commands.isNotEmpty ?? false)) {
+      final shouldShowCommands =
+          text.startsWith('/') && !text.contains(' ') && !text.contains('\n');
+      if (_isBotCommandsOpen != shouldShowCommands) {
+        setState(() {
+          _isBotCommandsOpen = shouldShowCommands;
+        });
+      }
     }
 
     final bool hasText = text.trim().isNotEmpty;
@@ -2407,19 +2495,42 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       final chat = chatResult['chat'] as ChatDetails;
       setState(() {
         _chatType = chat.chatType;
+        if (chat.pinnedMessage != null) {
+          _pinnedMessage = chat.pinnedMessage;
+        }
       });
+      if (chat.pinnedMessage == null && chat.pinnedMessageId != null) {
+        unawaited(ChatService.getPinnedMessages(chatId: widget.chatId).then((list) {
+          if (!mounted) return;
+          if (list.isNotEmpty) {
+            setState(() => _pinnedMessage = list.first);
+          }
+        }));
+      }
       // Find the other participant for private chat
       for (var participant in chat.participants) {
         if (participant.id != _currentUserId) {
+          final isBotPeer = participant.isBot ||
+              participant.username.toLowerCase().endsWith('bot');
           setState(() {
             _chatName = participant.displayName.isNotEmpty
                 ? participant.displayName
                 : participant.username;
             _chatAvatar = participant.avatarUrl;
             _otherUserId = participant.id;
+            _otherUsername = participant.username;
             _isOtherUserOnline = participant.isOnline;
             _otherUserLastSeen = participant.lastSeen;
+            _isBot = isBotPeer;
+            _isVerified = participant.isVerified;
           });
+          if (isBotPeer && participant.id.isNotEmpty) {
+            unawaited(BotService.getBotInfo(participant.id).then((info) {
+              if (mounted && info != null) {
+                setState(() => _botInfo = info);
+              }
+            }));
+          }
           final lastSeenIso = participant.lastSeen?.toIso8601String();
           try {
             final db = AppDatabase();
@@ -3394,6 +3505,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           } else {
             // 5. Пометить как failed
             final errMsg = result['message']?.toString() ?? 'Failed to send message';
+            final retryAfter = result['retry_after'];
+            if (retryAfter is int && retryAfter > 0) {
+              _startSlowmodeCountdown(retryAfter);
+            }
             debugPrint('ChatService.sendMessage returned false: $errMsg');
             await syncService.markMessageFailed(pendingLocalId);
             if (mounted) {
@@ -3406,8 +3521,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                   _updateFeedItems();
                 }
               });
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(errMsg)),
+              GlassToastService().show(
+                context,
+                retryAfter is int && retryAfter > 0
+                    ? 'Подождите $retryAfter сек. перед отправкой'
+                    : errMsg,
+                icon: Icons.error_outline,
               );
             }
           }
@@ -3603,6 +3722,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                         : null),
                 isChannel: false,
                 isMuted: _isMuted,
+                isBot: _isBot,
+                isVerified: _isVerified,
                 heroTag: heroTag,
                 onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: _viewUserProfile,
@@ -3620,8 +3741,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                   onSearchInChat: _searchMessages,
                   onJumpToMessageId: _scrollToMessage,
                 ),
-                onVoiceCall: _startVoiceCall,
-                onVideoCall: _startVideoCall,
+                onVoiceCall: _isBot ? null : _startVoiceCall,
+                onVideoCall: _isBot ? null : _startVideoCall,
                 onSearch: _searchMessages,
                 onToggleMute: _toggleMuteNotifications,
                 onClearHistory: _showClearHistoryDialog,
@@ -3648,7 +3769,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     // В glass-режиме Scaffold без appBar, поэтому нужно учесть
     // высоту статус-бара + AppBar для верхнего отступа контента
-    final topPadding = mediaQuery.padding.top + kToolbarHeight + 16.0;
+    final pinnedOffset = _pinnedMessage != null ? 48.0 : 0.0;
+    final topPadding = mediaQuery.padding.top + kToolbarHeight + 16.0 + pinnedOffset;
     final bottomInset = mediaQuery.viewInsets.bottom;
 
     // Cap panel height to ensure it doesn't cover the entire chat in small windows
@@ -3733,6 +3855,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         return const Center(child: CircularProgressIndicator());
       }
       if (_messages.isEmpty) {
+        if (_isBot) {
+          return BotWelcomeCard(
+            botName: widget.otherUserName ?? _chatName,
+            botUsername: _otherUsername,
+            botInfo: _botInfo,
+            onCommandTap: (cmd) => _sendMessage(cleanText: cmd),
+          );
+        }
         return Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -3860,9 +3990,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                     ChatBottomScrollEdge(
                       height: math.max(safeBottom + 52.0, 52.0),
                     ),
+                    // Баннер закреплённого сообщения
+                    if (_pinnedMessage != null)
+                      Positioned(
+                        top: MediaQuery.paddingOf(context).top +
+                            kFloatingAppBarTotalHeight +
+                            4,
+                        left: 8,
+                        right: 8,
+                        child: PinnedMessageBanner(
+                          message: _pinnedMessage!,
+                          onTap: () => _scrollToMessage(_pinnedMessage!.id),
+                          onUnpin: () => _togglePinMessage(_pinnedMessage!),
+                        ),
+                      ),
                     // Плеер видео/аудио (помещаем в корневой Stack, чтобы hitTest работал)
                     Positioned(
-                      top: MediaQuery.paddingOf(context).top + kFloatingAppBarTotalHeight,
+                      top: MediaQuery.paddingOf(context).top +
+                          kFloatingAppBarTotalHeight +
+                          pinnedOffset,
                       left: 0,
                       right: 0,
                       child: MediaNotePlayerHeader(
@@ -3879,7 +4025,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                     // Закреплённая (sticky) плашка с датой вверху области чтения чата
                     Positioned(
                       top: MediaQuery.paddingOf(context).top +
-                          kFloatingAppBarTotalHeight,
+                          kFloatingAppBarTotalHeight +
+                          pinnedOffset,
                       left: 0,
                       right: 0,
                       child: Center(
@@ -4344,52 +4491,183 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     );
   }
 
-  Widget _buildMessageInput() {
-    return ChatInputBar(
-      controller: _textController,
-      focusNode: _inputFocusNode,
-      isEditing: _isEditing,
-      onCancelEditing: _cancelEditing,
-      onEditLastMessage: _editLastOwnMessage,
-      isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
-      onTapInputWhenEmojiOpen: _onEmojiToggle,
-      replyToMessage: _replyToMessage,
-      isQuote: _isQuote,
-      quoteText: _quoteText,
-      quoteOffset: _quoteOffset,
-      quoteLength: _quoteLength,
-      onCancelReply: _cancelReply,
-      onTapReply: _replyToMessage != null
-          ? () => _scrollToMessage(_replyToMessage!.id)
-          : null,
-      attachedFiles: _attachedFiles,
-      attachedFileNames: _attachedFileNames,
-      onRemoveAttachment: _removeAttachedFile,
-      isUploading: _isUploading,
-      uploadProgress: _uploadProgress,
-      uploadProgressNotifier: _uploadProgressNotifier,
-      onChanged: _onInputTextChanged,
-      onSend: _sendMessage,
-      onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
-        _sendMessage(
-          cleanText: cleanText,
-          entities: entities,
-          linkPreviewOptions: linkPreviewOptions,
-          invertMedia: invertMedia,
+  List<List<Map<String, dynamic>>> get _activeReplyKeyboard {
+    if (!_isBot) return const [];
+    for (final msg in _messages) {
+      if (msg.senderId != _currentUserId && msg.replyKeyboard.isNotEmpty) {
+        return msg.replyKeyboard;
+      }
+      if (msg.senderId != _currentUserId &&
+          msg.replyMarkup?['remove_keyboard'] == true) {
+        return const [];
+      }
+    }
+    return const [];
+  }
+
+  void _startSlowmodeCountdown(int seconds) {
+    if (seconds <= 0) return;
+    _slowmodeTimer?.cancel();
+    if (mounted) {
+      setState(() => _slowmodeRemainingSeconds = seconds);
+    }
+    _slowmodeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_slowmodeRemainingSeconds <= 1) {
+        timer.cancel();
+        setState(() => _slowmodeRemainingSeconds = 0);
+      } else {
+        setState(() => _slowmodeRemainingSeconds--);
+      }
+    });
+  }
+
+  Future<void> _togglePinMessage(Message message) async {
+    final isCurrentlyPinned = _pinnedMessage?.id == message.id;
+    if (isCurrentlyPinned) {
+      setState(() => _pinnedMessage = null);
+      final res = await ChatService.unpinMessage(
+        chatId: widget.chatId,
+        messageId: message.id,
+      );
+      if (res['success'] == true && mounted) {
+        GlassToastService().show(
+          context,
+          'Сообщение откреплено',
+          iconWidget: iconoir.PinSlash(
+            width: 20,
+            height: 20,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
         );
-      },
-      onAttach: _showAttachmentPicker,
-      onEmoji: _onEmojiToggle,
-      onStartVideoRecord: _onStartVideoRecord,
-      onVideoRecordMove: _onVideoRecordMove,
-      onVideoRecordEnd: _onVideoRecordEnd,
-      onVideoRecordCancel: _onVideoRecordCancel,
-      onStartVoiceRecord: _onStartVoiceRecord,
-      onVoiceRecordMove: _onVoiceRecordMove,
-      onVoiceRecordEnd: _onVoiceRecordEnd,
-      onVoiceRecordCancel: _onVoiceRecordCancel,
-      currentUserId: _currentUserId,
-      isSending: _isSending,
+      }
+    } else {
+      setState(() => _pinnedMessage = message);
+      final res = await ChatService.pinMessage(
+        chatId: widget.chatId,
+        messageId: message.id,
+      );
+      if (res['success'] == true && mounted) {
+        GlassToastService().show(
+          context,
+          'Сообщение закреплено',
+          iconWidget: iconoir.Pin(
+            width: 20,
+            height: 20,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _forwardMessagesToPickedChat(List<String> messageIds) async {
+    if (messageIds.isEmpty) return;
+    await ForwardChatPickerSheet.show(
+      context,
+      fromChatId: widget.chatId,
+      messageIds: messageIds,
+    );
+  }
+
+  Widget _buildMessageInput() {
+    final commands = _botInfo?.commands ?? const <BotCommand>[];
+    final replyKb = _activeReplyKeyboard;
+    final hasReplyKb = replyKb.isNotEmpty;
+
+    if (_isBot && _messages.isEmpty && !_isLoading) {
+      return BotStartBar(
+        isLoading: _isSending,
+        onStartPressed: () {
+          _textController.text = '/start';
+          _sendMessage(cleanText: '/start');
+        },
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_isBot && _isBotCommandsOpen && commands.isNotEmpty)
+          BotCommandsPopup(
+            commands: commands,
+            filterQuery: _textController.text,
+            onClose: () => setState(() => _isBotCommandsOpen = false),
+            onSelectCommand: (cmd) {
+              setState(() => _isBotCommandsOpen = false);
+              _textController.text = cmd.normalizedCommand;
+              _sendMessage(cleanText: cmd.normalizedCommand);
+            },
+          ),
+        ChatInputBar(
+          controller: _textController,
+          focusNode: _inputFocusNode,
+          isEditing: _isEditing,
+          onCancelEditing: _cancelEditing,
+          onEditLastMessage: _editLastOwnMessage,
+          isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
+          onTapInputWhenEmojiOpen: _onEmojiToggle,
+          replyToMessage: _replyToMessage,
+          isQuote: _isQuote,
+          quoteText: _quoteText,
+          quoteOffset: _quoteOffset,
+          quoteLength: _quoteLength,
+          onCancelReply: _cancelReply,
+          onTapReply: _replyToMessage != null
+              ? () => _scrollToMessage(_replyToMessage!.id)
+              : null,
+          attachedFiles: _attachedFiles,
+          attachedFileNames: _attachedFileNames,
+          onRemoveAttachment: _removeAttachedFile,
+          isUploading: _isUploading,
+          uploadProgress: _uploadProgress,
+          uploadProgressNotifier: _uploadProgressNotifier,
+          onChanged: _onInputTextChanged,
+          onSend: _sendMessage,
+          onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
+            _sendMessage(
+              cleanText: cleanText,
+              entities: entities,
+              linkPreviewOptions: linkPreviewOptions,
+              invertMedia: invertMedia,
+            );
+          },
+          onAttach: _showAttachmentPicker,
+          onEmoji: _onEmojiToggle,
+          onStartVideoRecord: _onStartVideoRecord,
+          onVideoRecordMove: _onVideoRecordMove,
+          onVideoRecordEnd: _onVideoRecordEnd,
+          onVideoRecordCancel: _onVideoRecordCancel,
+          onStartVoiceRecord: _onStartVoiceRecord,
+          onVoiceRecordMove: _onVoiceRecordMove,
+          onVoiceRecordEnd: _onVoiceRecordEnd,
+          onVoiceRecordCancel: _onVoiceRecordCancel,
+          currentUserId: _currentUserId,
+          isSending: _isSending,
+          showBotCommandsButton: _isBot && commands.isNotEmpty,
+          isBotCommandsOpen: _isBotCommandsOpen,
+          onToggleBotCommands: () {
+            setState(() => _isBotCommandsOpen = !_isBotCommandsOpen);
+          },
+          hasReplyKeyboard: hasReplyKb,
+          isReplyKeyboardOpen: _isReplyKeyboardOpen,
+          onToggleReplyKeyboard: () {
+            setState(() => _isReplyKeyboardOpen = !_isReplyKeyboardOpen);
+          },
+          slowmodeRemainingSeconds: _slowmodeRemainingSeconds,
+        ),
+        if (hasReplyKb && _isReplyKeyboardOpen)
+          ReplyKeyboardPanel(
+            rows: replyKb,
+            onButtonPressed: (btnText) {
+              _textController.text = btnText;
+              _sendMessage(cleanText: btnText);
+            },
+          ),
+      ],
     );
   }
 
@@ -5559,6 +5837,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _typingTimer?.cancel();
     _watchingEmojiTimer?.cancel();
     _highlightTimer?.cancel();
+    _slowmodeTimer?.cancel();
 
     if (_registeredTileId != null) {
       TilingLayoutController.instance.unregisterTileBackHandler(
@@ -5896,12 +6175,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   void _forwardSelectedMessages() {
     if (_selectedMessageIds.isEmpty) return;
-    GlassToastService().show(
-      context,
-      'Пересылка скоро появится',
-      icon: Icons.forward,
-    );
+    final ids = _selectedMessageIds.toList();
     _clearSelection();
+    _forwardMessagesToPickedChat(ids);
   }
 
   void _deleteSelectedMessages() {
@@ -6198,18 +6474,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           ? null
           : (selectedText, offset, length) =>
               _startQuote(message, selectedText, offset, length),
-      onPin: () {
-        // TODO: Pin message
-        GlassToastService().show(
-          context,
-          'Сообщение закреплено',
-          iconWidget: iconoir.Pin(
-            width: 20,
-            height: 20,
-            color: Theme.of(context).colorScheme.onSurface,
-          ),
-        );
-      },
+      onPin: () => _togglePinMessage(message),
+      isPinned: _pinnedMessage?.id == message.id,
+      onForward: () => _forwardMessagesToPickedChat([message.id]),
       onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
         setState(() {
           _cancelReply();

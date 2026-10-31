@@ -63,6 +63,9 @@ import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/message_context_menu_service.dart';
+import '../../widgets/chat/forward_chat_picker_sheet.dart';
+import '../../widgets/chat/pinned_message_banner.dart';
+import '../../widgets/message/inline_keyboard_widget.dart';
 import '../settings/profile_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
@@ -129,6 +132,8 @@ class _ChannelScreenState extends State<ChannelScreen>
   int _subscriberCount = 0;
   bool _isAdmin = false;
   bool _isMuted = false;
+  bool _isVerified = false;
+  Message? _pinnedMessage;
   bool _showScrollDownFab = false;
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
@@ -652,8 +657,30 @@ class _ChannelScreenState extends State<ChannelScreen>
       onNewMessage: _onNewMessage,
       onMessageEdited: _onMessageEdited,
       onMessageDeleted: _onMessageDeleted,
+      onMessagePinned: _onMessagePinned,
+      onMessageUnpinned: _onMessageUnpinned,
       onReconnect: _triggerSilentSync,
     );
+  }
+
+  void _onMessagePinned(WebSocketEvent event) {
+    if (!mounted) return;
+    final msgRaw = event.data['message'] ?? event.data['pinned_message'];
+    final msgId = event.data['message_id']?.toString() ??
+        event.data['pinned_message_id']?.toString();
+    if (msgRaw is Map<String, dynamic>) {
+      setState(() => _pinnedMessage = Message.fromJson(msgRaw));
+    } else if (msgId != null && msgId.isNotEmpty) {
+      final found = _messages.where((m) => m.id == msgId);
+      if (found.isNotEmpty) {
+        setState(() => _pinnedMessage = found.first);
+      }
+    }
+  }
+
+  void _onMessageUnpinned(WebSocketEvent event) {
+    if (!mounted) return;
+    setState(() => _pinnedMessage = null);
   }
 
   @override
@@ -884,6 +911,10 @@ class _ChannelScreenState extends State<ChannelScreen>
         _channelName = chat.name;
         _channelAvatar = chat.avatarUrl;
         _subscriberCount = chat.participants.length;
+        _isVerified = chat.isVerified;
+        if (chat.pinnedMessage != null) {
+          _pinnedMessage = chat.pinnedMessage;
+        }
         // Check if current user is admin or owner
         for (var p in chat.participants) {
           if (p.id == _currentUserId &&
@@ -893,6 +924,14 @@ class _ChannelScreenState extends State<ChannelScreen>
           }
         }
       });
+      if (chat.pinnedMessage == null && chat.pinnedMessageId != null) {
+        unawaited(ChatService.getPinnedMessages(chatId: widget.channelId).then((list) {
+          if (!mounted) return;
+          if (list.isNotEmpty) {
+            setState(() => _pinnedMessage = list.first);
+          }
+        }));
+      }
       if (_isAdmin && _isDesktopPlatform) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _isMyTileActive()) {
@@ -2077,6 +2116,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         name: displayName,
         avatarUrl: widget.channelAvatar ?? _channelAvatar,
         isOnline: false, // Channel doesn't have online status
+        isVerified: _isVerified,
         statusText: subscriberText,
         isChannel: true, // Calls hidden in channel
         isMuted: _isMuted,
@@ -2195,7 +2235,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                   isLoadingMore: _isLoadingMore,
                   itemCount: _messages.length,
                   scrollController: _scrollController,
-                  topPadding: topPadding,
+                  topPadding: topPadding + (_pinnedMessage != null ? 52.0 : 0.0),
                   bottomPadding: _isAdmin ? _inputHeight + effectiveBottom + 8 : 16,
                   emptyTitle: 'No posts yet',
                   itemBuilder: (context, index) {
@@ -2208,15 +2248,36 @@ class _ChannelScreenState extends State<ChannelScreen>
                 top: topPadding + 4.0,
                 left: 0,
                 right: 0,
-                child: MediaNotePlayerHeader(
-                  chatId: widget.channelId,
-                  onScrollToActive: () {
-                    final activeId = VoicePlaybackService().activeMessageId ??
-                        VideoNotePlaybackService().activeMessageId;
-                    if (activeId != null) {
-                      _scrollToMessage(activeId);
-                    }
-                  },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_pinnedMessage != null)
+                      PinnedMessageBanner(
+                        message: _pinnedMessage!,
+                        canUnpin: _isAdmin,
+                        onTap: () => _scrollToMessage(_pinnedMessage!.id),
+                        onUnpin: _isAdmin
+                            ? () async {
+                                final msgId = _pinnedMessage!.id;
+                                setState(() => _pinnedMessage = null);
+                                await ChatService.unpinMessage(
+                                  chatId: widget.channelId,
+                                  messageId: msgId,
+                                );
+                              }
+                            : null,
+                      ),
+                    MediaNotePlayerHeader(
+                      chatId: widget.channelId,
+                      onScrollToActive: () {
+                        final activeId = VoicePlaybackService().activeMessageId ??
+                            VideoNotePlaybackService().activeMessageId;
+                        if (activeId != null) {
+                          _scrollToMessage(activeId);
+                        }
+                      },
+                    ),
+                  ],
                 ),
               ),
               if (_isAdmin && (_emojiPanelAnimation.value > 0 || _showEmojiPanel))
@@ -2426,6 +2487,15 @@ class _ChannelScreenState extends State<ChannelScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Header box: Forwarded info or Reply info
+              if (message.forwardFromName != null &&
+                  message.forwardFromName!.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4.0),
+                  child: MessageReplyInfo.forwarded(
+                    authorName: message.forwardFromName!,
+                    isMe: false,
+                  ),
+                ),
               if (message.hasReply)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4.0),
@@ -2744,6 +2814,17 @@ class _ChannelScreenState extends State<ChannelScreen>
                             child: metadataRow,
                           ),
                         ),
+                      if (message.inlineKeyboard.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: InlineKeyboardWidget(
+                            chatId: message.chatId.isNotEmpty
+                                ? message.chatId
+                                : widget.channelId,
+                            messageId: message.id,
+                            rows: message.inlineKeyboard,
+                          ),
+                        ),
                     ],
                   );
                 },
@@ -2893,6 +2974,54 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
+  Future<void> _togglePinMessage(Message message) async {
+    final isCurrentlyPinned = _pinnedMessage?.id == message.id;
+    if (isCurrentlyPinned) {
+      setState(() => _pinnedMessage = null);
+      final res = await ChatService.unpinMessage(
+        chatId: widget.channelId,
+        messageId: message.id,
+      );
+      if (res['success'] == true && mounted) {
+        GlassToastService().show(
+          context,
+          'Пост откреплен',
+          iconWidget: iconoir.PinSlash(
+            width: 20,
+            height: 20,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+        );
+      }
+    } else {
+      setState(() => _pinnedMessage = message);
+      final res = await ChatService.pinMessage(
+        chatId: widget.channelId,
+        messageId: message.id,
+      );
+      if (res['success'] == true && mounted) {
+        GlassToastService().show(
+          context,
+          'Пост закреплен',
+          iconWidget: iconoir.Pin(
+            width: 20,
+            height: 20,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _forwardMessagesToPickedChat(List<String> messageIds) async {
+    if (messageIds.isEmpty) return;
+    await ForwardChatPickerSheet.show(
+      context,
+      fromChatId: widget.channelId,
+      messageIds: messageIds,
+    );
+  }
+
   void _showContextMenu(
     Message message,
     bool isMe,
@@ -2933,7 +3062,9 @@ class _ChannelScreenState extends State<ChannelScreen>
               _startQuote(message, selectedText, offset, length)
           : null,
       onSelect: () => _enterSelectionMode(message),
-      onPin: () {},
+      onPin: _isAdmin ? () => _togglePinMessage(message) : null,
+      isPinned: _pinnedMessage?.id == message.id,
+      onForward: () => _forwardMessagesToPickedChat([message.id]),
       onEdit: (_isAdmin && !isVideoNote && !isVoiceNote && !isPoll)
           ? () {
               setState(() {
@@ -3022,12 +3153,9 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   void _forwardSelectedMessages() {
     if (_selectedMessageIds.isEmpty) return;
-    GlassToastService().show(
-      context,
-      'Пересылка скоро появится',
-      icon: Icons.forward,
-    );
+    final ids = _selectedMessageIds.toList();
     _clearSelection();
+    _forwardMessagesToPickedChat(ids);
   }
 
   void _deleteSelectedMessages() {

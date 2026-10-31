@@ -17,6 +17,7 @@ class CreateChannelScreen extends StatefulWidget {
 class _CreateChannelScreenState extends State<CreateChannelScreen> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _usernameController = TextEditingController();
   
   // Channel settings
   bool _isPublic = true;
@@ -30,6 +31,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
   void dispose() {
     _nameController.dispose();
     _descriptionController.dispose();
+    _usernameController.dispose();
     super.dispose();
   }
 
@@ -46,10 +48,14 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
     setState(() => _isLoading = true);
 
     try {
+      final rawUsername = _usernameController.text.trim().replaceAll('@', '');
       // Create channel via API
       final result = await ChatService.createChat(
         chatType: 'channel',
         name: _nameController.text.trim(),
+        description: _descriptionController.text.trim(),
+        isPublic: _isPublic,
+        username: _isPublic && rawUsername.isNotEmpty ? rawUsername : null,
         participantIds: [], // Channel creator is added automatically
       );
 
@@ -208,6 +214,19 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
               onChanged: (value) => setState(() => _isPublic = value!),
               activeColor: const Color(0xFF0088CC),
             ),
+            if (_isPublic) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Публичная ссылка (@username)',
+                  hintText: 'channel_username',
+                  prefixText: '@',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.alternate_email),
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
             
             // Channel settings section

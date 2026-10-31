@@ -32,6 +32,15 @@ class Chats extends Table {
   TextColumn get lastMessageFileUrl => text().nullable()();
   TextColumn get lastMessageGroupedId => text().nullable()();
   TextColumn get otherUserId => text().nullable()();
+  IntColumn get lastReadInboxMessageId =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get lastReadOutboxMessageId =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get pinnedMessageId => integer().nullable()();
+  TextColumn get username => text().nullable()();
+  BoolColumn get isPublic => boolean().withDefault(const Constant(false))();
+  BoolColumn get isBot => boolean().withDefault(const Constant(false))();
+  BoolColumn get isVerified => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -193,7 +202,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -296,6 +305,29 @@ class AppDatabase extends _$AppDatabase {
             );
             await customStatement(
               'ALTER TABLE chats ADD COLUMN other_user_id TEXT',
+            );
+          }
+          if (from < 10) {
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_read_inbox_message_id INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_read_outbox_message_id INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN pinned_message_id INTEGER',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN username TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0',
             );
           }
         },
@@ -941,6 +973,100 @@ class AppDatabase extends _$AppDatabase {
           : (readAt != null ? const Value(true) : const Value.absent()),
       mediaPayload: Value(jsonEncode(mp)),
     ));
+  }
+
+  /// Обновить High-Water Mark прочтения чата (lastReadInboxMessageId / lastReadOutboxMessageId)
+  Future<void> updateChatReadHwm(
+    String chatId, {
+    int? lastReadInboxMessageId,
+    int? lastReadOutboxMessageId,
+    int? unreadCount,
+  }) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    final existing = await getChat(chatId);
+    if (existing == null) return;
+
+    final nextInbox = lastReadInboxMessageId != null &&
+            lastReadInboxMessageId > existing.lastReadInboxMessageId
+        ? lastReadInboxMessageId
+        : existing.lastReadInboxMessageId;
+    final nextOutbox = lastReadOutboxMessageId != null &&
+            lastReadOutboxMessageId > existing.lastReadOutboxMessageId
+        ? lastReadOutboxMessageId
+        : existing.lastReadOutboxMessageId;
+
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        lastReadInboxMessageId: Value(nextInbox),
+        lastReadOutboxMessageId: Value(nextOutbox),
+        unreadCount:
+            unreadCount != null ? Value(unreadCount) : const Value.absent(),
+      ),
+    );
+  }
+
+  /// Обновить ID закреплённого сообщения в чате
+  Future<void> updateChatPinnedMessageId(
+    String chatId,
+    int? pinnedMessageId,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        pinnedMessageId: Value(pinnedMessageId),
+      ),
+    );
+  }
+
+  /// Пометить исходящие сообщения пользователя в чате прочитанными до maxMessageId (O(1) HWM)
+  Future<void> markOutboxMessagesReadUpTo(
+    String chatId,
+    String myUserId,
+    int maxMessageId, {
+    String? readAt,
+  }) async {
+    if (chatId.isEmpty || maxMessageId <= 0) return;
+    await ensureInitialized();
+    await updateChatReadHwm(
+      chatId,
+      lastReadOutboxMessageId: maxMessageId,
+    );
+    final effectiveReadAt = readAt ?? DateTime.now().toUtc().toIso8601String();
+    final unreadOutbox = await (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (myUserId.isNotEmpty ? t.senderId.equals(myUserId) : const Constant(true)) &
+              t.isRead.equals(false)))
+        .get();
+    if (unreadOutbox.isEmpty) return;
+
+    await batch((b) {
+      for (final msg in unreadOutbox) {
+        final sid = int.tryParse(msg.serverId ?? msg.localId) ?? 0;
+        if (sid > 0 && sid <= maxMessageId) {
+          Map<String, dynamic> mp = {};
+          if (msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty) {
+            try {
+              final decoded = jsonDecode(msg.mediaPayload!);
+              if (decoded is Map) {
+                mp = Map<String, dynamic>.from(decoded);
+              }
+            } catch (_) {}
+          }
+          mp['read_at'] ??= effectiveReadAt;
+          b.update(
+            messages,
+            MessagesCompanion(
+              isRead: const Value(true),
+              mediaPayload: Value(jsonEncode(mp)),
+            ),
+            where: (t) => t.localId.equals(msg.localId),
+          );
+        }
+      }
+    });
   }
 
   // === SYNC STATE ===

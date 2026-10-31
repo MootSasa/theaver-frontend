@@ -13,6 +13,7 @@ import '../../utils/blur_utils.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../common/peer_badges_widget.dart';
 import '../tiling/tile_viewport_scope.dart';
 import '../user/avatar_with_status.dart';
 import 'animated_ellipsis_text.dart';
@@ -80,6 +81,8 @@ class FloatingGlassAppBar extends StatefulWidget {
   final VoidCallback? onAvatarTap;
   final bool isChannel;
   final bool isMuted;
+  final bool isBot;
+  final bool isVerified;
   final VoidCallback? onVoiceCall;
   final VoidCallback? onVideoCall;
   final VoidCallback? onSearch;
@@ -112,6 +115,8 @@ class FloatingGlassAppBar extends StatefulWidget {
     this.onAvatarTap,
     this.isChannel = false,
     this.isMuted = false,
+    this.isBot = false,
+    this.isVerified = false,
     this.onVoiceCall,
     this.onVideoCall,
     this.onSearch,
@@ -776,17 +781,29 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                     type: MaterialType.transparency,
                     child: _MarqueeScrollWrapper(
                       child: widget.titleWidget ??
-                          Text(
-                            widget.name,
-                            style: TextStyle(
-                              fontSize: _kTitleFontSize,
-                              fontWeight: FontWeight.w600,
-                              color: primaryTextColor,
-                              fontFamily: theme.textTheme.bodyMedium?.fontFamily,
-                            ),
-                            maxLines: 1,
-                            textAlign: TextAlign.left,
-                            overflow: TextOverflow.ellipsis,
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  widget.name,
+                                  style: TextStyle(
+                                    fontSize: _kTitleFontSize,
+                                    fontWeight: FontWeight.w600,
+                                    color: primaryTextColor,
+                                    fontFamily: theme.textTheme.bodyMedium?.fontFamily,
+                                  ),
+                                  maxLines: 1,
+                                  textAlign: TextAlign.left,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (widget.isBot || widget.isVerified)
+                                PeerBadgesRow(
+                                  isBot: widget.isBot,
+                                  isVerified: widget.isVerified,
+                                ),
+                            ],
                           ),
                     ),
                   ),
@@ -812,7 +829,9 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                               ),
                             );
                           }
-                          if (widget.statusText != null) {
+                          final effectiveStatusText =
+                              widget.statusText ?? (widget.isBot ? 'бот' : null);
+                          if (effectiveStatusText != null) {
                             final isHardcodedGrey = widget.statusColor == Colors.grey[600] ||
                                 widget.statusColor == Colors.grey;
                             final defaultAccent = isDark
@@ -822,7 +841,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                 ? secondaryTextColor
                                 : (widget.statusColor == theme.colorScheme.primary ? defaultAccent : widget.statusColor);
                             return AnimatedEllipsisText(
-                              text: widget.statusText!,
+                              text: effectiveStatusText,
                               style: TextStyle(
                                 fontSize: _kStatusFontSize,
                                 color: effectiveColor,

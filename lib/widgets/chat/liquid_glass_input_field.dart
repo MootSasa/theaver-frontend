@@ -77,6 +77,13 @@ class LiquidGlassInputField extends StatefulWidget {
   final VoidCallback? onEditLastMessage;
   final bool isEmojiPanelOpen;
   final VoidCallback? onTapInputWhenEmojiOpen;
+  final bool showBotCommandsButton;
+  final bool isBotCommandsOpen;
+  final VoidCallback? onToggleBotCommands;
+  final bool hasReplyKeyboard;
+  final bool isReplyKeyboardOpen;
+  final VoidCallback? onToggleReplyKeyboard;
+  final int slowmodeRemainingSeconds;
 
   const LiquidGlassInputField({
     Key? key,
@@ -105,6 +112,13 @@ class LiquidGlassInputField extends StatefulWidget {
     this.onEditLastMessage,
     this.isEmojiPanelOpen = false,
     this.onTapInputWhenEmojiOpen,
+    this.showBotCommandsButton = false,
+    this.isBotCommandsOpen = false,
+    this.onToggleBotCommands,
+    this.hasReplyKeyboard = false,
+    this.isReplyKeyboardOpen = false,
+    this.onToggleReplyKeyboard,
+    this.slowmodeRemainingSeconds = 0,
   }) : super(key: key);
 
   @override
@@ -579,10 +593,65 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                 )
               : const SizedBox.shrink(),
         ),
-        if (widget.onEmoji != null) const SizedBox(width: 4),
+        if (widget.showBotCommandsButton) ...[
+          const SizedBox(width: 2),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8, top: 8),
+            child: GestureDetector(
+              onTap: widget.onToggleBotCommands,
+              child: Container(
+                height: 30,
+                padding: const EdgeInsets.symmetric(horizontal: 9),
+                decoration: BoxDecoration(
+                  color: widget.isBotCommandsOpen
+                      ? rightButtonBg
+                      : rightButtonBg.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: widget.isBotCommandsOpen
+                    ? const iconoir.Xmark(
+                        width: 16,
+                        height: 16,
+                        color: Colors.white,
+                      )
+                    : Text(
+                        '/',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: rightButtonBg,
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ],
+        if (widget.onEmoji != null || widget.showBotCommandsButton)
+          const SizedBox(width: 4),
         Expanded(
           child: _buildTextField(context),
         ),
+        if (widget.hasReplyKeyboard) ...[
+          const SizedBox(width: 2),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6, top: 6),
+            child: GestureDetector(
+              onTap: widget.onToggleReplyKeyboard,
+              child: Container(
+                width: 34,
+                height: _kActionButtonSize,
+                alignment: Alignment.center,
+                child: iconoir.ViewGrid(
+                  width: 22,
+                  height: 22,
+                  color: widget.isReplyKeyboardOpen ? rightButtonBg : iconColor,
+                ),
+              ),
+            ),
+          ),
+        ],
         if (widget.onAttach != null) const SizedBox(width: 4),
         Padding(
           padding: const EdgeInsets.only(bottom: 6, top: 6),
@@ -803,13 +872,16 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: widget.controller,
       builder: (context, value, child) {
+        final isSlowmodeLocked = widget.slowmodeRemainingSeconds > 0;
         final canSend = value.text.isNotEmpty || widget.hasAttachments;
-        final color = widget.isSending ? Colors.grey : rightButtonBg;
+        final color = (widget.isSending || isSlowmodeLocked)
+            ? Colors.grey
+            : rightButtonBg;
 
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
-            if (widget.isSending) return;
+            if (widget.isSending || isSlowmodeLocked) return;
             if (canSend) {
               widget.onSend?.call();
             } else {
@@ -817,7 +889,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressStart: (details) {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onStartVideoRecord?.call();
             } else {
@@ -826,7 +898,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressMoveUpdate: (details) {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onVideoRecordMove?.call(details.offsetFromOrigin);
             } else {
@@ -834,7 +906,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressEnd: (details) {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onVideoRecordEnd?.call();
             } else {
@@ -842,7 +914,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressCancel: () {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onVideoRecordCancel?.call();
             } else {
@@ -864,33 +936,42 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white),
                   )
-                : (canSend
-                    ? const iconoir.SendDiagonalSolid(
-                        width: 22, height: 22, color: Colors.white)
-                    : AnimatedBuilder(
-                        animation: _mediaFlipController,
-                        builder: (context, child) {
-                          final angle = _mediaFlipController.value * math.pi;
-                          final isVideo = _mediaFlipController.value >= 0.5;
-                          return Transform(
-                            alignment: Alignment.center,
-                            transform: Matrix4.identity()
-                              ..setEntry(3, 2, 0.002)
-                              ..rotateY(angle + (isVideo ? math.pi : 0)),
-                            child: isVideo
-                                ? const iconoir.VideoCamera(
-                                    width: 22,
-                                    height: 22,
-                                    color: Colors.white,
-                                  )
-                                : const iconoir.MicrophoneSolid(
-                                    width: 22,
-                                    height: 22,
-                                    color: Colors.white,
-                                  ),
-                          );
-                        },
-                      )),
+                : isSlowmodeLocked
+                    ? Text(
+                        '${widget.slowmodeRemainingSeconds}s',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      )
+                    : (canSend
+                        ? const iconoir.SendDiagonalSolid(
+                            width: 22, height: 22, color: Colors.white)
+                        : AnimatedBuilder(
+                            animation: _mediaFlipController,
+                            builder: (context, child) {
+                              final angle = _mediaFlipController.value * math.pi;
+                              final isVideo = _mediaFlipController.value >= 0.5;
+                              return Transform(
+                                alignment: Alignment.center,
+                                transform: Matrix4.identity()
+                                  ..setEntry(3, 2, 0.002)
+                                  ..rotateY(angle + (isVideo ? math.pi : 0)),
+                                child: isVideo
+                                    ? const iconoir.VideoCamera(
+                                        width: 22,
+                                        height: 22,
+                                        color: Colors.white,
+                                      )
+                                    : const iconoir.MicrophoneSolid(
+                                        width: 22,
+                                        height: 22,
+                                        color: Colors.white,
+                                      ),
+                              );
+                            },
+                          )),
           ),
         );
       },

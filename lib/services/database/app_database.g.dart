@@ -116,6 +116,63 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
   late final GeneratedColumn<String> otherUserId = GeneratedColumn<String>(
       'other_user_id', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastReadInboxMessageIdMeta =
+      const VerificationMeta('lastReadInboxMessageId');
+  @override
+  late final GeneratedColumn<int> lastReadInboxMessageId = GeneratedColumn<int>(
+      'last_read_inbox_message_id', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _lastReadOutboxMessageIdMeta =
+      const VerificationMeta('lastReadOutboxMessageId');
+  @override
+  late final GeneratedColumn<int> lastReadOutboxMessageId =
+      GeneratedColumn<int>('last_read_outbox_message_id', aliasedName, false,
+          type: DriftSqlType.int,
+          requiredDuringInsert: false,
+          defaultValue: const Constant(0));
+  static const VerificationMeta _pinnedMessageIdMeta =
+      const VerificationMeta('pinnedMessageId');
+  @override
+  late final GeneratedColumn<int> pinnedMessageId = GeneratedColumn<int>(
+      'pinned_message_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _usernameMeta =
+      const VerificationMeta('username');
+  @override
+  late final GeneratedColumn<String> username = GeneratedColumn<String>(
+      'username', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isPublicMeta =
+      const VerificationMeta('isPublic');
+  @override
+  late final GeneratedColumn<bool> isPublic = GeneratedColumn<bool>(
+      'is_public', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_public" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _isBotMeta = const VerificationMeta('isBot');
+  @override
+  late final GeneratedColumn<bool> isBot = GeneratedColumn<bool>(
+      'is_bot', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_bot" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _isVerifiedMeta =
+      const VerificationMeta('isVerified');
+  @override
+  late final GeneratedColumn<bool> isVerified = GeneratedColumn<bool>(
+      'is_verified', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_verified" IN (0, 1))'),
+      defaultValue: const Constant(false));
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -133,7 +190,14 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         lastMessageIsRound,
         lastMessageFileUrl,
         lastMessageGroupedId,
-        otherUserId
+        otherUserId,
+        lastReadInboxMessageId,
+        lastReadOutboxMessageId,
+        pinnedMessageId,
+        username,
+        isPublic,
+        isBot,
+        isVerified,
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -233,6 +297,44 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           otherUserId.isAcceptableOrUnknown(
               data['other_user_id']!, _otherUserIdMeta));
     }
+    if (data.containsKey('last_read_inbox_message_id')) {
+      context.handle(
+          _lastReadInboxMessageIdMeta,
+          lastReadInboxMessageId.isAcceptableOrUnknown(
+              data['last_read_inbox_message_id']!,
+              _lastReadInboxMessageIdMeta));
+    }
+    if (data.containsKey('last_read_outbox_message_id')) {
+      context.handle(
+          _lastReadOutboxMessageIdMeta,
+          lastReadOutboxMessageId.isAcceptableOrUnknown(
+              data['last_read_outbox_message_id']!,
+              _lastReadOutboxMessageIdMeta));
+    }
+    if (data.containsKey('pinned_message_id')) {
+      context.handle(
+          _pinnedMessageIdMeta,
+          pinnedMessageId.isAcceptableOrUnknown(
+              data['pinned_message_id']!, _pinnedMessageIdMeta));
+    }
+    if (data.containsKey('username')) {
+      context.handle(_usernameMeta,
+          username.isAcceptableOrUnknown(data['username']!, _usernameMeta));
+    }
+    if (data.containsKey('is_public')) {
+      context.handle(_isPublicMeta,
+          isPublic.isAcceptableOrUnknown(data['is_public']!, _isPublicMeta));
+    }
+    if (data.containsKey('is_bot')) {
+      context.handle(
+          _isBotMeta, isBot.isAcceptableOrUnknown(data['is_bot']!, _isBotMeta));
+    }
+    if (data.containsKey('is_verified')) {
+      context.handle(
+          _isVerifiedMeta,
+          isVerified.isAcceptableOrUnknown(
+              data['is_verified']!, _isVerifiedMeta));
+    }
     return context;
   }
 
@@ -275,6 +377,26 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           data['${effectivePrefix}last_message_grouped_id']),
       otherUserId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}other_user_id']),
+      lastReadInboxMessageId: attachedDatabase.typeMapping.read(DriftSqlType.int,
+              data['${effectivePrefix}last_read_inbox_message_id']) ??
+          0,
+      lastReadOutboxMessageId: attachedDatabase.typeMapping.read(
+              DriftSqlType.int,
+              data['${effectivePrefix}last_read_outbox_message_id']) ??
+          0,
+      pinnedMessageId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}pinned_message_id']),
+      username: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}username']),
+      isPublic: attachedDatabase.typeMapping
+              .read(DriftSqlType.bool, data['${effectivePrefix}is_public']) ??
+          false,
+      isBot: attachedDatabase.typeMapping
+              .read(DriftSqlType.bool, data['${effectivePrefix}is_bot']) ??
+          false,
+      isVerified: attachedDatabase.typeMapping
+              .read(DriftSqlType.bool, data['${effectivePrefix}is_verified']) ??
+          false,
     );
   }
 
@@ -301,6 +423,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final String? lastMessageFileUrl;
   final String? lastMessageGroupedId;
   final String? otherUserId;
+  final int lastReadInboxMessageId;
+  final int lastReadOutboxMessageId;
+  final int? pinnedMessageId;
+  final String? username;
+  final bool isPublic;
+  final bool isBot;
+  final bool isVerified;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -317,7 +446,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       required this.lastMessageIsRound,
       this.lastMessageFileUrl,
       this.lastMessageGroupedId,
-      this.otherUserId});
+      this.otherUserId,
+      this.lastReadInboxMessageId = 0,
+      this.lastReadOutboxMessageId = 0,
+      this.pinnedMessageId,
+      this.username,
+      this.isPublic = false,
+      this.isBot = false,
+      this.isVerified = false});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -353,6 +489,17 @@ class DbChat extends DataClass implements Insertable<DbChat> {
     if (!nullToAbsent || otherUserId != null) {
       map['other_user_id'] = Variable<String>(otherUserId);
     }
+    map['last_read_inbox_message_id'] = Variable<int>(lastReadInboxMessageId);
+    map['last_read_outbox_message_id'] = Variable<int>(lastReadOutboxMessageId);
+    if (!nullToAbsent || pinnedMessageId != null) {
+      map['pinned_message_id'] = Variable<int>(pinnedMessageId);
+    }
+    if (!nullToAbsent || username != null) {
+      map['username'] = Variable<String>(username);
+    }
+    map['is_public'] = Variable<bool>(isPublic);
+    map['is_bot'] = Variable<bool>(isBot);
+    map['is_verified'] = Variable<bool>(isVerified);
     return map;
   }
 
@@ -390,6 +537,17 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       otherUserId: otherUserId == null && nullToAbsent
           ? const Value.absent()
           : Value(otherUserId),
+      lastReadInboxMessageId: Value(lastReadInboxMessageId),
+      lastReadOutboxMessageId: Value(lastReadOutboxMessageId),
+      pinnedMessageId: pinnedMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(pinnedMessageId),
+      username: username == null && nullToAbsent
+          ? const Value.absent()
+          : Value(username),
+      isPublic: Value(isPublic),
+      isBot: Value(isBot),
+      isVerified: Value(isVerified),
     );
   }
 
@@ -415,6 +573,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       lastMessageGroupedId:
           serializer.fromJson<String?>(json['lastMessageGroupedId']),
       otherUserId: serializer.fromJson<String?>(json['otherUserId']),
+      lastReadInboxMessageId:
+          serializer.fromJson<int?>(json['lastReadInboxMessageId']) ?? 0,
+      lastReadOutboxMessageId:
+          serializer.fromJson<int?>(json['lastReadOutboxMessageId']) ?? 0,
+      pinnedMessageId: serializer.fromJson<int?>(json['pinnedMessageId']),
+      username: serializer.fromJson<String?>(json['username']),
+      isPublic: serializer.fromJson<bool?>(json['isPublic']) ?? false,
+      isBot: serializer.fromJson<bool?>(json['isBot']) ?? false,
+      isVerified: serializer.fromJson<bool?>(json['isVerified']) ?? false,
     );
   }
   @override
@@ -437,6 +604,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'lastMessageFileUrl': serializer.toJson<String?>(lastMessageFileUrl),
       'lastMessageGroupedId': serializer.toJson<String?>(lastMessageGroupedId),
       'otherUserId': serializer.toJson<String?>(otherUserId),
+      'lastReadInboxMessageId': serializer.toJson<int>(lastReadInboxMessageId),
+      'lastReadOutboxMessageId':
+          serializer.toJson<int>(lastReadOutboxMessageId),
+      'pinnedMessageId': serializer.toJson<int?>(pinnedMessageId),
+      'username': serializer.toJson<String?>(username),
+      'isPublic': serializer.toJson<bool>(isPublic),
+      'isBot': serializer.toJson<bool>(isBot),
+      'isVerified': serializer.toJson<bool>(isVerified),
     };
   }
 
@@ -456,7 +631,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           bool? lastMessageIsRound,
           Value<String?> lastMessageFileUrl = const Value.absent(),
           Value<String?> lastMessageGroupedId = const Value.absent(),
-          Value<String?> otherUserId = const Value.absent()}) =>
+          Value<String?> otherUserId = const Value.absent(),
+          int? lastReadInboxMessageId,
+          int? lastReadOutboxMessageId,
+          Value<int?> pinnedMessageId = const Value.absent(),
+          Value<String?> username = const Value.absent(),
+          bool? isPublic,
+          bool? isBot,
+          bool? isVerified}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -482,6 +664,16 @@ class DbChat extends DataClass implements Insertable<DbChat> {
             ? lastMessageGroupedId.value
             : this.lastMessageGroupedId,
         otherUserId: otherUserId.present ? otherUserId.value : this.otherUserId,
+        lastReadInboxMessageId:
+            lastReadInboxMessageId ?? this.lastReadInboxMessageId,
+        lastReadOutboxMessageId:
+            lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
+        pinnedMessageId:
+            pinnedMessageId.present ? pinnedMessageId.value : this.pinnedMessageId,
+        username: username.present ? username.value : this.username,
+        isPublic: isPublic ?? this.isPublic,
+        isBot: isBot ?? this.isBot,
+        isVerified: isVerified ?? this.isVerified,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -514,6 +706,20 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           : this.lastMessageGroupedId,
       otherUserId:
           data.otherUserId.present ? data.otherUserId.value : this.otherUserId,
+      lastReadInboxMessageId: data.lastReadInboxMessageId.present
+          ? data.lastReadInboxMessageId.value
+          : this.lastReadInboxMessageId,
+      lastReadOutboxMessageId: data.lastReadOutboxMessageId.present
+          ? data.lastReadOutboxMessageId.value
+          : this.lastReadOutboxMessageId,
+      pinnedMessageId: data.pinnedMessageId.present
+          ? data.pinnedMessageId.value
+          : this.pinnedMessageId,
+      username: data.username.present ? data.username.value : this.username,
+      isPublic: data.isPublic.present ? data.isPublic.value : this.isPublic,
+      isBot: data.isBot.present ? data.isBot.value : this.isBot,
+      isVerified:
+          data.isVerified.present ? data.isVerified.value : this.isVerified,
     );
   }
 
@@ -535,29 +741,44 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('lastMessageIsRound: $lastMessageIsRound, ')
           ..write('lastMessageFileUrl: $lastMessageFileUrl, ')
           ..write('lastMessageGroupedId: $lastMessageGroupedId, ')
-          ..write('otherUserId: $otherUserId')
+          ..write('otherUserId: $otherUserId, ')
+          ..write('lastReadInboxMessageId: $lastReadInboxMessageId, ')
+          ..write('lastReadOutboxMessageId: $lastReadOutboxMessageId, ')
+          ..write('pinnedMessageId: $pinnedMessageId, ')
+          ..write('username: $username, ')
+          ..write('isPublic: $isPublic, ')
+          ..write('isBot: $isBot, ')
+          ..write('isVerified: $isVerified')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
-      chatId,
-      chatType,
-      name,
-      avatarUrl,
-      lastMessage,
-      lastMessageTime,
-      updatedAt,
-      unreadCount,
-      isOnline,
-      lastSeen,
-      isPinned,
-      lastMessageType,
-      lastMessageIsRound,
-      lastMessageFileUrl,
-      lastMessageGroupedId,
-      otherUserId);
+  int get hashCode => Object.hashAll([
+        chatId,
+        chatType,
+        name,
+        avatarUrl,
+        lastMessage,
+        lastMessageTime,
+        updatedAt,
+        unreadCount,
+        isOnline,
+        lastSeen,
+        isPinned,
+        lastMessageType,
+        lastMessageIsRound,
+        lastMessageFileUrl,
+        lastMessageGroupedId,
+        otherUserId,
+        lastReadInboxMessageId,
+        lastReadOutboxMessageId,
+        pinnedMessageId,
+        username,
+        isPublic,
+        isBot,
+        isVerified,
+      ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -577,7 +798,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.lastMessageIsRound == this.lastMessageIsRound &&
           other.lastMessageFileUrl == this.lastMessageFileUrl &&
           other.lastMessageGroupedId == this.lastMessageGroupedId &&
-          other.otherUserId == this.otherUserId);
+          other.otherUserId == this.otherUserId &&
+          other.lastReadInboxMessageId == this.lastReadInboxMessageId &&
+          other.lastReadOutboxMessageId == this.lastReadOutboxMessageId &&
+          other.pinnedMessageId == this.pinnedMessageId &&
+          other.username == this.username &&
+          other.isPublic == this.isPublic &&
+          other.isBot == this.isBot &&
+          other.isVerified == this.isVerified);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -597,6 +825,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<String?> lastMessageFileUrl;
   final Value<String?> lastMessageGroupedId;
   final Value<String?> otherUserId;
+  final Value<int> lastReadInboxMessageId;
+  final Value<int> lastReadOutboxMessageId;
+  final Value<int?> pinnedMessageId;
+  final Value<String?> username;
+  final Value<bool> isPublic;
+  final Value<bool> isBot;
+  final Value<bool> isVerified;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -615,6 +850,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.lastMessageFileUrl = const Value.absent(),
     this.lastMessageGroupedId = const Value.absent(),
     this.otherUserId = const Value.absent(),
+    this.lastReadInboxMessageId = const Value.absent(),
+    this.lastReadOutboxMessageId = const Value.absent(),
+    this.pinnedMessageId = const Value.absent(),
+    this.username = const Value.absent(),
+    this.isPublic = const Value.absent(),
+    this.isBot = const Value.absent(),
+    this.isVerified = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -634,6 +876,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.lastMessageFileUrl = const Value.absent(),
     this.lastMessageGroupedId = const Value.absent(),
     this.otherUserId = const Value.absent(),
+    this.lastReadInboxMessageId = const Value.absent(),
+    this.lastReadOutboxMessageId = const Value.absent(),
+    this.pinnedMessageId = const Value.absent(),
+    this.username = const Value.absent(),
+    this.isPublic = const Value.absent(),
+    this.isBot = const Value.absent(),
+    this.isVerified = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -656,6 +905,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<String>? lastMessageFileUrl,
     Expression<String>? lastMessageGroupedId,
     Expression<String>? otherUserId,
+    Expression<int>? lastReadInboxMessageId,
+    Expression<int>? lastReadOutboxMessageId,
+    Expression<int>? pinnedMessageId,
+    Expression<String>? username,
+    Expression<bool>? isPublic,
+    Expression<bool>? isBot,
+    Expression<bool>? isVerified,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -678,6 +934,15 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       if (lastMessageGroupedId != null)
         'last_message_grouped_id': lastMessageGroupedId,
       if (otherUserId != null) 'other_user_id': otherUserId,
+      if (lastReadInboxMessageId != null)
+        'last_read_inbox_message_id': lastReadInboxMessageId,
+      if (lastReadOutboxMessageId != null)
+        'last_read_outbox_message_id': lastReadOutboxMessageId,
+      if (pinnedMessageId != null) 'pinned_message_id': pinnedMessageId,
+      if (username != null) 'username': username,
+      if (isPublic != null) 'is_public': isPublic,
+      if (isBot != null) 'is_bot': isBot,
+      if (isVerified != null) 'is_verified': isVerified,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -699,6 +964,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<String?>? lastMessageFileUrl,
       Value<String?>? lastMessageGroupedId,
       Value<String?>? otherUserId,
+      Value<int>? lastReadInboxMessageId,
+      Value<int>? lastReadOutboxMessageId,
+      Value<int?>? pinnedMessageId,
+      Value<String?>? username,
+      Value<bool>? isPublic,
+      Value<bool>? isBot,
+      Value<bool>? isVerified,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -717,6 +989,15 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       lastMessageFileUrl: lastMessageFileUrl ?? this.lastMessageFileUrl,
       lastMessageGroupedId: lastMessageGroupedId ?? this.lastMessageGroupedId,
       otherUserId: otherUserId ?? this.otherUserId,
+      lastReadInboxMessageId:
+          lastReadInboxMessageId ?? this.lastReadInboxMessageId,
+      lastReadOutboxMessageId:
+          lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
+      pinnedMessageId: pinnedMessageId ?? this.pinnedMessageId,
+      username: username ?? this.username,
+      isPublic: isPublic ?? this.isPublic,
+      isBot: isBot ?? this.isBot,
+      isVerified: isVerified ?? this.isVerified,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -773,6 +1054,29 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     if (otherUserId.present) {
       map['other_user_id'] = Variable<String>(otherUserId.value);
     }
+    if (lastReadInboxMessageId.present) {
+      map['last_read_inbox_message_id'] =
+          Variable<int>(lastReadInboxMessageId.value);
+    }
+    if (lastReadOutboxMessageId.present) {
+      map['last_read_outbox_message_id'] =
+          Variable<int>(lastReadOutboxMessageId.value);
+    }
+    if (pinnedMessageId.present) {
+      map['pinned_message_id'] = Variable<int>(pinnedMessageId.value);
+    }
+    if (username.present) {
+      map['username'] = Variable<String>(username.value);
+    }
+    if (isPublic.present) {
+      map['is_public'] = Variable<bool>(isPublic.value);
+    }
+    if (isBot.present) {
+      map['is_bot'] = Variable<bool>(isBot.value);
+    }
+    if (isVerified.present) {
+      map['is_verified'] = Variable<bool>(isVerified.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -798,6 +1102,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('lastMessageFileUrl: $lastMessageFileUrl, ')
           ..write('lastMessageGroupedId: $lastMessageGroupedId, ')
           ..write('otherUserId: $otherUserId, ')
+          ..write('lastReadInboxMessageId: $lastReadInboxMessageId, ')
+          ..write('lastReadOutboxMessageId: $lastReadOutboxMessageId, ')
+          ..write('pinnedMessageId: $pinnedMessageId, ')
+          ..write('username: $username, ')
+          ..write('isPublic: $isPublic, ')
+          ..write('isBot: $isBot, ')
+          ..write('isVerified: $isVerified, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3012,6 +3323,13 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<String?> lastMessageFileUrl,
   Value<String?> lastMessageGroupedId,
   Value<String?> otherUserId,
+  Value<int> lastReadInboxMessageId,
+  Value<int> lastReadOutboxMessageId,
+  Value<int?> pinnedMessageId,
+  Value<String?> username,
+  Value<bool> isPublic,
+  Value<bool> isBot,
+  Value<bool> isVerified,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -3031,6 +3349,13 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<String?> lastMessageFileUrl,
   Value<String?> lastMessageGroupedId,
   Value<String?> otherUserId,
+  Value<int> lastReadInboxMessageId,
+  Value<int> lastReadOutboxMessageId,
+  Value<int?> pinnedMessageId,
+  Value<String?> username,
+  Value<bool> isPublic,
+  Value<bool> isBot,
+  Value<bool> isVerified,
   Value<int> rowid,
 });
 
@@ -3094,6 +3419,30 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<String> get otherUserId => $composableBuilder(
       column: $table.otherUserId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get lastReadInboxMessageId => $composableBuilder(
+      column: $table.lastReadInboxMessageId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get lastReadOutboxMessageId => $composableBuilder(
+      column: $table.lastReadOutboxMessageId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get pinnedMessageId => $composableBuilder(
+      column: $table.pinnedMessageId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get username => $composableBuilder(
+      column: $table.username, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isPublic => $composableBuilder(
+      column: $table.isPublic, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isBot => $composableBuilder(
+      column: $table.isBot, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isVerified => $composableBuilder(
+      column: $table.isVerified, builder: (column) => ColumnFilters(column));
 }
 
 class $$ChatsTableOrderingComposer
@@ -3157,6 +3506,30 @@ class $$ChatsTableOrderingComposer
 
   ColumnOrderings<String> get otherUserId => $composableBuilder(
       column: $table.otherUserId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get lastReadInboxMessageId => $composableBuilder(
+      column: $table.lastReadInboxMessageId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get lastReadOutboxMessageId => $composableBuilder(
+      column: $table.lastReadOutboxMessageId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get pinnedMessageId => $composableBuilder(
+      column: $table.pinnedMessageId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get username => $composableBuilder(
+      column: $table.username, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isPublic => $composableBuilder(
+      column: $table.isPublic, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isBot => $composableBuilder(
+      column: $table.isBot, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isVerified => $composableBuilder(
+      column: $table.isVerified, builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -3215,6 +3588,27 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<String> get otherUserId => $composableBuilder(
       column: $table.otherUserId, builder: (column) => column);
+
+  GeneratedColumn<int> get lastReadInboxMessageId => $composableBuilder(
+      column: $table.lastReadInboxMessageId, builder: (column) => column);
+
+  GeneratedColumn<int> get lastReadOutboxMessageId => $composableBuilder(
+      column: $table.lastReadOutboxMessageId, builder: (column) => column);
+
+  GeneratedColumn<int> get pinnedMessageId => $composableBuilder(
+      column: $table.pinnedMessageId, builder: (column) => column);
+
+  GeneratedColumn<String> get username =>
+      $composableBuilder(column: $table.username, builder: (column) => column);
+
+  GeneratedColumn<bool> get isPublic =>
+      $composableBuilder(column: $table.isPublic, builder: (column) => column);
+
+  GeneratedColumn<bool> get isBot =>
+      $composableBuilder(column: $table.isBot, builder: (column) => column);
+
+  GeneratedColumn<bool> get isVerified => $composableBuilder(
+      column: $table.isVerified, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -3256,6 +3650,13 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<String?> lastMessageFileUrl = const Value.absent(),
             Value<String?> lastMessageGroupedId = const Value.absent(),
             Value<String?> otherUserId = const Value.absent(),
+            Value<int> lastReadInboxMessageId = const Value.absent(),
+            Value<int> lastReadOutboxMessageId = const Value.absent(),
+            Value<int?> pinnedMessageId = const Value.absent(),
+            Value<String?> username = const Value.absent(),
+            Value<bool> isPublic = const Value.absent(),
+            Value<bool> isBot = const Value.absent(),
+            Value<bool> isVerified = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -3275,6 +3676,13 @@ class $$ChatsTableTableManager extends RootTableManager<
             lastMessageFileUrl: lastMessageFileUrl,
             lastMessageGroupedId: lastMessageGroupedId,
             otherUserId: otherUserId,
+            lastReadInboxMessageId: lastReadInboxMessageId,
+            lastReadOutboxMessageId: lastReadOutboxMessageId,
+            pinnedMessageId: pinnedMessageId,
+            username: username,
+            isPublic: isPublic,
+            isBot: isBot,
+            isVerified: isVerified,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3294,6 +3702,13 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<String?> lastMessageFileUrl = const Value.absent(),
             Value<String?> lastMessageGroupedId = const Value.absent(),
             Value<String?> otherUserId = const Value.absent(),
+            Value<int> lastReadInboxMessageId = const Value.absent(),
+            Value<int> lastReadOutboxMessageId = const Value.absent(),
+            Value<int?> pinnedMessageId = const Value.absent(),
+            Value<String?> username = const Value.absent(),
+            Value<bool> isPublic = const Value.absent(),
+            Value<bool> isBot = const Value.absent(),
+            Value<bool> isVerified = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -3313,6 +3728,13 @@ class $$ChatsTableTableManager extends RootTableManager<
             lastMessageFileUrl: lastMessageFileUrl,
             lastMessageGroupedId: lastMessageGroupedId,
             otherUserId: otherUserId,
+            lastReadInboxMessageId: lastReadInboxMessageId,
+            lastReadOutboxMessageId: lastReadOutboxMessageId,
+            pinnedMessageId: pinnedMessageId,
+            username: username,
+            isPublic: isPublic,
+            isBot: isBot,
+            isVerified: isVerified,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

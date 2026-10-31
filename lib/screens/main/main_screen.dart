@@ -57,6 +57,7 @@ import '../../services/voice_playback_service.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../widgets/chat/swipeable_chat_tile.dart';
+import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 
 class MainScreen extends StatefulWidget {
@@ -99,6 +100,10 @@ class _MainScreenState extends State<MainScreen>
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
+  String _searchFilter = 'all'; // all, chats, users, groups, channels, messages
+  Timer? _searchDebounce;
+  UnifiedSearchResult _unifiedSearchResult = UnifiedSearchResult.empty;
+  final Set<String> _joiningPeerIds = {};
 
   // Chats list
   List<Chat> _chats = [];
@@ -159,12 +164,6 @@ class _MainScreenState extends State<MainScreen>
   late final CurvedAnimation _classicTopMenuAnimation;
   late final CurvedAnimation _classicFolderMenuAnimation;
   int _topMenuTabIndex = 1;
-
-  // Search results
-  List<SearchResultUser> _users = [];
-  List<SearchResultGroup> _groups = [];
-  List<SearchResultChannel> _channels = [];
-  List<SearchResultMessage> _messages = [];
 
   // Loading states
   bool _isLoading = false;
@@ -544,11 +543,7 @@ class _MainScreenState extends State<MainScreen>
           final groupedId = messageData?['grouped_id'] as String?;
           final content = messageData?['content'] as String? ?? '';
 
-          final newChat = Chat(
-            id: chat.id,
-            chatType: chat.chatType,
-            name: chat.name,
-            avatarUrl: chat.avatarUrl,
+          final newChat = chat.copyWith(
             lastMessage: content,
             lastMessageTime:
                 messageData?['created_at'] as String? ?? chat.lastMessageTime,
@@ -558,11 +553,6 @@ class _MainScreenState extends State<MainScreen>
             lastMessageGroupedId: groupedId,
             updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
             unreadCount: newUnreadCount,
-            isOnline: chat.isOnline,
-            lastSeen: chat.lastSeen,
-            isPinned: chat.isPinned,
-            otherUserId: chat.otherUserId,
-            draft: chat.draft,
           );
           updatedChat = newChat;
 
@@ -636,6 +626,22 @@ class _MainScreenState extends State<MainScreen>
     // We only use this to update the isRead status of our sent messages in chat screens.
     debugPrint(
         'Message read event received (sender notification): ${event.data}');
+    final chatId = event.data['chat_id']?.toString();
+    final rawOutboxHwm =
+        event.data['last_read_outbox_message_id'] ?? event.data['max_id'];
+    final outboxHwm = rawOutboxHwm is num
+        ? rawOutboxHwm.toInt()
+        : int.tryParse(rawOutboxHwm?.toString() ?? '');
+    if (chatId != null && outboxHwm != null && outboxHwm > 0) {
+      try {
+        AppDatabase(_currentUserId).markOutboxMessagesReadUpTo(
+          chatId,
+          _currentUserId ?? '',
+          outboxHwm,
+          readAt: event.data['read_at']?.toString(),
+        );
+      } catch (_) {}
+    }
   }
 
   /// Handle unread count updates from the server — the authoritative source for unread counts
@@ -643,13 +649,17 @@ class _MainScreenState extends State<MainScreen>
     debugPrint('Unread count updated: ${event.data}');
     final chatId = event.data['chat_id']?.toString();
     final unreadCount = event.data['unread_count'] as int? ?? 0;
+    final rawInboxHwm = event.data['last_read_inbox_message_id'];
+    final inboxHwm = rawInboxHwm is num
+        ? rawInboxHwm.toInt()
+        : int.tryParse(rawInboxHwm?.toString() ?? '');
 
     if (chatId != null && mounted) {
       try {
         context.read<UnreadCountProvider>().setCount(chatId, unreadCount);
       } catch (_) {}
 
-      _syncChatUnreadCount(chatId, unreadCount);
+      _syncChatUnreadCount(chatId, unreadCount, lastReadInboxMessageId: inboxHwm);
     }
   }
 
@@ -796,19 +806,33 @@ class _MainScreenState extends State<MainScreen>
   }
 
   /// Update a single chat's unread count in _chats and persist
-  void _syncChatUnreadCount(String chatId, int unreadCount) {
+  void _syncChatUnreadCount(
+    String chatId,
+    int unreadCount, {
+    int? lastReadInboxMessageId,
+  }) {
     setState(() {
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
       if (chatIndex != -1) {
-        _chats[chatIndex] =
-            _chats[chatIndex].copyWith(unreadCount: unreadCount);
+        _chats[chatIndex] = _chats[chatIndex].copyWith(
+          unreadCount: unreadCount,
+          lastReadInboxMessageId: lastReadInboxMessageId,
+        );
       }
     });
 
     // Сохранить в Drift
     final db = AppDatabase();
     try {
-      db.updateUnreadCount(chatId, unreadCount);
+      if (lastReadInboxMessageId != null && lastReadInboxMessageId > 0) {
+        db.updateChatReadHwm(
+          chatId,
+          lastReadInboxMessageId: lastReadInboxMessageId,
+          unreadCount: unreadCount,
+        );
+      } else {
+        db.updateUnreadCount(chatId, unreadCount);
+      }
     } catch (_) {}
 
     _localStorage.saveChats(_chats);
@@ -1009,6 +1033,13 @@ class _MainScreenState extends State<MainScreen>
       isOnline: effectiveIsOnline,
       lastSeen: effectiveLastSeen,
       isPinned: model.isPinned,
+      lastReadInboxMessageId: model.lastReadInboxMessageId,
+      lastReadOutboxMessageId: model.lastReadOutboxMessageId,
+      pinnedMessageId: model.pinnedMessageId,
+      username: model.username,
+      isPublic: model.isPublic,
+      isBot: model.isBot,
+      isVerified: model.isVerified,
     );
   }
 
@@ -1035,6 +1066,13 @@ class _MainScreenState extends State<MainScreen>
       isOnline: Value(chat.isOnline),
       lastSeen: Value(chat.lastSeen),
       isPinned: Value(chat.isPinned),
+      lastReadInboxMessageId: Value(chat.lastReadInboxMessageId),
+      lastReadOutboxMessageId: Value(chat.lastReadOutboxMessageId),
+      pinnedMessageId: Value(chat.pinnedMessageId),
+      username: Value(chat.username),
+      isPublic: Value(chat.isPublic),
+      isBot: Value(chat.isBot),
+      isVerified: Value(chat.isVerified),
     );
   }
 
@@ -1065,6 +1103,7 @@ class _MainScreenState extends State<MainScreen>
         _onChatTileClosed) {
       TilingLayoutController.instance.onChatTileClosed = null;
     }
+    _searchDebounce?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
@@ -1151,17 +1190,24 @@ class _MainScreenState extends State<MainScreen>
       setState(() {
         _searchQuery = newQuery;
       });
-      _performSearch();
+      _searchDebounce?.cancel();
+      if (_searchQuery.trim().isEmpty) {
+        setState(() {
+          _unifiedSearchResult = UnifiedSearchResult.empty;
+          _isLoading = false;
+        });
+        return;
+      }
+      _searchDebounce =
+          Timer(const Duration(milliseconds: 280), _performSearch);
     }
   }
 
   Future<void> _performSearch() async {
-    if (_searchQuery.isEmpty) {
+    final q = _searchQuery.trim();
+    if (q.isEmpty) {
       setState(() {
-        _users = [];
-        _groups = [];
-        _channels = [];
-        _messages = [];
+        _unifiedSearchResult = UnifiedSearchResult.empty;
         _isLoading = false;
       });
       return;
@@ -1170,17 +1216,11 @@ class _MainScreenState extends State<MainScreen>
     setState(() => _isLoading = true);
 
     try {
-      final users = await SearchService.searchUsers(query: _searchQuery);
-      final groups = await SearchService.searchGroups(query: _searchQuery);
-      final channels = await SearchService.searchChannels(query: _searchQuery);
-      final messages = await SearchService.searchMessages(query: _searchQuery);
+      final result = await SearchService.search(query: q);
 
-      if (mounted) {
+      if (mounted && _searchQuery.trim() == q) {
         setState(() {
-          _users = users;
-          _groups = groups;
-          _channels = channels;
-          _messages = messages;
+          _unifiedSearchResult = result;
           _isLoading = false;
         });
       }
@@ -1535,10 +1575,7 @@ class _MainScreenState extends State<MainScreen>
         _searchController.clear();
         setState(() {
           _searchQuery = '';
-          _users = [];
-          _groups = [];
-          _channels = [];
-          _messages = [];
+          _unifiedSearchResult = UnifiedSearchResult.empty;
         });
         break;
     }
@@ -2367,10 +2404,11 @@ class _MainScreenState extends State<MainScreen>
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (chat.chatType == 'system') ...[
-                    const SizedBox(width: 4),
-                    iconoir.CheckCircle(width: 16, height: 16, color: Theme.of(context).colorScheme.primary),
-                  ],
+                  PeerBadgesRow(
+                    isBot: chat.isBot,
+                    isVerified: chat.isVerified || chat.chatType == 'system',
+                    verifiedIconSize: 15,
+                  ),
                 ],
               ),
             ),
@@ -3389,10 +3427,8 @@ class _MainScreenState extends State<MainScreen>
                                         _searchController.clear();
                                         setState(() {
                                           _searchQuery = '';
-                                          _users = [];
-                                          _groups = [];
-                                          _channels = [];
-                                          _messages = [];
+                                          _unifiedSearchResult =
+                                              UnifiedSearchResult.empty;
                                         });
                                       },
                                     ),
@@ -3404,6 +3440,7 @@ class _MainScreenState extends State<MainScreen>
                                   ),
                                 ),
                               ),
+                              _buildSearchFilterChips(context),
                               // Результаты поиска
                               Expanded(
                                 child: _buildSearchResults(),
@@ -3697,6 +3734,109 @@ class _MainScreenState extends State<MainScreen>
 
 
 
+  Widget _buildSearchFilterChips(BuildContext context) {
+    final filters = const <(String, String)>[
+      ('all', 'Все'),
+      ('chats', 'Чаты'),
+      ('users', 'Люди и боты'),
+      ('groups', 'Группы'),
+      ('channels', 'Каналы'),
+      ('messages', 'Сообщения'),
+    ];
+    final primary = Theme.of(context).colorScheme.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final (key, label) = filters[index];
+          final selected = _searchFilter == key;
+          return GestureDetector(
+            onTap: () => setState(() => _searchFilter = key),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+              decoration: BoxDecoration(
+                color: selected
+                    ? primary
+                    : (isDark
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : Colors.black.withValues(alpha: 0.06)),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: selected
+                      ? Colors.white
+                      : Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  bool _matchesSearchPeerFilter(SearchPeer peer) {
+    switch (_searchFilter) {
+      case 'all':
+        return true;
+      case 'chats':
+        return peer.isMember;
+      case 'users':
+        return peer.type == 'user';
+      case 'groups':
+        return peer.type == 'group';
+      case 'channels':
+        return peer.type == 'channel';
+      case 'messages':
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  Future<void> _joinPublicSearchPeer(SearchPeer peer) async {
+    if (_joiningPeerIds.contains(peer.id)) return;
+    setState(() => _joiningPeerIds.add(peer.id));
+    try {
+      final res = await ChatService.joinPublicChat(peer.id);
+      if (!mounted) return;
+      if (res['success'] == true) {
+        await _loadChats(silent: true);
+        _onSearchPeerTap(peer.copyWith(isMember: true));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['message']?.toString() ?? 'Не удалось вступить')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _joiningPeerIds.remove(peer.id));
+      }
+    }
+  }
+
+  void _onSearchPeerTap(SearchPeer peer) {
+    if (peer.type == 'user') {
+      _onSearchResultTap(peer.toUser(), 'user');
+    } else if (peer.type == 'group') {
+      _onSearchResultTap(peer.toGroup(), 'group');
+    } else if (peer.type == 'channel') {
+      _onSearchResultTap(peer.toChannel(), 'channel');
+    }
+  }
+
   Widget _buildSearchResults() {
     final l10n = context.l10n;
 
@@ -3704,10 +3844,18 @@ class _MainScreenState extends State<MainScreen>
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_users.isEmpty &&
-        _groups.isEmpty &&
-        _channels.isEmpty &&
-        _messages.isEmpty) {
+    final myPeers =
+        _unifiedSearchResult.myPeers.where(_matchesSearchPeerFilter).toList();
+    final globalPeers = _unifiedSearchResult.globalPeers
+        .where(_matchesSearchPeerFilter)
+        .toList();
+    final showMessages =
+        _searchFilter == 'all' || _searchFilter == 'messages';
+    final messages = showMessages
+        ? _unifiedSearchResult.messages
+        : <SearchResultMessage>[];
+
+    if (myPeers.isEmpty && globalPeers.isEmpty && messages.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -3738,61 +3886,176 @@ class _MainScreenState extends State<MainScreen>
     return ListView(
       padding: const EdgeInsets.only(bottom: 100),
       children: [
-        if (_users.isNotEmpty)
+        if (myPeers.isNotEmpty)
           _buildSearchSection(
-              l10n.translate('search_users'),
-              _users
-                  .map((u) => ListTile(
-                        leading: CircleAvatar(
-                          child: Text(u.name.isNotEmpty
-                              ? u.name[0].toUpperCase()
-                              : '?'),
-                        ),
-                        title: Text(u.name),
-                        subtitle: Text('@${u.username}'),
-                        onTap: () => _onSearchResultTap(u, 'user'),
-                      ))
-                  .toList()),
-        if (_groups.isNotEmpty)
+            'МОИ ЧАТЫ',
+            myPeers
+                .map((p) => _buildSearchPeerTile(context, p, isGlobal: false))
+                .toList(),
+          ),
+        if (globalPeers.isNotEmpty)
           _buildSearchSection(
-              l10n.translate('search_groups'),
-              _groups
-                  .map((g) => ListTile(
-                        leading: const iconoir.Group(width: 40, height: 40),
-                        title: Text(g.name),
-                        subtitle: Text(g.description.isNotEmpty
-                            ? g.description
-                            : l10n.translate('search_no_description')),
-                        onTap: () => _onSearchResultTap(g, 'group'),
-                      ))
-                  .toList()),
-        if (_channels.isNotEmpty)
+            'ГЛОБАЛЬНЫЙ ПОИСК',
+            globalPeers
+                .map((p) => _buildSearchPeerTile(context, p, isGlobal: true))
+                .toList(),
+          ),
+        if (messages.isNotEmpty)
           _buildSearchSection(
-              l10n.translate('search_channels'),
-              _channels
-                  .map((c) => ListTile(
-                        leading: const iconoir.Megaphone(width: 40, height: 40),
-                        title: Text(c.name),
-                        subtitle: Text(c.description.isNotEmpty
-                            ? c.description
-                            : l10n.translate('search_no_description')),
-                        onTap: () => _onSearchResultTap(c, 'channel'),
-                      ))
-                  .toList()),
-        if (_messages.isNotEmpty)
-          _buildSearchSection(
-              l10n.translate('search_messages'),
-              _messages
-                  .map((m) => ListTile(
-                        leading: const iconoir.Message(width: 24, height: 24),
-                        title: Text(m.content,
-                            maxLines: 2, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(
-                            '${l10n.translate('search_from_user').replaceAll('{user}', m.userId)} • ${_formatDate(m.createdAt)}'),
-                        onTap: () => _onSearchResultTap(m, 'message'),
-                      ))
-                  .toList()),
+            l10n.translate('search_messages'),
+            messages
+                .map((m) => _buildSearchMessageTile(context, m))
+                .toList(),
+          ),
       ],
+    );
+  }
+
+  Widget _buildSearchPeerTile(BuildContext context, SearchPeer peer,
+      {required bool isGlobal}) {
+    final validAvatar = getValidAvatarUrl(peer.avatarUrl);
+    final canJoin = isGlobal &&
+        !peer.isMember &&
+        (peer.type == 'group' || peer.type == 'channel');
+    final isJoining = _joiningPeerIds.contains(peer.id);
+
+    final subtitleParts = <String>[];
+    if (peer.username.isNotEmpty) {
+      subtitleParts.add('@${peer.username}');
+    }
+    if (peer.type == 'user' && peer.isBot) {
+      subtitleParts.add('бот');
+    } else if (peer.memberCount > 0) {
+      subtitleParts.add(
+        peer.type == 'channel'
+            ? '${peer.memberCount} подписчиков'
+            : '${peer.memberCount} участников',
+      );
+    } else if (peer.description.isNotEmpty) {
+      subtitleParts.add(peer.description);
+    }
+
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor:
+            Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+        backgroundImage:
+            validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
+        child: validAvatar == null
+            ? (peer.type == 'channel'
+                ? iconoir.Megaphone(
+                    width: 22,
+                    height: 22,
+                    color: Theme.of(context).colorScheme.primary,
+                  )
+                : peer.type == 'group'
+                    ? iconoir.Group(
+                        width: 22,
+                        height: 22,
+                        color: Theme.of(context).colorScheme.primary,
+                      )
+                    : Text(
+                        peer.title.isNotEmpty
+                            ? peer.title[0].toUpperCase()
+                            : '?',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ))
+            : null,
+      ),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              peer.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          PeerBadgesRow(isBot: peer.isBot, isVerified: peer.isVerified),
+        ],
+      ),
+      subtitle: subtitleParts.isNotEmpty
+          ? Text(
+              subtitleParts.join(' • '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            )
+          : null,
+      trailing: canJoin
+          ? SizedBox(
+              height: 30,
+              child: FilledButton.tonal(
+                onPressed: isJoining ? null : () => _joinPublicSearchPeer(peer),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: isJoining
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(
+                        peer.type == 'channel' ? 'Подписаться' : 'Вступить',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+              ),
+            )
+          : null,
+      onTap: () => _onSearchPeerTap(peer),
+    );
+  }
+
+  Widget _buildSearchMessageTile(
+      BuildContext context, SearchResultMessage m) {
+    final l10n = context.l10n;
+    final header = m.chatName.isNotEmpty
+        ? m.chatName
+        : (m.senderName.isNotEmpty
+            ? m.senderName
+            : l10n
+                .translate('search_from_user')
+                .replaceAll('{user}', m.userId));
+    final senderPrefix = m.senderName.isNotEmpty && m.senderName != m.chatName
+        ? '${m.senderName}: '
+        : '';
+
+    return ListTile(
+      leading: const iconoir.Message(width: 24, height: 24),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              header,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _formatDate(m.createdAt),
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context)
+                  .colorScheme
+                  .onSurface
+                  .withValues(alpha: 0.55),
+            ),
+          ),
+        ],
+      ),
+      subtitle: Text(
+        '$senderPrefix${m.content}',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      onTap: () => _onSearchResultTap(m, 'message'),
     );
   }
 
@@ -3876,6 +4139,7 @@ class _MainScreenState extends State<MainScreen>
               chatId: result.id,
               chatType: 'group',
               chatName: result.name,
+              avatarUrl: result.avatarUrl,
             );
             return;
           }
@@ -3885,7 +4149,7 @@ class _MainScreenState extends State<MainScreen>
               builder: (_) => GroupChatScreen(
                 chatId: result.id,
                 groupName: result.name,
-                groupAvatar: null,
+                groupAvatar: result.avatarUrl,
               ),
             ),
           ).then((_) {
@@ -3900,6 +4164,7 @@ class _MainScreenState extends State<MainScreen>
               chatId: result.id,
               chatType: 'channel',
               chatName: result.name,
+              avatarUrl: result.avatarUrl,
             );
             return;
           }
@@ -3909,7 +4174,7 @@ class _MainScreenState extends State<MainScreen>
               builder: (_) => ChannelScreen(
                 channelId: result.id,
                 channelName: result.name,
-                channelAvatar: null,
+                channelAvatar: result.avatarUrl,
               ),
             ),
           ).then((_) {
@@ -3919,19 +4184,26 @@ class _MainScreenState extends State<MainScreen>
         break;
       case 'message':
         if (result is SearchResultMessage) {
-          final targetChatId = result.channelId.isNotEmpty
-              ? result.channelId
-              : result.groupId;
+          final targetChatId = result.chatId.isNotEmpty
+              ? result.chatId
+              : (result.channelId.isNotEmpty
+                  ? result.channelId
+                  : result.groupId);
           final dbChat = await AppDatabase().getChat(targetChatId);
           final chatType = dbChat?.chatType ??
-              (result.channelId.isNotEmpty ? 'channel' : 'group');
+              (result.chatType.isNotEmpty
+                  ? result.chatType
+                  : (result.channelId.isNotEmpty ? 'channel' : 'group'));
+          final effectiveChatName = dbChat?.name.isNotEmpty == true
+              ? dbChat!.name
+              : result.chatName;
 
           if (!mounted) return;
           if (TilingLayoutController.instance.isWorkspaceMounted) {
             TilingLayoutController.instance.openChatInActiveTile(
               chatId: targetChatId,
               chatType: chatType,
-              chatName: dbChat?.name ?? '',
+              chatName: effectiveChatName,
               avatarUrl: dbChat?.avatarUrl,
               otherUserId: dbChat?.otherUserId,
               otherUserOnline: dbChat?.isOnline ?? false,
@@ -3947,7 +4219,7 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => PrivateChatScreen(
                   chatId: targetChatId,
-                  otherUserName: dbChat?.name ?? '',
+                  otherUserName: effectiveChatName,
                   initialMessageId: result.id,
                 ),
               ),
@@ -3958,7 +4230,7 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => GroupChatScreen(
                   chatId: targetChatId,
-                  groupName: dbChat?.name ?? '',
+                  groupName: effectiveChatName,
                   initialMessageId: result.id,
                 ),
               ),
@@ -3969,7 +4241,7 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => ChannelScreen(
                   channelId: targetChatId,
-                  channelName: dbChat?.name,
+                  channelName: effectiveChatName,
                   channelAvatar: dbChat?.avatarUrl,
                   highlightMessageId: result.id,
                 ),

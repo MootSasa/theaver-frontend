@@ -79,13 +79,39 @@ class SyncService {
         await _applyNewMessage(payload);
         break;
       case 'edit_message':
+      case 'message_edited':
         await _applyEditMessage(payload);
         break;
       case 'delete_message':
+      case 'message_deleted':
         await _applyDeleteMessage(payload);
         break;
       case 'read_status':
+      case 'message_read':
+      case 'unread_count_updated':
         await _applyReadStatus(payload);
+        break;
+      case 'message_pinned':
+      case 'pin_message':
+        final pinChatId = payload['chat_id']?.toString() ?? chatId;
+        final rawPinId = payload['pinned_message_id'] ?? payload['message_id'];
+        final pinId = rawPinId is num
+            ? rawPinId.toInt()
+            : int.tryParse(rawPinId?.toString() ?? '');
+        if (pinChatId != null) {
+          await _db.updateChatPinnedMessageId(pinChatId, pinId);
+        }
+        break;
+      case 'message_unpinned':
+      case 'unpin_message':
+        final unpinChatId = payload['chat_id']?.toString() ?? chatId;
+        final rawNextPinId = payload['pinned_message_id'];
+        final nextPinId = rawNextPinId is num
+            ? rawNextPinId.toInt()
+            : int.tryParse(rawNextPinId?.toString() ?? '');
+        if (unpinChatId != null) {
+          await _db.updateChatPinnedMessageId(unpinChatId, nextPinId);
+        }
         break;
       case 'new_chat':
         await _applyNewChat(payload);
@@ -139,12 +165,30 @@ class SyncService {
         payload['invert_media'] == 1 ||
         payload['invert_media'] == 'true';
     final String? groupedId = payload['grouped_id']?.toString();
-    String? mediaPayloadStr;
-    if (payload['media_payload'] != null) {
-      mediaPayloadStr = payload['media_payload'] is String
-          ? payload['media_payload'] as String
-          : jsonEncode(payload['media_payload']);
+    Map<String, dynamic> mediaPayloadMap = {};
+    if (payload['media_payload'] is Map) {
+      mediaPayloadMap =
+          Map<String, dynamic>.from(payload['media_payload'] as Map);
+    } else if (payload['media_payload'] is String &&
+        (payload['media_payload'] as String).isNotEmpty) {
+      try {
+        final decoded = jsonDecode(payload['media_payload'] as String);
+        if (decoded is Map) {
+          mediaPayloadMap = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
     }
+    if (payload['reply_markup'] != null) {
+      mediaPayloadMap['reply_markup'] = payload['reply_markup'];
+    }
+    if (payload['via_bot_id'] != null) {
+      mediaPayloadMap['via_bot_id'] = payload['via_bot_id'];
+    }
+    if (payload['via_bot_username'] != null) {
+      mediaPayloadMap['via_bot_username'] = payload['via_bot_username'];
+    }
+    final String? mediaPayloadStr =
+        mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
 
     await _db.saveMessage(MessagesCompanion(
       serverId: Value(serverId),
@@ -178,6 +222,12 @@ class SyncService {
       senderAvatarUrl: Value(payload['sender_avatar_url']?.toString()),
       createdAt: Value(payload['created_at']?.toString() ??
           DateTime.now().toIso8601String()),
+      isForward: Value(payload['is_forward'] == true ||
+          payload['forward_from_id'] != null ||
+          (payload['forward_from_name'] != null &&
+              payload['forward_from_name'].toString().isNotEmpty)),
+      forwardFromId: Value(payload['forward_from_id']?.toString()),
+      forwardFromName: Value(payload['forward_from_name']?.toString()),
       entities: Value(entitiesStr),
       linkPreviewOptions: Value(linkPreviewOptionsStr),
       mediaPayload: Value(mediaPayloadStr),
@@ -287,10 +337,36 @@ class SyncService {
 
   Future<void> _applyReadStatus(Map<String, dynamic> payload) async {
     final chatId = payload['chat_id']?.toString();
-    final unreadCount = payload['unread_count'] as int? ?? 0;
     if (chatId == null) return;
 
-    await _db.updateUnreadCount(chatId, unreadCount);
+    final unreadCount = payload['unread_count'] as int?;
+    final rawInboxHwm = payload['last_read_inbox_message_id'];
+    final inboxHwm = rawInboxHwm is num
+        ? rawInboxHwm.toInt()
+        : int.tryParse(rawInboxHwm?.toString() ?? '');
+    final rawOutboxHwm =
+        payload['last_read_outbox_message_id'] ?? payload['max_id'];
+    final outboxHwm = rawOutboxHwm is num
+        ? rawOutboxHwm.toInt()
+        : int.tryParse(rawOutboxHwm?.toString() ?? '');
+
+    if (outboxHwm != null && outboxHwm > 0) {
+      final myUserId = await AuthService.getUserId() ?? '';
+      await _db.markOutboxMessagesReadUpTo(
+        chatId,
+        myUserId,
+        outboxHwm,
+        readAt: payload['read_at']?.toString(),
+      );
+    }
+    if ((inboxHwm != null && inboxHwm > 0) || unreadCount != null) {
+      await _db.updateChatReadHwm(
+        chatId,
+        lastReadInboxMessageId: inboxHwm,
+        lastReadOutboxMessageId: outboxHwm,
+        unreadCount: unreadCount,
+      );
+    }
   }
 
   Future<void> _applyNewChat(Map<String, dynamic> payload) async {

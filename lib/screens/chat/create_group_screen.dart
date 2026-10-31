@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
@@ -5,6 +6,7 @@ import '../../services/tiling_layout_controller.dart';
 import '../../l10n/app_localizations.dart';
 import 'group_chat_screen.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/common/peer_badges_widget.dart';
 import '../../utils/swipe_back_route.dart';
 
 class CreateGroupScreen extends StatefulWidget {
@@ -17,7 +19,9 @@ class CreateGroupScreen extends StatefulWidget {
 class _CreateGroupScreenState extends State<CreateGroupScreen> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
   
   List<SearchResultUser> _allUsers = [];
   List<SearchResultUser> _filteredUsers = [];
@@ -39,8 +43,10 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _nameController.dispose();
     _descriptionController.dispose();
+    _usernameController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -50,15 +56,20 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     if (newQuery != _searchQuery) {
       setState(() {
         _searchQuery = newQuery;
-        _filterUsers();
       });
+      _searchDebounce?.cancel();
+      if (_searchQuery.trim().isEmpty) {
+        setState(() => _filteredUsers = _allUsers);
+      } else {
+        _searchDebounce = Timer(const Duration(milliseconds: 250), _filterUsers);
+      }
     }
   }
 
   Future<void> _loadUsers() async {
     setState(() => _isLoading = true);
     try {
-      // Load all users (empty query returns all or recent)
+      // Load local contacts / recent users when query is empty
       final users = await SearchService.searchUsers(query: '');
       if (mounted) {
         setState(() {
@@ -74,27 +85,34 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     }
   }
 
-  void _filterUsers() {
-    if (_searchQuery.isEmpty) {
+  Future<void> _filterUsers() async {
+    if (_searchQuery.trim().isEmpty) {
       setState(() {
         _filteredUsers = _allUsers;
       });
-    } else {
-      setState(() {
-        _filteredUsers = _allUsers.where((user) {
-          final nameLower = user.name.toLowerCase();
-          final usernameLower = user.username.toLowerCase();
-          final queryLower = _searchQuery.toLowerCase();
-          return nameLower.contains(queryLower) || usernameLower.contains(queryLower);
-        }).toList();
-      });
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final remote = await SearchService.searchUsers(query: _searchQuery.trim());
+      if (mounted) {
+        setState(() {
+          _filteredUsers = remote;
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   void _toggleMember(SearchResultUser user) {
     setState(() {
-      if (_selectedMembers.contains(user)) {
-        _selectedMembers.remove(user);
+      final idx = _selectedMembers.indexWhere((m) => m.id == user.id);
+      if (idx != -1) {
+        _selectedMembers.removeAt(idx);
       } else {
         _selectedMembers.add(user);
       }
@@ -103,7 +121,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
   void _removeMember(SearchResultUser user) {
     setState(() {
-      _selectedMembers.remove(user);
+      _selectedMembers.removeWhere((m) => m.id == user.id);
     });
   }
 
@@ -132,6 +150,13 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       final result = await ChatService.createChat(
         chatType: 'group',
         name: _nameController.text.trim(),
+        description: _descriptionController.text.trim().isNotEmpty
+            ? _descriptionController.text.trim()
+            : null,
+        username: _isPublic && _usernameController.text.trim().isNotEmpty
+            ? _usernameController.text.trim().replaceFirst('@', '')
+            : null,
+        isPublic: _isPublic,
         participantIds: participantIds,
       );
 
@@ -249,6 +274,19 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                   value: _isPublic,
                   onChanged: (value) => setState(() => _isPublic = value),
                 ),
+                if (_isPublic) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _usernameController,
+                    decoration: const InputDecoration(
+                      prefixText: '@',
+                      labelText: 'Публичный @username',
+                      hintText: 'group_username',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 _buildSettingsTile(
                   icon: Icons.person_add,
                   title: l10n.translate('group_allow_invites'),
@@ -379,7 +417,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   Widget _buildUsersList() {
     final l10n = context.l10n;
 
-    if (_isLoading && _allUsers.isEmpty) {
+    if (_isLoading && _filteredUsers.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -398,7 +436,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       itemCount: _filteredUsers.length,
       itemBuilder: (context, index) {
         final user = _filteredUsers[index];
-        final isSelected = _selectedMembers.contains(user);
+        final isSelected = _selectedMembers.any((m) => m.id == user.id);
         
         return ListTile(
           leading: CircleAvatar(
@@ -408,8 +446,18 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               style: TextStyle(color: isSelected ? Colors.white : Colors.black87),
             ),
           ),
-          title: Text(user.name),
-          subtitle: Text('@${user.username}'),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  user.name,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              PeerBadgesRow(isBot: user.isBot, isVerified: user.isVerified),
+            ],
+          ),
+          subtitle: Text(user.username.isNotEmpty ? '@${user.username}' : ''),
           trailing: isSelected
               ? const Icon(Icons.check_circle, color: Color(0xFF0088CC))
               : const Icon(Icons.circle_outlined, color: Colors.grey),
