@@ -35,8 +35,11 @@ class SettingsGroup extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
           ),
           clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: _buildChildrenWithDividers(context),
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              children: _buildChildrenWithDividers(context),
+            ),
           ),
         ),
       ],

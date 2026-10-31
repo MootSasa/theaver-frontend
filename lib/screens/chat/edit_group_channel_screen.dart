@@ -500,7 +500,10 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                     width: 0.5,
                   ),
                 ),
-          child: child,
+          child: Material(
+            type: MaterialType.transparency,
+            child: child,
+          ),
         ),
       );
     }
@@ -516,7 +519,10 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           width: 0.5,
         ),
       ),
-      child: child,
+      child: Material(
+        type: MaterialType.transparency,
+        child: child,
+      ),
     );
   }
 }

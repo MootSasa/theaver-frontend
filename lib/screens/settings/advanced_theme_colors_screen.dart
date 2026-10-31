@@ -516,59 +516,62 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
         ],
       ),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Section Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-            child: Row(
-              children: [
-                IconTheme(
-                  data: IconThemeData(color: _theme.palette.primary, size: 20),
-                  child: icon,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 15.5,
-                      fontWeight: FontWeight.bold,
-                      color: _theme.palette.onSurface,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Section Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              child: Row(
+                children: [
+                  IconTheme(
+                    data: IconThemeData(color: _theme.palette.primary, size: 20),
+                    child: icon,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.bold,
+                        color: _theme.palette.onSurface,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-
-          // Real-time Dedicated Micro-Preview
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border.symmetric(
-                horizontal: BorderSide(color: borderColor, width: 0.5),
+                ],
               ),
             ),
-            child: preview,
-          ),
 
-          // Granular Color Tiles
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: children.length,
-            separatorBuilder: (_, __) => Divider(
-              height: 1,
-              thickness: 0.5,
-              indent: 16,
-              endIndent: 16,
-              color: borderColor,
+            // Real-time Dedicated Micro-Preview
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                border: Border.symmetric(
+                  horizontal: BorderSide(color: borderColor, width: 0.5),
+                ),
+              ),
+              child: preview,
             ),
-            itemBuilder: (_, index) => children[index],
-          ),
-        ],
+
+            // Granular Color Tiles
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: children.length,
+              separatorBuilder: (_, __) => Divider(
+                height: 1,
+                thickness: 0.5,
+                indent: 16,
+                endIndent: 16,
+                color: borderColor,
+              ),
+              itemBuilder: (_, index) => children[index],
+            ),
+          ],
+        ),
       ),
     );
   }

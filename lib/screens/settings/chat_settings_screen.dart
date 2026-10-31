@@ -396,7 +396,7 @@ class ChatSettingsScreen extends StatelessWidget {
                       ],
                     ),
                     Slider(
-                      value: activeTheme.bubbleRadius,
+                      value: activeTheme.bubbleRadius.clamp(0.0, 24.0),
                       min: 0,
                       max: 24,
                       divisions: 24,
@@ -649,7 +649,7 @@ class ChatSettingsScreen extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: AdaptiveSlider(
-                          value: provider.manualLightAngle,
+                          value: provider.manualLightAngle.clamp(0.0, 360.0),
                           min: 0,
                           max: 360,
                           divisions: 72,

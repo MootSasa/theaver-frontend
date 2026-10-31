@@ -764,25 +764,39 @@ class _SettingsScreenState extends State<SettingsScreen>
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                CircleAvatar(
-                  key: ValueKey('settings_avatar_${account.userId}_${account.avatarUrl}_${account.localAvatarPath}'),
-                  radius: 28,
-                  backgroundImage: avatarImageProvider(account.avatarUrl, localFallbackPath: account.localAvatarPath),
-                  backgroundColor: const Color(0xFF0088CC),
-                  onBackgroundImageError: (e, s) {
-                    debugPrint('[SettingsScreen] Failed to render avatar: $e');
+                Builder(
+                  builder: (context) {
+                    final avatarProvider = avatarImageProvider(
+                      account.avatarUrl,
+                      localFallbackPath: account.localAvatarPath,
+                    );
+                    final rawName = (account.displayName?.trim().isNotEmpty == true)
+                        ? account.displayName!.trim()
+                        : (account.username?.trim().isNotEmpty == true
+                            ? account.username!.trim()
+                            : '?');
+                    return CircleAvatar(
+                      key: ValueKey('settings_avatar_${account.userId}_${account.avatarUrl}_${account.localAvatarPath}'),
+                      radius: 28,
+                      backgroundImage: avatarProvider,
+                      backgroundColor: const Color(0xFF0088CC),
+                      onBackgroundImageError: avatarProvider != null
+                          ? (e, s) {
+                              debugPrint('[SettingsScreen] Failed to render avatar: $e');
+                            }
+                          : null,
+                      child: avatarProvider == null
+                          ? Text(
+                              rawName[0].toUpperCase(),
+                              style: const TextStyle(
+                                fontSize: 28,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            )
+                          : null,
+                    );
                   },
-                  child: (account.avatarUrl == null || account.avatarUrl!.isEmpty) &&
-                          (account.localAvatarPath == null || kIsWeb || !File(account.localAvatarPath!).existsSync())
-                      ? Text(
-                          (account.displayName ?? account.username ?? '?')[0].toUpperCase(),
-                          style: const TextStyle(
-                            fontSize: 28,
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        )
-                      : null,
                 ),
                 const SizedBox(width: 16),
                 Expanded(

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
@@ -141,10 +142,10 @@ void main() {
       expect(statusHero, findsOneWidget);
 
       // Verify peer user action icons (chat, phone, video, mute)
-      expect(find.byIcon(Icons.chat_bubble_outline_rounded), findsOneWidget);
-      expect(find.byIcon(Icons.phone_outlined), findsOneWidget);
-      expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
-      expect(find.byIcon(Icons.notifications_none_outlined), findsOneWidget);
+      expect(find.byType(iconoir.ChatBubble), findsOneWidget);
+      expect(find.byType(iconoir.Phone), findsOneWidget);
+      expect(find.byType(iconoir.VideoCamera), findsOneWidget);
+      expect(find.byType(iconoir.Bell), findsOneWidget);
     });
 
     testWidgets('Tapping center pill in FloatingGlassAppBar navigates directly to UserProfileScreen', (tester) async {
@@ -175,7 +176,7 @@ void main() {
 
       // Should now be on ProfileScreen with Nikolai/Pavel Durov profile UI
       expect(find.byType(ProfileScreen), findsOneWidget);
-      expect(find.byIcon(Icons.phone_outlined), findsOneWidget);
+      expect(find.byType(iconoir.Phone), findsOneWidget);
     });
   });
 }

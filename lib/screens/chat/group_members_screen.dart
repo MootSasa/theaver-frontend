@@ -240,9 +240,13 @@ class _GroupMembersScreenState extends State<GroupMembersScreen> {
                         );
                         return ListTile(
                           leading: CircleAvatar(
-                            child: Text(user['name']![0].toUpperCase()),
+                            child: Text(
+                              (user['name'] != null && user['name']!.trim().isNotEmpty)
+                                  ? user['name']!.trim()[0].toUpperCase()
+                                  : '?',
+                            ),
                           ),
-                          title: Text(user['name']!),
+                          title: Text(user['name'] ?? ''),
                           trailing: isAlreadyMember
                               ? const Icon(Icons.check, color: Colors.green)
                               : IconButton(
@@ -324,7 +328,11 @@ class _GroupMembersScreenState extends State<GroupMembersScreen> {
                       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       child: ListTile(
                         leading: CircleAvatar(
-                          child: Text(member.name[0].toUpperCase()),
+                          child: Text(
+                            member.name.trim().isNotEmpty
+                                ? member.name.trim()[0].toUpperCase()
+                                : '?',
+                          ),
                         ),
                         title: Text(member.name),
                         subtitle: Column(

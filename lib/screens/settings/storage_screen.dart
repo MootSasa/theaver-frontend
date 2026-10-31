@@ -100,7 +100,9 @@ class _StorageScreenState extends State<StorageScreen> {
       } else {
         _cacheBreakdown = await _cacheService.getCacheStats();
       }
-      await _loadLocalChatStats();
+      if (!widget.skipNetworkLoad) {
+        await _loadLocalChatStats();
+      }
     } catch (e) {
       debugPrint('StorageScreen: cacheService load error: $e');
     }
@@ -1431,7 +1433,10 @@ class _StorageScreenState extends State<StorageScreen> {
                         ),
                       ),
                     ),
-                    child: sheetBody,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: sheetBody,
+                    ),
                   ),
                 ),
               );
@@ -1512,7 +1517,10 @@ class _StorageScreenState extends State<StorageScreen> {
             width: 0.5,
           ),
         ),
-        child: child,
+        child: Material(
+          type: MaterialType.transparency,
+          child: child,
+        ),
       );
 
       return LiquidGlassLens(
