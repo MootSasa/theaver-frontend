@@ -95,22 +95,27 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     CallStateProvider callProvider,
     String peerTitle,
   ) {
-    final hasScreenShare = callProvider.hasScreenShareStream;
+    final hasScreenShare =
+        callProvider.hasScreenShareStream || callProvider.isScreenSharing;
     final hasRemoteVideo = callProvider.hasRemoteVideoStream;
     final hasLocalVideo =
         callProvider.hasLocalVideoStream && callProvider.isVideoOn;
     if (!hasScreenShare && !hasRemoteVideo && !hasLocalVideo) return;
 
     final stream = callProvider.focusedStream;
+    final openAsScreenShare = callProvider.hasScreenShareStream ||
+        (callProvider.isScreenSharing && !hasRemoteVideo);
     CallFullscreenVideoModal.show(
       context,
-      title: hasScreenShare
-          ? 'Трансляция ${stream?.streamerName ?? peerTitle}'
+      title: openAsScreenShare
+          ? (callProvider.isSelfScreenShare
+              ? 'Ваша трансляция экрана'
+              : 'Трансляция ${stream?.streamerName ?? peerTitle}')
           : (hasRemoteVideo ? peerTitle : 'Вы'),
       subtitle: callProvider.formattedDuration,
-      isScreenShare: hasScreenShare,
-      mirror: !hasScreenShare && !hasRemoteVideo && hasLocalVideo,
-      fallbackRenderer: hasScreenShare
+      isScreenShare: openAsScreenShare,
+      mirror: !openAsScreenShare && !hasRemoteVideo && hasLocalVideo,
+      fallbackRenderer: openAsScreenShare
           ? callProvider.screenShareRenderer
           : (hasRemoteVideo
               ? callProvider.remoteRenderer
@@ -140,8 +145,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final hasScreenShare = callProvider.hasScreenShareStream;
     final hasRemoteVideo = callProvider.hasRemoteVideoStream;
     final hasLocalVideo = callProvider.hasLocalVideoStream;
-    final hasAnyStageVideo =
-        hasScreenShare || hasRemoteVideo || (hasLocalVideo && callProvider.isVideoOn);
+    final hasAnyStageVideo = hasScreenShare ||
+        hasRemoteVideo ||
+        (hasLocalVideo && callProvider.isVideoOn) ||
+        callProvider.isScreenSharing;
 
     return PopScope(
       canPop: true,
@@ -162,11 +169,6 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 onTap: () {
                   if (hasAnyStageVideo) {
                     setState(() => _showControls = !_showControls);
-                  }
-                },
-                onDoubleTap: () {
-                  if (hasAnyStageVideo) {
-                    _openMainStageFullscreen(callProvider, peerTitle);
                   }
                 },
                 child: hasScreenShare
@@ -395,6 +397,10 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                                   if (stream != null)
                                     GestureDetector(
                                       onTap: () async {
+                                        if (callProvider.isSelfScreenShare) {
+                                          await _onTapScreenShare(callProvider);
+                                          return;
+                                        }
                                         final q =
                                             await ViewerQualitySelectorSheet.show(
                                           context,
@@ -459,20 +465,48 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   if (callProvider.isScreenSharing)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
-                      child: FilledButton.tonalIcon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor:
-                              Colors.redAccent.withValues(alpha: 0.26),
-                          foregroundColor: Colors.white,
-                        ),
-                        onPressed: () => callProvider.stopScreenShare(),
-                        icon: const Icon(
-                          Icons.stop_screen_share_rounded,
-                          size: 18,
-                        ),
-                        label: Text(
-                          'Остановить трансляцию (${callProvider.streamConfig.badgeLabel})',
-                        ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          FilledButton.tonalIcon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor:
+                                  Colors.black.withValues(alpha: 0.65),
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () {
+                              CallFullscreenVideoModal.show(
+                                context,
+                                title: 'Ваша трансляция экрана',
+                                subtitle: callProvider.formattedDuration,
+                                isScreenShare: true,
+                                fallbackRenderer:
+                                    callProvider.screenShareRenderer,
+                              );
+                            },
+                            icon: const Icon(
+                              Icons.screen_share_rounded,
+                              size: 17,
+                            ),
+                            label: Text(
+                              'Экран (${callProvider.streamConfig.badgeLabel})',
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.tonalIcon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor:
+                                  Colors.redAccent.withValues(alpha: 0.28),
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () => callProvider.stopScreenShare(),
+                            icon: const Icon(
+                              Icons.stop_screen_share_rounded,
+                              size: 17,
+                            ),
+                            label: const Text('Стоп'),
+                          ),
+                        ],
                       ),
                     ),
                   Padding(

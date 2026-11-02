@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -9,10 +11,12 @@ import 'stream_quality_sheet.dart';
 /// inside a 1-on-1 or group call.
 ///
 /// Features:
-/// - Pinch-to-zoom and pan via [InteractiveViewer] (1x–4x)
-/// - Tap anywhere to toggle top/bottom overlay controls
+/// - Pinch-to-zoom and pan via [InteractiveViewer] (1x–4.5x)
+/// - Instant tap anywhere to toggle top/bottom overlay controls
+/// - Self-screen-share mirror protection (prevents infinite recursive capture
+///   feedback loops by offering a dedicated broadcast control card + optional preview)
 /// - Fit mode toggle ([RTCVideoViewObjectFitContain] vs [RTCVideoViewObjectFitCover])
-/// - Quick orientation toggle (Landscape / Portrait)
+/// - Quick orientation toggle (Landscape / Portrait on mobile)
 /// - Quick call controls (Mute, Camera, Quality selector for streams, Close fullscreen)
 class CallFullscreenVideoModal extends StatefulWidget {
   final String title;
@@ -44,10 +48,10 @@ class CallFullscreenVideoModal extends StatefulWidget {
     HapticFeedback.lightImpact();
     return Navigator.of(context).push(
       PageRouteBuilder<void>(
-        opaque: false,
+        opaque: true,
         barrierColor: Colors.black,
-        transitionDuration: const Duration(milliseconds: 220),
-        reverseTransitionDuration: const Duration(milliseconds: 180),
+        transitionDuration: const Duration(milliseconds: 200),
+        reverseTransitionDuration: const Duration(milliseconds: 160),
         pageBuilder: (ctx, animation, secondaryAnimation) {
           return FadeTransition(
             opacity: CurvedAnimation(
@@ -79,17 +83,47 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
   bool _coverFit = false;
   bool _forceLandscape = false;
   bool _hadActiveCall = false;
+  bool _hadScreenShare = false;
+  bool _enabledSelfPreviewHere = false;
+  bool _isClosing = false;
+  CallStateProvider? _cachedProvider;
+
+  bool get _isMobilePlatform =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _cachedProvider = context.read<CallStateProvider>();
+  }
 
   @override
   void dispose() {
+    if (_enabledSelfPreviewHere && _cachedProvider != null) {
+      final prov = _cachedProvider!;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        prov.setPreviewOwnScreenShare(false);
+      });
+    }
     _transformCtrl.dispose();
-    if (_forceLandscape) {
+    if (_forceLandscape && _isMobilePlatform) {
       SystemChrome.setPreferredOrientations(const []);
     }
     super.dispose();
   }
 
+  void _closeModal() {
+    if (_isClosing || !mounted) return;
+    _isClosing = true;
+    if (_enabledSelfPreviewHere && _cachedProvider != null) {
+      _cachedProvider!.setPreviewOwnScreenShare(false);
+      _enabledSelfPreviewHere = false;
+    }
+    Navigator.of(context).pop();
+  }
+
   void _toggleOrientation() {
+    if (!_isMobilePlatform) return;
     HapticFeedback.selectionClick();
     setState(() {
       _forceLandscape = !_forceLandscape;
@@ -106,10 +140,14 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
 
   void _resetZoom() {
     _transformCtrl.value = Matrix4.identity();
+    setState(() {});
   }
 
   RTCVideoRenderer? _resolveRenderer(CallStateProvider provider) {
     if (widget.isScreenShare) {
+      if (provider.isSelfScreenShare && !provider.previewOwnScreenShare) {
+        return null;
+      }
       return provider.hasScreenShareStream
           ? provider.screenShareRenderer
           : widget.fallbackRenderer;
@@ -124,6 +162,219 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
             : (provider.hasLocalVideoStream ? provider.localRenderer : null));
   }
 
+  Future<void> _onTapQualitySelector(CallStateProvider callProvider) async {
+    if (callProvider.isSelfScreenShare) {
+      final updated = await StreamQualitySheet.show(
+        context,
+        initialConfig: callProvider.streamConfig,
+        isUpdatingActiveStream: true,
+      );
+      if (updated != null) {
+        await callProvider.updateScreenShareQuality(updated);
+      }
+      return;
+    }
+    final stream = callProvider.focusedStream;
+    if (stream == null) return;
+    final q = await ViewerQualitySelectorSheet.show(
+      context,
+      currentQuality: callProvider.viewerQuality,
+      stream: stream,
+    );
+    if (q != null) {
+      callProvider.setViewerQuality(q);
+    }
+  }
+
+  Widget _buildSelfScreenShareControlStage(
+    BuildContext context,
+    CallStateProvider callProvider,
+  ) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
+    final stream = callProvider.focusedStream;
+    final cfg = callProvider.streamConfig;
+    final specsText = stream != null
+        ? '${stream.resolutionWidth}×${stream.resolutionHeight} @ ${stream.fps} FPS • ${stream.codec} • ${(stream.bitrateKbps / 1000).toStringAsFixed(1)} Mbps'
+        : '${cfg.width}×${cfg.height} @ ${cfg.fps} FPS • ${cfg.codec} • ${(cfg.bitrateKbps / 1000).toStringAsFixed(1)} Mbps';
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 96),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: const Color(0xFF141822),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: primaryColor.withValues(alpha: 0.35),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: primaryColor.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: primaryColor.withValues(alpha: 0.4),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.screen_share_rounded,
+                    size: 34,
+                    color: primaryColor,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'LIVE',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Flexible(
+                      child: Text(
+                        'Вы делитесь экраном',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  specsText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFFFAB40),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Живое превью собственного экрана скрыто по умолчанию, чтобы избежать эффекта бесконечного зеркала и лишней нагрузки на видеокодер.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.4,
+                    color: Colors.white.withValues(alpha: 0.68),
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      _enabledSelfPreviewHere = true;
+                      callProvider.setPreviewOwnScreenShare(true);
+                    },
+                    icon: const Icon(Icons.visibility_rounded, size: 19),
+                    label: const Text(
+                      'Показать превью экрана',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: primaryColor.withValues(alpha: 0.2),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: () => _onTapQualitySelector(callProvider),
+                    icon: const Icon(Icons.tune_rounded, size: 19),
+                    label: Text(
+                      'Изменить качество (${cfg.badgeLabel})',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.redAccent.withValues(alpha: 0.22),
+                      foregroundColor: Colors.redAccent,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: () async {
+                      HapticFeedback.mediumImpact();
+                      await callProvider.stopScreenShare();
+                      _closeModal();
+                    },
+                    icon: const Icon(
+                      Icons.stop_screen_share_rounded,
+                      size: 19,
+                    ),
+                    label: const Text(
+                      'Остановить трансляцию',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final callProvider = context.watch<CallStateProvider>();
@@ -132,72 +383,138 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
     } else if (_hadActiveCall) {
       _hadActiveCall = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) Navigator.of(context).maybePop();
+        _closeModal();
+      });
+    }
+
+    final stream = widget.isScreenShare ? callProvider.focusedStream : null;
+    final isSelfScreenShare =
+        widget.isScreenShare && callProvider.isSelfScreenShare;
+    final isScreenShareActive = widget.isScreenShare &&
+        (callProvider.isScreenSharing ||
+            stream != null ||
+            callProvider.hasScreenShareStream);
+
+    if (isScreenShareActive) {
+      _hadScreenShare = true;
+    } else if (widget.isScreenShare && _hadScreenShare) {
+      _hadScreenShare = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _closeModal();
       });
     }
 
     final renderer = _resolveRenderer(callProvider);
-    final stream = widget.isScreenShare ? callProvider.focusedStream : null;
     final objectFit = _coverFit
         ? RTCVideoViewObjectFit.RTCVideoViewObjectFitCover
         : RTCVideoViewObjectFit.RTCVideoViewObjectFitContain;
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF080A0F),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Interactive Zoomable Video Stage
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              setState(() => _showControls = !_showControls);
-            },
-            onDoubleTap: () {
-              HapticFeedback.selectionClick();
-              if (_transformCtrl.value != Matrix4.identity()) {
-                _resetZoom();
-              } else {
-                setState(() => _coverFit = !_coverFit);
-              }
-            },
-            child: InteractiveViewer(
-              transformationController: _transformCtrl,
-              minScale: 1.0,
-              maxScale: 4.5,
-              panEnabled: true,
-              scaleEnabled: true,
-              child: Center(
-                child: renderer != null
-                    ? RTCVideoView(
-                        renderer,
-                        mirror: widget.mirror && !widget.isScreenShare,
-                        objectFit: objectFit,
-                      )
-                    : Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            widget.isScreenShare
-                                ? Icons.screen_share_rounded
-                                : Icons.videocam_off_rounded,
-                            size: 48,
-                            color: Colors.white54,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            widget.title,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white70,
+          // Main Stage: either Self-Stream Control Card or Interactive Zoomable Video Stage
+          if (isSelfScreenShare && !callProvider.previewOwnScreenShare)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                setState(() => _showControls = !_showControls);
+              },
+              child: _buildSelfScreenShareControlStage(context, callProvider),
+            )
+          else
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                setState(() => _showControls = !_showControls);
+              },
+              child: InteractiveViewer(
+                transformationController: _transformCtrl,
+                minScale: 1.0,
+                maxScale: 4.5,
+                panEnabled: true,
+                scaleEnabled: true,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final w = constraints.hasBoundedWidth &&
+                            constraints.maxWidth.isFinite
+                        ? constraints.maxWidth
+                        : MediaQuery.sizeOf(context).width;
+                    final h = constraints.hasBoundedHeight &&
+                            constraints.maxHeight.isFinite
+                        ? constraints.maxHeight
+                        : MediaQuery.sizeOf(context).height;
+                    return SizedBox(
+                      width: w,
+                      height: h,
+                      child: renderer != null
+                          ? RTCVideoView(
+                              renderer,
+                              mirror: widget.mirror && !widget.isScreenShare,
+                              objectFit: objectFit,
+                            )
+                          : Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    widget.isScreenShare
+                                        ? Icons.screen_share_rounded
+                                        : Icons.videocam_off_rounded,
+                                    size: 48,
+                                    color: Colors.white54,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    widget.title,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
+                    );
+                  },
+                ),
               ),
             ),
-          ),
+
+          // Floating "Hide self preview" pill when self-screen-share mirror preview is enabled
+          if (isSelfScreenShare && callProvider.previewOwnScreenShare)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 68,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.black.withValues(alpha: 0.72),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: const BorderSide(color: Colors.white24, width: 0.8),
+                    ),
+                  ),
+                  onPressed: () {
+                    HapticFeedback.selectionClick();
+                    callProvider.setPreviewOwnScreenShare(false);
+                  },
+                  icon: const Icon(Icons.visibility_off_rounded, size: 16),
+                  label: const Text(
+                    'Скрыть превью (убрать зеркало)',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ),
 
           // Top Overlay Bar
           AnimatedPositioned(
@@ -228,7 +545,7 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                   _buildCircleButton(
                     icon: Icons.fullscreen_exit_rounded,
                     tooltip: 'Свернуть из полного экрана',
-                    onTap: () => Navigator.of(context).maybePop(),
+                    onTap: _closeModal,
                   ),
                   const SizedBox(width: 12),
                   if (widget.isScreenShare) ...[
@@ -258,7 +575,9 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          widget.title,
+                          isSelfScreenShare
+                              ? 'Ваша трансляция экрана'
+                              : widget.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -282,19 +601,10 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                       ],
                     ),
                   ),
-                  if (stream != null) ...[
+                  if (stream != null || isSelfScreenShare) ...[
                     const SizedBox(width: 8),
                     GestureDetector(
-                      onTap: () async {
-                        final q = await ViewerQualitySelectorSheet.show(
-                          context,
-                          currentQuality: callProvider.viewerQuality,
-                          stream: stream,
-                        );
-                        if (q != null) {
-                          callProvider.setViewerQuality(q);
-                        }
-                      },
+                      onTap: () => _onTapQualitySelector(callProvider),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
@@ -311,14 +621,18 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(
-                              Icons.hd_rounded,
+                            Icon(
+                              isSelfScreenShare
+                                  ? Icons.tune_rounded
+                                  : Icons.hd_rounded,
                               size: 16,
                               color: Colors.white,
                             ),
                             const SizedBox(width: 4),
                             Text(
-                              callProvider.viewerQuality.label,
+                              isSelfScreenShare
+                                  ? callProvider.streamConfig.badgeLabel
+                                  : callProvider.viewerQuality.label,
                               style: const TextStyle(
                                 fontSize: 11.5,
                                 fontWeight: FontWeight.w600,
@@ -328,6 +642,14 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                           ],
                         ),
                       ),
+                    ),
+                  ],
+                  if (_transformCtrl.value != Matrix4.identity()) ...[
+                    const SizedBox(width: 8),
+                    _buildCircleButton(
+                      icon: Icons.zoom_out_map_rounded,
+                      tooltip: 'Сбросить масштаб',
+                      onTap: _resetZoom,
                     ),
                   ],
                   const SizedBox(width: 8),
@@ -341,12 +663,14 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                       setState(() => _coverFit = !_coverFit);
                     },
                   ),
-                  const SizedBox(width: 8),
-                  _buildCircleButton(
-                    icon: Icons.screen_rotation_rounded,
-                    tooltip: 'Повернуть экран',
-                    onTap: _toggleOrientation,
-                  ),
+                  if (_isMobilePlatform) ...[
+                    const SizedBox(width: 8),
+                    _buildCircleButton(
+                      icon: Icons.screen_rotation_rounded,
+                      tooltip: 'Повернуть экран',
+                      onTap: _toggleOrientation,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -396,11 +720,23 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                     active: callProvider.isVideoOn,
                     onTap: () => callProvider.toggleVideo(),
                   ),
+                  if (isSelfScreenShare) ...[
+                    const SizedBox(width: 24),
+                    _buildBottomAction(
+                      icon: Icons.stop_screen_share_rounded,
+                      label: 'Стоп экран',
+                      danger: true,
+                      onTap: () async {
+                        await callProvider.stopScreenShare();
+                        _closeModal();
+                      },
+                    ),
+                  ],
                   const SizedBox(width: 24),
                   _buildBottomAction(
                     icon: Icons.fullscreen_exit_rounded,
                     label: 'Свернуть',
-                    onTap: () => Navigator.of(context).maybePop(),
+                    onTap: _closeModal,
                   ),
                 ],
               ),

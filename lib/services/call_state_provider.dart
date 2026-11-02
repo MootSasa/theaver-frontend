@@ -61,6 +61,7 @@ class CallStateProvider extends ChangeNotifier {
   bool _isSpeakerOn = true;
   bool _isVideoOn = false;
   bool _isScreenSharing = false;
+  bool _previewOwnScreenShare = false;
   bool _isHandRaised = false;
   bool _isRecording = false;
 
@@ -322,6 +323,25 @@ class CallStateProvider extends ChangeNotifier {
   bool get isVideoOn => _isVideoOn;
   bool get isTogglingVideo => _isTogglingVideo;
   bool get isScreenSharing => _isScreenSharing;
+  bool get previewOwnScreenShare => _previewOwnScreenShare;
+
+  /// True when the active/focused screen share belongs to the current user.
+  bool get isSelfScreenShare {
+    if (!_isScreenSharing) return false;
+    final s = focusedStream;
+    if (s == null) return true;
+    return s.streamerId == _currentUserId || s.streamerId == 'local';
+  }
+
+  void setPreviewOwnScreenShare(bool value) {
+    if (_previewOwnScreenShare == value) return;
+    _previewOwnScreenShare = value;
+    if (isSelfScreenShare && _renderersInitialized) {
+      screenShareRenderer.srcObject = value ? _localDisplayStream : null;
+    }
+    notifyListeners();
+  }
+
   bool get isHandRaised => _isHandRaised;
   bool get isRecording => _isRecording;
   Duration get elapsed => _elapsed;
@@ -347,6 +367,7 @@ class CallStateProvider extends ChangeNotifier {
       remoteRenderer.srcObject!.getVideoTracks().isNotEmpty;
   bool get hasScreenShareStream =>
       _renderersInitialized &&
+      (!isSelfScreenShare || _previewOwnScreenShare) &&
       screenShareRenderer.srcObject != null &&
       screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty;
 
@@ -1667,8 +1688,9 @@ class CallStateProvider extends ChangeNotifier {
       }
 
       _localDisplayStream = displayStream;
+      _previewOwnScreenShare = false;
       if (_renderersInitialized) {
-        screenShareRenderer.srcObject = displayStream;
+        screenShareRenderer.srcObject = null;
       }
       final videoTracks = displayStream.getVideoTracks();
       if (videoTracks.isNotEmpty) {
@@ -1795,6 +1817,7 @@ class CallStateProvider extends ChangeNotifier {
     final localStreamInfo = _activeLocalStreamInfo;
     final displayStream = _localDisplayStream;
     _isScreenSharing = false;
+    _previewOwnScreenShare = false;
     _activeLocalStreamInfo = null;
     _localDisplayStream = null;
     if (_renderersInitialized) {
@@ -1974,6 +1997,7 @@ class CallStateProvider extends ChangeNotifier {
     _focusedStream = null;
     _isMinimized = false;
     _isScreenSharing = false;
+    _previewOwnScreenShare = false;
     _isVideoOn = false;
     _isRecording = false;
     _reactions.clear();

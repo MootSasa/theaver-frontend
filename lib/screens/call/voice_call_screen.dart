@@ -220,15 +220,27 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                           ),
                         ),
                         const Spacer(),
-                        if (stream != null || callProvider.hasScreenShareStream)
+                        if (stream != null ||
+                            callProvider.hasScreenShareStream ||
+                            callProvider.isScreenSharing)
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (stream != null) ...[
+                              if (stream != null ||
+                                  callProvider.isSelfScreenShare) ...[
                                 _buildTopIconButton(
-                                  icon: Icons.hd_rounded,
-                                  tooltip: 'Качество просмотра',
+                                  icon: callProvider.isSelfScreenShare
+                                      ? Icons.tune_rounded
+                                      : Icons.hd_rounded,
+                                  tooltip: callProvider.isSelfScreenShare
+                                      ? 'Настройки трансляции'
+                                      : 'Качество просмотра',
                                   onTap: () async {
+                                    if (callProvider.isSelfScreenShare) {
+                                      await _onTapScreenShare(callProvider);
+                                      return;
+                                    }
+                                    if (stream == null) return;
                                     final q =
                                         await ViewerQualitySelectorSheet.show(
                                       context,
@@ -249,8 +261,9 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                                 onTap: () {
                                   CallFullscreenVideoModal.show(
                                     context,
-                                    title:
-                                        'Трансляция ${stream?.streamerName ?? peerTitle}',
+                                    title: callProvider.isSelfScreenShare
+                                        ? 'Ваша трансляция экрана'
+                                        : 'Трансляция ${stream?.streamerName ?? peerTitle}',
                                     subtitle: callProvider.formattedDuration,
                                     isScreenShare: true,
                                     fallbackRenderer:
@@ -344,17 +357,48 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
 
                   if (callProvider.isScreenSharing) ...[
                     const SizedBox(height: 14),
-                    FilledButton.tonalIcon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor:
-                            Colors.redAccent.withValues(alpha: 0.22),
-                        foregroundColor: Colors.redAccent,
-                      ),
-                      onPressed: () => callProvider.stopScreenShare(),
-                      icon: const Icon(Icons.stop_screen_share_rounded, size: 18),
-                      label: Text(
-                        'Остановить экран (${callProvider.streamConfig.badgeLabel})',
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        FilledButton.tonalIcon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor:
+                                Colors.white.withValues(alpha: 0.1),
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () {
+                            CallFullscreenVideoModal.show(
+                              context,
+                              title: 'Ваша трансляция экрана',
+                              subtitle: callProvider.formattedDuration,
+                              isScreenShare: true,
+                              fallbackRenderer:
+                                  callProvider.screenShareRenderer,
+                            );
+                          },
+                          icon: const Icon(
+                            Icons.screen_share_rounded,
+                            size: 18,
+                          ),
+                          label: Text(
+                            'Экран (${callProvider.streamConfig.badgeLabel})',
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.tonalIcon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor:
+                                Colors.redAccent.withValues(alpha: 0.22),
+                            foregroundColor: Colors.redAccent,
+                          ),
+                          onPressed: () => callProvider.stopScreenShare(),
+                          icon: const Icon(
+                            Icons.stop_screen_share_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('Стоп'),
+                        ),
+                      ],
                     ),
                   ],
 

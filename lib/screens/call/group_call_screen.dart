@@ -432,7 +432,9 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   onTap: () {
                     CallFullscreenVideoModal.show(
                       context,
-                      title: 'Трансляция ${stream.streamerName}',
+                      title: callProvider.isSelfScreenShare
+                          ? 'Ваша трансляция экрана'
+                          : 'Трансляция ${stream.streamerName}',
                       subtitle:
                           '${stream.resolutionWidth}×${stream.resolutionHeight} @ ${stream.fps} FPS • ${stream.codec}',
                       isScreenShare: true,
@@ -465,32 +467,151 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                             )
                           else
                             Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.screen_share_rounded,
-                                    size: 42,
-                                    color: primaryColor,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  32,
+                                  16,
+                                  12,
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.screen_share_rounded,
+                                      size: 38,
+                                      color: primaryColor,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      callProvider.isSelfScreenShare
+                                          ? 'Вы делитесь экраном'
+                                          : 'Трансляция ${stream.streamerName}',
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${stream.resolutionWidth}×${stream.resolutionHeight} @ ${stream.fps} FPS • ${stream.codec} • ${(stream.bitrateKbps / 1000).toStringAsFixed(1)} Mbps',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                    if (callProvider.isSelfScreenShare) ...[
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          FilledButton.tonalIcon(
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: Colors.white
+                                                  .withValues(alpha: 0.1),
+                                              foregroundColor: Colors.white,
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 12,
+                                                vertical: 6,
+                                              ),
+                                            ),
+                                            onPressed: () {
+                                              HapticFeedback.selectionClick();
+                                              callProvider
+                                                  .setPreviewOwnScreenShare(
+                                                true,
+                                              );
+                                            },
+                                            icon: const Icon(
+                                              Icons.visibility_rounded,
+                                              size: 15,
+                                            ),
+                                            label: const Text(
+                                              'Превью',
+                                              style: TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          FilledButton.tonalIcon(
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: Colors.redAccent
+                                                  .withValues(alpha: 0.22),
+                                              foregroundColor: Colors.redAccent,
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 12,
+                                                vertical: 6,
+                                              ),
+                                            ),
+                                            onPressed: () {
+                                              HapticFeedback.mediumImpact();
+                                              callProvider.stopScreenShare();
+                                            },
+                                            icon: const Icon(
+                                              Icons.stop_screen_share_rounded,
+                                              size: 15,
+                                            ),
+                                            label: const Text(
+                                              'Остановить',
+                                              style: TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (callProvider.isSelfScreenShare &&
+                              callProvider.previewOwnScreenShare)
+                            Positioned(
+                              right: 12,
+                              bottom: 10,
+                              child: GestureDetector(
+                                onTap: () {
+                                  HapticFeedback.selectionClick();
+                                  callProvider.setPreviewOwnScreenShare(false);
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 5,
                                   ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'Трансляция ${stream.streamerName}',
-                                    style: const TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.72),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.white24,
+                                      width: 0.8,
                                     ),
                                   ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '${stream.resolutionWidth}×${stream.resolutionHeight} @ ${stream.fps} FPS • ${stream.codec} • ${(stream.bitrateKbps / 1000).toStringAsFixed(1)} Mbps',
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.white70,
-                                    ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.visibility_off_rounded,
+                                        size: 14,
+                                        color: Colors.white,
+                                      ),
+                                      SizedBox(width: 4),
+                                      Text(
+                                        'Скрыть превью',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ],
+                                ),
                               ),
                             ),
                           Positioned(
@@ -539,6 +660,10 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                 const Spacer(),
                                 GestureDetector(
                                   onTap: () async {
+                                    if (callProvider.isSelfScreenShare) {
+                                      await _onTapGoLive(callProvider);
+                                      return;
+                                    }
                                     final q =
                                         await ViewerQualitySelectorSheet.show(
                                       context,
@@ -567,14 +692,19 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        const Icon(
-                                          Icons.hd_rounded,
+                                        Icon(
+                                          callProvider.isSelfScreenShare
+                                              ? Icons.tune_rounded
+                                              : Icons.hd_rounded,
                                           size: 15,
                                           color: Colors.white,
                                         ),
                                         const SizedBox(width: 4),
                                         Text(
-                                          callProvider.viewerQuality.label,
+                                          callProvider.isSelfScreenShare
+                                              ? 'Качество'
+                                              : callProvider
+                                                  .viewerQuality.label,
                                           style: const TextStyle(
                                             fontSize: 11,
                                             fontWeight: FontWeight.w600,
@@ -633,7 +763,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   final showVideo =
                       participant.isVideoOn && videoRenderer != null;
                   final canOpenScreenShare = participant.isScreenSharing &&
-                      callProvider.hasScreenShareStream;
+                      (callProvider.hasScreenShareStream ||
+                          (isSelf && callProvider.isScreenSharing));
                   final resolvedAvatar =
                       AppConfig.resolveMediaUrl(participant.avatarUrl) ?? '';
                   final isSpeaking =
@@ -653,7 +784,9 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       } else if (canOpenScreenShare) {
                         CallFullscreenVideoModal.show(
                           context,
-                          title: 'Трансляция ${participant.displayName}',
+                          title: isSelf
+                              ? 'Ваша трансляция экрана'
+                              : 'Трансляция ${participant.displayName}',
                           isScreenShare: true,
                           fallbackRenderer: callProvider.screenShareRenderer,
                         );
