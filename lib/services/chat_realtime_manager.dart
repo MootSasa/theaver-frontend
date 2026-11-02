@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../utils/date_time_utils.dart';
+import 'community_service.dart';
 import 'database/app_database.dart';
 import 'sync_service.dart';
 import 'websocket_service.dart';
@@ -222,6 +223,9 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.emojiInteraction:
+        if (event.data['action']?.toString() == '__webrtc_call__') {
+          break;
+        }
         _dispatchForChat(event.data['chat_id']?.toString(),
             (s) => s.onEmojiInteraction?.call(event));
         break;
@@ -379,8 +383,17 @@ class ChatRealtimeManager {
       final fileUrl = messageData['file_url']?.toString();
       final groupedId = messageData['grouped_id']?.toString();
 
+      final isCommunityChannel =
+          event.data['community_id'] != null ||
+          messageData['community_id'] != null ||
+          CommunityService.isCommunityChannelId(chatId);
+
       final existing = await AppDatabase().getChat(chatId);
-      if (existing == null) {
+      if (isCommunityChannel) {
+        if (existing != null) {
+          await AppDatabase().deleteChat(chatId);
+        }
+      } else if (existing == null) {
         await AppDatabase().saveChat(ChatsCompanion(
           chatId: drift.Value(chatId),
           chatType: drift.Value(event.data['chat_type']?.toString() ?? 'private'),

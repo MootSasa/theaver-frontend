@@ -20,6 +20,10 @@ class PushDetectorHandler(private val context: Context) {
     companion object {
         private const val PUSH_DETECTOR_CHANNEL = "app.theaver.messenger/push_detector"
         private const val HMS_PUSH_CHANNEL = "app.theaver.messenger/hms_push"
+
+        fun register(flutterEngine: FlutterEngine, context: Context) {
+            PushDetectorHandler(context).setup(flutterEngine)
+        }
     }
 
     fun setup(flutterEngine: FlutterEngine) {
@@ -42,6 +46,12 @@ class PushDetectorHandler(private val context: Context) {
                         cancelChatNotifications(chatId, chatTitle)
                         result.success(true)
                     }
+                    "cancelCallNotifications" -> {
+                        val callId = call.argument<String>("call_id") ?: ""
+                        val chatId = call.argument<String>("chat_id") ?: ""
+                        cancelCallNotifications(callId, chatId)
+                        result.success(true)
+                    }
                     "cancelAllNotifications" -> {
                         cancelAllNotifications()
                         result.success(true)
@@ -56,6 +66,34 @@ class PushDetectorHandler(private val context: Context) {
                     }
                     "isKeepAliveServiceRunning" -> {
                         result.success(KeepAliveService.isServiceRunning())
+                    }
+                    "startCallForegroundService" -> {
+                        val title = call.argument<String>("title") ?: "Активный звонок"
+                        val isVideo = call.argument<Boolean>("is_video") ?: false
+                        val isScreenShare = call.argument<Boolean>("is_screen_share") ?: false
+                        CallForegroundService.startCallService(context, title, isVideo, isScreenShare)
+                        result.success(true)
+                    }
+                    "promoteCallToMediaProjection" -> {
+                        CallForegroundService.promoteToMediaProjection(context)
+                        result.success(true)
+                    }
+                    "stopCallForegroundService" -> {
+                        CallForegroundService.stopCallService(context)
+                        MainActivity.getCurrentActivity()?.enableCallLockScreenWakeup(false)
+                        result.success(true)
+                    }
+                    "wakeUpScreenForCall" -> {
+                        val enable = call.argument<Boolean>("enable") ?: true
+                        wakeUpScreenForCall(enable)
+                        result.success(true)
+                    }
+                    "canUseFullScreenIntent" -> {
+                        result.success(canUseFullScreenIntent())
+                    }
+                    "requestFullScreenIntentPermission" -> {
+                        requestFullScreenIntentPermission()
+                        result.success(true)
                     }
                     "requestIgnoreBatteryOptimizations" -> {
                         requestIgnoreBatteryOptimizations()
@@ -241,6 +279,105 @@ class PushDetectorHandler(private val context: Context) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
             nm.cancelAll()
         } catch (_: Throwable) {}
+    }
+
+    private fun cancelCallNotifications(callId: String, chatId: String) {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+            val targetCallId = callId.trim()
+            val targetChatId = chatId.trim()
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                for (sbn in nm.activeNotifications) {
+                    val id = sbn.id
+                    if (id == 77701 || id == 77702) continue // keep-alive & active-call service notifications
+                    val rawTag = sbn.tag
+                    val notif = sbn.notification
+                    val category = notif?.category
+                    val channelId = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        notif?.channelId
+                    } else null
+                    val extras = notif?.extras
+                    val payload = extras?.getString("payload") ?: ""
+
+                    var match = false
+                    if (category == android.app.Notification.CATEGORY_CALL || channelId == "calls" || channelId == "incoming_calls_v2") {
+                        if (targetCallId.isEmpty() && targetChatId.isEmpty()) {
+                            match = true
+                        } else if (targetCallId.isNotEmpty() && (payload.contains(targetCallId) || rawTag?.contains(targetCallId) == true)) {
+                            match = true
+                        } else if (targetChatId.isNotEmpty() && (payload.contains("\"chat_id\":\"$targetChatId\"") || payload.contains("call_chat_$targetChatId") || rawTag == "call_chat_$targetChatId")) {
+                            match = true
+                        } else {
+                            // Also cancel any active incoming call notification if call ended
+                            match = true
+                        }
+                    }
+                    if (match) {
+                        if (rawTag != null) {
+                            nm.cancel(rawTag, id)
+                        } else {
+                            nm.cancel(id)
+                        }
+                    }
+                }
+            }
+            nm.cancel(77703)
+            if (targetCallId.isNotEmpty()) {
+                nm.cancel(targetCallId.hashCode())
+            }
+            if (targetChatId.isNotEmpty()) {
+                nm.cancel(("call_$targetChatId").hashCode())
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun wakeUpScreenForCall(enable: Boolean) {
+        try {
+            MainActivity.getCurrentActivity()?.enableCallLockScreenWakeup(enable)
+            if (enable) {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm != null && !pm.isInteractive) {
+                    @Suppress("DEPRECATION")
+                    val wl = pm.newWakeLock(
+                        android.os.PowerManager.FULL_WAKE_LOCK or
+                                android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                                android.os.PowerManager.ON_AFTER_RELEASE,
+                        "Theaver::IncomingCallScreenWakeLock"
+                    )
+                    wl.acquire(10_000L)
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun canUseFullScreenIntent(): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                nm?.canUseFullScreenIntent() ?: true
+            } else {
+                true
+            }
+        } catch (_: Throwable) {
+            true
+        }
+    }
+
+    private fun requestFullScreenIntentPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                if (nm != null && !nm.canUseFullScreenIntent()) {
+                    val intent = android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT
+                    ).apply {
+                        data = android.net.Uri.parse("package:${context.packageName}")
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                }
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun requestIgnoreBatteryOptimizations() {

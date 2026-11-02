@@ -32,6 +32,7 @@ import '../../services/media_cache_manager.dart';
 import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
 import 'poll_message_widget.dart';
+import 'call_message_widget.dart';
 import 'unsupported_message_widget.dart';
 import 'dice_message_widget.dart';
 import 'message_interactive_state.dart';
@@ -1003,6 +1004,7 @@ class MessageBubble extends StatelessWidget {
 
     final bool endsWithBlock =
         message.messageType == 'poll' ||
+        message.messageType == 'call' ||
         trimmedContent.endsWith('```') ||
         trimmedContent.endsWith(r'$$') ||
         trimmedContent.endsWith(r'\]') ||
@@ -1168,7 +1170,12 @@ class MessageBubble extends StatelessWidget {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
     Widget textBodyWidget;
-    if (message.messageType == 'poll') {
+    if (message.messageType == 'call') {
+      textBodyWidget = CallMessageWidget(
+        message: message,
+        isMine: isMe,
+      );
+    } else if (message.messageType == 'poll') {
       textBodyWidget = PollMessageWidget(
         chatId: message.chatId,
         messageId: message.id,

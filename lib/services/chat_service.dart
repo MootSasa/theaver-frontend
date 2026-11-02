@@ -98,8 +98,63 @@ class Chat {
       'document',
       'file',
       'dice',
+      'call',
     };
     return !supportedTypes.contains(lastMessageType!.toLowerCase());
+  }
+
+  /// Formats a raw `message_type == 'call'` JSON content string into a human-readable Russian preview.
+  static String formatCallPreview(String? rawContent, {String? currentUserId}) {
+    if (rawContent == null || rawContent.trim().isEmpty) {
+      return '📞 Звонок';
+    }
+    try {
+      final decoded = jsonDecode(rawContent);
+      if (decoded is Map) {
+        final status = (decoded['status'] ?? '').toString().toLowerCase();
+        final reason = (decoded['end_reason'] ?? '').toString().toLowerCase();
+        final initiatorId = (decoded['initiator_id'] ?? '').toString();
+        final isVideo =
+            decoded['video_enabled'] == true ||
+            decoded['is_video'] == true ||
+            (decoded['call_type'] ?? '').toString().toLowerCase() == 'video';
+        final durationSec = (decoded['duration_seconds'] as num?)?.toInt() ??
+            int.tryParse((decoded['duration_seconds'] ?? '0').toString()) ??
+            0;
+        final isOutgoing =
+            currentUserId != null &&
+            currentUserId.isNotEmpty &&
+            initiatorId == currentUserId;
+        final icon = isVideo ? '📹' : '📞';
+        final callNoun = isVideo ? 'видеозвонок' : 'звонок';
+
+        if (status == 'declined' || reason == 'declined') {
+          return isOutgoing
+              ? '$icon Отклонённый $callNoun'
+              : '$icon Пропущенный $callNoun';
+        }
+        if (status == 'missed' ||
+            reason == 'missed' ||
+            reason == 'timeout' ||
+            reason == 'unanswered' ||
+            ((status == 'canceled' || reason == 'canceled') && !isOutgoing)) {
+          return '$icon Пропущенный $callNoun';
+        }
+        if (status == 'canceled' || reason == 'canceled' || durationSec <= 0) {
+          return isOutgoing
+              ? '$icon Отменённый $callNoun'
+              : '$icon Пропущенный $callNoun';
+        }
+        final mins = durationSec ~/ 60;
+        final secs = (durationSec % 60).toString().padLeft(2, '0');
+        final dir = isOutgoing ? 'Исходящий' : 'Входящий';
+        return '$icon $dir $callNoun ($mins:$secs)';
+      }
+    } catch (_) {}
+    if (!rawContent.trim().startsWith('{')) {
+      return rawContent;
+    }
+    return '📞 Звонок';
   }
 
   factory Chat.fromJson(Map<String, dynamic> json) {
@@ -257,6 +312,7 @@ class ReplyInfo {
       'document',
       'file',
       'dice',
+      'call',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
@@ -570,6 +626,7 @@ class Message {
       'document',
       'file',
       'dice',
+      'call',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
@@ -1403,6 +1460,9 @@ class ChatService {
         List<Chat> chats = [];
         if (data['chats'] != null && data['chats'] is List) {
           for (var chat in data['chats']) {
+            if (chat is Map && chat['community_id'] != null) {
+              continue;
+            }
             chats.add(Chat.fromJson(chat));
           }
         }

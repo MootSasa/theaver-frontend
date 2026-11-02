@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:huawei_push/huawei_push.dart' as hms;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:local_notifier/local_notifier.dart';
 import 'package:window_manager/window_manager.dart';
@@ -117,14 +118,45 @@ Future<String?> downloadOrGetCachedAvatar(String? url) =>
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (kIsWeb) return;
-  // Если сообщение содержит notification-payload, Google Play Services уже показал его в шторке
-  if (message.notification != null) {
+  final data = message.data;
+  final msgType = data['type']?.toString() ?? '';
+
+  // Для звонков (incoming_call / call_ended) всегда обрабатываем даже если есть notification-блок,
+  // чтобы показать полноэкранное уведомление с кнопками «Принять» / «Отклонить» или отменить его.
+  if (message.notification != null && msgType != 'incoming_call' && msgType != 'call_ended') {
     debugPrint('NotificationService: background notification already displayed by system tray');
     return;
   }
 
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
+  await _processBackgroundPushData(Map<String, dynamic>.from(data));
+}
+
+/// Фоновый обработчик HMS Push сообщений для устройств Huawei / Honor
+@pragma('vm:entry-point')
+void hmsMessagingBackgroundHandler(hms.RemoteMessage message) async {
+  if (kIsWeb) return;
+  WidgetsFlutterBinding.ensureInitialized();
+  Map<String, dynamic> data = {};
+  if (message.dataOfMap != null && message.dataOfMap!.isNotEmpty) {
+    data = Map<String, dynamic>.from(message.dataOfMap!);
+  } else if (message.data != null && message.data!.isNotEmpty) {
+    try {
+      final decoded = jsonDecode(message.data!);
+      if (decoded is Map) {
+        data = Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+  }
+  if (data.isEmpty) return;
+  await _processBackgroundPushData(data);
+}
+
+Future<void> _processBackgroundPushData(Map<String, dynamic> data) async {
+  final msgType = data['type']?.toString() ?? '';
   final localNotifications = FlutterLocalNotificationsPlugin();
   const androidSettings = AndroidInitializationSettings('@drawable/ic_notification');
   const iosSettings = DarwinInitializationSettings();
@@ -147,14 +179,162 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       importance: Importance.high,
     ));
     await androidPlugin?.createNotificationChannel(const AndroidNotificationChannel(
+      'calls',
+      'Звонки',
+      description: 'Уведомления о входящих звонках',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+    ));
+    await androidPlugin?.createNotificationChannel(const AndroidNotificationChannel(
+      'incoming_calls_v2',
+      'Входящие звонки',
+      description: 'Полноэкранные уведомления о входящих звонках с кнопками ответа',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+    ));
+    await androidPlugin?.createNotificationChannel(const AndroidNotificationChannel(
       'app_updates',
       'Обновления приложения',
       description: 'Уведомления о выходе новых версий Theaver',
       importance: Importance.high,
     ));
   }
-  final data = message.data;
-  if (data['type'] == 'read_status_updated') {
+
+  if (msgType == 'call_ended') {
+    final callId = data['call_id']?.toString() ?? '';
+    final chatId = data['chat_id']?.toString() ?? '';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getString('last_incoming_call_id') == callId) {
+        await prefs.remove('last_incoming_call_id');
+        await prefs.remove('last_incoming_call_ts');
+      }
+    } catch (_) {}
+    await localNotifications.cancel(77703);
+    if (callId.isNotEmpty) {
+      await localNotifications.cancel(callId.hashCode);
+    }
+    if (chatId.isNotEmpty) {
+      await localNotifications.cancel(('call_$chatId').hashCode);
+    }
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+        await nativeChannel.invokeMethod('cancelCallNotifications', {
+          'call_id': callId,
+          'chat_id': chatId,
+        });
+      } catch (_) {}
+    }
+    return;
+  }
+
+  if (msgType == 'incoming_call') {
+    final callId = data['call_id']?.toString() ?? '';
+    final chatId = data['chat_id']?.toString() ?? '';
+    if (callId.isNotEmpty) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final lastId = prefs.getString('last_incoming_call_id');
+        final lastTs = prefs.getInt('last_incoming_call_ts') ?? 0;
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        if (lastId == callId && (nowMs - lastTs) < 45000) {
+          return;
+        }
+        await prefs.setString('last_incoming_call_id', callId);
+        await prefs.setInt('last_incoming_call_ts', nowMs);
+      } catch (_) {}
+    }
+    final callerName = (data['caller_name']?.toString().isNotEmpty == true)
+        ? data['caller_name']!.toString()
+        : (data['chat_name']?.toString().isNotEmpty == true ? data['chat_name']!.toString() : 'Входящий звонок');
+    final isVideo = data['is_video'] == 'true' || data['is_video'] == true || data['call_type'] == 'video';
+    final isGroup = data['chat_type'] == 'group' || data['is_group'] == 'true';
+    final avatarUrl = data['caller_avatar']?.toString() ?? data['avatar_url']?.toString();
+
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+        await nativeChannel.invokeMethod('wakeUpScreenForCall', {'enable': true});
+      } catch (_) {}
+    }
+
+    FilePathAndroidBitmap? largeIconBitmap;
+    if (avatarUrl != null && avatarUrl.isNotEmpty) {
+      final cachedPath = await downloadOrGetCachedAvatar(avatarUrl);
+      if (cachedPath != null) {
+        largeIconBitmap = FilePathAndroidBitmap(cachedPath);
+      }
+    }
+
+    final title = isVideo
+        ? (isGroup ? 'Групповой видеозвонок' : 'Входящий видеозвонок')
+        : (isGroup ? 'Групповой звонок' : 'Входящий звонок');
+    final body = '$callerName звонит вам';
+
+    final androidDetails = AndroidNotificationDetails(
+      'incoming_calls_v2',
+      'Входящие звонки',
+      channelDescription: 'Полноэкранные уведомления о входящих звонках с кнопками ответа',
+      importance: Importance.max,
+      priority: Priority.max,
+      icon: '@drawable/ic_notification',
+      color: const Color(0xFF2ECC71),
+      largeIcon: largeIconBitmap,
+      autoCancel: false,
+      ongoing: true,
+      onlyAlertOnce: true,
+      fullScreenIntent: true,
+      category: AndroidNotificationCategory.call,
+      visibility: NotificationVisibility.public,
+      timeoutAfter: 45000,
+      playSound: true,
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 500, 400, 500, 400, 500, 400, 500]),
+      actions: const <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          'accept_call',
+          'Принять',
+          showsUserInterface: true,
+          cancelNotification: true,
+          titleColor: Color(0xFF2ECC71),
+        ),
+        AndroidNotificationAction(
+          'decline_call',
+          'Отклонить',
+          showsUserInterface: true,
+          cancelNotification: true,
+          titleColor: Color(0xFFE74C3C),
+        ),
+      ],
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      interruptionLevel: InterruptionLevel.critical,
+    );
+    final payloadJson = jsonEncode({
+      ...data,
+      'type': 'incoming_call',
+      'call_id': callId,
+      'chat_id': chatId,
+      'caller_name': callerName,
+      'is_video': isVideo,
+    });
+    await localNotifications.show(
+      77703,
+      title,
+      body,
+      NotificationDetails(android: androidDetails, iOS: iosDetails),
+      payload: payloadJson,
+    );
+    return;
+  }
+
+  if (msgType == 'read_status_updated') {
     final cid = data['chat_id']?.toString();
     if (cid != null && cid.isNotEmpty && !kIsWeb && Platform.isAndroid) {
       try {
@@ -164,7 +344,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
     return;
   }
-  if (data['type'] == 'app_update') {
+  if (msgType == 'app_update') {
     final version = data['latest_version']?.toString() ?? data['version']?.toString() ?? '';
     final title = data['title']?.toString() ??
         (version.isNotEmpty ? 'Доступно обновление Theaver v$version' : 'Доступно обновление Theaver');
@@ -372,7 +552,45 @@ class NotificationService {
   Map<String, dynamic>? get pendingNotificationData => _pendingNotificationData;
   bool get hasPendingNotification => _pendingNotificationData != null;
 
+  void Function(String action, Map<String, dynamic> callData)? _callActionHandler;
+  Map<String, dynamic>? _pendingCallAction;
+
+  void registerCallActionHandler(
+    void Function(String action, Map<String, dynamic> callData) handler,
+  ) {
+    _callActionHandler = handler;
+    if (_pendingCallAction != null) {
+      final pending = _pendingCallAction!;
+      _pendingCallAction = null;
+      final action = pending['action']?.toString() ?? 'open_call';
+      final data = pending['data'] is Map<String, dynamic>
+          ? pending['data'] as Map<String, dynamic>
+          : Map<String, dynamic>.from(pending);
+      Future.microtask(() => handler(action, data));
+    }
+  }
+
+  void _dispatchCallAction(String action, Map<String, dynamic> callData) {
+    if (_callActionHandler != null) {
+      _callActionHandler!(action, callData);
+    } else {
+      _pendingCallAction = {
+        'action': action,
+        'data': callData,
+      };
+    }
+  }
+
   void consumePendingNotification() {
+    if (_pendingCallAction != null && _callActionHandler != null) {
+      final pending = _pendingCallAction!;
+      _pendingCallAction = null;
+      final action = pending['action']?.toString() ?? 'open_call';
+      final data = pending['data'] is Map<String, dynamic>
+          ? pending['data'] as Map<String, dynamic>
+          : Map<String, dynamic>.from(pending);
+      _callActionHandler!(action, data);
+    }
     if (_pendingNotificationData != null) {
       final data = _pendingNotificationData!;
       _pendingNotificationData = null;
@@ -444,6 +662,7 @@ class NotificationService {
 
   /// Кэш недавно показанных уведомлений для защиты от дублирования (гонка WebSocket и Push)
   final Map<String, DateTime> _recentlyShownNotifications = {};
+  final Map<String, DateTime> _shownIncomingCallIds = {};
 
   bool _isDuplicateNotification(String chatId, String messageText, {String? messageId}) {
     final now = DateTime.now();
@@ -547,6 +766,12 @@ class NotificationService {
             ? Map<String, dynamic>.from(data['message'] as Map)
             : <String, dynamic>{};
 
+        final msgType = (msg['message_type'] ?? data['message_type'] ?? '').toString();
+        if (msgType == 'call') {
+          // Call summary messages have dedicated call/missed-call notifications
+          return;
+        }
+
         final chatId = data['chat_id']?.toString() ?? msg['chat_id']?.toString() ?? '';
         final senderId = msg['sender_id']?.toString() ?? data['sender_id']?.toString() ?? '';
         final currentUserId = await AuthService.getUserId();
@@ -564,7 +789,6 @@ class NotificationService {
 
         String messageText = msg['content']?.toString() ?? data['message_text']?.toString() ?? data['content']?.toString() ?? '';
         if (messageText.isEmpty) {
-          final msgType = msg['message_type']?.toString() ?? '';
           switch (msgType) {
             case 'voice':
               messageText = '🎤 Голосовое сообщение';
@@ -755,6 +979,7 @@ class NotificationService {
     // Обработчики
     _hmsPushService!.onMessageReceived.listen(_onHMSForegroundMessage);
     _hmsPushService!.onMessageOpenedApp.listen(_onHMSMessageOpenedApp);
+    await _hmsPushService!.registerBackgroundMessageHandler(hmsMessagingBackgroundHandler);
 
     // Проверяем начальное уведомление при холодном старте
     await _checkHMSInitialMessage();
@@ -797,17 +1022,41 @@ class NotificationService {
     try {
       final launchDetails = await _localNotifications.getNotificationAppLaunchDetails();
       if (launchDetails?.didNotificationLaunchApp == true) {
-        final payload = launchDetails?.notificationResponse?.payload;
-        if (payload != null && payload.isNotEmpty && !payload.startsWith('call_')) {
-          try {
-            final decoded = jsonDecode(payload);
-            if (decoded is Map<String, dynamic>) {
-              _pendingNotificationData = decoded;
-            } else {
+        final response = launchDetails?.notificationResponse;
+        final payload = response?.payload;
+        final actionId = response?.actionId;
+        if (payload != null && payload.isNotEmpty) {
+          if (payload.startsWith('call_')) {
+            final callId = payload.substring(5);
+            _dispatchCallAction(actionId ?? 'open_call', {
+              'type': 'incoming_call',
+              'call_id': callId,
+            });
+          } else {
+            try {
+              final decoded = jsonDecode(payload);
+              if (decoded is Map<String, dynamic>) {
+                if (decoded['type'] == 'incoming_call') {
+                  _dispatchCallAction(actionId ?? 'open_call', decoded);
+                } else if (decoded['type'] == 'missed_call' ||
+                    actionId == 'callback_missed_call') {
+                  if (actionId == 'callback_missed_call') {
+                    _dispatchCallAction('callback_missed_call', decoded);
+                  } else {
+                    _pendingNotificationData = {
+                      ...decoded,
+                      'type': 'new_message',
+                    };
+                  }
+                } else {
+                  _pendingNotificationData = decoded;
+                }
+              } else {
+                _pendingNotificationData = {'chat_id': payload, 'type': 'new_message'};
+              }
+            } catch (_) {
               _pendingNotificationData = {'chat_id': payload, 'type': 'new_message'};
             }
-          } catch (_) {
-            _pendingNotificationData = {'chat_id': payload, 'type': 'new_message'};
           }
         }
       }
@@ -841,6 +1090,15 @@ class NotificationService {
       'calls', 'Звонки',
       description: 'Уведомления о входящих звонках',
       importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+    ));
+    await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
+      'incoming_calls_v2', 'Входящие звонки',
+      description: 'Полноэкранные уведомления о входящих звонках с кнопками ответа',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
     ));
     await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
       'mentions', 'Упоминания',
@@ -996,6 +1254,8 @@ class NotificationService {
         break;
       case 'new_message':
         if (data.containsKey('chat_id')) {
+          final msgType = (data['message_type'] ?? '').toString();
+          if (msgType == 'call') break;
           final chatId = data['chat_id']!.toString();
           final senderName = data['sender_name']?.toString() ?? '';
           final chatName = (data['chat_name']?.toString().isNotEmpty == true)
@@ -1041,6 +1301,12 @@ class NotificationService {
       case 'incoming_call':
         _handleIncomingCall(data);
         break;
+      case 'call_ended':
+        cancelIncomingCallNotification(
+          callId: data['call_id']?.toString(),
+          chatId: data['chat_id']?.toString(),
+        );
+        break;
       case 'app_update':
         _handleAppUpdatePush(data);
         break;
@@ -1060,11 +1326,22 @@ class NotificationService {
   }
 
   void _handleIncomingCall(Map<String, dynamic> data) {
-    showCallNotification(
-      callId: data['call_id'] ?? '',
-      callerName: data['caller_name'] ?? '',
-      isVideo: data['is_video'] == 'true',
-    );
+    final callerName = (data['caller_name']?.toString().isNotEmpty == true)
+        ? data['caller_name']!.toString()
+        : (data['chat_name']?.toString().isNotEmpty == true ? data['chat_name']!.toString() : 'Входящий звонок');
+    if (!_isAppInForeground) {
+      showCallNotification(
+        callId: data['call_id']?.toString() ?? '',
+        chatId: data['chat_id']?.toString() ?? '',
+        callerId: data['caller_id']?.toString() ?? '',
+        callerName: callerName,
+        callerAvatar: data['caller_avatar']?.toString() ?? data['avatar_url']?.toString(),
+        isVideo: data['is_video'] == 'true' || data['is_video'] == true || data['call_type'] == 'video',
+        isGroup: data['chat_type'] == 'group' || data['is_group'] == 'true' || data['is_group'] == true,
+        chatTitle: data['chat_title']?.toString() ?? data['chat_name']?.toString(),
+      );
+    }
+    _dispatchCallAction('incoming_push', data);
   }
 
   Future<void> _navigateFromNotificationData(Map<String, dynamic> rawData) async {
@@ -1116,6 +1393,15 @@ class NotificationService {
           if (decoded is Map) data.addAll(Map<String, dynamic>.from(decoded));
         } catch (_) {}
       }
+    }
+
+    if (data['type'] == 'incoming_call') {
+      cancelIncomingCallNotification(
+        callId: data['call_id']?.toString(),
+        chatId: data['chat_id']?.toString(),
+      );
+      _dispatchCallAction(data['action']?.toString() ?? 'open_call', data);
+      return;
     }
 
     if (data['type'] == 'app_update') {
@@ -1427,29 +1713,376 @@ class NotificationService {
     await _localNotifications.show(notifId, title, body, details, payload: payloadData);
   }
 
+  static const int _kIncomingCallNotificationId = 77703;
+  static const int _kMissedCallNotificationIdBase = 77800;
+
   Future<void> showCallNotification({
     required String callId,
     required String callerName,
+    String chatId = '',
+    String callerId = '',
+    String? callerAvatar,
     bool isVideo = false,
+    bool isGroup = false,
+    String? chatTitle,
   }) async {
-    if (kIsWeb) return;
-    const androidDetails = AndroidNotificationDetails(
-      'calls', 'Звонки',
-      channelDescription: 'Уведомления о входящих звонках',
-      importance: Importance.max, priority: Priority.max,
-      autoCancel: false, ongoing: true,
+    final now = DateTime.now();
+    _shownIncomingCallIds.removeWhere(
+      (_, ts) => now.difference(ts).inSeconds > 45,
+    );
+    final dedupKey = callId.isNotEmpty ? callId : chatId;
+    if (dedupKey.isNotEmpty) {
+      if (_shownIncomingCallIds.containsKey(dedupKey)) {
+        return;
+      }
+      _shownIncomingCallIds[dedupKey] = now;
+      if (!kIsWeb && callId.isNotEmpty) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final lastId = prefs.getString('last_incoming_call_id');
+          final lastTs = prefs.getInt('last_incoming_call_ts') ?? 0;
+          if (lastId == callId &&
+              (now.millisecondsSinceEpoch - lastTs) < 45000) {
+            return;
+          }
+          await prefs.setString('last_incoming_call_id', callId);
+          await prefs.setInt('last_incoming_call_ts', now.millisecondsSinceEpoch);
+        } catch (_) {}
+      }
+    }
+
+    final displayCaller = callerName.isNotEmpty
+        ? callerName
+        : (chatTitle != null && chatTitle.isNotEmpty ? chatTitle : 'Входящий звонок');
+    final title = isVideo
+        ? (isGroup ? 'Групповой видеозвонок' : 'Входящий видеозвонок')
+        : (isGroup ? 'Групповой звонок' : 'Входящий звонок');
+    final body = '$displayCaller звонит вам';
+
+    final callPayloadMap = <String, dynamic>{
+      'type': 'incoming_call',
+      'call_id': callId,
+      'chat_id': chatId,
+      'caller_id': callerId,
+      'caller_name': displayCaller,
+      if (callerAvatar != null) 'caller_avatar': callerAvatar,
+      'is_video': isVideo,
+      'is_group': isGroup,
+      if (chatTitle != null) 'chat_title': chatTitle,
+    };
+
+    if (kIsWeb) {
+      WebNotificationHelper.playNotificationSound();
+      WebNotificationHelper.showBrowserNotification(
+        title: title,
+        body: body,
+        iconUrl: getValidAvatarUrl(callerAvatar),
+        tag: 'incoming_call_${callId.isNotEmpty ? callId : chatId}',
+        onTap: () {
+          _dispatchCallAction('open_call', callPayloadMap);
+        },
+      );
+      return;
+    }
+
+    // Desktop (Windows, Linux, macOS)
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        final prevCalls = _desktopNotifications.remove('calls');
+        if (prevCalls != null) {
+          for (final prev in prevCalls) {
+            try {
+              await prev.close();
+            } catch (_) {}
+          }
+        }
+        final notification = LocalNotification(
+          identifier: 'call_${callId.isNotEmpty ? callId : DateTime.now().millisecondsSinceEpoch}',
+          title: title,
+          body: body,
+          silent: false,
+        );
+        (_desktopNotifications['calls'] ??= []).add(notification);
+        notification.onClose = (_) {
+          _desktopNotifications['calls']?.remove(notification);
+        };
+        notification.onClick = () async {
+          _desktopNotifications['calls']?.remove(notification);
+          try {
+            await notification.close();
+          } catch (_) {}
+          await DesktopTrayService().showAndFocusWindow();
+          _dispatchCallAction('open_call', callPayloadMap);
+        };
+        await notification.show();
+
+        // Also bring window to attention if minimized/hidden
+        bool isVisible = true;
+        try {
+          isVisible = await windowManager.isVisible();
+        } catch (_) {}
+        if (!isVisible) {
+          await DesktopTrayService().showAndFocusWindow();
+        }
+      } catch (e) {
+        debugPrint('NotificationService: desktop call notification error: $e');
+      }
+      return;
+    }
+
+    // Android / iOS
+    if (Platform.isAndroid) {
+      try {
+        const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+        await nativeChannel.invokeMethod('wakeUpScreenForCall', {'enable': true});
+      } catch (_) {}
+    }
+
+    FilePathAndroidBitmap? largeIconBitmap;
+    if (callerAvatar != null && callerAvatar.isNotEmpty) {
+      final cachedPath = await downloadOrGetCachedAvatar(callerAvatar);
+      if (cachedPath != null) {
+        largeIconBitmap = FilePathAndroidBitmap(cachedPath);
+      }
+    }
+
+    final androidDetails = AndroidNotificationDetails(
+      'incoming_calls_v2',
+      'Входящие звонки',
+      channelDescription: 'Полноэкранные уведомления о входящих звонках с кнопками ответа',
+      importance: Importance.max,
+      priority: Priority.max,
+      icon: '@drawable/ic_notification',
+      color: const Color(0xFF2ECC71),
+      largeIcon: largeIconBitmap,
+      autoCancel: false,
+      ongoing: true,
+      onlyAlertOnce: true,
       fullScreenIntent: true,
       category: AndroidNotificationCategory.call,
+      visibility: NotificationVisibility.public,
+      timeoutAfter: 45000,
+      playSound: true,
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 500, 400, 500, 400, 500, 400, 500]),
+      actions: const <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          'accept_call',
+          'Принять',
+          showsUserInterface: true,
+          cancelNotification: true,
+          titleColor: Color(0xFF2ECC71),
+        ),
+        AndroidNotificationAction(
+          'decline_call',
+          'Отклонить',
+          showsUserInterface: true,
+          cancelNotification: true,
+          titleColor: Color(0xFFE74C3C),
+        ),
+      ],
     );
     const iosDetails = DarwinNotificationDetails(
-      presentAlert: true, presentBadge: true, presentSound: true,
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
       interruptionLevel: InterruptionLevel.critical,
     );
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    final details = NotificationDetails(android: androidDetails, iOS: iosDetails);
     await _localNotifications.show(
-      callId.hashCode, isVideo ? 'Видеозвонок' : 'Звонок', callerName, details,
-      payload: 'call_$callId',
+      _kIncomingCallNotificationId,
+      title,
+      body,
+      details,
+      payload: jsonEncode(callPayloadMap),
     );
+  }
+
+  Future<void> showMissedCallNotification({
+    required String callId,
+    required String chatId,
+    required String callerName,
+    bool isVideo = false,
+    bool isGroup = false,
+  }) async {
+    await cancelIncomingCallNotification(callId: callId, chatId: chatId);
+    final displayCaller = callerName.isNotEmpty ? callerName : 'Собеседник';
+    final title = isVideo ? 'Пропущенный видеозвонок' : 'Пропущенный звонок';
+    final body = displayCaller;
+
+    final payloadMap = <String, dynamic>{
+      'type': 'missed_call',
+      'call_id': callId,
+      'chat_id': chatId,
+      'caller_name': displayCaller,
+      'chat_name': displayCaller,
+      'is_video': isVideo,
+      'is_group': isGroup,
+    };
+
+    if (kIsWeb) {
+      WebNotificationHelper.showBrowserNotification(
+        title: title,
+        body: body,
+        tag: 'missed_call_${callId.isNotEmpty ? callId : chatId}',
+        onTap: () {
+          _navigateFromNotificationData({...payloadMap, 'type': 'new_message'});
+        },
+      );
+      return;
+    }
+
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        final notification = LocalNotification(
+          identifier: 'missed_call_${callId.isNotEmpty ? callId : chatId}',
+          title: title,
+          body: body,
+          silent: true,
+        );
+        notification.onClick = () async {
+          try {
+            await notification.close();
+          } catch (_) {}
+          await DesktopTrayService().showAndFocusWindow();
+          await _navigateFromNotificationData({
+            ...payloadMap,
+            'type': 'new_message',
+          });
+        };
+        await notification.show();
+      } catch (_) {}
+      return;
+    }
+
+    final channelId = isGroup ? 'group_chats' : 'private_chats';
+    final androidDetails = AndroidNotificationDetails(
+      channelId,
+      _channelLabel(channelId),
+      channelDescription: _channelDescription(channelId),
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+      icon: '@drawable/ic_notification',
+      color: const Color(0xFFE74C3C),
+      autoCancel: true,
+      onlyAlertOnce: true,
+      playSound: false,
+      enableVibration: false,
+      category: AndroidNotificationCategory.missedCall,
+      actions: const <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          'callback_missed_call',
+          'Перезвонить',
+          showsUserInterface: true,
+          cancelNotification: true,
+          titleColor: Color(0xFF5B7FFF),
+        ),
+      ],
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: false,
+    );
+    final notifId =
+        _kMissedCallNotificationIdBase +
+        ((callId.isNotEmpty ? callId : chatId).hashCode.abs() % 1000);
+    if (chatId.isNotEmpty) {
+      (_chatNotificationIds[chatId] ??= []).add(notifId);
+    }
+    await _localNotifications.show(
+      notifId,
+      title,
+      body,
+      NotificationDetails(android: androidDetails, iOS: iosDetails),
+      payload: jsonEncode(payloadMap),
+    );
+  }
+
+  Future<void> cancelIncomingCallNotification({String? callId, String? chatId}) async {
+    if (callId != null && callId.isNotEmpty) {
+      _shownIncomingCallIds.remove(callId);
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getString('last_incoming_call_id') == callId) {
+          await prefs.remove('last_incoming_call_id');
+          await prefs.remove('last_incoming_call_ts');
+        }
+      } catch (_) {}
+    }
+    if (chatId != null && chatId.isNotEmpty) {
+      _shownIncomingCallIds.remove(chatId);
+    }
+    if (kIsWeb) return;
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      final desktopCalls = _desktopNotifications.remove('calls');
+      if (desktopCalls != null) {
+        for (final n in desktopCalls) {
+          try {
+            await n.close();
+          } catch (_) {}
+        }
+      }
+      return;
+    }
+
+    try {
+      await _localNotifications.cancel(_kIncomingCallNotificationId);
+      if (callId != null && callId.isNotEmpty) {
+        await _localNotifications.cancel(callId.hashCode);
+      }
+      if (chatId != null && chatId.isNotEmpty) {
+        await _localNotifications.cancel(('call_$chatId').hashCode);
+      }
+    } catch (_) {}
+
+    if (Platform.isAndroid) {
+      try {
+        const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+        await nativeChannel.invokeMethod('cancelCallNotifications', {
+          'call_id': callId ?? '',
+          'chat_id': chatId ?? '',
+        });
+      } catch (_) {}
+    }
+  }
+
+  Future<void> startCallForegroundService({
+    required String title,
+    bool isVideo = false,
+    bool isScreenShare = false,
+  }) async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+      await nativeChannel.invokeMethod('startCallForegroundService', {
+        'title': title,
+        'is_video': isVideo,
+        'is_screen_share': isScreenShare,
+      });
+    } catch (e) {
+      debugPrint('NotificationService: startCallForegroundService error: $e');
+    }
+  }
+
+  Future<void> promoteCallToMediaProjection() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+      await nativeChannel.invokeMethod('promoteCallToMediaProjection');
+    } catch (e) {
+      debugPrint('NotificationService: promoteCallToMediaProjection error: $e');
+    }
+  }
+
+  Future<void> stopCallForegroundService() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      const nativeChannel = MethodChannel('app.theaver.messenger/push_detector');
+      await nativeChannel.invokeMethod('stopCallForegroundService');
+    } catch (e) {
+      debugPrint('NotificationService: stopCallForegroundService error: $e');
+    }
   }
 
   static const int _kAppUpdateNotificationId = 88888;
@@ -1742,9 +2375,15 @@ class NotificationService {
 
   void _onLocalNotificationTap(NotificationResponse response) {
     final payload = response.payload;
+    final actionId = response.actionId;
     if (payload == null || payload.isEmpty) return;
     if (payload.startsWith('call_')) {
-      debugPrint('NotificationService: call notification tapped');
+      final callId = payload.substring(5);
+      cancelIncomingCallNotification(callId: callId);
+      _dispatchCallAction(actionId ?? 'open_call', {
+        'type': 'incoming_call',
+        'call_id': callId,
+      });
     } else {
       Map<String, dynamic> data;
       try {
@@ -1756,6 +2395,23 @@ class NotificationService {
         }
       } catch (_) {
         data = {'chat_id': payload, 'type': 'new_message'};
+      }
+      if (data['type'] == 'incoming_call') {
+        cancelIncomingCallNotification(
+          callId: data['call_id']?.toString(),
+          chatId: data['chat_id']?.toString(),
+        );
+        _dispatchCallAction(actionId ?? 'open_call', data);
+        return;
+      }
+      if (data['type'] == 'missed_call' || actionId == 'callback_missed_call') {
+        if (actionId == 'callback_missed_call') {
+          _dispatchCallAction('callback_missed_call', data);
+          _navigateFromNotificationData({...data, 'type': 'new_message'});
+        } else {
+          _navigateFromNotificationData({...data, 'type': 'new_message'});
+        }
+        return;
       }
       _navigateFromNotificationData(data);
     }

@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'auth_service.dart';
 import 'avatar_sync_service.dart';
 import 'chat_service.dart';
+import 'community_service.dart';
 import 'file_service.dart';
 import 'media_cache_manager.dart';
 import 'websocket_service.dart';
@@ -279,8 +280,19 @@ class SyncService {
       groupedId: Value(groupedId),
     ));
 
-    // Also update chat's last message if message is newer
+    final isCommunityChannel =
+        payload['community_id'] != null ||
+        CommunityService.isCommunityChannelId(chatId);
+
+    // Also update chat's last message if message is newer (only for standalone chats, not community channels)
     final chat = await _db.getChat(chatId);
+    if (isCommunityChannel) {
+      if (chat != null) {
+        await _db.deleteChat(chatId);
+      }
+      return;
+    }
+
     final msgCreatedAt = payload['created_at']?.toString() ?? '';
     final safeCreatedAt = msgCreatedAt.isNotEmpty
         ? msgCreatedAt
