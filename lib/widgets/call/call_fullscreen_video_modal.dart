@@ -145,12 +145,16 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
 
   RTCVideoRenderer? _resolveRenderer(CallStateProvider provider) {
     if (widget.isScreenShare) {
-      if (provider.isSelfScreenShare && !provider.previewOwnScreenShare) {
-        return null;
+      if (provider.isSelfScreenShare) {
+        return provider.previewOwnScreenShare
+            ? (provider.screenShareRenderer.srcObject != null
+                ? provider.screenShareRenderer
+                : widget.fallbackRenderer)
+            : null;
       }
       return provider.hasScreenShareStream
           ? provider.screenShareRenderer
-          : widget.fallbackRenderer;
+          : (widget.fallbackRenderer ?? provider.screenShareRenderer);
     }
     if (widget.participantUserId != null) {
       final r = provider.rendererForParticipant(widget.participantUserId!);
@@ -445,14 +449,25 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                             constraints.maxHeight.isFinite
                         ? constraints.maxHeight
                         : MediaQuery.sizeOf(context).height;
+                    final rotKey = widget.isScreenShare
+                        ? (stream?.streamerId ?? 'screen_share')
+                        : (widget.participantUserId ??
+                            (callProvider.hasRemoteVideoStream
+                                ? 'remote'
+                                : 'local'));
+                    final rot = callProvider.getParticipantRotation(rotKey);
+
                     return SizedBox(
                       width: w,
                       height: h,
                       child: renderer != null
-                          ? RTCVideoView(
-                              renderer,
-                              mirror: widget.mirror && !widget.isScreenShare,
-                              objectFit: objectFit,
+                          ? RotatedBox(
+                              quarterTurns: rot ~/ 90,
+                              child: RTCVideoView(
+                                renderer,
+                                mirror: widget.mirror && !widget.isScreenShare,
+                                objectFit: objectFit,
+                              ),
                             )
                           : Center(
                               child: Column(
@@ -661,6 +676,21 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                     onTap: () {
                       HapticFeedback.selectionClick();
                       setState(() => _coverFit = !_coverFit);
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  _buildCircleButton(
+                    icon: Icons.rotate_90_degrees_cw_rounded,
+                    tooltip: 'Повернуть видео на 90°',
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      final rotKey = widget.isScreenShare
+                          ? (stream?.streamerId ?? 'screen_share')
+                          : (widget.participantUserId ??
+                              (callProvider.hasRemoteVideoStream
+                                  ? 'remote'
+                                  : 'local'));
+                      callProvider.rotateParticipant(rotKey);
                     },
                   ),
                   if (_isMobilePlatform) ...[

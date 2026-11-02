@@ -95,6 +95,8 @@ class CallStateProvider extends ChangeNotifier {
   final Set<String> _makingOfferForPeer = {};
   final Map<String, DateTime> _lastOfferSentAt = {};
   final Map<String, MediaStream> _remotePrimaryStreams = {};
+  final Map<String, MediaStream> _remoteDisplayStreams = {};
+  final Map<String, int> _participantRotations = {};
 
   final List<FloatingCallReaction> _reactions = [];
 
@@ -365,11 +367,47 @@ class CallStateProvider extends ChangeNotifier {
       _renderersInitialized &&
       remoteRenderer.srcObject != null &&
       remoteRenderer.srcObject!.getVideoTracks().isNotEmpty;
-  bool get hasScreenShareStream =>
-      _renderersInitialized &&
-      (!isSelfScreenShare || _previewOwnScreenShare) &&
-      screenShareRenderer.srcObject != null &&
-      screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty;
+  int getParticipantRotation(String userId) =>
+      _participantRotations[userId] ?? 0;
+
+  void rotateParticipant(String userId) {
+    final current = getParticipantRotation(userId);
+    _participantRotations[userId] = (current + 90) % 360;
+    notifyListeners();
+  }
+
+  void setParticipantRotation(String userId, int degrees) {
+    _participantRotations[userId] = degrees % 360;
+    notifyListeners();
+  }
+
+  bool get hasScreenShareStream {
+    if (!_renderersInitialized) return false;
+    if (isSelfScreenShare) {
+      return _previewOwnScreenShare &&
+          screenShareRenderer.srcObject != null &&
+          screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty;
+    }
+    if (screenShareRenderer.srcObject != null &&
+        screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty) {
+      return true;
+    }
+    final stream = focusedStream;
+    if (stream != null) {
+      final s = _remoteDisplayStreams[stream.streamerId] ??
+          (_remotePrimaryStreams[stream.streamerId]
+                      ?.getVideoTracks()
+                      .isNotEmpty ==
+                  true
+              ? _remotePrimaryStreams[stream.streamerId]
+              : _participantRenderers[stream.streamerId]?.srcObject);
+      if (s != null && s.getVideoTracks().isNotEmpty) {
+        screenShareRenderer.srcObject = s;
+        return true;
+      }
+    }
+    return false;
+  }
 
   bool get shouldShowPip =>
       _activeCall != null &&
@@ -1113,19 +1151,129 @@ class CallStateProvider extends ChangeNotifier {
   ) async {
     try {
       final params = sender.parameters;
-      final txId = params.transactionId;
-      if (txId != null &&
-          txId.isNotEmpty &&
-          params.encodings != null &&
-          params.encodings!.isNotEmpty) {
+      if (params.encodings != null && params.encodings!.isNotEmpty) {
         for (final encoding in params.encodings!) {
           encoding.maxBitrate = config.bitrateKbps * 1000;
           encoding.maxFramerate = config.fps;
+          if (config.height > 0) {
+            if (config.height <= 720) {
+              encoding.scaleResolutionDownBy = 1.5;
+            } else {
+              encoding.scaleResolutionDownBy = 1.0;
+            }
+          }
         }
+        params.degradationPreference =
+            RTCDegradationPreference.MAINTAIN_RESOLUTION;
         await sender.setParameters(params);
       }
     } catch (e) {
       debugPrint('[CallStateProvider] setParameters error: $e');
+    }
+  }
+
+  /// Munges SDP to prioritize the chosen video codec (VP9, AV1, H264)
+  /// and injects bitrate limits (b=AS, b=TIAS, and Google bitrate fmtp attributes).
+  String _applySdpCodecAndBitrate(String sdp, StreamConfig config) {
+    try {
+      final lines = sdp.split('\r\n');
+      final newLines = <String>[];
+      final targetCodec = config.codec.toUpperCase().trim();
+
+      // Find payload types matching targetCodec
+      final preferredPayloadTypes = <String>[];
+      final rtpmapRegex =
+          RegExp(r'^a=rtpmap:(\d+)\s+([A-Za-z0-9_-]+)/', caseSensitive: false);
+
+      for (final line in lines) {
+        final match = rtpmapRegex.firstMatch(line);
+        if (match != null) {
+          final pt = match.group(1)!;
+          final codecName = match.group(2)!.toUpperCase();
+          if (codecName == targetCodec ||
+              (targetCodec == 'AV1' &&
+                  (codecName == 'AV1' || codecName == 'AV1X')) ||
+              (targetCodec == 'H264' && codecName == 'H264') ||
+              (targetCodec == 'VP9' && codecName == 'VP9')) {
+            preferredPayloadTypes.add(pt);
+          }
+        }
+      }
+
+      // Find associated RTX payload types
+      final rtxPayloadTypes = <String>[];
+      if (preferredPayloadTypes.isNotEmpty) {
+        for (final pt in preferredPayloadTypes) {
+          final fmtpAptRegex = RegExp(
+            r'^a=fmtp:(\d+)\s+apt=' + pt + r'(?:;|\s|$)',
+            caseSensitive: false,
+          );
+          for (final line in lines) {
+            final match = fmtpAptRegex.firstMatch(line);
+            if (match != null) {
+              rtxPayloadTypes.add(match.group(1)!);
+            }
+          }
+        }
+      }
+
+      bool inVideoSection = false;
+      for (int i = 0; i < lines.length; i++) {
+        final line = lines[i];
+        if (line.startsWith('m=video ')) {
+          inVideoSection = true;
+          final parts = line.split(' ');
+          if (parts.length > 3 && preferredPayloadTypes.isNotEmpty) {
+            final header = parts.sublist(0, 3);
+            final existingPts = parts.sublist(3);
+            final reordered = <String>[];
+
+            for (final pt in preferredPayloadTypes) {
+              if (existingPts.contains(pt)) reordered.add(pt);
+            }
+            for (final pt in rtxPayloadTypes) {
+              if (existingPts.contains(pt)) reordered.add(pt);
+            }
+            for (final pt in existingPts) {
+              if (!reordered.contains(pt)) reordered.add(pt);
+            }
+            newLines.add('${header.join(' ')} ${reordered.join(' ')}');
+            continue;
+          }
+        } else if (line.startsWith('m=') && !line.startsWith('m=video ')) {
+          inVideoSection = false;
+        }
+
+        if (inVideoSection &&
+            (line.startsWith('b=AS:') || line.startsWith('b=TIAS:'))) {
+          continue;
+        }
+
+        newLines.add(line);
+
+        if (inVideoSection && line.startsWith('m=video ')) {
+          if (config.bitrateKbps > 0) {
+            newLines.add('b=AS:${config.bitrateKbps}');
+            newLines.add('b=TIAS:${config.bitrateKbps * 1000}');
+          }
+        }
+      }
+
+      if (preferredPayloadTypes.isNotEmpty && config.bitrateKbps > 0) {
+        const minBitrate = 500;
+        final startBitrate = (config.bitrateKbps ~/ 2).clamp(minBitrate, config.bitrateKbps);
+        final maxBitrate = config.bitrateKbps;
+        for (final pt in preferredPayloadTypes) {
+          newLines.add(
+            'a=fmtp:$pt x-google-min-bitrate=$minBitrate;x-google-start-bitrate=$startBitrate;x-google-max-bitrate=$maxBitrate',
+          );
+        }
+      }
+
+      return newLines.join('\r\n');
+    } catch (e) {
+      debugPrint('[CallStateProvider] _applySdpCodecAndBitrate error: $e');
+      return sdp;
     }
   }
 
@@ -1154,27 +1302,38 @@ class CallStateProvider extends ChangeNotifier {
           .where((p) => p.userId == peerId)
           .firstOrNull;
       final primaryStream = _remotePrimaryStreams[peerId];
+      final activeStreams = _activeCall?.streams ?? const <CallStream>[];
+      final hasActiveStreamRecord =
+          activeStreams.any((s) => s.streamerId == peerId);
+      final isPeerScreenSharing =
+          (peer?.isScreenSharing ?? false) || hasActiveStreamRecord;
 
       final isSecondaryDisplayStream =
-          primaryStream != null &&
-          primaryStream.id != stream.id &&
-          primaryStream.getVideoTracks().isNotEmpty;
+          primaryStream != null && primaryStream.id != stream.id;
       final isScreenShareOnly =
-          (peer?.isScreenSharing ?? false) && !(peer?.isVideoOn ?? false);
+          isPeerScreenSharing && !(peer?.isVideoOn ?? false);
+      final isDisplayStream = isPeerScreenSharing ||
+          isSecondaryDisplayStream ||
+          isScreenShareOnly ||
+          (!(_activeCall?.isVideo ?? false) && isPeerScreenSharing);
 
-      if (isSecondaryDisplayStream || isScreenShareOnly) {
+      if (isDisplayStream) {
+        _remoteDisplayStreams[peerId] = stream;
         if (_renderersInitialized) {
           screenShareRenderer.srcObject = stream;
         }
-        if (isScreenShareOnly && participantRenderer.srcObject == null) {
-          participantRenderer.srcObject = stream;
+        if (!isPeerScreenSharing && (peer?.isVideoOn ?? false)) {
+          // Keep participantRenderer on primaryStream if peer also has camera
+        } else {
+          participantRenderer.srcObject ??= stream;
         }
       } else {
         _remotePrimaryStreams[peerId] = stream;
         participantRenderer.srcObject = stream;
         if (_renderersInitialized) {
           remoteRenderer.srcObject = stream;
-          if (peer?.isScreenSharing ?? false) {
+          if (isPeerScreenSharing) {
+            _remoteDisplayStreams[peerId] = stream;
             screenShareRenderer.srcObject ??= stream;
           }
         }
@@ -1193,11 +1352,20 @@ class CallStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _handleRemoteTrackOnly(String peerId, MediaStreamTrack track) {
+  void _handleRemoteTrackOnly(String peerId, MediaStreamTrack track) async {
     if (track.kind == 'audio') {
       track.enabled = !_isDeafened;
       Helper.setVolume(_isDeafened ? 0.0 : 1.0, track).catchError((_) {});
       unawaited(_configureCallAudioSession());
+    } else if (track.kind == 'video') {
+      try {
+        final newStream =
+            await createLocalMediaStream('remote_${peerId}_${track.id}');
+        await newStream.addTrack(track);
+        _handleRemoteStream(peerId, newStream, track);
+      } catch (e) {
+        debugPrint('[CallStateProvider] _handleRemoteTrackOnly video error: $e');
+      }
     }
     notifyListeners();
   }
@@ -1226,13 +1394,26 @@ class CallStateProvider extends ChangeNotifier {
         if (iceRestart) 'iceRestart': true,
       };
       final offer = await pc.createOffer(constraints);
-      await pc.setLocalDescription(offer);
+      var sdp = offer.sdp ?? '';
+      if (_isScreenSharing && sdp.isNotEmpty) {
+        sdp = _applySdpCodecAndBitrate(sdp, _streamConfig);
+      }
+      final mungedOffer = RTCSessionDescription(sdp, offer.type);
+      await pc.setLocalDescription(mungedOffer);
+      try {
+        final senders = await pc.getSenders();
+        for (final s in senders) {
+          if (s.track?.kind == 'video') {
+            await _applySenderEncodingParameters(s, _streamConfig);
+          }
+        }
+      } catch (_) {}
       await _sendCallSignal(call, {
         'type': 'offer',
         'target_user_id': peerId,
         'from_user_id': _currentUserId,
-        'sdp': offer.sdp,
-        'sdp_type': offer.type,
+        'sdp': mungedOffer.sdp,
+        'sdp_type': mungedOffer.type,
       });
     } catch (e) {
       debugPrint('[CallStateProvider] _createAndSendOffer ($peerId) error: $e');
@@ -1347,13 +1528,26 @@ class CallStateProvider extends ChangeNotifier {
           'offerToReceiveAudio': 1,
           'offerToReceiveVideo': 1,
         });
-        await pc.setLocalDescription(answer);
+        var answerSdp = answer.sdp ?? '';
+        if (_isScreenSharing && answerSdp.isNotEmpty) {
+          answerSdp = _applySdpCodecAndBitrate(answerSdp, _streamConfig);
+        }
+        final mungedAnswer = RTCSessionDescription(answerSdp, answer.type);
+        await pc.setLocalDescription(mungedAnswer);
+        try {
+          final senders = await pc.getSenders();
+          for (final s in senders) {
+            if (s.track?.kind == 'video') {
+              await _applySenderEncodingParameters(s, _streamConfig);
+            }
+          }
+        } catch (_) {}
         await _sendCallSignal(call, {
           'type': 'answer',
           'target_user_id': fromUserId,
           'from_user_id': myId,
-          'sdp': answer.sdp,
-          'sdp_type': answer.type,
+          'sdp': mungedAnswer.sdp,
+          'sdp_type': mungedAnswer.type,
         });
       } else if (signalType == 'answer') {
         final sdp = (signal['sdp'] ?? '').toString();
@@ -1364,6 +1558,14 @@ class CallStateProvider extends ChangeNotifier {
         }
         await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
         await _flushPendingCandidates(fromUserId, pc);
+        try {
+          final senders = await pc.getSenders();
+          for (final s in senders) {
+            if (s.track?.kind == 'video') {
+              await _applySenderEncodingParameters(s, _streamConfig);
+            }
+          }
+        } catch (_) {}
       } else if (signalType == 'ice_candidate') {
         final candidateStr = (signal['candidate'] ?? '').toString();
         if (candidateStr.isEmpty) return;
@@ -1406,6 +1608,7 @@ class CallStateProvider extends ChangeNotifier {
     _makingOfferForPeer.remove(peerId);
     _lastOfferSentAt.remove(peerId);
     _remotePrimaryStreams.remove(peerId);
+    _remoteDisplayStreams.remove(peerId);
     final pc = _peerConnections.remove(peerId);
     if (pc != null) {
       try {
@@ -1784,6 +1987,10 @@ class CallStateProvider extends ChangeNotifier {
       } catch (_) {}
     }
 
+    if (config.enableServerRecording != _isRecording) {
+      await toggleRecording(config: config);
+    }
+
     CallStream? updated;
     if (!call.id.startsWith('local_')) {
       updated = await CallService.updateStreamQuality(
@@ -1808,7 +2015,21 @@ class CallStateProvider extends ChangeNotifier {
         .map((s) => s.id == updated!.id ? updated : s)
         .toList();
     _activeCall = call.copyWith(streams: updatedList);
+
+    _broadcastWebRtcCallRelay(
+      call.chatId,
+      'call_stream_quality_updated',
+      {
+        'call_id': call.id,
+        'chat_id': call.chatId,
+        'stream': updated.toJson(),
+      },
+    );
+
     notifyListeners();
+
+    // Renegotiate with peers so SDP munging applies new codec, resolution, and bitrate immediately
+    await _renegotiateAllPeers();
   }
 
   /// Stops screen sharing.
@@ -1907,7 +2128,7 @@ class CallStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> toggleRecording() async {
+  Future<void> toggleRecording({StreamConfig? config}) async {
     final call = _activeCall;
     if (call == null) return;
     if (_isRecording) {
@@ -1920,7 +2141,10 @@ class CallStateProvider extends ChangeNotifier {
       _isRecording = true;
       notifyListeners();
       if (!call.id.startsWith('local_')) {
-        await CallService.startRecording(call.id);
+        await CallService.startRecording(
+          call.id,
+          config: config ?? _streamConfig,
+        );
       }
     }
   }
@@ -2015,6 +2239,8 @@ class CallStateProvider extends ChangeNotifier {
     _isVideoOn = false;
     _isRecording = false;
     _reactions.clear();
+    _remoteDisplayStreams.clear();
+    _participantRotations.clear();
 
     unawaited(NotificationService().stopCallForegroundService());
     if (call != null) {
@@ -2425,6 +2651,24 @@ class CallStateProvider extends ChangeNotifier {
           participants: updatedParticipants,
         );
         _focusedStream ??= stream;
+
+        // Immediately link renderer to this streamer's video stream if already received
+        if (stream.streamerId == _currentUserId) {
+          if (_previewOwnScreenShare && _renderersInitialized) {
+            screenShareRenderer.srcObject = _localDisplayStream;
+          }
+        } else {
+          final existingStream = _remoteDisplayStreams[stream.streamerId] ??
+              (_remotePrimaryStreams[stream.streamerId]
+                          ?.getVideoTracks()
+                          .isNotEmpty ==
+                      true
+                  ? _remotePrimaryStreams[stream.streamerId]
+                  : _participantRenderers[stream.streamerId]?.srcObject);
+          if (existingStream != null && _renderersInitialized) {
+            screenShareRenderer.srcObject = existingStream;
+          }
+        }
         notifyListeners();
         break;
 
@@ -2455,12 +2699,24 @@ class CallStateProvider extends ChangeNotifier {
           streams: list,
           participants: updatedParticipants,
         );
+        if (streamerId.isNotEmpty) {
+          _remoteDisplayStreams.remove(streamerId);
+        }
         if (_focusedStream != null &&
             !list.any((s) => s.id == _focusedStream!.id)) {
           _focusedStream = list.isNotEmpty ? list.first : null;
         }
         if (list.isEmpty && !_isScreenSharing && _renderersInitialized) {
           screenShareRenderer.srcObject = null;
+        } else if (_focusedStream != null &&
+            _focusedStream!.streamerId != _currentUserId &&
+            _renderersInitialized) {
+          final nextStream =
+              _remoteDisplayStreams[_focusedStream!.streamerId] ??
+                  _participantRenderers[_focusedStream!.streamerId]?.srcObject;
+          if (nextStream != null) {
+            screenShareRenderer.srcObject = nextStream;
+          }
         }
         notifyListeners();
         break;

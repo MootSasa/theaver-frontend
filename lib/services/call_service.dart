@@ -366,11 +366,23 @@ class CallService {
   }
 
   /// Starts server-side call recording (`POST /api/calls/:callId/recordings/start`).
-  static Future<String?> startRecording(String callId) async {
+  static Future<String?> startRecording(
+    String callId, {
+    StreamConfig? config,
+  }) async {
     try {
+      final body = config != null
+          ? jsonEncode({
+              'video_codec': config.codec.toLowerCase(),
+              'max_height': config.height,
+              'max_fps': config.fps,
+              'video_bitrate_kbps': config.bitrateKbps,
+            })
+          : null;
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/calls/$callId/recordings/start'),
         headers: await _headers(),
+        body: body,
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);

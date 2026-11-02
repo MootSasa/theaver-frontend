@@ -186,18 +186,28 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         ? InteractiveViewer(
                             minScale: 1.0,
                             maxScale: 3.5,
-                            child: RTCVideoView(
-                              callProvider.remoteRenderer,
-                              objectFit: RTCVideoViewObjectFit
-                                  .RTCVideoViewObjectFitCover,
+                            child: RotatedBox(
+                              quarterTurns: callProvider
+                                      .getParticipantRotation('remote') ~/
+                                  90,
+                              child: RTCVideoView(
+                                callProvider.remoteRenderer,
+                                objectFit: RTCVideoViewObjectFit
+                                    .RTCVideoViewObjectFitCover,
+                              ),
                             ),
                           )
                         : hasLocalVideo && callProvider.isVideoOn
-                            ? RTCVideoView(
-                                callProvider.localRenderer,
-                                mirror: true,
-                                objectFit: RTCVideoViewObjectFit
-                                    .RTCVideoViewObjectFitCover,
+                            ? RotatedBox(
+                                quarterTurns: callProvider
+                                        .getParticipantRotation('local') ~/
+                                    90,
+                                child: RTCVideoView(
+                                  callProvider.localRenderer,
+                                  mirror: true,
+                                  objectFit: RTCVideoViewObjectFit
+                                      .RTCVideoViewObjectFitCover,
+                                ),
                               )
                             : Container(
                                 decoration: BoxDecoration(
@@ -305,11 +315,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          RTCVideoView(
-                            callProvider.localRenderer,
-                            mirror: true,
-                            objectFit: RTCVideoViewObjectFit
-                                .RTCVideoViewObjectFitCover,
+                          RotatedBox(
+                            quarterTurns: callProvider
+                                    .getParticipantRotation('local') ~/
+                                90,
+                            child: RTCVideoView(
+                              callProvider.localRenderer,
+                              mirror: true,
+                              objectFit: RTCVideoViewObjectFit
+                                  .RTCVideoViewObjectFitCover,
+                            ),
                           ),
                           Positioned(
                             right: 6,
@@ -453,6 +468,17 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                               ),
                             ),
                           ],
+                          const SizedBox(width: 8),
+                          _buildTopCircleBtn(
+                            icon: Icons.rotate_90_degrees_cw_rounded,
+                            tooltip: 'Повернуть видео на 90°',
+                            onTap: () {
+                              HapticFeedback.selectionClick();
+                              callProvider.rotateParticipant(
+                                hasRemoteVideo ? 'remote' : 'local',
+                              );
+                            },
+                          ),
                           const SizedBox(width: 8),
                           _buildTopCircleBtn(
                             icon: Icons.cameraswitch_rounded,

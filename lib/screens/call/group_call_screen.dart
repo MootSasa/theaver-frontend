@@ -836,11 +836,17 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                           fit: StackFit.expand,
                           children: [
                             if (showVideo) ...[
-                              RTCVideoView(
-                                videoRenderer,
-                                mirror: isSelf,
-                                objectFit: RTCVideoViewObjectFit
-                                    .RTCVideoViewObjectFitCover,
+                              RotatedBox(
+                                quarterTurns: callProvider
+                                        .getParticipantRotation(
+                                            participant.userId) ~/
+                                    90,
+                                child: RTCVideoView(
+                                  videoRenderer,
+                                  mirror: isSelf,
+                                  objectFit: RTCVideoViewObjectFit
+                                      .RTCVideoViewObjectFitCover,
+                                ),
                               ),
                               Positioned(
                                 left: 8,
@@ -850,18 +856,45 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                   mainAxisAlignment:
                                       MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(5),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black
-                                            .withValues(alpha: 0.55),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(
-                                        Icons.open_in_full_rounded,
-                                        size: 13,
-                                        color: Colors.white,
-                                      ),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.all(5),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black
+                                                .withValues(alpha: 0.55),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.open_in_full_rounded,
+                                            size: 13,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        GestureDetector(
+                                          onTap: () {
+                                            HapticFeedback.selectionClick();
+                                            callProvider.rotateParticipant(
+                                              participant.userId,
+                                            );
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.all(5),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black
+                                                  .withValues(alpha: 0.55),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              Icons.rotate_90_degrees_cw_rounded,
+                                              size: 13,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                     GestureDetector(
                                       onTap: () => _showParticipantOptions(
