@@ -87,6 +87,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
         context,
         initialConfig: provider.streamConfig,
         isUpdatingActiveStream: true,
+        onStopStream: () => provider.stopScreenShare(),
       );
       if (updated != null) {
         await provider.updateScreenShareQuality(updated);
@@ -541,17 +542,32 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
             );
           },
         ),
-        _buildControlButton(
-          icon: callProvider.isScreenSharing
-              ? Icons.tune_rounded
-              : Icons.screen_share_rounded,
-          label: callProvider.isScreenSharing
-              ? callProvider.streamConfig.badgeLabel
-              : 'Экран',
-          active: callProvider.isScreenSharing,
-          accentColor: primaryColor,
-          onTap: () => _onTapScreenShare(callProvider),
-        ),
+        if (callProvider.isScreenSharing) ...[
+          _buildControlButton(
+            icon: Icons.stop_screen_share_rounded,
+            label: 'Стоп экран',
+            active: true,
+            danger: true,
+            onTap: () {
+              HapticFeedback.mediumImpact();
+              callProvider.stopScreenShare();
+            },
+          ),
+          _buildControlButton(
+            icon: Icons.tune_rounded,
+            label: callProvider.streamConfig.badgeLabel,
+            active: true,
+            accentColor: primaryColor,
+            onTap: () => _onTapScreenShare(callProvider),
+          ),
+        ] else
+          _buildControlButton(
+            icon: Icons.screen_share_rounded,
+            label: 'Экран',
+            active: false,
+            accentColor: primaryColor,
+            onTap: () => _onTapScreenShare(callProvider),
+          ),
         GestureDetector(
           onTap: () => _endCall(callProvider),
           child: Container(

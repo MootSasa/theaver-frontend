@@ -23,6 +23,7 @@ class GroupCallScreen extends StatefulWidget {
   final String? title;
   final bool isStage;
   final bool embedded;
+  final VoidCallback? onLeave;
 
   const GroupCallScreen({
     super.key,
@@ -32,6 +33,7 @@ class GroupCallScreen extends StatefulWidget {
     this.title,
     this.isStage = false,
     this.embedded = false,
+    this.onLeave,
   });
 
   @override
@@ -70,6 +72,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
         context,
         initialConfig: provider.streamConfig,
         isUpdatingActiveStream: true,
+        onStopStream: () => provider.stopScreenShare(),
       );
       if (updated != null) {
         await provider.updateScreenShareQuality(updated);
@@ -1162,17 +1165,32 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           accentColor: primaryColor,
           onTap: () => callProvider.toggleVideo(),
         ),
-        _buildDockItem(
-          icon: callProvider.isScreenSharing
-              ? Icons.tune_rounded
-              : Icons.screen_share_rounded,
-          label: callProvider.isScreenSharing
-              ? callProvider.streamConfig.badgeLabel
-              : 'Go Live',
-          active: callProvider.isScreenSharing,
-          accentColor: primaryColor,
-          onTap: () => _onTapGoLive(callProvider),
-        ),
+        if (callProvider.isScreenSharing) ...[
+          _buildDockItem(
+            icon: Icons.stop_screen_share_rounded,
+            label: 'Стоп экран',
+            danger: true,
+            active: true,
+            onTap: () {
+              HapticFeedback.mediumImpact();
+              callProvider.stopScreenShare();
+            },
+          ),
+          _buildDockItem(
+            icon: Icons.tune_rounded,
+            label: callProvider.streamConfig.badgeLabel,
+            active: true,
+            accentColor: primaryColor,
+            onTap: () => _onTapGoLive(callProvider),
+          ),
+        ] else
+          _buildDockItem(
+            icon: Icons.screen_share_rounded,
+            label: 'Go Live',
+            active: false,
+            accentColor: primaryColor,
+            onTap: () => _onTapGoLive(callProvider),
+          ),
         if (widget.isStage)
           _buildDockItem(
             icon: Icons.front_hand_rounded,
@@ -1191,6 +1209,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           onTap: () async {
             HapticFeedback.mediumImpact();
             await callProvider.leaveCall();
+            widget.onLeave?.call();
             if (!widget.embedded && context.mounted) {
               Navigator.of(context).maybePop();
             }

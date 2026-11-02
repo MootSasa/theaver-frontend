@@ -202,6 +202,24 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
                   ),
                 ),
               ),
+              if (callProvider.isScreenSharing) ...[
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                  padding: EdgeInsets.zero,
+                  tooltip: 'Остановить демонстрацию экрана',
+                  icon: const Icon(
+                    Icons.stop_screen_share_rounded,
+                    size: 19,
+                    color: Colors.redAccent,
+                  ),
+                  onPressed: () {
+                    HapticFeedback.mediumImpact();
+                    callProvider.stopScreenShare();
+                  },
+                ),
+                const SizedBox(width: 2),
+              ],
               // Quick Mute button
               IconButton(
                 visualDensity: VisualDensity.compact,

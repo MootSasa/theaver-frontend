@@ -76,6 +76,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         context,
         initialConfig: provider.streamConfig,
         isUpdatingActiveStream: true,
+        onStopStream: () => provider.stopScreenShare(),
       );
       if (updated != null) {
         await provider.updateScreenShareQuality(updated);
@@ -613,17 +614,32 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           active: callProvider.isVideoOn,
           onTap: () => callProvider.toggleVideo(),
         ),
-        _buildDockIcon(
-          icon: callProvider.isScreenSharing
-              ? Icons.tune_rounded
-              : Icons.screen_share_rounded,
-          label: callProvider.isScreenSharing
-              ? callProvider.streamConfig.badgeLabel
-              : 'Go Live',
-          active: callProvider.isScreenSharing,
-          accentColor: primaryColor,
-          onTap: () => _onTapScreenShare(callProvider),
-        ),
+        if (callProvider.isScreenSharing) ...[
+          _buildDockIcon(
+            icon: Icons.stop_screen_share_rounded,
+            label: 'Стоп экран',
+            danger: true,
+            active: true,
+            onTap: () {
+              HapticFeedback.mediumImpact();
+              callProvider.stopScreenShare();
+            },
+          ),
+          _buildDockIcon(
+            icon: Icons.tune_rounded,
+            label: callProvider.streamConfig.badgeLabel,
+            active: true,
+            accentColor: primaryColor,
+            onTap: () => _onTapScreenShare(callProvider),
+          ),
+        ] else
+          _buildDockIcon(
+            icon: Icons.screen_share_rounded,
+            label: 'Go Live',
+            active: false,
+            accentColor: primaryColor,
+            onTap: () => _onTapScreenShare(callProvider),
+          ),
         _buildDockIcon(
           icon: callProvider.isSpeakerOn
               ? Icons.volume_up_rounded

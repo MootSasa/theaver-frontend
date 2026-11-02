@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
+import '../../models/call_models.dart';
 import '../../models/community_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
@@ -64,17 +66,41 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   void _onWsMessage(WebSocketEvent event) {
-    final type = event.rawType.isNotEmpty
+    if (event.type == WebSocketEventType.emojiInteraction &&
+        event.data['action']?.toString() == '__webrtc_call__') {
+      final rawEmoji = event.data['emoji']?.toString() ?? '';
+      if (rawEmoji.isNotEmpty) {
+        try {
+          final decodedJson = utf8.decode(base64Decode(rawEmoji));
+          final envelope = jsonDecode(decodedJson);
+          if (envelope is Map<String, dynamic>) {
+            final evType = (envelope['event'] ?? '').toString();
+            final payload = envelope['payload'] is Map
+                ? Map<String, dynamic>.from(envelope['payload'] as Map)
+                : <String, dynamic>{};
+            final senderId = event.data['user_id']?.toString() ?? '';
+            if (senderId.isNotEmpty) {
+              payload.putIfAbsent('user_id', () => senderId);
+              payload.putIfAbsent('from_user_id', () => senderId);
+            }
+            _handleVoiceOrCallEvent(evType.replaceAll('.', '_'), payload);
+          }
+        } catch (_) {}
+      }
+      return;
+    }
+
+    final rawType = event.rawType.isNotEmpty
         ? event.rawType
         : (event.data['__raw_type'] ?? event.data['type'] ?? '').toString();
-    if (type == 'community.updated' ||
-        type == 'community_updated' ||
-        type == 'community.channel_created' ||
-        type == 'community_channel_created') {
-      final raw = event.data;
-      final payload = raw['payload'] is Map<String, dynamic>
-          ? raw['payload'] as Map<String, dynamic>
-          : raw;
+    final normalizedType = rawType.replaceAll('.', '_');
+    final raw = event.data;
+    final payload = raw['payload'] is Map<String, dynamic>
+        ? raw['payload'] as Map<String, dynamic>
+        : raw;
+
+    if (normalizedType == 'community_updated' ||
+        normalizedType == 'community_channel_created') {
       final commId = (payload['community_id'] ??
               (payload['community'] is Map
                   ? (payload['community'] as Map)['id']
@@ -84,7 +110,213 @@ class _CommunityScreenState extends State<CommunityScreen> {
       if (commId.isEmpty || commId == _community.id) {
         _fetchFreshCommunity();
       }
+      return;
     }
+
+    if (normalizedType == 'community_voice_state_updated' ||
+        normalizedType.startsWith('call_')) {
+      _handleVoiceOrCallEvent(normalizedType, payload);
+    }
+  }
+
+  void _handleVoiceOrCallEvent(
+    String normalizedType,
+    Map<String, dynamic> payload,
+  ) {
+    if (!mounted) return;
+    final callMap = payload['call'] is Map
+        ? Map<String, dynamic>.from(payload['call'] as Map)
+        : null;
+    final chatId = (payload['chat_id'] ??
+            callMap?['chat_id'] ??
+            (payload['stream'] is Map
+                ? (payload['stream'] as Map)['chat_id']
+                : null) ??
+            '')
+        .toString();
+    final commId =
+        (payload['community_id'] ?? callMap?['community_id'] ?? '').toString();
+
+    final hasMatchingChannel =
+        chatId.isNotEmpty && _community.channels.any((c) => c.id == chatId);
+    if (!hasMatchingChannel && commId != _community.id) {
+      return;
+    }
+
+    if (callMap != null && hasMatchingChannel) {
+      final session = CallSession.fromJson(callMap);
+      final isEnded = session.status == 'ended' ||
+          session.status == 'canceled' ||
+          session.status == 'declined' ||
+          normalizedType == 'call_ended';
+      final streamOwnerIds =
+          session.streams.map((s) => s.streamerId).toSet();
+      final updatedParticipants = isEnded
+          ? const <CallParticipant>[]
+          : session.participants
+              .where((p) => p.state == 'connected' || p.state.isEmpty)
+              .map((p) => streamOwnerIds.contains(p.userId) && !p.isScreenSharing
+                  ? p.copyWith(isScreenSharing: true)
+                  : p)
+              .toList();
+      _updateChannelParticipants(chatId, updatedParticipants);
+      return;
+    }
+
+    if (!hasMatchingChannel) {
+      if (commId == _community.id) {
+        _fetchFreshCommunity();
+      }
+      return;
+    }
+
+    final ch = _community.channels.firstWhere((c) => c.id == chatId);
+    switch (normalizedType) {
+      case 'call_ended':
+        final reason = (payload['reason'] ?? '').toString();
+        final fromUserId =
+            (payload['from_user_id'] ?? payload['user_id'] ?? '').toString();
+        if (reason.isEmpty && fromUserId.isNotEmpty) {
+          _updateChannelParticipants(
+            chatId,
+            ch.activeVoiceParticipants
+                .where((p) => p.userId != fromUserId)
+                .toList(),
+          );
+        } else {
+          _updateChannelParticipants(chatId, const []);
+        }
+        break;
+      case 'call_participant_left':
+        final userId =
+            (payload['user_id'] ?? payload['from_user_id'] ?? '').toString();
+        if (userId.isNotEmpty) {
+          _updateChannelParticipants(
+            chatId,
+            ch.activeVoiceParticipants
+                .where((p) => p.userId != userId)
+                .toList(),
+          );
+        }
+        break;
+      case 'call_participant_joined':
+      case 'call_accepted':
+        if (payload['participant'] is Map) {
+          final p = CallParticipant.fromJson(
+            Map<String, dynamic>.from(payload['participant'] as Map),
+          );
+          final next = [
+            ...ch.activeVoiceParticipants.where((x) => x.userId != p.userId),
+            p,
+          ];
+          _updateChannelParticipants(chatId, next);
+        } else {
+          _fetchFreshCommunity();
+        }
+        break;
+      case 'call_participant_updated':
+      case 'call_state_changed':
+        final userId =
+            (payload['user_id'] ?? payload['from_user_id'] ?? '').toString();
+        if (userId.isNotEmpty) {
+          final next = ch.activeVoiceParticipants.map((p) {
+            if (p.userId != userId) return p;
+            return p.copyWith(
+              isMuted:
+                  (payload['self_mute'] ?? payload['is_muted']) as bool?,
+              isDeafened:
+                  (payload['self_deaf'] ?? payload['is_deafened']) as bool?,
+              isVideoOn: payload['is_video_on'] as bool?,
+              isScreenSharing: payload['is_screen_sharing'] as bool?,
+            );
+          }).toList();
+          _updateChannelParticipants(chatId, next);
+        }
+        break;
+      case 'call_stream_started':
+        final sMap = payload['stream'] is Map
+            ? Map<String, dynamic>.from(payload['stream'] as Map)
+            : payload;
+        final streamerId = (sMap['streamer_id'] ?? '').toString();
+        if (streamerId.isNotEmpty) {
+          final next = ch.activeVoiceParticipants
+              .map((p) => p.userId == streamerId
+                  ? p.copyWith(isScreenSharing: true)
+                  : p)
+              .toList();
+          _updateChannelParticipants(chatId, next);
+        }
+        break;
+      case 'call_stream_stopped':
+        final streamerId =
+            (payload['streamer_id'] ?? payload['from_user_id'] ?? '')
+                .toString();
+        if (streamerId.isNotEmpty) {
+          final next = ch.activeVoiceParticipants
+              .map((p) => p.userId == streamerId
+                  ? p.copyWith(isScreenSharing: false)
+                  : p)
+              .toList();
+          _updateChannelParticipants(chatId, next);
+        } else {
+          _fetchFreshCommunity();
+        }
+        break;
+    }
+  }
+
+  void _updateChannelParticipants(
+    String channelId,
+    List<CallParticipant> participants,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      final updatedChannels = _community.channels.map((c) {
+        if (c.id == channelId) {
+          return c.copyWith(activeVoiceParticipants: participants);
+        }
+        return c;
+      }).toList();
+      _community = _community.copyWith(channels: updatedChannels);
+      if (_selectedChannel?.id == channelId) {
+        _selectedChannel = _selectedChannel!.copyWith(
+          activeVoiceParticipants: participants,
+        );
+      }
+      if (_community.isMember) {
+        CommunityService.cacheCommunity(_community);
+      }
+    });
+  }
+
+  void _onLocalVoiceLeft(String? channelId) {
+    if (!mounted) return;
+    final myId = context.read<CallStateProvider>().currentUserId;
+    setState(() {
+      if (channelId != null && channelId.isNotEmpty) {
+        final updatedChannels = _community.channels.map((c) {
+          if (c.id == channelId) {
+            return c.copyWith(
+              activeVoiceParticipants: c.activeVoiceParticipants
+                  .where((p) =>
+                      p.userId != 'local' &&
+                      (myId == null || p.userId != myId))
+                  .toList(),
+            );
+          }
+          return c;
+        }).toList();
+        _community = _community.copyWith(channels: updatedChannels);
+      }
+      if (_selectedChannel != null &&
+          _selectedChannel!.isAudioRoom &&
+          (channelId == null || _selectedChannel!.id == channelId)) {
+        _selectedChannel = _community.channels
+            .where((c) => !c.isAudioRoom)
+            .firstOrNull;
+      }
+    });
+    _fetchFreshCommunity();
   }
 
   void _selectInitialChannel() {
@@ -237,6 +469,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
             userId: 'local',
             title: '${_community.name} • ${channel.name}',
             isStage: channel.isStage,
+            onLeave: () => _onLocalVoiceLeft(channel.id),
           ),
         ),
       );
@@ -308,6 +541,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                               title: selected.name,
                               isStage: selected.isStage,
                               embedded: true,
+                              onLeave: () => _onLocalVoiceLeft(selected.id),
                             )
                           : GroupChatScreen(
                               key: ValueKey('text_${selected.id}'),
@@ -809,6 +1043,12 @@ class _CommunityScreenState extends State<CommunityScreen> {
               padding: const EdgeInsets.only(left: 34, top: 2, bottom: 4),
               child: Column(
                 children: liveParticipants.map((part) {
+                  final partAvatar = _resolveAvatarImage(part.avatarUrl);
+                  final isStreaming = part.isScreenSharing ||
+                      (isThisVoiceActive &&
+                          (callProvider.activeCall?.streams
+                                  .any((s) => s.streamerId == part.userId) ??
+                              false));
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 3),
                     child: Row(
@@ -819,6 +1059,12 @@ class _CommunityScreenState extends State<CommunityScreen> {
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: primaryColor.withValues(alpha: 0.25),
+                            image: partAvatar != null
+                                ? DecorationImage(
+                                    image: partAvatar,
+                                    fit: BoxFit.cover,
+                                  )
+                                : null,
                             border: Border.all(
                               color: part.isSpeaking
                                   ? const Color(0xFF00E676)
@@ -827,16 +1073,18 @@ class _CommunityScreenState extends State<CommunityScreen> {
                             ),
                           ),
                           alignment: Alignment.center,
-                          child: Text(
-                            part.displayName.isNotEmpty
-                                ? part.displayName[0].toUpperCase()
-                                : '?',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: p.textPrimary,
-                            ),
-                          ),
+                          child: partAvatar == null
+                              ? Text(
+                                  part.displayName.isNotEmpty
+                                      ? part.displayName[0].toUpperCase()
+                                      : '?',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: p.textPrimary,
+                                  ),
+                                )
+                              : null,
                         ),
                         const SizedBox(width: 8),
                         Expanded(
@@ -850,7 +1098,23 @@ class _CommunityScreenState extends State<CommunityScreen> {
                             ),
                           ),
                         ),
-                        if (part.isScreenSharing)
+                        if (part.isMuted) ...[
+                          const Icon(
+                            Icons.mic_off_rounded,
+                            size: 13,
+                            color: Colors.redAccent,
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        if (part.isVideoOn && !isStreaming) ...[
+                          Icon(
+                            Icons.videocam_rounded,
+                            size: 13,
+                            color: primaryColor,
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        if (isStreaming)
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 5,
@@ -917,6 +1181,17 @@ class _CommunityScreenState extends State<CommunityScreen> {
               ],
             ),
           ),
+          if (callProvider.isScreenSharing)
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Остановить трансляцию экрана',
+              icon: const Icon(
+                Icons.stop_screen_share_rounded,
+                size: 19,
+                color: Colors.redAccent,
+              ),
+              onPressed: () => callProvider.stopScreenShare(),
+            ),
           IconButton(
             visualDensity: VisualDensity.compact,
             icon: Icon(
@@ -935,7 +1210,11 @@ class _CommunityScreenState extends State<CommunityScreen> {
               size: 19,
               color: Colors.redAccent,
             ),
-            onPressed: () => callProvider.leaveCall(),
+            onPressed: () async {
+              final leftChatId = call?.chatId;
+              await callProvider.leaveCall();
+              _onLocalVoiceLeft(leftChatId);
+            },
           ),
         ],
       ),

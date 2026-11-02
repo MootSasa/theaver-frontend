@@ -1861,19 +1861,31 @@ class CallStateProvider extends ChangeNotifier {
     _updateLocalParticipant(isScreenSharing: false);
 
     if (call != null) {
-      final remaining = localStreamInfo == null
-          ? call.streams
-          : call.streams.where((s) => s.id != localStreamInfo.id).toList();
-      _activeCall = call.copyWith(streams: remaining);
-      if (_focusedStream?.id == localStreamInfo?.id) {
+      final myId = _currentUserId;
+      final remaining = call.streams.where((s) {
+        if (localStreamInfo != null && s.id == localStreamInfo.id) return false;
+        if (myId != null && myId.isNotEmpty && s.streamerId == myId) return false;
+        if (s.streamerId == 'local') return false;
+        return true;
+      }).toList();
+      _activeCall = _activeCall?.copyWith(streams: remaining);
+      if (_focusedStream != null &&
+          !remaining.any((s) => s.id == _focusedStream!.id)) {
         _focusedStream = remaining.isNotEmpty ? remaining.first : null;
       }
       if (!call.id.startsWith('local_')) {
-        if (localStreamInfo != null) {
-          await CallService.stopStream(call.id, localStreamInfo.id);
-        }
+        await CallService.stopStream(call.id, localStreamInfo?.id ?? 'mine');
         await CallService.updateState(call.id, isScreenSharing: false);
       }
+      if (_activeCall != null) {
+        _broadcastLocalStateToChat(_activeCall!);
+      }
+      _broadcastWebRtcCallRelay(call.chatId, 'call_stream_stopped', {
+        'call_id': call.id,
+        'chat_id': call.chatId,
+        'stream_id': localStreamInfo?.id ?? 'mine',
+        'streamer_id': _currentUserId ?? 'local',
+      });
     }
     notifyListeners();
     await _renegotiateAllPeers();
@@ -1987,6 +1999,8 @@ class CallStateProvider extends ChangeNotifier {
   /// Leaves and cleans up the active call.
   Future<void> leaveCall({bool notifyServer = true}) async {
     final call = _activeCall;
+    final wasScreenSharing = _isScreenSharing;
+    final localStreamId = _activeLocalStreamInfo?.id;
     _ringingTimeoutTimer?.cancel();
     _ringingTimeoutTimer = null;
     _timer?.cancel();
@@ -2047,9 +2061,14 @@ class CallStateProvider extends ChangeNotifier {
 
     if (notifyServer && call != null) {
       if (!call.id.startsWith('local_')) {
+        if (wasScreenSharing) {
+          await CallService.stopStream(call.id, localStreamId ?? 'mine');
+        }
         await CallService.leaveCall(call.id);
       }
-      final isOneOnOne = call.participants.length <= 2;
+      final isOneOnOne = !call.isGroupOrCommunity &&
+          call.callType != 'group' &&
+          call.callType != 'stage';
       _broadcastWebRtcCallRelay(
         call.chatId,
         isOneOnOne ? 'call_ended' : 'call_participant_left',
@@ -2060,6 +2079,48 @@ class CallStateProvider extends ChangeNotifier {
         },
       );
     }
+  }
+
+  CallSession _mergeUpdatedCallSession(CallSession current, CallSession incoming) {
+    final myId = _currentUserId;
+    final preservedCallType = current.isGroupOrCommunity
+        ? (current.callType == 'stage' ? 'stage' : 'group')
+        : incoming.callType;
+
+    final filteredStreams = _isScreenSharing
+        ? incoming.streams
+        : incoming.streams
+            .where((s) =>
+                (myId == null || s.streamerId != myId) &&
+                s.streamerId != 'local')
+            .toList();
+
+    final syncedParticipants = incoming.participants.map((p) {
+      if (p.userId == myId || p.userId == 'local') {
+        return p.copyWith(
+          isScreenSharing: _isScreenSharing,
+          isVideoOn: _isVideoOn,
+          isMuted: _isMuted,
+          isDeafened: _isDeafened,
+        );
+      }
+      final hasStream = filteredStreams.any((s) => s.streamerId == p.userId);
+      if (hasStream && !p.isScreenSharing) {
+        return p.copyWith(isScreenSharing: true);
+      }
+      return p;
+    }).toList();
+
+    return incoming.copyWith(
+      callType: preservedCallType,
+      communityId: incoming.communityId ?? current.communityId,
+      maxParticipants: incoming.maxParticipants > current.maxParticipants
+          ? incoming.maxParticipants
+          : current.maxParticipants,
+      title: incoming.title.isNotEmpty ? incoming.title : current.title,
+      participants: syncedParticipants,
+      streams: filteredStreams,
+    );
   }
 
   Future<void> _notifyDeviceIfBackgroundOrUnfocused(
@@ -2175,9 +2236,7 @@ class CallStateProvider extends ChangeNotifier {
             (_activeCall!.id == session.id ||
                 (_activeCall!.chatId == session.chatId &&
                     _activeCall!.id.startsWith('local_')))) {
-          _activeCall = session.copyWith(
-            title: session.title.isNotEmpty ? session.title : _activeCall!.title,
-          );
+          _activeCall = _mergeUpdatedCallSession(_activeCall!, session);
           notifyListeners();
           _syncPeerConnections();
         } else if (_activeCall == null &&
@@ -2226,11 +2285,9 @@ class CallStateProvider extends ChangeNotifier {
           final updatedSession = CallSession.fromJson(
             Map<String, dynamic>.from(payload['call'] as Map),
           );
-          _activeCall = updatedSession.copyWith(
-            status: 'active',
-            title: updatedSession.title.isNotEmpty
-                ? updatedSession.title
-                : _activeCall!.title,
+          _activeCall = _mergeUpdatedCallSession(
+            _activeCall!,
+            updatedSession.copyWith(status: 'active'),
           );
         } else if (payload['participant'] is Map) {
           final p = CallParticipant.fromJson(
@@ -2264,7 +2321,7 @@ class CallStateProvider extends ChangeNotifier {
         if (call == null) break;
         final callId = (payload['call_id'] ?? '').toString();
         if (callId.isNotEmpty && call.id != callId && call.chatId != payload['chat_id']?.toString()) break;
-        final userId = (payload['user_id'] ?? '').toString();
+        final userId = (payload['user_id'] ?? payload['from_user_id'] ?? '').toString();
         if (userId.isNotEmpty) {
           _closePeerConnection(userId);
         }
@@ -2272,16 +2329,20 @@ class CallStateProvider extends ChangeNotifier {
           final updatedSession = CallSession.fromJson(
             Map<String, dynamic>.from(payload['call'] as Map),
           );
-          _activeCall = updatedSession.copyWith(
-            title: updatedSession.title.isNotEmpty
-                ? updatedSession.title
-                : call.title,
-          );
+          _activeCall = _mergeUpdatedCallSession(call, updatedSession);
         } else {
+          final remainingStreams =
+              call.streams.where((s) => s.streamerId != userId).toList();
           _activeCall = call.copyWith(
             participants:
                 call.participants.where((p) => p.userId != userId).toList(),
+            streams: remainingStreams,
           );
+        }
+        if (_focusedStream != null &&
+            !_activeCall!.streams.any((s) => s.id == _focusedStream!.id)) {
+          _focusedStream =
+              _activeCall!.streams.isNotEmpty ? _activeCall!.streams.first : null;
         }
         notifyListeners();
         break;
@@ -2297,13 +2358,10 @@ class CallStateProvider extends ChangeNotifier {
           final updatedSession = CallSession.fromJson(
             Map<String, dynamic>.from(payload['call'] as Map),
           );
-          _activeCall = updatedSession.copyWith(
-            title: updatedSession.title.isNotEmpty
-                ? updatedSession.title
-                : call.title,
-          );
+          _activeCall = _mergeUpdatedCallSession(call, updatedSession);
         } else {
           final userId = (payload['user_id'] ?? '').toString();
+          final isSharing = payload['is_screen_sharing'] as bool?;
           final updated = call.participants.map((p) {
             if (p.userId != userId) return p;
             final selfMute =
@@ -2319,13 +2377,24 @@ class CallStateProvider extends ChangeNotifier {
               serverMuted: srvMute,
               serverDeafened: srvDeaf,
               isVideoOn: payload['is_video_on'] as bool?,
-              isScreenSharing: payload['is_screen_sharing'] as bool?,
+              isScreenSharing: isSharing,
               isHandRaised: payload['is_hand_raised'] as bool?,
               isSpeaking: payload['is_speaking'] as bool?,
               role: payload['stage_role']?.toString(),
             );
           }).toList();
-          _activeCall = call.copyWith(participants: updated);
+          final updatedStreams = (isSharing == false && userId.isNotEmpty)
+              ? call.streams.where((s) => s.streamerId != userId).toList()
+              : call.streams;
+          _activeCall = call.copyWith(
+            participants: updated,
+            streams: updatedStreams,
+          );
+        }
+        if (_focusedStream != null &&
+            !_activeCall!.streams.any((s) => s.id == _focusedStream!.id)) {
+          _focusedStream =
+              _activeCall!.streams.isNotEmpty ? _activeCall!.streams.first : null;
         }
         notifyListeners();
         break;
@@ -2342,10 +2411,19 @@ class CallStateProvider extends ChangeNotifier {
                 : payload);
         final stream = CallStream.fromJson(sMap);
         final list = [
-          ...call.streams.where((s) => s.id != stream.id),
+          ...call.streams.where(
+              (s) => s.id != stream.id && s.streamerId != stream.streamerId),
           stream,
         ];
-        _activeCall = call.copyWith(streams: list);
+        final updatedParticipants = call.participants
+            .map((p) => p.userId == stream.streamerId
+                ? p.copyWith(isScreenSharing: true)
+                : p)
+            .toList();
+        _activeCall = call.copyWith(
+          streams: list,
+          participants: updatedParticipants,
+        );
         _focusedStream ??= stream;
         notifyListeners();
         break;
@@ -2355,9 +2433,30 @@ class CallStateProvider extends ChangeNotifier {
         if (call == null) break;
         final streamId =
             (payload['stream_id'] ?? payload['id'] ?? '').toString();
-        final list = call.streams.where((s) => s.id != streamId).toList();
-        _activeCall = call.copyWith(streams: list);
-        if (_focusedStream?.id == streamId) {
+        final streamerId =
+            (payload['streamer_id'] ?? payload['from_user_id'] ?? '').toString();
+        final list = call.streams.where((s) {
+          if (streamId.isNotEmpty && streamId != 'mine' && s.id == streamId) {
+            return false;
+          }
+          if (streamerId.isNotEmpty && s.streamerId == streamerId) {
+            return false;
+          }
+          return true;
+        }).toList();
+        final updatedParticipants = streamerId.isNotEmpty
+            ? call.participants
+                .map((p) => p.userId == streamerId
+                    ? p.copyWith(isScreenSharing: false)
+                    : p)
+                .toList()
+            : call.participants;
+        _activeCall = call.copyWith(
+          streams: list,
+          participants: updatedParticipants,
+        );
+        if (_focusedStream != null &&
+            !list.any((s) => s.id == _focusedStream!.id)) {
           _focusedStream = list.isNotEmpty ? list.first : null;
         }
         if (list.isEmpty && !_isScreenSharing && _renderersInitialized) {
@@ -2407,6 +2506,8 @@ class CallStateProvider extends ChangeNotifier {
         final callId = (payload['call_id'] ?? payload['id'] ?? '').toString();
         final chatId = (payload['chat_id'] ?? '').toString();
         final reason = (payload['reason'] ?? '').toString();
+        final fromPeerId =
+            (payload['from_user_id'] ?? payload['user_id'] ?? '').toString();
         unawaited(
           NotificationService().cancelIncomingCallNotification(
             callId: callId,
@@ -2416,6 +2517,24 @@ class CallStateProvider extends ChangeNotifier {
         if (_activeCall != null &&
             (_activeCall!.id == callId ||
                 (chatId.isNotEmpty && _activeCall!.chatId == chatId))) {
+          // If this is a group or community call and a peer sent a client-side relay
+          // (no server end reason), only remove that peer instead of ending the call!
+          if (_activeCall!.isGroupOrCommunity &&
+              reason.isEmpty &&
+              fromPeerId.isNotEmpty) {
+            _closePeerConnection(fromPeerId);
+            final remainingStreams = _activeCall!.streams
+                .where((s) => s.streamerId != fromPeerId)
+                .toList();
+            _activeCall = _activeCall!.copyWith(
+              participants: _activeCall!.participants
+                  .where((p) => p.userId != fromPeerId)
+                  .toList(),
+              streams: remainingStreams,
+            );
+            notifyListeners();
+            break;
+          }
           leaveCall(notifyServer: false);
         }
         if (_incomingCall != null &&

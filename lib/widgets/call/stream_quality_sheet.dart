@@ -17,17 +17,20 @@ import '../../services/liquid_glass_provider.dart';
 class StreamQualitySheet extends StatefulWidget {
   final StreamConfig initialConfig;
   final bool isUpdatingActiveStream;
+  final VoidCallback? onStopStream;
 
   const StreamQualitySheet({
     super.key,
     required this.initialConfig,
     this.isUpdatingActiveStream = false,
+    this.onStopStream,
   });
 
   static Future<StreamConfig?> show(
     BuildContext context, {
     StreamConfig initialConfig = const StreamConfig(),
     bool isUpdatingActiveStream = false,
+    VoidCallback? onStopStream,
   }) {
     return showModalBottomSheet<StreamConfig>(
       context: context,
@@ -36,6 +39,7 @@ class StreamQualitySheet extends StatefulWidget {
       builder: (_) => StreamQualitySheet(
         initialConfig: initialConfig,
         isUpdatingActiveStream: isUpdatingActiveStream,
+        onStopStream: onStopStream,
       ),
     );
   }
@@ -384,7 +388,7 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
             value: _includeAudio,
-            activeColor: primaryColor,
+            activeThumbColor: primaryColor,
             title: Text(
               'Транслировать системный звук',
               style: TextStyle(
@@ -403,7 +407,7 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
             SwitchListTile.adaptive(
               contentPadding: EdgeInsets.zero,
               value: _enableRecording,
-              activeColor: Colors.redAccent,
+              activeThumbColor: Colors.redAccent,
               title: Text(
                 'Запись на сервере (1080p @ 60fps)',
                 style: TextStyle(
@@ -462,6 +466,37 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
               ),
             ),
           ),
+          if (widget.isUpdatingActiveStream && widget.onStopStream != null) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                  side: BorderSide(
+                    color: Colors.redAccent.withValues(alpha: 0.6),
+                  ),
+                  backgroundColor: Colors.redAccent.withValues(alpha: 0.12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  widget.onStopStream?.call();
+                },
+                icon: const Icon(Icons.stop_screen_share_rounded),
+                label: const Text(
+                  'Остановить трансляцию экрана',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

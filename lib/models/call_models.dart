@@ -415,11 +415,13 @@ class CallStream {
 class CallSession {
   final String id;
   final String chatId;
+  final String? communityId;
   final String initiatorId;
   final String callType; // 'voice' | 'video' | 'group' | 'stage'
   final String status; // 'ringing' | 'active' | 'ended'
   final bool isVideo;
   final String title;
+  final int maxParticipants;
   final DateTime startedAt;
   final DateTime? endedAt;
   final List<CallParticipant> participants;
@@ -429,11 +431,13 @@ class CallSession {
   const CallSession({
     required this.id,
     required this.chatId,
+    this.communityId,
     this.initiatorId = '',
     this.callType = 'voice',
     this.status = 'active',
     this.isVideo = false,
     this.title = '',
+    this.maxParticipants = 2,
     required this.startedAt,
     this.endedAt,
     this.participants = const [],
@@ -441,14 +445,25 @@ class CallSession {
     this.activeRecordingId,
   });
 
+  bool get isGroupOrCommunity =>
+      callType == 'group' ||
+      callType == 'stage' ||
+      (communityId != null &&
+          communityId!.isNotEmpty &&
+          communityId != '0' &&
+          communityId != 'null') ||
+      maxParticipants > 2;
+
   CallSession copyWith({
     String? id,
     String? chatId,
+    String? communityId,
     String? initiatorId,
     String? callType,
     String? status,
     bool? isVideo,
     String? title,
+    int? maxParticipants,
     DateTime? startedAt,
     DateTime? endedAt,
     List<CallParticipant>? participants,
@@ -458,11 +473,13 @@ class CallSession {
     return CallSession(
       id: id ?? this.id,
       chatId: chatId ?? this.chatId,
+      communityId: communityId ?? this.communityId,
       initiatorId: initiatorId ?? this.initiatorId,
       callType: callType ?? this.callType,
       status: status ?? this.status,
       isVideo: isVideo ?? this.isVideo,
       title: title ?? this.title,
+      maxParticipants: maxParticipants ?? this.maxParticipants,
       startedAt: startedAt ?? this.startedAt,
       endedAt: endedAt ?? this.endedAt,
       participants: participants ?? this.participants,
@@ -493,19 +510,32 @@ class CallSession {
       }
     }
 
-    final cType = (json['call_type'] ?? json['type'] ?? 'voice').toString();
+    final commIdRaw = json['community_id']?.toString();
+    final commId =
+        (commIdRaw != null && commIdRaw.isNotEmpty && commIdRaw != '0' && commIdRaw != 'null')
+            ? commIdRaw
+            : null;
+    final maxParts = (json['max_participants'] as num?)?.toInt() ??
+        (commId != null ? 50 : 2);
+
+    var cType = (json['call_type'] ?? json['type'] ?? 'voice').toString();
     final isVid = json['is_video'] == true ||
         json['video_enabled'] == true ||
         cType == 'video';
+    if (cType == 'voice' && (commId != null || maxParts > 2)) {
+      cType = 'group';
+    }
 
     return CallSession(
       id: (json['id'] ?? json['call_id'] ?? '').toString(),
       chatId: (json['chat_id'] ?? '').toString(),
+      communityId: commId,
       initiatorId: (json['initiator_id'] ?? json['creator_id'] ?? '').toString(),
       callType: cType,
       status: (json['status'] ?? 'active').toString(),
       isVideo: isVid,
       title: (json['title'] ?? json['chat_name'] ?? '').toString(),
+      maxParticipants: maxParts,
       startedAt: json['started_at'] != null
           ? (DateTime.tryParse(json['started_at'].toString()) ?? DateTime.now())
           : DateTime.now(),
@@ -523,12 +553,14 @@ class CallSession {
         'id': id,
         'call_id': id,
         'chat_id': chatId,
+        if (communityId != null) 'community_id': communityId,
         'initiator_id': initiatorId,
         'call_type': callType,
         'status': status,
         'is_video': isVideo,
         'video_enabled': isVideo,
         'title': title,
+        'max_participants': maxParticipants,
         'started_at': startedAt.toIso8601String(),
         if (endedAt != null) 'ended_at': endedAt!.toIso8601String(),
         'participants': participants.map((p) => p.toJson()).toList(),
