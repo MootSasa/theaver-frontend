@@ -1,13 +1,18 @@
+import 'dart:io' show Platform;
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import '../../models/call_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
+import '../../widgets/call/desktop_source_picker_modal.dart';
+import '../../widgets/call/soundboard_sheet.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
 import 'video_call_screen.dart';
 
@@ -37,6 +42,61 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulseCtrl;
   bool _hadActiveCall = false;
+  bool _showingTransferDialog = false;
+
+  void _showDeviceTransferDialog(
+    BuildContext context,
+    CallStateProvider callProvider,
+  ) {
+    if (_showingTransferDialog) return;
+    final conflictId = callProvider.conflictCallId;
+    if (conflictId == null) return;
+    _showingTransferDialog = true;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF181D2A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.devices_rounded, color: Color(0xFF00E676), size: 24),
+            SizedBox(width: 10),
+            Text('Активный звонок', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          'Вы уже находитесь в этом звонке с другого устройства.\n\nПеревести звонок на это устройство?',
+          style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _showingTransferDialog = false;
+              callProvider.clearConflictCall();
+              if (mounted) Navigator.of(context).maybePop();
+            },
+            child: const Text('Отмена', style: TextStyle(color: Colors.white60)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              _showingTransferDialog = false;
+              await callProvider.transferCallToThisDevice(
+                conflictId,
+                chatTitle: widget.peerName ?? 'Голосовой звонок',
+                isVideo: false,
+              );
+            },
+            child: const Text('Перевести', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    ).then((_) => _showingTransferDialog = false);
+  }
 
   @override
   void initState() {
@@ -94,10 +154,19 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
       }
       return;
     }
-    final config = await StreamQualitySheet.show(
-      context,
-      initialConfig: provider.streamConfig,
-    );
+
+    StreamConfig? config;
+    if (kIsWeb || (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux)) {
+      config = await StreamQualitySheet.show(
+        context,
+        initialConfig: provider.streamConfig,
+      );
+    } else {
+      config = await DesktopSourcePickerModal.show(
+        context,
+        initialConfig: provider.streamConfig,
+      );
+    }
     if (config != null) {
       await provider.startScreenShare(config);
     }
@@ -106,6 +175,11 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   @override
   Widget build(BuildContext context) {
     final callProvider = context.watch<CallStateProvider>();
+    if (callProvider.conflictCallId != null && !_showingTransferDialog) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showDeviceTransferDialog(context, callProvider);
+      });
+    }
     if (callProvider.hasActiveCall) {
       _hadActiveCall = true;
     } else if (_hadActiveCall) {
@@ -275,7 +349,30 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                             ],
                           )
                         else
-                          const SizedBox(width: 40),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _buildTopIconButton(
+                                icon: callProvider.highFidelityAudio
+                                    ? Icons.graphic_eq_rounded
+                                    : Icons.music_note_outlined,
+                                tooltip: callProvider.highFidelityAudio
+                                    ? 'Hi-Fi Аудио (48 кГц Opus)'
+                                    : 'Стандартный звук',
+                                onTap: () {
+                                  callProvider.toggleHighFidelityAudio();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(callProvider.highFidelityAudio
+                                          ? 'Hi-Fi звук включён (48 кГц Opus)'
+                                          : 'Стандартный звук'),
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
                       ],
                     ),
                   ),
@@ -568,6 +665,18 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
             accentColor: primaryColor,
             onTap: () => _onTapScreenShare(callProvider),
           ),
+        _buildControlButton(
+          icon: Icons.music_note_rounded,
+          label: 'Звуки',
+          active: false,
+          onTap: () {
+            HapticFeedback.selectionClick();
+            SoundboardSheet.show(
+              context,
+              callId: widget.callId,
+            );
+          },
+        ),
         GestureDetector(
           onTap: () => _endCall(callProvider),
           child: Container(

@@ -74,6 +74,8 @@ class StreamConfig {
   final bool includeAudio;
   final bool enableServerRecording;
   final String sourceType; // 'screen' | 'window' | 'camera'
+  final String? sourceId;
+  final String? sourceName;
 
   const StreamConfig({
     this.width = 1920,
@@ -85,6 +87,8 @@ class StreamConfig {
     this.includeAudio = true,
     this.enableServerRecording = false,
     this.sourceType = 'screen',
+    this.sourceId,
+    this.sourceName,
   });
 
   String get resolutionLabel {
@@ -106,6 +110,8 @@ class StreamConfig {
     bool? includeAudio,
     bool? enableServerRecording,
     String? sourceType,
+    String? sourceId,
+    String? sourceName,
   }) {
     return StreamConfig(
       width: width ?? this.width,
@@ -118,6 +124,8 @@ class StreamConfig {
       enableServerRecording:
           enableServerRecording ?? this.enableServerRecording,
       sourceType: sourceType ?? this.sourceType,
+      sourceId: sourceId ?? this.sourceId,
+      sourceName: sourceName ?? this.sourceName,
     );
   }
 
@@ -427,6 +435,10 @@ class CallSession {
   final List<CallParticipant> participants;
   final List<CallStream> streams;
   final String? activeRecordingId;
+  final List<Map<String, dynamic>>? iceServers;
+  final String? livekitUrl;
+  final String? livekitToken;
+  final String? roomName;
 
   const CallSession({
     required this.id,
@@ -443,6 +455,10 @@ class CallSession {
     this.participants = const [],
     this.streams = const [],
     this.activeRecordingId,
+    this.iceServers,
+    this.livekitUrl,
+    this.livekitToken,
+    this.roomName,
   });
 
   bool get isActiveOnOtherDevice => status == 'active_on_other_device';
@@ -471,6 +487,10 @@ class CallSession {
     List<CallParticipant>? participants,
     List<CallStream>? streams,
     String? activeRecordingId,
+    List<Map<String, dynamic>>? iceServers,
+    String? livekitUrl,
+    String? livekitToken,
+    String? roomName,
   }) {
     return CallSession(
       id: id ?? this.id,
@@ -487,6 +507,10 @@ class CallSession {
       participants: participants ?? this.participants,
       streams: streams ?? this.streams,
       activeRecordingId: activeRecordingId ?? this.activeRecordingId,
+      iceServers: iceServers ?? this.iceServers,
+      livekitUrl: livekitUrl ?? this.livekitUrl,
+      livekitToken: livekitToken ?? this.livekitToken,
+      roomName: roomName ?? this.roomName,
     );
   }
 
@@ -528,6 +552,14 @@ class CallSession {
       cType = 'group';
     }
 
+    List<Map<String, dynamic>>? parsedIceServers;
+    if (json['ice_servers'] is List) {
+      parsedIceServers = (json['ice_servers'] as List)
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+    }
+
     return CallSession(
       id: (json['id'] ?? json['call_id'] ?? '').toString(),
       chatId: (json['chat_id'] ?? '').toString(),
@@ -548,6 +580,10 @@ class CallSession {
       streams: streamsList,
       activeRecordingId: json['active_recording_id']?.toString() ??
           (json['is_recorded'] == true ? 'active' : null),
+      iceServers: parsedIceServers,
+      livekitUrl: json['livekit_url']?.toString(),
+      livekitToken: json['livekit_token']?.toString(),
+      roomName: json['room_name']?.toString(),
     );
   }
 

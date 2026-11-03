@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show MaterialPageRoute;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:window_manager/window_manager.dart';
 import '../models/call_models.dart';
@@ -35,7 +36,7 @@ class FloatingCallReaction {
 /// real multi-peer WebRTC (`RTCPeerConnection`) audio/video/screen-share tracks,
 /// High-FPS screen sharing (up to 144 FPS), Top Banner (active + incoming), and Draggable PiP.
 class CallStateProvider extends ChangeNotifier {
-  static const Map<String, dynamic> _rtcConfiguration = {
+  Map<String, dynamic> _rtcConfiguration = {
     'iceServers': [
       {
         'urls': [
@@ -49,6 +50,58 @@ class CallStateProvider extends ChangeNotifier {
     'sdpSemantics': 'unified-plan',
     'ContinualGatheringPolicy': 'gather_continually',
   };
+
+  void updateIceServers(List<Map<String, dynamic>>? servers) {
+    if (servers == null || servers.isEmpty) return;
+    _rtcConfiguration = {
+      'iceServers': servers,
+      'sdpSemantics': 'unified-plan',
+      'ContinualGatheringPolicy': 'gather_continually',
+    };
+  }
+
+  // Multi-device active call banner state (for banner in ChatsScreen)
+  String? _otherDeviceActiveCallId;
+  String? get otherDeviceActiveCallId => _otherDeviceActiveCallId;
+  String? _otherDeviceActiveChatTitle;
+  String? get otherDeviceActiveChatTitle => _otherDeviceActiveChatTitle;
+  String? _otherDeviceActiveChatId;
+  String? get otherDeviceActiveChatId => _otherDeviceActiveChatId;
+
+  // High-Fidelity Audio Mode
+  bool _highFidelityAudio = true;
+  bool get highFidelityAudio => _highFidelityAudio;
+  void toggleHighFidelityAudio() {
+    _highFidelityAudio = !_highFidelityAudio;
+    notifyListeners();
+  }
+
+  // Soundboard audio player
+  AudioPlayer? _soundboardPlayer;
+  Future<void> _playSoundboardClip(String soundUrl) async {
+    try {
+      _soundboardPlayer ??= AudioPlayer();
+      await _soundboardPlayer!.setUrl(soundUrl);
+      await _soundboardPlayer!.play();
+    } catch (e) {
+      debugPrint('[CallStateProvider] soundboard play error: $e');
+    }
+  }
+
+  /// Transfers the active call on other device to this device via global banner.
+  Future<bool> transferActiveCallFromBanner() async {
+    final callId = _otherDeviceActiveCallId;
+    if (callId == null || callId.isEmpty) return false;
+    final chatTitle = _otherDeviceActiveChatTitle;
+    final success = await transferCallToThisDevice(callId, chatTitle: chatTitle);
+    if (success) {
+      _otherDeviceActiveCallId = null;
+      _otherDeviceActiveChatId = null;
+      _otherDeviceActiveChatTitle = null;
+      notifyListeners();
+    }
+    return success;
+  }
 
   CallSession? _activeCall;
   CallSession? _incomingCall;
@@ -513,7 +566,7 @@ class CallStateProvider extends ChangeNotifier {
 
   static final AndroidAudioConfiguration _mediaAudioConfig =
       AndroidAudioConfiguration(
-        manageAudioFocus: false,
+        manageAudioFocus: true,
         androidAudioMode: AndroidAudioMode.normal,
         androidAudioFocusMode: AndroidAudioFocusMode.gainTransientMayDuck,
         androidAudioStreamType: AndroidAudioStreamType.music,
@@ -738,6 +791,9 @@ class CallStateProvider extends ChangeNotifier {
     }
 
     _activeCall = session;
+    if (session.iceServers != null) {
+      updateIceServers(session.iceServers);
+    }
     if (session.status == 'ringing') {
       _timer?.cancel();
       _timer = null;
@@ -814,6 +870,9 @@ class CallStateProvider extends ChangeNotifier {
       );
       if (session != null && !session.isActiveOnOtherDevice) {
         _activeCall = session;
+        if (session.iceServers != null) {
+          updateIceServers(session.iceServers);
+        }
         _ringingTimeoutTimer?.cancel();
         _startTimer(session.startedAt);
         if (session.streams.isNotEmpty) {
@@ -998,8 +1057,21 @@ class CallStateProvider extends ChangeNotifier {
         (_localUserStream == null ||
             _localUserStream!.getAudioTracks().isEmpty)) {
       try {
+        final audioConstraints = _highFidelityAudio
+            ? <String, dynamic>{
+                'echoCancellation': true,
+                'noiseSuppression': true,
+                'autoGainControl': true,
+                'sampleRate': 48000,
+                'channelCount': 2,
+              }
+            : <String, dynamic>{
+                'echoCancellation': true,
+                'noiseSuppression': true,
+                'autoGainControl': true,
+              };
         final audioStream = await navigator.mediaDevices.getUserMedia({
-          'audio': true,
+          'audio': audioConstraints,
           'video': false,
         });
         _localUserStream = audioStream;
@@ -2039,16 +2111,23 @@ class CallStateProvider extends ChangeNotifier {
             types: [SourceType.Screen, SourceType.Window],
           );
           if (sources.isNotEmpty) {
-            if (config.sourceType == 'window') {
+            if (config.sourceId != null && config.sourceId!.isNotEmpty) {
               selectedSource = sources
-                      .where((s) => s.type == SourceType.Window)
-                      .firstOrNull ??
-                  sources.first;
-            } else {
-              selectedSource = sources
-                      .where((s) => s.type == SourceType.Screen)
-                      .firstOrNull ??
-                  sources.first;
+                  .where((s) => s.id == config.sourceId)
+                  .firstOrNull;
+            }
+            if (selectedSource == null) {
+              if (config.sourceType == 'window') {
+                selectedSource = sources
+                        .where((s) => s.type == SourceType.Window)
+                        .firstOrNull ??
+                    sources.first;
+              } else {
+                selectedSource = sources
+                        .where((s) => s.type == SourceType.Screen)
+                        .firstOrNull ??
+                    sources.first;
+              }
             }
           }
         } catch (e) {
@@ -2994,6 +3073,42 @@ class CallStateProvider extends ChangeNotifier {
         if (_activeCall != null && (_activeCall!.id == callId || callId.isEmpty)) {
           debugPrint('[CallStateProvider] Call transferred to another device, terminating locally.');
           leaveCall(notifyServer: false);
+        }
+        break;
+
+      case 'call.user_active_call_state':
+        final callId = (payload['call_id'] ?? '').toString();
+        final chatId = (payload['chat_id'] ?? '').toString();
+        final title = (payload['title'] ?? '').toString();
+        final status = (payload['status'] ?? '').toString();
+        if (status == 'active' && (_activeCall == null || _activeCall!.id != callId)) {
+          _otherDeviceActiveCallId = callId;
+          _otherDeviceActiveChatId = chatId;
+          _otherDeviceActiveChatTitle = title;
+        } else if (status == 'ended' || (_activeCall != null && _activeCall!.id == callId)) {
+          _otherDeviceActiveCallId = null;
+          _otherDeviceActiveChatId = null;
+          _otherDeviceActiveChatTitle = null;
+        }
+        notifyListeners();
+        break;
+
+      case 'call.peer_device_transferred':
+        final callId = (payload['call_id'] ?? '').toString();
+        final peerUserId = (payload['user_id'] ?? '').toString();
+        if (_activeCall != null && (_activeCall!.id == callId || callId.isEmpty)) {
+          debugPrint('[CallStateProvider] Peer $peerUserId transferred device, renegotiating WebRTC...');
+          if (peerUserId.isNotEmpty) {
+            _closePeerConnection(peerUserId);
+            unawaited(_syncPeerConnections(initiateOffers: true));
+          }
+        }
+        break;
+
+      case 'call.soundboard_played':
+        final soundUrl = (payload['file_url'] ?? payload['sound_url'] ?? '').toString();
+        if (soundUrl.isNotEmpty) {
+          unawaited(_playSoundboardClip(soundUrl));
         }
         break;
 

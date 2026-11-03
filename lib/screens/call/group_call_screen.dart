@@ -1,4 +1,6 @@
+import 'dart:io' show Platform;
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -10,6 +12,8 @@ import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
+import '../../widgets/call/desktop_source_picker_modal.dart';
+import '../../widgets/call/soundboard_sheet.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
 
 /// Group Voice/Video Call, Go Live Screen Share Stage, and Community Stage Room Screen.
@@ -288,10 +292,20 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       }
       return;
     }
-    final config = await StreamQualitySheet.show(
-      context,
-      initialConfig: provider.streamConfig,
-    );
+    final isDesktop =
+        !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+    final StreamConfig? config;
+    if (isDesktop) {
+      config = await DesktopSourcePickerModal.show(
+        context,
+        initialConfig: provider.streamConfig,
+      );
+    } else {
+      config = await StreamQualitySheet.show(
+        context,
+        initialConfig: provider.streamConfig,
+      );
+    }
     if (config != null) {
       await provider.startScreenShare(config);
     }
@@ -650,6 +664,62 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                               fontSize: 11.5,
                               fontWeight: FontWeight.w700,
                               color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      callProvider.toggleHighFidelityAudio();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(callProvider.highFidelityAudio
+                              ? 'Hi-Fi звук включён (48 кГц Opus)'
+                              : 'Стандартный звук'),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: callProvider.highFidelityAudio
+                            ? const Color(0xFF00E676).withValues(alpha: 0.18)
+                            : Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: callProvider.highFidelityAudio
+                              ? const Color(0xFF00E676)
+                              : Colors.white24,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.graphic_eq_rounded,
+                            size: 13,
+                            color: callProvider.highFidelityAudio
+                                ? const Color(0xFF00E676)
+                                : Colors.white60,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Hi-Fi',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: callProvider.highFidelityAudio
+                                  ? const Color(0xFF00E676)
+                                  : Colors.white70,
                             ),
                           ),
                         ],
@@ -1517,6 +1587,14 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
             label: 'Реакции',
             onTap: () => _showReactionsSheet(context, callProvider),
           ),
+        _buildDockItem(
+          icon: Icons.music_note_rounded,
+          label: 'Звуки',
+          onTap: () => SoundboardSheet.show(
+            context,
+            callId: widget.callId,
+          ),
+        ),
         GestureDetector(
           onTap: () async {
             HapticFeedback.mediumImpact();

@@ -48,6 +48,7 @@ import '../../services/update_service.dart';
 import '../settings/widgets/update_dialog.dart';
 import '../../widgets/chat/round_video_thumbnail.dart';
 import '../../widgets/chat/media_note_player_header.dart';
+import '../../widgets/call/call_device_transfer_banner.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
 import '../../services/notification_service.dart';
 import '../../services/proximity_audio_service.dart';
@@ -3877,7 +3878,13 @@ class _MainScreenState extends State<MainScreen>
                         top: topBarHeight + 4.0,
                         left: 0,
                         right: 0,
-                        child: const MediaNotePlayerHeader(),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            CallDeviceTransferBanner(),
+                            MediaNotePlayerHeader(),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -4028,7 +4035,13 @@ class _MainScreenState extends State<MainScreen>
                     top: topBarHeight + 4.0,
                     left: 0,
                     right: 0,
-                    child: const MediaNotePlayerHeader(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        CallDeviceTransferBanner(),
+                        MediaNotePlayerHeader(),
+                      ],
+                    ),
                   ),
                   Positioned(
                     top: 0,

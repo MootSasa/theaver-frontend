@@ -61,8 +61,12 @@ class CallService {
             );
           }
           final callMap = data['call'] is Map<String, dynamic>
-              ? data['call'] as Map<String, dynamic>
-              : data;
+              ? Map<String, dynamic>.from(data['call'] as Map)
+              : Map<String, dynamic>.from(data);
+          if (data['ice_servers'] != null) callMap['ice_servers'] = data['ice_servers'];
+          if (data['livekit_url'] != null) callMap['livekit_url'] = data['livekit_url'];
+          if (data['livekit_token'] != null) callMap['livekit_token'] = data['livekit_token'];
+          if (data['room_name'] != null) callMap['room_name'] = data['room_name'];
           final parsed = CallSession.fromJson(callMap);
           return callType == 'group'
               ? parsed.copyWith(callType: 'group')
@@ -157,8 +161,12 @@ class CallService {
             );
           }
           final callMap = data['call'] is Map<String, dynamic>
-              ? data['call'] as Map<String, dynamic>
-              : data;
+              ? Map<String, dynamic>.from(data['call'] as Map)
+              : Map<String, dynamic>.from(data);
+          if (data['ice_servers'] != null) callMap['ice_servers'] = data['ice_servers'];
+          if (data['livekit_url'] != null) callMap['livekit_url'] = data['livekit_url'];
+          if (data['livekit_token'] != null) callMap['livekit_token'] = data['livekit_token'];
+          if (data['room_name'] != null) callMap['room_name'] = data['room_name'];
           return CallSession.fromJson(callMap);
         }
       }
@@ -180,13 +188,39 @@ class CallService {
         final data = jsonDecode(response.body);
         if (data is Map<String, dynamic>) {
           final callMap = data['call'] is Map<String, dynamic>
-              ? data['call'] as Map<String, dynamic>
-              : data;
+              ? Map<String, dynamic>.from(data['call'] as Map)
+              : Map<String, dynamic>.from(data);
+          if (data['ice_servers'] != null) callMap['ice_servers'] = data['ice_servers'];
+          if (data['livekit_url'] != null) callMap['livekit_url'] = data['livekit_url'];
+          if (data['livekit_token'] != null) callMap['livekit_token'] = data['livekit_token'];
+          if (data['room_name'] != null) callMap['room_name'] = data['room_name'];
           return CallSession.fromJson(callMap);
         }
       }
     } catch (e) {
       debugPrint('[CallService] transferCall error: $e');
+    }
+    return null;
+  }
+
+  /// Fetches dynamic TURN / STUN ICE servers from backend (`GET /api/calls/ice-servers`).
+  static Future<List<Map<String, dynamic>>?> getIceServers() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/calls/ice-servers'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['ice_servers'] is List) {
+          return (data['ice_servers'] as List)
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CallService] getIceServers error: $e');
     }
     return null;
   }

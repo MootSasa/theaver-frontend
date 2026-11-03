@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
+import '../models/call_models.dart';
 import '../models/community_models.dart';
 import 'auth_service.dart';
 import 'database/app_database.dart';
@@ -586,6 +587,64 @@ class CommunityService {
     return null;
   }
 
+  /// Updates a channel inside a community (`PATCH /api/communities/:communityId/channels/:chatId`).
+  static Future<CommunityChannel?> updateChannel(
+    String communityId,
+    String chatId, {
+    String? name,
+    String? topic,
+    String? categoryId,
+    int? position,
+    int? voiceBitrateKbps,
+    int? voiceUserLimit,
+  }) async {
+    try {
+      final parsedCatId =
+          categoryId != null ? int.tryParse(categoryId.trim()) : null;
+      final response = await http.patch(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/channels/$chatId'),
+        headers: await _headers(),
+        body: jsonEncode({
+          if (name != null) 'name': name,
+          if (topic != null) ...{
+            'topic': topic,
+            'description': topic,
+          },
+          if (parsedCatId != null) 'category_id': parsedCatId,
+          if (position != null) 'position': position,
+          if (voiceBitrateKbps != null) 'voice_bitrate_kbps': voiceBitrateKbps,
+          if (voiceUserLimit != null) 'voice_user_limit': voiceUserLimit,
+        }),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic>) {
+          final map = data['channel'] is Map<String, dynamic>
+              ? data['channel'] as Map<String, dynamic>
+              : data;
+          return CommunityChannel.fromJson(map);
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] updateChannel error: $e');
+    }
+    return null;
+  }
+
+  /// Deletes a channel inside a community (`DELETE /api/communities/:communityId/channels/:chatId`).
+  static Future<bool> deleteChannel(String communityId, String chatId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/channels/$chatId'),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] deleteChannel error: $e');
+      return false;
+    }
+  }
+
   /// Lists roles (`GET /api/communities/:communityId/roles`).
   static Future<List<CommunityRole>> getRoles(String communityId) async {
     try {
@@ -693,5 +752,27 @@ class CommunityService {
       debugPrint('[CommunityService] createInviteCode error: $e');
     }
     return null;
+  }
+
+  /// Lists soundboard sounds for community (`GET /api/communities/:communityId/soundboard`).
+  static Future<List<SoundboardItem>> getSoundboardSounds(String communityId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/soundboard'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['sounds'] is List) {
+          return (data['sounds'] as List)
+              .whereType<Map>()
+              .map((s) => SoundboardItem.fromJson(Map<String, dynamic>.from(s)))
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getSoundboardSounds error: $e');
+    }
+    return [];
   }
 }
