@@ -644,7 +644,7 @@ class CallStateProvider extends ChangeNotifier {
     if (session != null && session.isActiveOnOtherDevice) {
       _conflictCallId = session.id;
       notifyListeners();
-      return;
+      return null;
     }
 
     final currentUserId = _currentUserId ?? 'local';
@@ -1050,7 +1050,6 @@ class CallStateProvider extends ChangeNotifier {
 
     // Create/sync peer connections for connected remote participants
     for (final peerId in connectedRemotePeers) {
-      final isNew = !_peerConnections.containsKey(peerId);
       final pc = await _getOrCreatePeerConnection(peerId);
       await _attachLocalTracksToPeer(pc);
 
@@ -2880,7 +2879,7 @@ class CallStateProvider extends ChangeNotifier {
         final callId = (payload['call_id'] ?? '').toString();
         if (_activeCall != null && (_activeCall!.id == callId || callId.isEmpty)) {
           debugPrint('[CallStateProvider] Call transferred to another device, terminating locally.');
-          endCall(notifyServer: false);
+          leaveCall(notifyServer: false);
         }
         break;
 

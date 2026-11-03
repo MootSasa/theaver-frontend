@@ -674,7 +674,7 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                   if (widget.isScreenShare &&
                       (callProvider.activeCall?.streams.length ?? 0) > 1) ...[
                     const SizedBox(width: 8),
-                    PopupMenuButton<CallStreamInfo>(
+                    PopupMenuButton<CallStream>(
                       tooltip: 'Сменить стрим',
                       icon: Container(
                         padding: const EdgeInsets.all(8),
@@ -697,7 +697,7 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                       },
                       itemBuilder: (context) {
                         return (callProvider.activeCall?.streams ?? [])
-                            .map((s) => PopupMenuItem<CallStreamInfo>(
+                            .map((s) => PopupMenuItem<CallStream>(
                                   value: s,
                                   child: Row(
                                     children: [

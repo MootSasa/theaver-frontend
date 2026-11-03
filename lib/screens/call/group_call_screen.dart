@@ -523,7 +523,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     final primaryColor = Theme.of(context).colorScheme.primary;
     final call = callProvider.activeCall;
     final participants = call?.participants ?? const <CallParticipant>[];
-    final streams = call?.streams ?? const <CallStreamInfo>[];
+    final streams = call?.streams ?? const <CallStream>[];
     final stream = callProvider.focusedStream;
     final title =
         widget.title ?? call?.title ?? (widget.isStage ? 'Трибуна' : 'Голосовой канал');
