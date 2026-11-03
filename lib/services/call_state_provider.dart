@@ -97,6 +97,41 @@ class CallStateProvider extends ChangeNotifier {
   final Map<String, MediaStream> _remotePrimaryStreams = {};
   final Map<String, MediaStream> _remoteDisplayStreams = {};
   final Map<String, int> _participantRotations = {};
+  final Map<String, RTCVideoRenderer> _streamRenderers = {};
+
+  bool _isFrontCamera = true;
+  bool get isFrontCamera => _isFrontCamera;
+
+  String? _conflictCallId;
+  String? get conflictCallId => _conflictCallId;
+  void clearConflictCall() {
+    _conflictCallId = null;
+    notifyListeners();
+  }
+
+  Future<RTCVideoRenderer> ensureStreamRenderer(String streamerId) async {
+    final existing = _streamRenderers[streamerId];
+    if (existing != null) return existing;
+    final r = RTCVideoRenderer();
+    await r.initialize();
+    _streamRenderers[streamerId] = r;
+    if (streamerId == _currentUserId || streamerId == 'local') {
+      r.srcObject = _localDisplayStream;
+    } else {
+      r.srcObject = _remoteDisplayStreams[streamerId] ??
+          (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
+              ? _remotePrimaryStreams[streamerId]
+              : null);
+    }
+    return r;
+  }
+
+  RTCVideoRenderer? rendererForStream(String streamerId) {
+    if (streamerId == _currentUserId || streamerId == 'local') {
+      if (!_previewOwnScreenShare) return null;
+    }
+    return _streamRenderers[streamerId];
+  }
 
   final List<FloatingCallReaction> _reactions = [];
 
@@ -384,9 +419,14 @@ class CallStateProvider extends ChangeNotifier {
   bool get hasScreenShareStream {
     if (!_renderersInitialized) return false;
     if (isSelfScreenShare) {
-      return _previewOwnScreenShare &&
+      if (_previewOwnScreenShare &&
           screenShareRenderer.srcObject != null &&
-          screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty;
+          screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty) {
+        return true;
+      }
+    }
+    if (_remoteDisplayStreams.values.any((s) => s.getVideoTracks().isNotEmpty)) {
+      return true;
     }
     if (screenShareRenderer.srcObject != null &&
         screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty) {
@@ -601,6 +641,12 @@ class CallStateProvider extends ChangeNotifier {
       );
     }
 
+    if (session != null && session.isActiveOnOtherDevice) {
+      _conflictCallId = session.id;
+      notifyListeners();
+      return;
+    }
+
     final currentUserId = _currentUserId ?? 'local';
     final currentUsername =
         AccountManager().currentAccount?.displayName ??
@@ -693,6 +739,44 @@ class CallStateProvider extends ChangeNotifier {
 
     await _syncPeerConnections(initiateOffers: true);
     return session;
+  }
+
+  /// Transfers an ongoing call from another device to this device.
+  Future<bool> transferCallToThisDevice(
+    String callId, {
+    String? chatTitle,
+    bool isVideo = false,
+  }) async {
+    try {
+      _conflictCallId = null;
+      await ensureRenderersInitialized();
+      await _ensureCallPermissions(video: isVideo);
+      await _configureCallAudioSession();
+      await NotificationService().startCallForegroundService(
+        title: chatTitle != null && chatTitle.isNotEmpty ? chatTitle : 'Активный звонок',
+        isVideo: isVideo,
+        isScreenShare: false,
+      );
+      await _acquireUserMedia(audio: true, video: isVideo);
+
+      final session = await CallService.acceptCall(
+        callId,
+        isVideo: isVideo,
+        forceTransfer: true,
+      );
+      if (session != null && !session.isActiveOnOtherDevice) {
+        _activeCall = session;
+        _ringingTimeoutTimer?.cancel();
+        _startTimer(session.startedAt);
+        await _syncPeerConnections(initiateOffers: true);
+        notifyListeners();
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[CallStateProvider] transferCallToThisDevice error: $e');
+    }
+    notifyListeners();
+    return false;
   }
 
   /// Accepts the currently ringing [_incomingCall].
@@ -978,7 +1062,7 @@ class CallStateProvider extends ChangeNotifier {
       final shouldOffer =
           (forceOfferToPeerId == peerId && !recentlySentOffer) ||
           (initiateOffers &&
-              (isNew || !_isPolitePeer(peerId)) &&
+              !_isPolitePeer(peerId) &&
               !recentlySentOffer);
       if (shouldOffer) {
         await _createAndSendOffer(peerId, pc);
@@ -1137,6 +1221,12 @@ class CallStateProvider extends ChangeNotifier {
             if (track.kind == 'video') {
               await _applySenderEncodingParameters(sender, _streamConfig);
             }
+          } else {
+            for (final sender in senders) {
+              if (sender.track?.id == track.id && track.kind == 'video') {
+                await _applySenderEncodingParameters(sender, _streamConfig);
+              }
+            }
           }
         }
       }
@@ -1156,11 +1246,12 @@ class CallStateProvider extends ChangeNotifier {
           encoding.maxBitrate = config.bitrateKbps * 1000;
           encoding.maxFramerate = config.fps;
           if (config.height > 0) {
-            if (config.height <= 720) {
-              encoding.scaleResolutionDownBy = 1.5;
-            } else {
-              encoding.scaleResolutionDownBy = 1.0;
-            }
+            double scale = 1080.0 / config.height;
+            if (scale < 1.0) scale = 1.0;
+            if (scale > 4.0) scale = 4.0;
+            encoding.scaleResolutionDownBy = scale;
+          } else {
+            encoding.scaleResolutionDownBy = 1.0;
           }
         }
         params.degradationPreference =
@@ -1238,6 +1329,10 @@ class CallStateProvider extends ChangeNotifier {
               if (!reordered.contains(pt)) reordered.add(pt);
             }
             newLines.add('${header.join(' ')} ${reordered.join(' ')}');
+            if (config.bitrateKbps > 0) {
+              newLines.add('b=AS:${config.bitrateKbps}');
+              newLines.add('b=TIAS:${config.bitrateKbps * 1000}');
+            }
             continue;
           }
         } else if (line.startsWith('m=') && !line.startsWith('m=video ')) {
@@ -1308,19 +1403,25 @@ class CallStateProvider extends ChangeNotifier {
       final isPeerScreenSharing =
           (peer?.isScreenSharing ?? false) || hasActiveStreamRecord;
 
-      final isSecondaryDisplayStream =
-          primaryStream != null && primaryStream.id != stream.id;
+      final isSecondaryDisplayStream = primaryStream != null &&
+          primaryStream.getVideoTracks().isNotEmpty &&
+          primaryStream.id != stream.id;
       final isScreenShareOnly =
           isPeerScreenSharing && !(peer?.isVideoOn ?? false);
-      final isDisplayStream = isPeerScreenSharing ||
-          isSecondaryDisplayStream ||
-          isScreenShareOnly ||
-          (!(_activeCall?.isVideo ?? false) && isPeerScreenSharing);
+      final isDisplayStream = isPeerScreenSharing &&
+          (isSecondaryDisplayStream ||
+              isScreenShareOnly ||
+              hasActiveStreamRecord ||
+              (!(_activeCall?.isVideo ?? false)));
 
       if (isDisplayStream) {
         _remoteDisplayStreams[peerId] = stream;
+        final sRenderer = await ensureStreamRenderer(peerId);
+        sRenderer.srcObject = stream;
         if (_renderersInitialized) {
-          screenShareRenderer.srcObject = stream;
+          if (_focusedStream == null || _focusedStream!.streamerId == peerId) {
+            screenShareRenderer.srcObject = stream;
+          }
         }
         if (!isPeerScreenSharing && (peer?.isVideoOn ?? false)) {
           // Keep participantRenderer on primaryStream if peer also has camera
@@ -1334,7 +1435,11 @@ class CallStateProvider extends ChangeNotifier {
           remoteRenderer.srcObject = stream;
           if (isPeerScreenSharing) {
             _remoteDisplayStreams[peerId] = stream;
-            screenShareRenderer.srcObject ??= stream;
+            final sRenderer = await ensureStreamRenderer(peerId);
+            sRenderer.srcObject = stream;
+            if (_focusedStream == null || _focusedStream!.streamerId == peerId) {
+              screenShareRenderer.srcObject ??= stream;
+            }
           }
         }
       }
@@ -1495,7 +1600,7 @@ class CallStateProvider extends ChangeNotifier {
     final call = _activeCall;
     if (call == null) return;
     final myId = _currentUserId;
-    final pc = await _getOrCreatePeerConnection(fromUserId);
+    var pc = await _getOrCreatePeerConnection(fromUserId);
 
     try {
       if (signalType == 'offer') {
@@ -1514,10 +1619,9 @@ class CallStateProvider extends ChangeNotifier {
             // Impolite peer ignores colliding offer
             return;
           }
-          // Polite peer rolls back local offer before applying remote offer
-          try {
-            await pc.setLocalDescription(RTCSessionDescription('', 'rollback'));
-          } catch (_) {}
+          // Polite peer yields: re-create peer connection cleanly without throwing rollback on Android
+          await _closePeerConnection(fromUserId);
+          pc = await _getOrCreatePeerConnection(fromUserId);
         }
 
         await _attachLocalTracksToPeer(pc);
@@ -1764,6 +1868,8 @@ class CallStateProvider extends ChangeNotifier {
     if (videoTracks.isNotEmpty) {
       try {
         await Helper.switchCamera(videoTracks.first);
+        _isFrontCamera = !_isFrontCamera;
+        notifyListeners();
       } catch (e) {
         debugPrint('[CallStateProvider] switchCamera error: $e');
       }
@@ -2125,6 +2231,18 @@ class CallStateProvider extends ChangeNotifier {
 
   void setFocusedStream(CallStream? stream) {
     _focusedStream = stream;
+    if (_renderersInitialized) {
+      if (stream == null) {
+        screenShareRenderer.srcObject = null;
+      } else if (stream.streamerId == _currentUserId || stream.streamerId == 'local') {
+        screenShareRenderer.srcObject = _previewOwnScreenShare ? _localDisplayStream : null;
+      } else {
+        screenShareRenderer.srcObject = _remoteDisplayStreams[stream.streamerId] ??
+            (_remotePrimaryStreams[stream.streamerId]?.getVideoTracks().isNotEmpty == true
+                ? _remotePrimaryStreams[stream.streamerId]
+                : null);
+      }
+    }
     notifyListeners();
   }
 
@@ -2283,6 +2401,11 @@ class CallStateProvider extends ChangeNotifier {
       remoteRenderer.srcObject = null;
       screenShareRenderer.srcObject = null;
     }
+    for (final r in _streamRenderers.values) {
+      r.srcObject = null;
+      r.dispose();
+    }
+    _streamRenderers.clear();
     notifyListeners();
 
     if (notifyServer && call != null) {
@@ -2672,7 +2795,10 @@ class CallStateProvider extends ChangeNotifier {
         notifyListeners();
         break;
 
+      case 'call.stream_stopped':
       case 'call_stream_stopped':
+      case 'call.stream_ended':
+      case 'call_stream_ended':
         final call = _activeCall;
         if (call == null) break;
         final streamId =
@@ -2701,6 +2827,8 @@ class CallStateProvider extends ChangeNotifier {
         );
         if (streamerId.isNotEmpty) {
           _remoteDisplayStreams.remove(streamerId);
+          _streamRenderers[streamerId]?.srcObject = null;
+          _streamRenderers.remove(streamerId)?.dispose();
         }
         if (_focusedStream != null &&
             !list.any((s) => s.id == _focusedStream!.id)) {
@@ -2744,6 +2872,15 @@ class CallStateProvider extends ChangeNotifier {
         }
         if (userId != _currentUserId) {
           _addFloatingReaction(userId, emoji);
+        }
+        break;
+
+      case 'call.transferred_elsewhere':
+      case 'call_transferred_elsewhere':
+        final callId = (payload['call_id'] ?? '').toString();
+        if (_activeCall != null && (_activeCall!.id == callId || callId.isEmpty)) {
+          debugPrint('[CallStateProvider] Call transferred to another device, terminating locally.');
+          endCall(notifyServer: false);
         }
         break;
 

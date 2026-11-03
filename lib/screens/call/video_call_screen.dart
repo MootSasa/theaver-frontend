@@ -35,6 +35,61 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   Offset _localPreviewOffset = const Offset(16, 92);
   bool _hadActiveCall = false;
   bool _showControls = true;
+  bool _showingTransferDialog = false;
+
+  void _showDeviceTransferDialog(
+    BuildContext context,
+    CallStateProvider callProvider,
+  ) {
+    if (_showingTransferDialog) return;
+    final conflictId = callProvider.conflictCallId;
+    if (conflictId == null) return;
+    _showingTransferDialog = true;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF181D2A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.devices_rounded, color: Color(0xFF00E676), size: 24),
+            SizedBox(width: 10),
+            Text('Активный звонок', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          'Вы уже находитесь в этом звонке с другого устройства.\n\nПеревести звонок на это устройство?',
+          style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _showingTransferDialog = false;
+              callProvider.clearConflictCall();
+              if (mounted) Navigator.of(context).maybePop();
+            },
+            child: const Text('Отмена', style: TextStyle(color: Colors.white60)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              _showingTransferDialog = false;
+              await callProvider.transferCallToThisDevice(
+                conflictId,
+                chatTitle: widget.peerName ?? 'Видеозвонок',
+                isVideo: true,
+              );
+            },
+            child: const Text('Перевести', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    ).then((_) => _showingTransferDialog = false);
+  }
 
   @override
   void initState() {
@@ -115,7 +170,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           : (hasRemoteVideo ? peerTitle : 'Вы'),
       subtitle: callProvider.formattedDuration,
       isScreenShare: openAsScreenShare,
-      mirror: !openAsScreenShare && !hasRemoteVideo && hasLocalVideo,
+      mirror: !openAsScreenShare && !hasRemoteVideo && hasLocalVideo && callProvider.isFrontCamera,
       fallbackRenderer: openAsScreenShare
           ? callProvider.screenShareRenderer
           : (hasRemoteVideo
@@ -142,6 +197,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final peerTitle =
         widget.peerName ?? callProvider.activeCall?.title ?? 'Видеозвонок';
     final stream = callProvider.focusedStream;
+
+    if (callProvider.conflictCallId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && callProvider.conflictCallId != null) {
+          _showDeviceTransferDialog(context, callProvider);
+        }
+      });
+    }
 
     final hasScreenShare = callProvider.hasScreenShareStream;
     final hasRemoteVideo = callProvider.hasRemoteVideoStream;
@@ -204,7 +267,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                                     90,
                                 child: RTCVideoView(
                                   callProvider.localRenderer,
-                                  mirror: true,
+                                  mirror: callProvider.isFrontCamera,
                                   objectFit: RTCVideoViewObjectFit
                                       .RTCVideoViewObjectFitCover,
                                 ),
@@ -286,7 +349,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                       title: 'Ваша камера',
                       subtitle: callProvider.formattedDuration,
                       participantUserId: 'local',
-                      mirror: true,
+                      mirror: callProvider.isFrontCamera,
                       fallbackRenderer: callProvider.localRenderer,
                     );
                   },
@@ -321,7 +384,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                                 90,
                             child: RTCVideoView(
                               callProvider.localRenderer,
-                              mirror: true,
+                              mirror: callProvider.isFrontCamera,
                               objectFit: RTCVideoViewObjectFit
                                   .RTCVideoViewObjectFitCover,
                             ),
@@ -640,6 +703,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           active: callProvider.isVideoOn,
           onTap: () => callProvider.toggleVideo(),
         ),
+        if (callProvider.isVideoOn)
+          _buildDockIcon(
+            icon: Icons.flip_camera_ios_rounded,
+            label: 'Перевернуть',
+            active: true,
+            accentColor: primaryColor,
+            onTap: () => callProvider.switchCamera(),
+          ),
         if (callProvider.isScreenSharing) ...[
           _buildDockIcon(
             icon: Icons.stop_screen_share_rounded,

@@ -210,7 +210,9 @@ class _MainScreenState extends State<MainScreen>
       final mappedChats = <Chat>[];
       bool hasSaved = false;
       for (final dbChat in dbChats) {
-        if (CommunityService.isCommunityChannelId(dbChat.chatId)) {
+        if (dbChat.chatType == 'community' ||
+            dbChat.chatType == 'community_channel' ||
+            CommunityService.isCommunityChannelId(dbChat.chatId)) {
           continue;
         }
         final chat = _dbChatToChat(dbChat);
@@ -601,7 +603,7 @@ class _MainScreenState extends State<MainScreen>
         return;
       }
       final newChat = Chat.fromJson(chatData);
-      if (CommunityService.isCommunityChannelId(newChat.id)) {
+      if (newChat.isCommunityChannel) {
         if (mounted) _loadCommunities();
         return;
       }
@@ -734,6 +736,13 @@ class _MainScreenState extends State<MainScreen>
     debugPrint('Chat update received: ${event.data}');
     final chatData = event.data['chat'] as Map<String, dynamic>?;
     final chatId = event.data['chat_id']?.toString();
+    final communityId = event.data['community_id']?.toString() ??
+        chatData?['community_id']?.toString();
+    if ((communityId != null && communityId.isNotEmpty) ||
+        (chatId != null && CommunityService.isCommunityChannelId(chatId))) {
+      if (mounted) _loadCommunities();
+      return;
+    }
 
     if (chatId != null && mounted) {
       setState(() {
@@ -1015,7 +1024,7 @@ class _MainScreenState extends State<MainScreen>
       if (mounted) {
         if (result['success'] == true && result['chats'] is List<Chat>) {
           final serverChats = (result['chats'] as List<Chat>)
-              .where((c) => !CommunityService.isCommunityChannelId(c.id))
+              .where((c) => !c.isCommunityChannel)
               .toList();
           DraftService().populateFromChats(serverChats);
 
@@ -1045,7 +1054,7 @@ class _MainScreenState extends State<MainScreen>
                   (c) =>
                       c.chatType != 'saved' &&
                       !c.id.startsWith('saved_') &&
-                      (CommunityService.isCommunityChannelId(c.id) ||
+                      (c.isCommunityChannel ||
                           !serverIds.contains(c.id)),
                 )
                 .map((c) => c.id)
@@ -1216,7 +1225,7 @@ class _MainScreenState extends State<MainScreen>
     }
     return ChatsCompanion(
       chatId: Value(chat.id),
-      chatType: Value(chat.chatType),
+      chatType: Value(chat.isCommunityChannel ? 'community_channel' : chat.chatType),
       name: Value(chat.name),
       avatarUrl: Value(avatarUrl),
       lastMessage: Value(chat.lastMessage),

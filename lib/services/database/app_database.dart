@@ -384,6 +384,10 @@ class AppDatabase extends _$AppDatabase {
   /// 3) По дате последнего сообщения / обновления (updatedAt DESC)
   Stream<List<DbChat>> watchChats({int filter = 0}) {
     final query = select(chats);
+    // Исключаем сообщества и каналы сообществ из общего списка чатов
+    query.where((t) =>
+        t.chatType.isNotValue('community') &
+        t.chatType.isNotValue('community_channel'));
     // Скрываем пустые приватные чаты-«призраки» (должно быть сообщение или закрепление)
     query.where((t) =>
         t.chatType.isNotValue('private') |
@@ -413,7 +417,10 @@ class AppDatabase extends _$AppDatabase {
     await ensureInitialized();
     final pattern = '%$query%';
     return (select(chats)
-          ..where((t) => t.name.like(pattern) | t.lastMessage.like(pattern))
+          ..where((t) =>
+              (t.name.like(pattern) | t.lastMessage.like(pattern)) &
+              t.chatType.isNotValue('community') &
+              t.chatType.isNotValue('community_channel'))
           ..orderBy([
             (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
             (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
@@ -425,7 +432,9 @@ class AppDatabase extends _$AppDatabase {
   /// Реактивный подсчёт общего числа непрочитанных сообщений
   Stream<int> watchTotalUnread() {
     final sumCol = chats.unreadCount.sum();
-    final query = selectOnly(chats)..addColumns([sumCol]);
+    final query = selectOnly(chats)
+      ..addColumns([sumCol])
+      ..where(chats.chatType.isNotValue('community') & chats.chatType.isNotValue('community_channel'));
     return query.watchSingleOrNull().map((row) => row?.read(sumCol) ?? 0);
   }
 
@@ -433,6 +442,9 @@ class AppDatabase extends _$AppDatabase {
   Future<List<DbChat>> getChats() async {
     await ensureInitialized();
     return (select(chats)
+          ..where((t) =>
+              t.chatType.isNotValue('community') &
+              t.chatType.isNotValue('community_channel'))
           ..orderBy([
             (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
             (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
@@ -1206,6 +1218,63 @@ class AppDatabase extends _$AppDatabase {
         return hasFile;
       });
     return stmt.get();
+  }
+
+  /// Локальный мгновенный поиск по чатам (Unicode / регистронезависимый)
+  Future<List<DbChat>> searchChatsLocal(String query, {int limit = 20}) async {
+    final qLower = query.trim().toLowerCase();
+    if (qLower.isEmpty) return [];
+    await ensureInitialized();
+    final allChats = await getChats();
+    final matched = <DbChat>[];
+    for (final c in allChats) {
+      final nameMatch = c.name.toLowerCase().contains(qLower);
+      final usernameMatch =
+          c.username != null && c.username!.toLowerCase().contains(qLower);
+      if (nameMatch || usernameMatch) {
+        matched.add(c);
+        if (matched.length >= limit) break;
+      }
+    }
+    return matched;
+  }
+
+  /// Локальный мгновенный поиск по сообщениям (с поддержкой регистронезависимого поиска кириллицы/латиницы)
+  Future<List<DbMessage>> searchMessagesLocal(
+    String query, {
+    String? chatId,
+    int limit = 30,
+  }) async {
+    final qLower = query.trim().toLowerCase();
+    if (qLower.isEmpty) return [];
+    await ensureInitialized();
+
+    final trimmedChatId = chatId?.trim() ?? '';
+    final stmt = select(messages)
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
+
+    if (trimmedChatId.isNotEmpty) {
+      stmt
+        ..where((t) => t.chatId.equals(trimmedChatId))
+        ..limit(2000);
+    } else {
+      stmt.limit(3000);
+    }
+
+    final candidates = await stmt.get();
+    final matched = <DbMessage>[];
+    for (final m in candidates) {
+      final contentMatch = m.content.toLowerCase().contains(qLower);
+      final fileMatch =
+          m.fileName != null && m.fileName!.toLowerCase().contains(qLower);
+      final senderMatch =
+          m.senderName != null && m.senderName!.toLowerCase().contains(qLower);
+      if (contentMatch || fileMatch || senderMatch) {
+        matched.add(m);
+        if (matched.length >= limit) break;
+      }
+    }
+    return matched;
   }
 
   /// Очистить все данные локальной базы (сообщения, чаты, состояние синхронизации, карты)

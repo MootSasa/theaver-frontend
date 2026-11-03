@@ -445,6 +445,8 @@ class CallSession {
     this.activeRecordingId,
   });
 
+  bool get isActiveOnOtherDevice => status == 'active_on_other_device';
+
   bool get isGroupOrCommunity =>
       callType == 'group' ||
       callType == 'stage' ||

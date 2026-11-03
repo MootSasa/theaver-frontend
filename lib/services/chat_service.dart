@@ -10,6 +10,7 @@ import 'websocket_service.dart';
 import '../utils/date_time_utils.dart';
 import '../models/chat_draft.dart';
 import '../utils/emoji_utils.dart';
+import 'community_service.dart';
 
 /// Chat represents a chat conversation.
 class Chat {
@@ -38,6 +39,7 @@ class Chat {
   final bool isPublic;
   final bool isBot;
   final bool isVerified;
+  final int? communityId;
 
   Chat({
     required this.id,
@@ -65,7 +67,13 @@ class Chat {
     this.isPublic = false,
     this.isBot = false,
     this.isVerified = false,
+    this.communityId,
   });
+
+  /// Whether this chat belongs to a community channel
+  bool get isCommunityChannel =>
+      (communityId != null && communityId! > 0) ||
+      CommunityService.isCommunityChannelId(id);
 
   /// Whether this chat has been manually marked as unread (represented by unreadCount == -1).
   bool get isMarkedUnread => unreadCount == -1;
@@ -210,6 +218,8 @@ class Chat {
       isPublic: json['is_public'] == true,
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
+      communityId: (json['community_id'] as num?)?.toInt() ??
+          int.tryParse(json['community_id']?.toString() ?? ''),
     );
   }
 
@@ -239,6 +249,7 @@ class Chat {
     bool? isPublic,
     bool? isBot,
     bool? isVerified,
+    int? communityId,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -268,6 +279,7 @@ class Chat {
       isPublic: isPublic ?? this.isPublic,
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
+      communityId: communityId ?? this.communityId,
     );
   }
 }

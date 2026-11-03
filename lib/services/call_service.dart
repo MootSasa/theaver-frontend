@@ -21,6 +21,7 @@ class CallService {
     String callType = 'voice', // 'voice' | 'video' | 'group' | 'stage'
     bool isVideo = false,
     String? title,
+    bool forceTransfer = false,
   }) async {
     try {
       final numericChatId =
@@ -39,12 +40,26 @@ class CallService {
           'call_type': apiCallType,
           'video_enabled': isVideo,
           'is_video': isVideo,
+          'force_transfer': forceTransfer,
           if (title != null && title.isNotEmpty) 'title': title,
         }),
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);
         if (data is Map<String, dynamic>) {
+          if (data['active_on_other_device'] == true) {
+            return CallSession(
+              id: (data['call_id'] ?? '').toString(),
+              chatId: (data['chat_id'] as num?)?.toString() ?? chatId,
+              initiatorId: '',
+              callType: 'conflict',
+              status: 'active_on_other_device',
+              isVideo: isVideo,
+              title: data['existing_device_id']?.toString() ?? '',
+              startedAt: DateTime.now(),
+              participants: const [],
+            );
+          }
           final callMap = data['call'] is Map<String, dynamic>
               ? data['call'] as Map<String, dynamic>
               : data;
@@ -114,12 +129,52 @@ class CallService {
   static Future<CallSession?> acceptCall(
     String callId, {
     bool isVideo = false,
+    bool forceTransfer = false,
   }) async {
     try {
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/calls/$callId/accept'),
         headers: await _headers(),
-        body: jsonEncode({'video_enabled': isVideo}),
+        body: jsonEncode({
+          'video_enabled': isVideo,
+          'force_transfer': forceTransfer,
+        }),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic>) {
+          if (data['active_on_other_device'] == true) {
+            return CallSession(
+              id: callId,
+              chatId: (data['chat_id'] as num?)?.toString() ?? '',
+              initiatorId: '',
+              callType: 'conflict',
+              status: 'active_on_other_device',
+              isVideo: isVideo,
+              title: data['existing_device_id']?.toString() ?? '',
+              startedAt: DateTime.now(),
+              participants: const [],
+            );
+          }
+          final callMap = data['call'] is Map<String, dynamic>
+              ? data['call'] as Map<String, dynamic>
+              : data;
+          return CallSession.fromJson(callMap);
+        }
+      }
+    } catch (e) {
+      debugPrint('[CallService] acceptCall error: $e');
+    }
+    return null;
+  }
+
+  /// Transfers an active call from another device to this device (`POST /api/calls/:callId/transfer`).
+  static Future<CallSession?> transferCall(String callId) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/calls/$callId/transfer'),
+        headers: await _headers(),
+        body: jsonEncode({}),
       );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -131,7 +186,7 @@ class CallService {
         }
       }
     } catch (e) {
-      debugPrint('[CallService] acceptCall error: $e');
+      debugPrint('[CallService] transferCall error: $e');
     }
     return null;
   }

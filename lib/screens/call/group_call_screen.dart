@@ -42,6 +42,215 @@ class GroupCallScreen extends StatefulWidget {
 
 class _GroupCallScreenState extends State<GroupCallScreen> {
   static const List<String> _quickReactions = ['👍', '❤️', '🔥', '🎉', '👏', '😂'];
+  bool _isFocusView = true;
+  bool _showingTransferDialog = false;
+
+  void _showDeviceTransferDialog(BuildContext context, CallStateProvider callProvider) {
+    if (_showingTransferDialog) return;
+    _showingTransferDialog = true;
+    final conflictId = callProvider.conflictCallId;
+    if (conflictId == null) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF171C28),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text(
+          'Звонок на другом устройстве',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: const Text(
+          'Вы уже подключены к этому звонку с другого устройства. Перевести звонок на это устройство?',
+          style: TextStyle(color: Colors.white70, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              callProvider.clearConflictCall();
+              _showingTransferDialog = false;
+              Navigator.of(ctx).pop();
+              if (!widget.embedded) {
+                Navigator.of(context).maybePop();
+              }
+            },
+            child: const Text('Отмена', style: TextStyle(color: Colors.white60)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              _showingTransferDialog = false;
+              await callProvider.transferCallToThisDevice(
+                conflictId,
+                chatTitle: widget.title,
+                isVideo: false,
+              );
+            },
+            child: const Text('Перевести', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    ).then((_) => _showingTransferDialog = false);
+  }
+
+  Widget _buildStreamFilmstrip(
+    BuildContext context,
+    CallStateProvider callProvider,
+    List<CallStream> streams,
+    CallStream? focused,
+  ) {
+    if (streams.length <= 1) return const SizedBox.shrink();
+    return Container(
+      height: 44,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: streams.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final s = streams[index];
+          final isSelected = focused?.id == s.id;
+          final isMine = s.streamerId == callProvider.currentUserId || s.streamerId == 'local';
+          return GestureDetector(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              callProvider.setFocusedStream(s);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? const Color(0xFF5865F2).withValues(alpha: 0.3)
+                    : Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isSelected ? const Color(0xFF5865F2) : Colors.white24,
+                  width: isSelected ? 1.5 : 0.8,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: const BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    isMine ? 'Ваш экран' : s.streamerName,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${s.resolutionHeight}p',
+                    style: const TextStyle(fontSize: 10, color: Colors.white60),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildGridStreamCard(
+    BuildContext context,
+    CallStateProvider callProvider,
+    CallStream s,
+    Color primaryColor,
+  ) {
+    final isMine = s.streamerId == callProvider.currentUserId || s.streamerId == 'local';
+    final renderer = callProvider.rendererForStream(s.streamerId) ?? callProvider.screenShareRenderer;
+    final isRendering = isMine
+        ? (callProvider.previewOwnScreenShare && renderer.srcObject != null)
+        : (renderer.srcObject != null && renderer.srcObject!.getVideoTracks().isNotEmpty);
+
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        callProvider.setFocusedStream(s);
+        setState(() => _isFocusView = true);
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF171C28),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: const Color(0xFF5865F2).withValues(alpha: 0.6),
+            width: 1.5,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (isRendering)
+              RTCVideoView(
+                renderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              )
+            else
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.screen_share_rounded, size: 36, color: Color(0xFF5865F2)),
+                    const SizedBox(height: 6),
+                    Text(
+                      isMine ? 'Ваш стрим' : s.streamerName,
+                      style: const TextStyle(fontSize: 12, color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            Positioned(
+              top: 8,
+              left: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'LIVE',
+                  style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 8,
+              left: 8,
+              right: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.65),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  isMine ? 'Ваш экран' : s.streamerName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -314,9 +523,18 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     final primaryColor = Theme.of(context).colorScheme.primary;
     final call = callProvider.activeCall;
     final participants = call?.participants ?? const <CallParticipant>[];
+    final streams = call?.streams ?? const <CallStreamInfo>[];
     final stream = callProvider.focusedStream;
     final title =
         widget.title ?? call?.title ?? (widget.isStage ? 'Трибуна' : 'Голосовой канал');
+
+    if (callProvider.conflictCallId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && callProvider.conflictCallId != null) {
+          _showDeviceTransferDialog(context, callProvider);
+        }
+      });
+    }
 
     final content = Stack(
       children: [
@@ -377,6 +595,21 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       ],
                     ),
                   ),
+                  if ((call?.streams.isNotEmpty ?? false) || callProvider.isScreenSharing) ...[
+                    IconButton(
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        setState(() => _isFocusView = !_isFocusView);
+                      },
+                      icon: Icon(
+                        _isFocusView ? Icons.grid_view_rounded : Icons.view_sidebar_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      tooltip: _isFocusView ? 'Режим сетки (Grid View)' : 'Режим фокуса (Focus View)',
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                   // Server Recording Button
                   GestureDetector(
                     onTap: () => callProvider.toggleRecording(),
@@ -427,8 +660,11 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
               ),
             ),
 
-            // Active High-FPS Go Live Stage (if a stream is active)
-            if (stream != null)
+            if (_isFocusView && call != null && call.streams.length > 1)
+              _buildStreamFilmstrip(context, callProvider, call.streams, stream),
+
+            // Active High-FPS Go Live Stage (if a stream is active in focus view)
+            if (_isFocusView && stream != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 child: GestureDetector(
@@ -755,9 +991,22 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   crossAxisSpacing: 12,
                   childAspectRatio: 1.05,
                 ),
-                itemCount: participants.length,
+                itemCount: (!_isFocusView && streams.isNotEmpty)
+                    ? streams.length + participants.length
+                    : participants.length,
                 itemBuilder: (context, index) {
-                  final participant = participants[index];
+                  if (!_isFocusView && streams.isNotEmpty && index < streams.length) {
+                    return _buildGridStreamCard(
+                      context,
+                      callProvider,
+                      streams[index],
+                      primaryColor,
+                    );
+                  }
+                  final pIndex = (!_isFocusView && streams.isNotEmpty)
+                      ? index - streams.length
+                      : index;
+                  final participant = participants[pIndex];
                   final isSelf =
                       participant.userId == callProvider.currentUserId ||
                       participant.userId == 'local';
@@ -772,7 +1021,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       AppConfig.resolveMediaUrl(participant.avatarUrl) ?? '';
                   final isSpeaking =
                       participant.isSpeaking ||
-                      (!participant.isMuted && index == 0);
+                      (!participant.isMuted && pIndex == 0);
                   return GestureDetector(
                     onTap: () {
                       if (showVideo) {
@@ -843,7 +1092,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                     90,
                                 child: RTCVideoView(
                                   videoRenderer,
-                                  mirror: isSelf,
+                                  mirror: isSelf && callProvider.isFrontCamera,
                                   objectFit: RTCVideoViewObjectFit
                                       .RTCVideoViewObjectFitCover,
                                 ),
@@ -873,6 +1122,28 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                           ),
                                         ),
                                         const SizedBox(width: 4),
+                                        if (isSelf) ...[
+                                          GestureDetector(
+                                            onTap: () {
+                                              HapticFeedback.selectionClick();
+                                              callProvider.switchCamera();
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.all(5),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black
+                                                    .withValues(alpha: 0.55),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const Icon(
+                                                Icons.flip_camera_ios_rounded,
+                                                size: 13,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                        ],
                                         GestureDetector(
                                           onTap: () {
                                             HapticFeedback.selectionClick();
@@ -1198,6 +1469,14 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           accentColor: primaryColor,
           onTap: () => callProvider.toggleVideo(),
         ),
+        if (callProvider.isVideoOn)
+          _buildDockItem(
+            icon: Icons.flip_camera_ios_rounded,
+            label: 'Камера',
+            active: true,
+            accentColor: primaryColor,
+            onTap: () => callProvider.switchCamera(),
+          ),
         if (callProvider.isScreenSharing) ...[
           _buildDockItem(
             icon: Icons.stop_screen_share_rounded,

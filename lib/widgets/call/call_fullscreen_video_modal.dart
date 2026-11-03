@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
+import '../../models/call_models.dart';
 import '../../services/call_state_provider.dart';
 import 'stream_quality_sheet.dart';
 
@@ -151,6 +152,11 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                 ? provider.screenShareRenderer
                 : widget.fallbackRenderer)
             : null;
+      }
+      final focused = provider.focusedStream;
+      if (focused != null) {
+        final r = provider.rendererForStream(focused.streamerId);
+        if (r != null && r.srcObject != null) return r;
       }
       return provider.hasScreenShareStream
           ? provider.screenShareRenderer
@@ -465,7 +471,13 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                               quarterTurns: rot ~/ 90,
                               child: RTCVideoView(
                                 renderer,
-                                mirror: widget.mirror && !widget.isScreenShare,
+                                mirror: widget.mirror &&
+                                    !widget.isScreenShare &&
+                                    ((widget.participantUserId == 'local' ||
+                                            widget.participantUserId ==
+                                                callProvider.currentUserId)
+                                        ? callProvider.isFrontCamera
+                                        : true),
                                 objectFit: objectFit,
                               ),
                             )
@@ -659,6 +671,59 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                       ),
                     ),
                   ],
+                  if (widget.isScreenShare &&
+                      (callProvider.activeCall?.streams.length ?? 0) > 1) ...[
+                    const SizedBox(width: 8),
+                    PopupMenuButton<CallStreamInfo>(
+                      tooltip: 'Сменить стрим',
+                      icon: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.14),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white24,
+                            width: 0.8,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.swap_calls_rounded,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                      onSelected: (selected) {
+                        callProvider.setFocusedStream(selected);
+                      },
+                      itemBuilder: (context) {
+                        return (callProvider.activeCall?.streams ?? [])
+                            .map((s) => PopupMenuItem<CallStreamInfo>(
+                                  value: s,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.screen_share_rounded,
+                                        size: 16,
+                                        color: s.streamerId == stream?.streamerId
+                                            ? const Color(0xFF00E676)
+                                            : Colors.white70,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          s.streamerName,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 13),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ))
+                            .toList();
+                      },
+                    ),
+                  ],
                   if (_transformCtrl.value != Matrix4.identity()) ...[
                     const SizedBox(width: 8),
                     _buildCircleButton(
@@ -750,6 +815,15 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                     active: callProvider.isVideoOn,
                     onTap: () => callProvider.toggleVideo(),
                   ),
+                  if (callProvider.isVideoOn) ...[
+                    const SizedBox(width: 24),
+                    _buildBottomAction(
+                      icon: Icons.flip_camera_ios_rounded,
+                      label: 'Камера',
+                      active: true,
+                      onTap: () => callProvider.switchCamera(),
+                    ),
+                  ],
                   if (isSelfScreenShare) ...[
                     const SizedBox(width: 24),
                     _buildBottomAction(
