@@ -111,7 +111,19 @@ class CallStateProvider extends ChangeNotifier {
 
   Future<RTCVideoRenderer> ensureStreamRenderer(String streamerId) async {
     final existing = _streamRenderers[streamerId];
-    if (existing != null) return existing;
+    if (existing != null) {
+      if (existing.srcObject == null) {
+        if (streamerId == _currentUserId || streamerId == 'local') {
+          existing.srcObject = _localDisplayStream;
+        } else {
+          existing.srcObject = _remoteDisplayStreams[streamerId] ??
+              (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
+                  ? _remotePrimaryStreams[streamerId]
+                  : null);
+        }
+      }
+      return existing;
+    }
     final r = RTCVideoRenderer();
     await r.initialize();
     _streamRenderers[streamerId] = r;
@@ -130,7 +142,17 @@ class CallStateProvider extends ChangeNotifier {
     if (streamerId == _currentUserId || streamerId == 'local') {
       if (!_previewOwnScreenShare) return null;
     }
-    return _streamRenderers[streamerId];
+    final r = _streamRenderers[streamerId];
+    if (r != null && r.srcObject == null) {
+      final s = _remoteDisplayStreams[streamerId] ??
+          (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
+              ? _remotePrimaryStreams[streamerId]
+              : null);
+      if (s != null) {
+        r.srcObject = s;
+      }
+    }
+    return r;
   }
 
   final List<FloatingCallReaction> _reactions = [];
@@ -425,26 +447,27 @@ class CallStateProvider extends ChangeNotifier {
         return true;
       }
     }
+    final stream = focusedStream;
+    if (stream != null) {
+      final target = _remoteDisplayStreams[stream.streamerId] ??
+          (_remotePrimaryStreams[stream.streamerId]?.getVideoTracks().isNotEmpty == true
+              ? _remotePrimaryStreams[stream.streamerId]
+              : _participantRenderers[stream.streamerId]?.srcObject);
+      if (target != null && target.getVideoTracks().isNotEmpty) {
+        screenShareRenderer.srcObject = target;
+        return true;
+      }
+    }
     if (_remoteDisplayStreams.values.any((s) => s.getVideoTracks().isNotEmpty)) {
+      final firstWithVideo = _remoteDisplayStreams.values.firstWhere(
+        (s) => s.getVideoTracks().isNotEmpty,
+      );
+      screenShareRenderer.srcObject = firstWithVideo;
       return true;
     }
     if (screenShareRenderer.srcObject != null &&
         screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty) {
       return true;
-    }
-    final stream = focusedStream;
-    if (stream != null) {
-      final s = _remoteDisplayStreams[stream.streamerId] ??
-          (_remotePrimaryStreams[stream.streamerId]
-                      ?.getVideoTracks()
-                      .isNotEmpty ==
-                  true
-              ? _remotePrimaryStreams[stream.streamerId]
-              : _participantRenderers[stream.streamerId]?.srcObject);
-      if (s != null && s.getVideoTracks().isNotEmpty) {
-        screenShareRenderer.srcObject = s;
-        return true;
-      }
     }
     return false;
   }
@@ -724,6 +747,13 @@ class CallStateProvider extends ChangeNotifier {
       _ringingTimeoutTimer?.cancel();
       _startTimer(session.startedAt);
     }
+
+    if (session.streams.isNotEmpty) {
+      _focusedStream = session.streams.first;
+      for (final s in session.streams) {
+        unawaited(ensureStreamRenderer(s.streamerId));
+      }
+    }
     notifyListeners();
 
     // Relay incoming call notification over WebSocket only in offline/local fallback mode
@@ -737,7 +767,25 @@ class CallStateProvider extends ChangeNotifier {
       });
     }
 
-    await _syncPeerConnections(initiateOffers: true);
+    final shouldInitiateOffers = isOneOnOne && !isUuidCallId;
+    await _syncPeerConnections(initiateOffers: shouldInitiateOffers);
+
+    // Fallback: if remote peers haven't sent an offer within 1200ms, initiate offer from our side
+    Future.delayed(const Duration(milliseconds: 1200), () async {
+      if (_activeCall?.id != session?.id) return;
+      for (final entry in _peerConnections.entries) {
+        final peerId = entry.key;
+        final pc = entry.value;
+        try {
+          final remoteDesc = await pc.getRemoteDescription();
+          if (remoteDesc == null &&
+              pc.signalingState == RTCSignalingState.RTCSignalingStateStable) {
+            await _createAndSendOffer(peerId, pc);
+          }
+        } catch (_) {}
+      }
+    });
+
     return session;
   }
 
@@ -768,7 +816,13 @@ class CallStateProvider extends ChangeNotifier {
         _activeCall = session;
         _ringingTimeoutTimer?.cancel();
         _startTimer(session.startedAt);
-        await _syncPeerConnections(initiateOffers: true);
+        if (session.streams.isNotEmpty) {
+          _focusedStream = session.streams.first;
+          for (final s in session.streams) {
+            unawaited(ensureStreamRenderer(s.streamerId));
+          }
+        }
+        await _syncPeerConnections(initiateOffers: false);
         notifyListeners();
         return true;
       }
@@ -871,6 +925,12 @@ class CallStateProvider extends ChangeNotifier {
           title: accepted.title.isNotEmpty ? accepted.title : incoming.title,
         );
         _activeCall = session;
+        if (session.streams.isNotEmpty) {
+          _focusedStream = session.streams.first;
+          for (final s in session.streams) {
+            unawaited(ensureStreamRenderer(s.streamerId));
+          }
+        }
         notifyListeners();
         await _syncPeerConnections(initiateOffers: false);
       }
@@ -1058,11 +1118,13 @@ class CallStateProvider extends ChangeNotifier {
           lastSent != null &&
           DateTime.now().difference(lastSent).inMilliseconds < 1500;
 
+      final isPeerStreaming = call.streams.any((s) => s.streamerId == peerId);
       final shouldOffer =
           (forceOfferToPeerId == peerId && !recentlySentOffer) ||
           (initiateOffers &&
               !_isPolitePeer(peerId) &&
-              !recentlySentOffer);
+              !recentlySentOffer &&
+              (!isPeerStreaming || _isScreenSharing));
       if (shouldOffer) {
         await _createAndSendOffer(peerId, pc);
       }
@@ -1390,7 +1452,23 @@ class CallStateProvider extends ChangeNotifier {
       } catch (_) {}
     }
 
-    if (stream.getVideoTracks().isNotEmpty || track?.kind == 'video') {
+    if (track != null && !stream.getTracks().any((t) => t.id == track.id)) {
+      try {
+        await stream.addTrack(track);
+      } catch (_) {}
+    }
+
+    var effectiveStream = stream;
+    if (track?.kind == 'video' && effectiveStream.getVideoTracks().isEmpty) {
+      try {
+        final newStream =
+            await createLocalMediaStream('remote_${peerId}_${track!.id}');
+        await newStream.addTrack(track);
+        effectiveStream = newStream;
+      } catch (_) {}
+    }
+
+    if (effectiveStream.getVideoTracks().isNotEmpty || track?.kind == 'video') {
       final participantRenderer = await _ensureParticipantRenderer(peerId);
       final peer = _activeCall?.participants
           .where((p) => p.userId == peerId)
@@ -1404,40 +1482,38 @@ class CallStateProvider extends ChangeNotifier {
 
       final isSecondaryDisplayStream = primaryStream != null &&
           primaryStream.getVideoTracks().isNotEmpty &&
-          primaryStream.id != stream.id;
+          primaryStream.id != effectiveStream.id;
       final isScreenShareOnly =
           isPeerScreenSharing && !(peer?.isVideoOn ?? false);
       final isDisplayStream = isPeerScreenSharing &&
-          (isSecondaryDisplayStream ||
+          (hasActiveStreamRecord ||
+              isSecondaryDisplayStream ||
               isScreenShareOnly ||
-              hasActiveStreamRecord ||
               (!(_activeCall?.isVideo ?? false)));
 
       if (isDisplayStream) {
-        _remoteDisplayStreams[peerId] = stream;
+        _remoteDisplayStreams[peerId] = effectiveStream;
         final sRenderer = await ensureStreamRenderer(peerId);
-        sRenderer.srcObject = stream;
+        sRenderer.srcObject = effectiveStream;
         if (_renderersInitialized) {
-          if (_focusedStream == null || _focusedStream!.streamerId == peerId) {
-            screenShareRenderer.srcObject = stream;
+          final focused = focusedStream;
+          if (focused == null || focused.streamerId == peerId) {
+            screenShareRenderer.srcObject = effectiveStream;
           }
         }
-        if (!isPeerScreenSharing && (peer?.isVideoOn ?? false)) {
-          // Keep participantRenderer on primaryStream if peer also has camera
-        } else {
-          participantRenderer.srcObject ??= stream;
-        }
+        participantRenderer.srcObject ??= effectiveStream;
       } else {
-        _remotePrimaryStreams[peerId] = stream;
-        participantRenderer.srcObject = stream;
+        _remotePrimaryStreams[peerId] = effectiveStream;
+        participantRenderer.srcObject = effectiveStream;
         if (_renderersInitialized) {
-          remoteRenderer.srcObject = stream;
+          remoteRenderer.srcObject = effectiveStream;
           if (isPeerScreenSharing) {
-            _remoteDisplayStreams[peerId] = stream;
+            _remoteDisplayStreams[peerId] = effectiveStream;
             final sRenderer = await ensureStreamRenderer(peerId);
-            sRenderer.srcObject = stream;
-            if (_focusedStream == null || _focusedStream!.streamerId == peerId) {
-              screenShareRenderer.srcObject ??= stream;
+            sRenderer.srcObject = effectiveStream;
+            final focused = focusedStream;
+            if (focused == null || focused.streamerId == peerId) {
+              screenShareRenderer.srcObject ??= effectiveStream;
             }
           }
         }
@@ -1445,11 +1521,11 @@ class CallStateProvider extends ChangeNotifier {
     } else {
       // Voice-only stream: store and attach to remoteRenderer if no video stream is active
       // so WebRTC audio playout starts immediately even without video/screen-share!
-      _remotePrimaryStreams[peerId] = stream;
+      _remotePrimaryStreams[peerId] = effectiveStream;
       if (_renderersInitialized &&
           (remoteRenderer.srcObject == null ||
               remoteRenderer.srcObject!.getVideoTracks().isEmpty)) {
-        remoteRenderer.srcObject = stream;
+        remoteRenderer.srcObject = effectiveStream;
       }
     }
     unawaited(_configureCallAudioSession());
@@ -1631,12 +1707,9 @@ class CallStateProvider extends ChangeNotifier {
           'offerToReceiveAudio': 1,
           'offerToReceiveVideo': 1,
         });
-        var answerSdp = answer.sdp ?? '';
-        if (_isScreenSharing && answerSdp.isNotEmpty) {
-          answerSdp = _applySdpCodecAndBitrate(answerSdp, _streamConfig);
-        }
-        final mungedAnswer = RTCSessionDescription(answerSdp, answer.type);
-        await pc.setLocalDescription(mungedAnswer);
+        final answerSdp = answer.sdp ?? '';
+        final localAnswer = RTCSessionDescription(answerSdp, answer.type);
+        await pc.setLocalDescription(localAnswer);
         try {
           final senders = await pc.getSenders();
           for (final s in senders) {
@@ -1649,9 +1722,22 @@ class CallStateProvider extends ChangeNotifier {
           'type': 'answer',
           'target_user_id': fromUserId,
           'from_user_id': myId,
-          'sdp': mungedAnswer.sdp,
-          'sdp_type': mungedAnswer.type,
+          'sdp': localAnswer.sdp,
+          'sdp_type': localAnswer.type,
         });
+
+        // If we are sharing screen or camera, renegotiate as offerer so that
+        // our preferred codecs (VP9/H264/AV1) and display tracks are fully established!
+        if (_isScreenSharing || _isVideoOn) {
+          Future.delayed(const Duration(milliseconds: 250), () async {
+            if (_activeCall?.id == call.id && _peerConnections[fromUserId] == pc) {
+              if (pc.signalingState == RTCSignalingState.RTCSignalingStateStable) {
+                await _attachLocalTracksToPeer(pc);
+                await _createAndSendOffer(fromUserId, pc, forceRenegotiation: true);
+              }
+            }
+          });
+        }
       } else if (signalType == 'answer') {
         final sdp = (signal['sdp'] ?? '').toString();
         if (sdp.isEmpty) return;
@@ -2443,6 +2529,21 @@ class CallStateProvider extends ChangeNotifier {
                 s.streamerId != 'local')
             .toList();
 
+    final List<CallStream> mergedStreams;
+    if (incoming.streams.isNotEmpty) {
+      mergedStreams = filteredStreams;
+    } else if (current.streams.isNotEmpty) {
+      final connectedUserIds = incoming.participants
+          .where((p) => p.state == 'connected')
+          .map((p) => p.userId)
+          .toSet();
+      mergedStreams = current.streams
+          .where((s) => connectedUserIds.contains(s.streamerId))
+          .toList();
+    } else {
+      mergedStreams = const [];
+    }
+
     final syncedParticipants = incoming.participants.map((p) {
       if (p.userId == myId || p.userId == 'local') {
         return p.copyWith(
@@ -2452,7 +2553,7 @@ class CallStateProvider extends ChangeNotifier {
           isDeafened: _isDeafened,
         );
       }
-      final hasStream = filteredStreams.any((s) => s.streamerId == p.userId);
+      final hasStream = mergedStreams.any((s) => s.streamerId == p.userId);
       if (hasStream && !p.isScreenSharing) {
         return p.copyWith(isScreenSharing: true);
       }
@@ -2467,7 +2568,7 @@ class CallStateProvider extends ChangeNotifier {
           : current.maxParticipants,
       title: incoming.title.isNotEmpty ? incoming.title : current.title,
       participants: syncedParticipants,
-      streams: filteredStreams,
+      streams: mergedStreams,
     );
   }
 
@@ -2637,6 +2738,14 @@ class CallStateProvider extends ChangeNotifier {
             _activeCall!,
             updatedSession.copyWith(status: 'active'),
           );
+          if (_activeCall!.streams.isNotEmpty) {
+            if (_focusedStream == null || !_activeCall!.streams.any((s) => s.id == _focusedStream!.id)) {
+              _focusedStream = _activeCall!.streams.first;
+            }
+            for (final s in _activeCall!.streams) {
+              unawaited(ensureStreamRenderer(s.streamerId));
+            }
+          }
         } else if (payload['participant'] is Map) {
           final p = CallParticipant.fromJson(
             Map<String, dynamic>.from(payload['participant'] as Map),
@@ -2773,6 +2882,7 @@ class CallStateProvider extends ChangeNotifier {
           participants: updatedParticipants,
         );
         _focusedStream ??= stream;
+        unawaited(ensureStreamRenderer(stream.streamerId));
 
         // Immediately link renderer to this streamer's video stream if already received
         if (stream.streamerId == _currentUserId) {
@@ -2787,8 +2897,12 @@ class CallStateProvider extends ChangeNotifier {
                       true
                   ? _remotePrimaryStreams[stream.streamerId]
                   : _participantRenderers[stream.streamerId]?.srcObject);
-          if (existingStream != null && _renderersInitialized) {
-            screenShareRenderer.srcObject = existingStream;
+          if (existingStream != null) {
+            final sRenderer = _streamRenderers[stream.streamerId];
+            if (sRenderer != null) sRenderer.srcObject = existingStream;
+            if (_renderersInitialized) {
+              screenShareRenderer.srcObject = existingStream;
+            }
           }
         }
         notifyListeners();
