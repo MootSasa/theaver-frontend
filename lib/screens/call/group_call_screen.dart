@@ -174,10 +174,11 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     Color primaryColor,
   ) {
     final isMine = s.streamerId == callProvider.currentUserId || s.streamerId == 'local';
-    final renderer = callProvider.rendererForStream(s.streamerId) ?? callProvider.screenShareRenderer;
-    final isRendering = isMine
-        ? (callProvider.previewOwnScreenShare && renderer.srcObject != null)
-        : (renderer.srcObject != null && renderer.srcObject!.getVideoTracks().isNotEmpty);
+    final renderer = callProvider.rendererForStream(s.streamerId);
+    final isRendering = renderer != null &&
+        (isMine
+            ? (callProvider.previewOwnScreenShare && renderer.srcObject != null)
+            : (renderer.srcObject != null && renderer.srcObject!.getVideoTracks().isNotEmpty));
 
     return GestureDetector(
       onTap: () {
@@ -739,6 +740,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 child: GestureDetector(
                   onTap: () {
+                    final streamRenderer = callProvider.rendererForStream(stream.streamerId) ??
+                        callProvider.screenShareRenderer;
                     CallFullscreenVideoModal.show(
                       context,
                       title: callProvider.isSelfScreenShare
@@ -747,7 +750,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       subtitle:
                           '${stream.resolutionWidth}×${stream.resolutionHeight} @ ${stream.fps} FPS • ${stream.codec}',
                       isScreenShare: true,
-                      fallbackRenderer: callProvider.screenShareRenderer,
+                      fallbackRenderer: streamRenderer,
                     );
                   },
                   child: Container(
@@ -770,7 +773,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                         children: [
                           if (callProvider.hasScreenShareStream)
                             RTCVideoView(
-                              callProvider.screenShareRenderer,
+                              callProvider.rendererForStream(stream.streamerId) ??
+                                  callProvider.screenShareRenderer,
                               objectFit: RTCVideoViewObjectFit
                                   .RTCVideoViewObjectFitContain,
                             )

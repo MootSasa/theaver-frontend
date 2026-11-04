@@ -163,47 +163,57 @@ class CallStateProvider extends ChangeNotifier {
   }
 
   Future<RTCVideoRenderer> ensureStreamRenderer(String streamerId) async {
+    final isMine = streamerId == _currentUserId || streamerId == 'local';
     final existing = _streamRenderers[streamerId];
     if (existing != null) {
-      if (existing.srcObject == null) {
-        if (streamerId == _currentUserId || streamerId == 'local') {
-          existing.srcObject = _localDisplayStream;
-        } else {
-          existing.srcObject = _remoteDisplayStreams[streamerId] ??
+      final target = isMine
+          ? _localDisplayStream
+          : (_remoteDisplayStreams[streamerId] ??
               (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
                   ? _remotePrimaryStreams[streamerId]
-                  : null);
-        }
+                  : null));
+      if (existing.srcObject != target) {
+        existing.srcObject = target;
       }
       return existing;
     }
     final r = RTCVideoRenderer();
     await r.initialize();
     _streamRenderers[streamerId] = r;
-    if (streamerId == _currentUserId || streamerId == 'local') {
-      r.srcObject = _localDisplayStream;
-    } else {
-      r.srcObject = _remoteDisplayStreams[streamerId] ??
-          (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
-              ? _remotePrimaryStreams[streamerId]
-              : null);
-    }
+    r.srcObject = isMine
+        ? _localDisplayStream
+        : (_remoteDisplayStreams[streamerId] ??
+            (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
+                ? _remotePrimaryStreams[streamerId]
+                : null));
     return r;
   }
 
   RTCVideoRenderer? rendererForStream(String streamerId) {
-    if (streamerId == _currentUserId || streamerId == 'local') {
-      if (!_previewOwnScreenShare) return null;
+    final isMine = streamerId == _currentUserId || streamerId == 'local';
+    var r = _streamRenderers[streamerId];
+    if (r == null) {
+      r = RTCVideoRenderer();
+      r.initialize().then((_) {
+        final s = isMine
+            ? _localDisplayStream
+            : (_remoteDisplayStreams[streamerId] ??
+                (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
+                    ? _remotePrimaryStreams[streamerId]
+                    : null));
+        r?.srcObject = s;
+        notifyListeners();
+      });
+      _streamRenderers[streamerId] = r;
     }
-    final r = _streamRenderers[streamerId];
-    if (r != null && r.srcObject == null) {
-      final s = _remoteDisplayStreams[streamerId] ??
-          (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
-              ? _remotePrimaryStreams[streamerId]
-              : null);
-      if (s != null) {
-        r.srcObject = s;
-      }
+    final expectedStream = isMine
+        ? _localDisplayStream
+        : (_remoteDisplayStreams[streamerId] ??
+            (_remotePrimaryStreams[streamerId]?.getVideoTracks().isNotEmpty == true
+                ? _remotePrimaryStreams[streamerId]
+                : null));
+    if (r.srcObject != expectedStream && expectedStream != null) {
+      r.srcObject = expectedStream;
     }
     return r;
   }
@@ -493,36 +503,31 @@ class CallStateProvider extends ChangeNotifier {
 
   bool get hasScreenShareStream {
     if (!_renderersInitialized) return false;
-    if (isSelfScreenShare) {
-      if (_previewOwnScreenShare &&
-          screenShareRenderer.srcObject != null &&
-          screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty) {
-        return true;
-      }
-    }
     final stream = focusedStream;
-    if (stream != null) {
-      final target = _remoteDisplayStreams[stream.streamerId] ??
-          (_remotePrimaryStreams[stream.streamerId]?.getVideoTracks().isNotEmpty == true
-              ? _remotePrimaryStreams[stream.streamerId]
-              : _participantRenderers[stream.streamerId]?.srcObject);
-      if (target != null && target.getVideoTracks().isNotEmpty) {
-        screenShareRenderer.srcObject = target;
-        return true;
+    if (stream == null) {
+      if (isSelfScreenShare) {
+        return _previewOwnScreenShare &&
+            _localDisplayStream != null &&
+            _localDisplayStream!.getVideoTracks().isNotEmpty;
       }
+      return _remoteDisplayStreams.values
+          .any((s) => s.getVideoTracks().isNotEmpty);
     }
-    if (_remoteDisplayStreams.values.any((s) => s.getVideoTracks().isNotEmpty)) {
-      final firstWithVideo = _remoteDisplayStreams.values.firstWhere(
-        (s) => s.getVideoTracks().isNotEmpty,
-      );
-      screenShareRenderer.srcObject = firstWithVideo;
-      return true;
+    final isMine =
+        stream.streamerId == _currentUserId || stream.streamerId == 'local';
+    if (isMine) {
+      return _previewOwnScreenShare &&
+          _localDisplayStream != null &&
+          _localDisplayStream!.getVideoTracks().isNotEmpty;
     }
-    if (screenShareRenderer.srcObject != null &&
-        screenShareRenderer.srcObject!.getVideoTracks().isNotEmpty) {
-      return true;
-    }
-    return false;
+    final target = _remoteDisplayStreams[stream.streamerId] ??
+        (_remotePrimaryStreams[stream.streamerId]
+                    ?.getVideoTracks()
+                    .isNotEmpty ==
+                true
+            ? _remotePrimaryStreams[stream.streamerId]
+            : _participantRenderers[stream.streamerId]?.srcObject);
+    return target != null && target.getVideoTracks().isNotEmpty;
   }
 
   bool get shouldShowPip =>

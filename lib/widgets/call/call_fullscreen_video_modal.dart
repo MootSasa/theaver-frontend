@@ -146,21 +146,30 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
 
   RTCVideoRenderer? _resolveRenderer(CallStateProvider provider) {
     if (widget.isScreenShare) {
-      if (provider.isSelfScreenShare) {
-        return provider.previewOwnScreenShare
-            ? (provider.screenShareRenderer.srcObject != null
-                ? provider.screenShareRenderer
-                : widget.fallbackRenderer)
-            : null;
-      }
       final focused = provider.focusedStream;
       if (focused != null) {
+        final isMine = focused.streamerId == provider.currentUserId ||
+            focused.streamerId == 'local';
+        if (isMine) {
+          return provider.previewOwnScreenShare
+              ? (provider.rendererForStream(focused.streamerId) ??
+                  widget.fallbackRenderer)
+              : null;
+        }
         final r = provider.rendererForStream(focused.streamerId);
-        if (r != null && r.srcObject != null) return r;
+        if (r != null &&
+            r.srcObject != null &&
+            r.srcObject!.getVideoTracks().isNotEmpty) {
+          return r;
+        }
       }
-      return provider.hasScreenShareStream
-          ? provider.screenShareRenderer
-          : (widget.fallbackRenderer ?? provider.screenShareRenderer);
+      if (provider.isSelfScreenShare) {
+        return provider.previewOwnScreenShare
+            ? (provider.rendererForStream(provider.currentUserId ?? 'local') ??
+                widget.fallbackRenderer)
+            : null;
+      }
+      return widget.fallbackRenderer;
     }
     if (widget.participantUserId != null) {
       final r = provider.rendererForParticipant(widget.participantUserId!);
