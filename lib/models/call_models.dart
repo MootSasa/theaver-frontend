@@ -48,6 +48,21 @@ enum ViewerSubscriptionQuality {
     }
   }
 
+  String get shortLabel {
+    switch (this) {
+      case ViewerSubscriptionQuality.auto:
+        return 'Auto';
+      case ViewerSubscriptionQuality.high:
+        return 'Source';
+      case ViewerSubscriptionQuality.medium:
+        return '720p';
+      case ViewerSubscriptionQuality.low:
+        return '480p';
+      case ViewerSubscriptionQuality.audioOnly:
+        return 'Audio';
+    }
+  }
+
   static ViewerSubscriptionQuality fromString(String? raw) {
     switch (raw) {
       case 'high':
@@ -69,7 +84,7 @@ class StreamConfig {
   final int height;
   final int fps; // 30, 60, 120, 144
   final int bitrateKbps; // 1500 .. 25000
-  final String codec; // 'VP9' | 'AV1' | 'H264'
+  final String codec; // 'H264' | 'VP8' | 'VP9' | 'AV1'
   final String contentHint; // 'motion' | 'detail'
   final bool includeAudio;
   final bool enableServerRecording;
@@ -82,7 +97,7 @@ class StreamConfig {
     this.height = 1080,
     this.fps = 60,
     this.bitrateKbps = 6000,
-    this.codec = 'VP9',
+    this.codec = 'H264',
     this.contentHint = 'motion',
     this.includeAudio = true,
     this.enableServerRecording = false,

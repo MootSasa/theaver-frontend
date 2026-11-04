@@ -1378,14 +1378,25 @@ class CallStateProvider extends ChangeNotifier {
         for (final encoding in params.encodings!) {
           encoding.maxBitrate = config.bitrateKbps * 1000;
           encoding.maxFramerate = config.fps;
-          if (config.height > 0) {
-            double scale = 1080.0 / config.height;
+
+          double scale = 1.0;
+          final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+          if (isMobile) {
+            // Target longest edge for mobile screens (portrait or landscape):
+            // 720p -> 1280, 1080p -> 1920, 1440p -> 2560
+            final targetMax = config.height >= 1440
+                ? 2560.0
+                : (config.height >= 1080 ? 1920.0 : 1280.0);
+            scale = 2400.0 / targetMax;
             if (scale < 1.0) scale = 1.0;
-            if (scale > 4.0) scale = 4.0;
-            encoding.scaleResolutionDownBy = scale;
           } else {
-            encoding.scaleResolutionDownBy = 1.0;
+            if (config.height > 0) {
+              scale = 1080.0 / config.height;
+              if (scale < 1.0) scale = 1.0;
+            }
           }
+          if (scale > 4.0) scale = 4.0;
+          encoding.scaleResolutionDownBy = scale;
         }
         params.degradationPreference =
             RTCDegradationPreference.MAINTAIN_RESOLUTION;
@@ -1396,8 +1407,8 @@ class CallStateProvider extends ChangeNotifier {
     }
   }
 
-  /// Munges SDP to prioritize the chosen video codec (VP9, AV1, H264)
-  /// and injects bitrate limits (b=AS, b=TIAS, and Google bitrate fmtp attributes).
+  /// Munges SDP to prioritize the chosen video codec (H264, VP8, VP9, AV1)
+  /// and injects bitrate limits (b=AS, b=TIAS).
   String _applySdpCodecAndBitrate(String sdp, StreamConfig config) {
     try {
       final lines = sdp.split('\r\n');
@@ -1415,28 +1426,12 @@ class CallStateProvider extends ChangeNotifier {
           final pt = match.group(1)!;
           final codecName = match.group(2)!.toUpperCase();
           if (codecName == targetCodec ||
-              (targetCodec == 'AV1' &&
-                  (codecName == 'AV1' || codecName == 'AV1X')) ||
               (targetCodec == 'H264' && codecName == 'H264') ||
-              (targetCodec == 'VP9' && codecName == 'VP9')) {
+              (targetCodec == 'VP8' && codecName == 'VP8') ||
+              (targetCodec == 'VP9' && codecName == 'VP9') ||
+              (targetCodec == 'AV1' &&
+                  (codecName == 'AV1' || codecName == 'AV1X'))) {
             preferredPayloadTypes.add(pt);
-          }
-        }
-      }
-
-      // Find associated RTX payload types
-      final rtxPayloadTypes = <String>[];
-      if (preferredPayloadTypes.isNotEmpty) {
-        for (final pt in preferredPayloadTypes) {
-          final fmtpAptRegex = RegExp(
-            r'^a=fmtp:(\d+)\s+apt=' + pt + r'(?:;|\s|$)',
-            caseSensitive: false,
-          );
-          for (final line in lines) {
-            final match = fmtpAptRegex.firstMatch(line);
-            if (match != null) {
-              rtxPayloadTypes.add(match.group(1)!);
-            }
           }
         }
       }
@@ -1455,9 +1450,6 @@ class CallStateProvider extends ChangeNotifier {
             for (final pt in preferredPayloadTypes) {
               if (existingPts.contains(pt)) reordered.add(pt);
             }
-            for (final pt in rtxPayloadTypes) {
-              if (existingPts.contains(pt)) reordered.add(pt);
-            }
             for (final pt in existingPts) {
               if (!reordered.contains(pt)) reordered.add(pt);
             }
@@ -1468,7 +1460,7 @@ class CallStateProvider extends ChangeNotifier {
             }
             continue;
           }
-        } else if (line.startsWith('m=') && !line.startsWith('m=video ')) {
+        } else if (line.startsWith('m=')) {
           inVideoSection = false;
         }
 
@@ -1478,24 +1470,6 @@ class CallStateProvider extends ChangeNotifier {
         }
 
         newLines.add(line);
-
-        if (inVideoSection && line.startsWith('m=video ')) {
-          if (config.bitrateKbps > 0) {
-            newLines.add('b=AS:${config.bitrateKbps}');
-            newLines.add('b=TIAS:${config.bitrateKbps * 1000}');
-          }
-        }
-      }
-
-      if (preferredPayloadTypes.isNotEmpty && config.bitrateKbps > 0) {
-        const minBitrate = 500;
-        final startBitrate = (config.bitrateKbps ~/ 2).clamp(minBitrate, config.bitrateKbps);
-        final maxBitrate = config.bitrateKbps;
-        for (final pt in preferredPayloadTypes) {
-          newLines.add(
-            'a=fmtp:$pt x-google-min-bitrate=$minBitrate;x-google-start-bitrate=$startBitrate;x-google-max-bitrate=$maxBitrate',
-          );
-        }
       }
 
       return newLines.join('\r\n');
@@ -1651,7 +1625,15 @@ class CallStateProvider extends ChangeNotifier {
         sdp = _applySdpCodecAndBitrate(sdp, _streamConfig);
       }
       final mungedOffer = RTCSessionDescription(sdp, offer.type);
-      await pc.setLocalDescription(mungedOffer);
+      RTCSessionDescription offerToSet = mungedOffer;
+      try {
+        await pc.setLocalDescription(mungedOffer);
+      } catch (e) {
+        debugPrint(
+            '[CallStateProvider] setLocalDescription failed with munged SDP, falling back to original offer: $e');
+        offerToSet = offer;
+        await pc.setLocalDescription(offer);
+      }
       try {
         final senders = await pc.getSenders();
         for (final s in senders) {
@@ -1660,12 +1642,13 @@ class CallStateProvider extends ChangeNotifier {
           }
         }
       } catch (_) {}
+      final activeDesc = await pc.getLocalDescription() ?? offerToSet;
       await _sendCallSignal(call, {
         'type': 'offer',
         'target_user_id': peerId,
         'from_user_id': _currentUserId,
-        'sdp': mungedOffer.sdp,
-        'sdp_type': mungedOffer.type,
+        'sdp': activeDesc.sdp,
+        'sdp_type': activeDesc.type,
       });
     } catch (e) {
       debugPrint('[CallStateProvider] _createAndSendOffer ($peerId) error: $e');
@@ -2090,13 +2073,7 @@ class CallStateProvider extends ChangeNotifier {
         await NotificationService().promoteCallToMediaProjection();
 
         final androidConstraints = <String, dynamic>{
-          'video': {
-            'mandatory': {
-              'minWidth': config.width.clamp(640, 1920).toString(),
-              'minHeight': config.height.clamp(360, 1080).toString(),
-              'minFrameRate': config.fps.clamp(15, 60).toString(),
-            },
-          },
+          'video': true,
           'audio': false,
         };
         displayStream =

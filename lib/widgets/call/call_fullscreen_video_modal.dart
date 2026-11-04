@@ -628,144 +628,156 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                       ],
                     ),
                   ),
-                  if (stream != null || isSelfScreenShare) ...[
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => _onTapQualitySelector(callProvider),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.white24,
-                            width: 0.8,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              isSelfScreenShare
-                                  ? Icons.tune_rounded
-                                  : Icons.hd_rounded,
-                              size: 16,
-                              color: Colors.white,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              isSelfScreenShare
-                                  ? callProvider.streamConfig.badgeLabel
-                                  : callProvider.viewerQuality.label,
-                              style: const TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      reverse: true,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (stream != null || isSelfScreenShare) ...[
+                            GestureDetector(
+                              onTap: () => _onTapQualitySelector(callProvider),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.14),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Colors.white24,
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      isSelfScreenShare
+                                          ? Icons.tune_rounded
+                                          : Icons.hd_rounded,
+                                      size: 16,
+                                      color: Colors.white,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      isSelfScreenShare
+                                          ? callProvider.streamConfig.badgeLabel
+                                          : callProvider.viewerQuality.shortLabel,
+                                      style: const TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                    ),
-                  ],
-                  if (widget.isScreenShare &&
-                      (callProvider.activeCall?.streams.length ?? 0) > 1) ...[
-                    const SizedBox(width: 8),
-                    PopupMenuButton<CallStream>(
-                      tooltip: 'Сменить стрим',
-                      icon: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.14),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white24,
-                            width: 0.8,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.swap_calls_rounded,
-                          size: 16,
-                          color: Colors.white,
-                        ),
-                      ),
-                      onSelected: (selected) {
-                        callProvider.setFocusedStream(selected);
-                      },
-                      itemBuilder: (context) {
-                        return (callProvider.activeCall?.streams ?? [])
-                            .map((s) => PopupMenuItem<CallStream>(
-                                  value: s,
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.screen_share_rounded,
-                                        size: 16,
-                                        color: s.streamerId == stream?.streamerId
-                                            ? const Color(0xFF00E676)
-                                            : Colors.white70,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          s.streamerName,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 13),
-                                        ),
-                                      ),
-                                    ],
+                          if (widget.isScreenShare &&
+                              (callProvider.activeCall?.streams.length ?? 0) > 1) ...[
+                            const SizedBox(width: 8),
+                            PopupMenuButton<CallStream>(
+                              tooltip: 'Сменить стрим',
+                              icon: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.14),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white24,
+                                    width: 0.8,
                                   ),
-                                ))
-                            .toList();
-                      },
+                                ),
+                                child: const Icon(
+                                  Icons.swap_calls_rounded,
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              onSelected: (selected) {
+                                callProvider.setFocusedStream(selected);
+                              },
+                              itemBuilder: (context) {
+                                return (callProvider.activeCall?.streams ?? [])
+                                    .map((s) => PopupMenuItem<CallStream>(
+                                          value: s,
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.screen_share_rounded,
+                                                size: 16,
+                                                color: s.streamerId == stream?.streamerId
+                                                    ? const Color(0xFF00E676)
+                                                    : Colors.white70,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  s.streamerName,
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(fontSize: 13),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ))
+                                    .toList();
+                              },
+                            ),
+                          ],
+                          if (_transformCtrl.value != Matrix4.identity()) ...[
+                            const SizedBox(width: 8),
+                            _buildCircleButton(
+                              icon: Icons.zoom_out_map_rounded,
+                              tooltip: 'Сбросить масштаб',
+                              onTap: _resetZoom,
+                            ),
+                          ],
+                          const SizedBox(width: 8),
+                          _buildCircleButton(
+                            icon: _coverFit
+                                ? Icons.fit_screen_rounded
+                                : Icons.aspect_ratio_rounded,
+                            tooltip: _coverFit ? 'Вписать целиком' : 'Заполнить экран',
+                            onTap: () {
+                              HapticFeedback.selectionClick();
+                              setState(() => _coverFit = !_coverFit);
+                            },
+                          ),
+                          const SizedBox(width: 8),
+                          _buildCircleButton(
+                            icon: Icons.rotate_90_degrees_cw_rounded,
+                            tooltip: 'Повернуть видео на 90°',
+                            onTap: () {
+                              HapticFeedback.selectionClick();
+                              final rotKey = widget.isScreenShare
+                                  ? (stream?.streamerId ?? 'screen_share')
+                                  : (widget.participantUserId ??
+                                      (callProvider.hasRemoteVideoStream
+                                          ? 'remote'
+                                          : 'local'));
+                              callProvider.rotateParticipant(rotKey);
+                            },
+                          ),
+                          if (_isMobilePlatform) ...[
+                            const SizedBox(width: 8),
+                            _buildCircleButton(
+                              icon: Icons.screen_rotation_rounded,
+                              tooltip: 'Повернуть экран',
+                              onTap: _toggleOrientation,
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
-                  ],
-                  if (_transformCtrl.value != Matrix4.identity()) ...[
-                    const SizedBox(width: 8),
-                    _buildCircleButton(
-                      icon: Icons.zoom_out_map_rounded,
-                      tooltip: 'Сбросить масштаб',
-                      onTap: _resetZoom,
-                    ),
-                  ],
-                  const SizedBox(width: 8),
-                  _buildCircleButton(
-                    icon: _coverFit
-                        ? Icons.fit_screen_rounded
-                        : Icons.aspect_ratio_rounded,
-                    tooltip: _coverFit ? 'Вписать целиком' : 'Заполнить экран',
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      setState(() => _coverFit = !_coverFit);
-                    },
                   ),
-                  const SizedBox(width: 8),
-                  _buildCircleButton(
-                    icon: Icons.rotate_90_degrees_cw_rounded,
-                    tooltip: 'Повернуть видео на 90°',
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      final rotKey = widget.isScreenShare
-                          ? (stream?.streamerId ?? 'screen_share')
-                          : (widget.participantUserId ??
-                              (callProvider.hasRemoteVideoStream
-                                  ? 'remote'
-                                  : 'local'));
-                      callProvider.rotateParticipant(rotKey);
-                    },
-                  ),
-                  if (_isMobilePlatform) ...[
-                    const SizedBox(width: 8),
-                    _buildCircleButton(
-                      icon: Icons.screen_rotation_rounded,
-                      tooltip: 'Повернуть экран',
-                      onTap: _toggleOrientation,
-                    ),
-                  ],
                 ],
               ),
             ),

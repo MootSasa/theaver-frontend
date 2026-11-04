@@ -1013,7 +1013,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                           callProvider.isSelfScreenShare
                                               ? 'Качество'
                                               : callProvider
-                                                  .viewerQuality.label,
+                                                  .viewerQuality.shortLabel,
                                           style: const TextStyle(
                                             fontSize: 11,
                                             fontWeight: FontWeight.w600,
@@ -1509,116 +1509,135 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     CallStateProvider callProvider,
     Color primaryColor,
   ) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
+    final items = <Widget>[
+      _buildDockItem(
+        icon: callProvider.isMuted
+            ? Icons.mic_off_rounded
+            : Icons.mic_rounded,
+        label: callProvider.isMuted ? 'Вкл. микр.' : 'Микрофон',
+        danger: callProvider.isMuted,
+        active: !callProvider.isMuted,
+        onTap: () => callProvider.toggleMute(),
+      ),
+      _buildDockItem(
+        icon: callProvider.isDeafened
+            ? Icons.headset_off_rounded
+            : Icons.headset_rounded,
+        label: 'Звук',
+        danger: callProvider.isDeafened,
+        active: !callProvider.isDeafened,
+        onTap: () => callProvider.toggleDeafen(),
+      ),
+      _buildDockItem(
+        icon: callProvider.isVideoOn
+            ? Icons.videocam_rounded
+            : Icons.videocam_off_rounded,
+        label: 'Видео',
+        active: callProvider.isVideoOn,
+        accentColor: primaryColor,
+        onTap: () => callProvider.toggleVideo(),
+      ),
+      if (callProvider.isVideoOn)
         _buildDockItem(
-          icon: callProvider.isMuted
-              ? Icons.mic_off_rounded
-              : Icons.mic_rounded,
-          label: callProvider.isMuted ? 'Вкл. микр.' : 'Микрофон',
-          danger: callProvider.isMuted,
-          active: !callProvider.isMuted,
-          onTap: () => callProvider.toggleMute(),
-        ),
-        _buildDockItem(
-          icon: callProvider.isDeafened
-              ? Icons.headset_off_rounded
-              : Icons.headset_rounded,
-          label: 'Звук',
-          danger: callProvider.isDeafened,
-          active: !callProvider.isDeafened,
-          onTap: () => callProvider.toggleDeafen(),
-        ),
-        _buildDockItem(
-          icon: callProvider.isVideoOn
-              ? Icons.videocam_rounded
-              : Icons.videocam_off_rounded,
-          label: 'Видео',
-          active: callProvider.isVideoOn,
+          icon: Icons.flip_camera_ios_rounded,
+          label: 'Камера',
+          active: true,
           accentColor: primaryColor,
-          onTap: () => callProvider.toggleVideo(),
+          onTap: () => callProvider.switchCamera(),
         ),
-        if (callProvider.isVideoOn)
-          _buildDockItem(
-            icon: Icons.flip_camera_ios_rounded,
-            label: 'Камера',
-            active: true,
-            accentColor: primaryColor,
-            onTap: () => callProvider.switchCamera(),
-          ),
-        if (callProvider.isScreenSharing) ...[
-          _buildDockItem(
-            icon: Icons.stop_screen_share_rounded,
-            label: 'Стоп экран',
-            danger: true,
-            active: true,
-            onTap: () {
-              HapticFeedback.mediumImpact();
-              callProvider.stopScreenShare();
-            },
-          ),
-          _buildDockItem(
-            icon: Icons.tune_rounded,
-            label: callProvider.streamConfig.badgeLabel,
-            active: true,
-            accentColor: primaryColor,
-            onTap: () => _onTapGoLive(callProvider),
-          ),
-        ] else
-          _buildDockItem(
-            icon: Icons.screen_share_rounded,
-            label: 'Go Live',
-            active: false,
-            accentColor: primaryColor,
-            onTap: () => _onTapGoLive(callProvider),
-          ),
-        if (widget.isStage)
-          _buildDockItem(
-            icon: Icons.front_hand_rounded,
-            label: 'Рука',
-            active: callProvider.isHandRaised,
-            accentColor: const Color(0xFFFFAB00),
-            onTap: () => callProvider.toggleHandRaise(),
-          )
-        else
-          _buildDockItem(
-            icon: Icons.emoji_emotions_outlined,
-            label: 'Реакции',
-            onTap: () => _showReactionsSheet(context, callProvider),
-          ),
+      if (callProvider.isScreenSharing) ...[
         _buildDockItem(
-          icon: Icons.music_note_rounded,
-          label: 'Звуки',
-          onTap: () => SoundboardSheet.show(
-            context,
-            callId: widget.callId,
-          ),
-        ),
-        GestureDetector(
-          onTap: () async {
+          icon: Icons.stop_screen_share_rounded,
+          label: 'Стоп экран',
+          danger: true,
+          active: true,
+          onTap: () {
             HapticFeedback.mediumImpact();
-            await callProvider.leaveCall();
-            widget.onLeave?.call();
-            if (!widget.embedded && context.mounted) {
-              Navigator.of(context).maybePop();
-            }
+            callProvider.stopScreenShare();
           },
-          child: Container(
-            width: 48,
-            height: 48,
-            decoration: const BoxDecoration(
-              color: Colors.redAccent,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.call_end_rounded,
-              color: Colors.white,
-              size: 22,
-            ),
+        ),
+        _buildDockItem(
+          icon: Icons.tune_rounded,
+          label: callProvider.streamConfig.badgeLabel,
+          active: true,
+          accentColor: primaryColor,
+          onTap: () => _onTapGoLive(callProvider),
+        ),
+      ] else
+        _buildDockItem(
+          icon: Icons.screen_share_rounded,
+          label: 'Go Live',
+          active: false,
+          accentColor: primaryColor,
+          onTap: () => _onTapGoLive(callProvider),
+        ),
+      if (widget.isStage)
+        _buildDockItem(
+          icon: Icons.front_hand_rounded,
+          label: 'Рука',
+          active: callProvider.isHandRaised,
+          accentColor: const Color(0xFFFFAB00),
+          onTap: () => callProvider.toggleHandRaise(),
+        )
+      else
+        _buildDockItem(
+          icon: Icons.emoji_emotions_outlined,
+          label: 'Реакции',
+          onTap: () => _showReactionsSheet(context, callProvider),
+        ),
+      _buildDockItem(
+        icon: Icons.music_note_rounded,
+        label: 'Звуки',
+        onTap: () => SoundboardSheet.show(
+          context,
+          callId: widget.callId,
+        ),
+      ),
+      GestureDetector(
+        onTap: () async {
+          HapticFeedback.mediumImpact();
+          await callProvider.leaveCall();
+          widget.onLeave?.call();
+          if (!widget.embedded && context.mounted) {
+            Navigator.of(context).maybePop();
+          }
+        },
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: const BoxDecoration(
+            color: Colors.redAccent,
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(
+            Icons.call_end_rounded,
+            color: Colors.white,
+            size: 22,
           ),
         ),
-      ],
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth - 20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                for (int i = 0; i < items.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 8),
+                  items[i],
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

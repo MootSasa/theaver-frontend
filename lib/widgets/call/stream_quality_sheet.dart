@@ -68,7 +68,7 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
   ];
 
   static const List<int> _fpsOptions = [30, 60, 120, 144];
-  static const List<String> _codecs = ['VP9', 'AV1', 'H264'];
+  static const List<String> _codecs = ['H264', 'VP8', 'VP9', 'AV1'];
 
   @override
   void initState() {
