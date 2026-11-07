@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'auth_service.dart';
+import 'community_service.dart';
 import 'database/app_database.dart';
 import '../config/app_config.dart';
+import '../models/community_models.dart';
 
 /// Unified peer item returned by `GET /api/search` in `my_peers` and `global_peers`.
 class SearchPeer {
-  final String peerType; // 'user' | 'group' | 'channel'
+  final String peerType; // 'user' | 'group' | 'channel' | 'community'
   final String id;
   final String? chatId;
   final String name;
@@ -38,8 +40,9 @@ class SearchPeer {
   bool get isUser => peerType == 'user';
   bool get isGroup => peerType == 'group';
   bool get isChannel => peerType == 'channel';
+  bool get isCommunity => peerType == 'community';
 
-  /// Alias for [peerType] (`'user'`, `'group'`, `'channel'`).
+  /// Alias for [peerType] (`'user'`, `'group'`, `'channel'`, `'community'`).
   String get type => peerType;
 
   /// Alias for [name].
@@ -82,12 +85,33 @@ class SearchPeer {
 
   SearchResultChannel toChannel() => SearchResultChannel.fromPeer(this);
 
+  Community toCommunity() {
+    final cleanId = id.startsWith('community_')
+        ? id.substring('community_'.length)
+        : id;
+    if (isMember) {
+      final cached = CommunityService.getCachedCommunity(cleanId);
+      if (cached != null) return cached;
+    }
+    return Community(
+      id: cleanId,
+      name: name,
+      description: description,
+      avatarUrl: avatarUrl,
+      memberCount: memberCount > 0 ? memberCount : 1,
+      createdAt: DateTime.now(),
+      isMember: isMember,
+      isPublic: isPublic,
+    );
+  }
+
   factory SearchPeer.fromJson(Map<String, dynamic> json) {
-    final rawAvatar = json['avatar_url']?.toString().trim();
+    final rawAvatar =
+        (json['avatar_url'] ?? json['icon_url'])?.toString().trim();
     final rawChatId = json['chat_id']?.toString().trim();
     return SearchPeer(
       peerType: (json['peer_type'] ?? json['chat_type'] ?? 'user').toString(),
-      id: (json['id'] ?? '').toString(),
+      id: (json['id'] ?? json['community_id'] ?? '').toString(),
       chatId: (rawChatId != null && rawChatId.isNotEmpty) ? rawChatId : null,
       name: (json['name'] ?? json['display_name'] ?? json['username'] ?? '').toString(),
       username: (json['username'] ?? '').toString(),
@@ -145,6 +169,38 @@ class UnifiedSearchResult {
           .toList(),
     );
   }
+
+  /// Merges instant local results with server search results without duplicates.
+  UnifiedSearchResult mergeWithServer(UnifiedSearchResult server) {
+    final mergedPeers = <SearchPeer>[...server.myPeers];
+    final seenPeerKeys = <String>{
+      for (final p in server.myPeers) (p.chatId ?? p.id),
+      for (final p in server.myPeers) p.id,
+    };
+    for (final lp in myPeers) {
+      final key = lp.chatId ?? lp.id;
+      if (!seenPeerKeys.contains(key) && !seenPeerKeys.contains(lp.id)) {
+        seenPeerKeys.add(key);
+        mergedPeers.add(lp);
+      }
+    }
+
+    final mergedMessages = <SearchResultMessage>[...server.messages];
+    final seenMsgIds = <String>{for (final m in server.messages) m.id};
+    for (final lm in messages) {
+      if (seenMsgIds.add(lm.id)) {
+        mergedMessages.add(lm);
+      }
+    }
+
+    return UnifiedSearchResult(
+      query: server.query.isNotEmpty ? server.query : query,
+      type: server.type,
+      myPeers: mergedPeers,
+      globalPeers: server.globalPeers,
+      messages: mergedMessages,
+    );
+  }
 }
 
 /// SearchResultUser represents a user or bot in search results.
@@ -153,22 +209,26 @@ class SearchResultUser {
   final String name;
   final String email;
   final String username;
+  final String bio;
   final String? avatarUrl;
   final String? chatId;
   final bool isBot;
   final bool isVerified;
   final bool isMyPeer;
+  final bool isOnline;
 
   SearchResultUser({
     required this.id,
     required this.name,
-    required this.email,
+    this.email = '',
     required this.username,
+    this.bio = '',
     this.avatarUrl,
     this.chatId,
     this.isBot = false,
     this.isVerified = false,
     this.isMyPeer = false,
+    this.isOnline = false,
   });
 
   factory SearchResultUser.fromJson(Map<String, dynamic> json) {
@@ -179,11 +239,13 @@ class SearchResultUser {
       name: (json['name'] ?? json['display_name'] ?? '').toString(),
       email: (json['email'] ?? '').toString(),
       username: (json['username'] ?? '').toString(),
+      bio: (json['bio'] ?? json['description'] ?? '').toString(),
       avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
       chatId: (rawChatId != null && rawChatId.isNotEmpty) ? rawChatId : null,
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
       isMyPeer: json['is_member'] == true,
+      isOnline: json['is_online'] == true,
     );
   }
 
@@ -193,6 +255,7 @@ class SearchResultUser {
       name: peer.name,
       email: '',
       username: peer.username,
+      bio: peer.description,
       avatarUrl: peer.avatarUrl,
       chatId: peer.chatId,
       isBot: peer.isBot,
@@ -384,8 +447,124 @@ class SearchResultMessage {
   }
 }
 
-/// SearchService provides unified search functionality via `GET /api/search`.
+/// SearchService provides unified search functionality via `GET /api/search`
+/// and instant offline-first local SQLite search.
 class SearchService {
+  /// Instant local SQLite search across cached chats and messages (0ms network latency).
+  static Future<UnifiedSearchResult> searchLocal({
+    required String query,
+    String type = 'all',
+    String? chatId,
+    int limit = 20,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return const UnifiedSearchResult();
+
+    try {
+      final db = AppDatabase();
+      final myPeers = <SearchPeer>[];
+      final messages = <SearchResultMessage>[];
+
+      final allChats = await db.getChats();
+      final chatById = <String, DbChat>{
+        for (final c in allChats) c.chatId: c,
+      };
+
+      if (chatId == null && type != 'messages') {
+        final seenPeerIds = <String>{};
+        final matchedCommunities =
+            await CommunityService.searchCommunitiesLocal(trimmed, limit: limit);
+        for (final comm in matchedCommunities) {
+          final peerChatId = 'community_${comm.id}';
+          seenPeerIds.add(peerChatId);
+          seenPeerIds.add(comm.id);
+          myPeers.add(
+            SearchPeer(
+              peerType: 'community',
+              id: comm.id,
+              chatId: peerChatId,
+              name: comm.name,
+              description: comm.description,
+              avatarUrl: comm.avatarUrl,
+              isPublic: true,
+              memberCount: comm.memberCount,
+              isMember: true,
+            ),
+          );
+        }
+
+        final matchedChats = await db.searchChatsLocal(trimmed, limit: limit);
+        for (final c in matchedChats) {
+          if (seenPeerIds.contains(c.chatId) ||
+              (c.otherUserId != null && seenPeerIds.contains(c.otherUserId!))) {
+            continue;
+          }
+          final peerType = c.chatType == 'private'
+              ? 'user'
+              : (c.chatType == 'channel'
+                  ? 'channel'
+                  : (c.chatType == 'community' ? 'community' : 'group'));
+          myPeers.add(
+            SearchPeer(
+              peerType: peerType,
+              id: (c.otherUserId != null && c.otherUserId!.isNotEmpty)
+                  ? c.otherUserId!
+                  : c.chatId,
+              chatId: c.chatId,
+              name: c.name,
+              username: c.username ?? '',
+              avatarUrl: c.avatarUrl,
+              isBot: c.isBot,
+              isVerified: c.isVerified,
+              isPublic: c.isPublic,
+              isMember: true,
+            ),
+          );
+        }
+      }
+
+      if (type == 'all' || type == 'messages') {
+        final localMsgs = await db.searchMessagesLocal(
+          trimmed,
+          chatId: chatId,
+          limit: limit,
+        );
+        for (final m in localMsgs) {
+          final chat = chatById[m.chatId];
+          final cType = chat?.chatType ?? 'group';
+          messages.add(
+            SearchResultMessage(
+              id: m.serverId ?? m.localId,
+              content: m.content,
+              chatId: m.chatId,
+              chatType: cType,
+              chatName: chat?.name ?? '',
+              senderId: m.senderId,
+              senderName: m.senderName ?? '',
+              senderAvatar: m.senderAvatarUrl,
+              messageType: m.messageType,
+              userId: m.senderId,
+              channelId: cType == 'channel' ? m.chatId : '',
+              groupId: cType != 'channel' ? m.chatId : '',
+              createdAt: DateTime.tryParse(m.createdAt) ?? DateTime.now(),
+            ),
+          );
+        }
+      }
+
+      return UnifiedSearchResult(
+        query: trimmed,
+        type: type,
+        myPeers: myPeers,
+        globalPeers: const [],
+        messages: messages,
+      );
+    } catch (e) {
+      debugPrint('Error in local search: $e');
+      return const UnifiedSearchResult();
+    }
+  }
+
   /// Executes a unified search across the user's peers, global directory (users/bots/public chats),
   /// and messages (`GET /api/search`).
   static Future<UnifiedSearchResult> search({

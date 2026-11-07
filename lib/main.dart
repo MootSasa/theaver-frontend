@@ -36,6 +36,10 @@ import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'screens/call/voice_call_screen.dart';
 import 'screens/call/video_call_screen.dart';
+import 'screens/call/group_call_screen.dart';
+import 'services/call_state_provider.dart';
+import 'widgets/call/active_call_top_banner.dart';
+import 'widgets/call/call_pip_overlay.dart';
 import 'screens/chat/user_profile_screen.dart';
 import 'screens/search/search_screen.dart';
 import 'utils/swipe_back_route.dart';
@@ -162,6 +166,51 @@ void main() async {
 class TheaverApp extends StatelessWidget {
   const TheaverApp({super.key});
 
+  void _restoreActiveCall(BuildContext context) {
+    final callProvider = context.read<CallStateProvider>();
+    final call = callProvider.activeCall;
+    if (call == null) return;
+    callProvider.setMinimized(false);
+    final nav = DeepLinkService().navigatorKey.currentState;
+    if (nav == null) return;
+
+    if (call.callType == 'group' || call.callType == 'stage') {
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => GroupCallScreen(
+            callId: call.id,
+            chatId: call.chatId,
+            userId: 'local',
+            title: call.title,
+            isStage: call.callType == 'stage',
+          ),
+        ),
+      );
+    } else if (call.isVideo || callProvider.isVideoOn) {
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => VideoCallScreen(
+            callId: call.id,
+            chatId: call.chatId,
+            isCaller: true,
+            peerName: call.title,
+          ),
+        ),
+      );
+    } else {
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => VoiceCallScreen(
+            callId: call.id,
+            chatId: call.chatId,
+            isCaller: true,
+            peerName: call.title,
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
@@ -175,6 +224,7 @@ class TheaverApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => WallpaperProvider()..init()),
         ChangeNotifierProvider(create: (_) => ProfileThemeProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => WalletSecurityProvider()),
+        ChangeNotifierProvider(create: (_) => CallStateProvider(), lazy: false),
         ChangeNotifierProvider.value(value: EmojiHapticService.instance),
         ChangeNotifierProxyProvider<WalletSecurityProvider, BankingCardsProvider>(
           create: (_) => BankingCardsProvider(),
@@ -214,6 +264,17 @@ class TheaverApp extends StatelessWidget {
               return Stack(
                 children: [
                   child ?? const SizedBox.shrink(),
+                  Positioned(
+                    top: MediaQuery.of(context).padding.top,
+                    left: 0,
+                    right: 0,
+                    child: ActiveCallTopBanner(
+                      onRestoreCall: () => _restoreActiveCall(context),
+                    ),
+                  ),
+                  CallPipOverlay(
+                    onRestoreCall: () => _restoreActiveCall(context),
+                  ),
                   const FloatingVideoNoteOverlay(),
                 ],
               );
@@ -222,10 +283,15 @@ class TheaverApp extends StatelessWidget {
               if (settings.name == '/voice-call') {
                 final args = settings.arguments as Map<String, dynamic>? ?? {};
                 final chatId = args['chatId']?.toString() ?? '0';
+                final peerName = (args['peerName'] ?? args['userName'])?.toString();
+                final avatarUrl = args['avatarUrl']?.toString();
                 return MaterialPageRoute(
                   builder: (_) => VoiceCallScreen(
                     callId: chatId,
+                    chatId: chatId,
                     isCaller: true,
+                    peerName: peerName,
+                    peerAvatarUrl: avatarUrl,
                   ),
                   settings: settings,
                 );
@@ -233,10 +299,15 @@ class TheaverApp extends StatelessWidget {
               if (settings.name == '/video-call') {
                 final args = settings.arguments as Map<String, dynamic>? ?? {};
                 final chatId = args['chatId']?.toString() ?? '0';
+                final peerName = (args['peerName'] ?? args['userName'])?.toString();
+                final avatarUrl = args['avatarUrl']?.toString();
                 return MaterialPageRoute(
                   builder: (_) => VideoCallScreen(
                     callId: chatId,
+                    chatId: chatId,
                     isCaller: true,
+                    peerName: peerName,
+                    peerAvatarUrl: avatarUrl,
                   ),
                   settings: settings,
                 );

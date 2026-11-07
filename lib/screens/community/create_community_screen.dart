@@ -404,13 +404,11 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
         name: name,
         description: desc,
         avatarUrl: uploadedAvatarUrl,
+        skipDefaultChannels: template.categories.isNotEmpty,
       );
 
       // Если выбран шаблон и сообщество создано на сервере — создадим стартовые категории и каналы
-      if (created != null &&
-          template.categories.isNotEmpty &&
-          created.categories.isEmpty &&
-          created.channels.length <= 1) {
+      if (created != null && template.categories.isNotEmpty) {
         for (int cIdx = 0; cIdx < template.categories.length; cIdx++) {
           final catSpec = template.categories[cIdx];
           final createdCat = await CommunityService.createCategory(
@@ -434,49 +432,14 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
         }
       }
 
-      // Локальный fallback если сервер временно недоступен
       if (created == null) {
-        final now = DateTime.now();
-        final fallbackId = 'comm_${now.millisecondsSinceEpoch}';
-        final localCats = <CommunityCategory>[];
-        final localChans = <CommunityChannel>[];
-
-        for (int cIdx = 0; cIdx < template.categories.length; cIdx++) {
-          final catSpec = template.categories[cIdx];
-          final catId = '${fallbackId}_cat_$cIdx';
-          for (int chIdx = 0; chIdx < catSpec.channels.length; chIdx++) {
-            final chSpec = catSpec.channels[chIdx];
-            final ch = CommunityChannel(
-              id: '${catId}_ch_$chIdx',
-              communityId: fallbackId,
-              categoryId: catId,
-              name: chSpec.name,
-              channelType: chSpec.type,
-              topic: chSpec.topic,
-              position: chIdx,
-            );
-            localChans.add(ch);
-          }
-          localCats.add(
-            CommunityCategory(
-              id: catId,
-              communityId: fallbackId,
-              name: catSpec.name,
-              position: cIdx,
-            ),
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            'Не удалось создать сообщество. Проверьте соединение с сервером.',
           );
         }
-
-        created = Community(
-          id: fallbackId,
-          name: name,
-          description: desc,
-          avatarUrl: uploadedAvatarUrl ?? _pickedAvatarFile?.path,
-          memberCount: 1,
-          categories: localCats,
-          channels: localChans,
-          createdAt: now,
-        );
+        return;
       }
 
       CommunityService.cacheCommunity(created);

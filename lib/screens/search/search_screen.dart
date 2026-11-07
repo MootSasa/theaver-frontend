@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/community_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/image_utils.dart';
 import '../../widgets/common/peer_badges_widget.dart';
@@ -48,14 +49,29 @@ class _SearchScreenState extends State<SearchScreen> {
         _searchQuery = newQuery;
       });
       _debounce?.cancel();
-      if (_searchQuery.trim().isEmpty) {
+      final trimmed = _searchQuery.trim();
+      if (trimmed.isEmpty) {
         setState(() {
           _result = UnifiedSearchResult.empty;
           _isLoading = false;
         });
         return;
       }
+      _performLocalSearch(trimmed);
       _debounce = Timer(const Duration(milliseconds: 280), _performSearch);
+    }
+  }
+
+  Future<void> _performLocalSearch(String q) async {
+    final localRes = await SearchService.searchLocal(
+      query: q,
+      type: widget.initialChatId != null ? 'messages' : 'all',
+      chatId: widget.initialChatId,
+    );
+    if (mounted && _searchQuery.trim() == q) {
+      setState(() {
+        _result = localRes;
+      });
     }
   }
 
@@ -72,7 +88,7 @@ class _SearchScreenState extends State<SearchScreen> {
       );
       if (mounted && _searchQuery.trim() == q) {
         setState(() {
-          _result = res;
+          _result = _result.mergeWithServer(res);
           _isLoading = false;
         });
       }
@@ -94,6 +110,18 @@ class _SearchScreenState extends State<SearchScreen> {
     if (_joiningPeerIds.contains(peer.id)) return;
     setState(() => _joiningPeerIds.add(peer.id));
     try {
+      if (peer.type == 'community') {
+        final joined = await CommunityService.joinCommunity(peer.id);
+        if (!mounted) return;
+        if (joined != null) {
+          _onPeerTap(peer.copyWith(isMember: true));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Не удалось вступить в сообщество')),
+          );
+        }
+        return;
+      }
       final res = await ChatService.joinPublicChat(peer.id);
       if (!mounted) return;
       if (res['success'] == true) {
@@ -155,6 +183,7 @@ class _SearchScreenState extends State<SearchScreen> {
       ('users', 'Люди и боты'),
       ('groups', 'Группы'),
       ('channels', 'Каналы'),
+      ('communities', 'Сообщества'),
       ('messages', 'Сообщения'),
     ];
     final primary = Theme.of(context).colorScheme.primary;
@@ -212,10 +241,6 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
 
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
     final myPeers = _result.myPeers.where(_matchesPeerFilter).toList();
     final globalPeers = _result.globalPeers.where(_matchesPeerFilter).toList();
     final showMessages =
@@ -223,6 +248,9 @@ class _SearchScreenState extends State<SearchScreen> {
     final messages = showMessages ? _result.messages : <SearchResultMessage>[];
 
     if (myPeers.isEmpty && globalPeers.isEmpty && messages.isEmpty) {
+      if (_isLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
       return Center(
         child: Text(
           l10n.translate('common_nothing_found'),
@@ -231,25 +259,33 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 32),
+    return Column(
       children: [
-        if (myPeers.isNotEmpty)
-          SettingsGroup(
-            title: 'МОИ ЧАТЫ',
-            children: myPeers.map((p) => _buildPeerTile(context, p)).toList(),
+        if (_isLoading)
+          const LinearProgressIndicator(minHeight: 2),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 32),
+            children: [
+              if (myPeers.isNotEmpty)
+                SettingsGroup(
+                  title: 'МОИ ЧАТЫ',
+                  children: myPeers.map((p) => _buildPeerTile(context, p)).toList(),
+                ),
+              if (globalPeers.isNotEmpty)
+                SettingsGroup(
+                  title: 'ГЛОБАЛЬНЫЙ ПОИСК',
+                  children:
+                      globalPeers.map((p) => _buildPeerTile(context, p, isGlobal: true)).toList(),
+                ),
+              if (messages.isNotEmpty)
+                SettingsGroup(
+                  title: 'СООБЩЕНИЯ',
+                  children: messages.map((m) => _buildMessageTile(context, m)).toList(),
+                ),
+            ],
           ),
-        if (globalPeers.isNotEmpty)
-          SettingsGroup(
-            title: 'ГЛОБАЛЬНЫЙ ПОИСК',
-            children:
-                globalPeers.map((p) => _buildPeerTile(context, p, isGlobal: true)).toList(),
-          ),
-        if (messages.isNotEmpty)
-          SettingsGroup(
-            title: 'СООБЩЕНИЯ',
-            children: messages.map((m) => _buildMessageTile(context, m)).toList(),
-          ),
+        ),
       ],
     );
   }
@@ -266,6 +302,8 @@ class _SearchScreenState extends State<SearchScreen> {
         return peer.type == 'group';
       case 'channels':
         return peer.type == 'channel';
+      case 'communities':
+        return peer.type == 'community';
       case 'messages':
         return false;
       default:
@@ -278,7 +316,7 @@ class _SearchScreenState extends State<SearchScreen> {
     final validAvatar = getValidAvatarUrl(peer.avatarUrl);
     final canJoin = isGlobal &&
         !peer.isMember &&
-        (peer.type == 'group' || peer.type == 'channel');
+        (peer.type == 'group' || peer.type == 'channel' || peer.type == 'community');
     final isJoining = _joiningPeerIds.contains(peer.id);
 
     final subtitleParts = <String>[];
@@ -287,6 +325,15 @@ class _SearchScreenState extends State<SearchScreen> {
     }
     if (peer.type == 'user' && peer.isBot) {
       subtitleParts.add('бот');
+    } else if (peer.type == 'community') {
+      subtitleParts.add(
+        peer.memberCount > 0
+            ? 'Сообщество • ${peer.memberCount} участн.'
+            : 'Сообщество',
+      );
+      if (peer.description.isNotEmpty) {
+        subtitleParts.add(peer.description);
+      }
     } else if (peer.memberCount > 0) {
       subtitleParts.add(
         peer.type == 'channel'
@@ -306,18 +353,21 @@ class _SearchScreenState extends State<SearchScreen> {
             ? (peer.type == 'channel'
                 ? Icon(Icons.campaign_rounded,
                     color: Theme.of(context).colorScheme.primary)
-                : peer.type == 'group'
-                    ? Icon(Icons.group_rounded,
+                : peer.type == 'community'
+                    ? Icon(Icons.hub_rounded,
                         color: Theme.of(context).colorScheme.primary)
-                    : Text(
-                        peer.title.isNotEmpty
-                            ? peer.title[0].toUpperCase()
-                            : '?',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ))
+                    : peer.type == 'group'
+                        ? Icon(Icons.group_rounded,
+                            color: Theme.of(context).colorScheme.primary)
+                        : Text(
+                            peer.title.isNotEmpty
+                                ? peer.title[0].toUpperCase()
+                                : '?',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ))
             : null,
       ),
       title: Row(
@@ -467,6 +517,8 @@ class _SearchScreenState extends State<SearchScreen> {
       Navigator.pop(context, {'type': 'group', 'data': peer.toGroup()});
     } else if (peer.type == 'channel') {
       Navigator.pop(context, {'type': 'channel', 'data': peer.toChannel()});
+    } else if (peer.type == 'community') {
+      Navigator.pop(context, {'type': 'community', 'data': peer.toCommunity()});
     }
   }
 }

@@ -113,6 +113,40 @@ class _CommunityScreenState extends State<CommunityScreen> {
       return;
     }
 
+    if (normalizedType == 'community_channel_deleted') {
+      final commId = (payload['community_id'] ?? '').toString();
+      final channelId =
+          (payload['channel_id'] ?? payload['chat_id'] ?? '').toString();
+      if ((commId.isEmpty || commId == _community.id) && channelId.isNotEmpty) {
+        setState(() {
+          final remaining = _community.channels
+              .where((c) => c.id != channelId)
+              .toList();
+          _community = _community.copyWith(channels: remaining);
+          if (_community.isMember) {
+            CommunityService.cacheCommunity(_community);
+          }
+          if (_selectedChannel?.id == channelId) {
+            _selectedChannel = null;
+            _selectInitialChannel();
+          }
+        });
+      }
+      return;
+    }
+
+    if (normalizedType == 'community_deleted') {
+      final commId =
+          (payload['community_id'] ?? payload['id'] ?? '').toString();
+      if (commId == _community.id) {
+        CommunityService.removeCommunityFromCache(_community.id);
+        if (mounted) {
+          TilingLayoutController.popOrCloseChatTile(context);
+        }
+      }
+      return;
+    }
+
     if (normalizedType == 'community_voice_state_updated' ||
         normalizedType.startsWith('call_')) {
       _handleVoiceOrCallEvent(normalizedType, payload);
@@ -442,8 +476,15 @@ class _CommunityScreenState extends State<CommunityScreen> {
       await _joinCommunity();
       if (!mounted || !_community.isMember) return;
     }
+    final clearedChannel = channel.copyWith(unreadCount: 0);
+    CommunityService.resetChannelUnread(channel.id);
     setState(() {
-      _selectedChannel = channel;
+      _selectedChannel = clearedChannel;
+      _community = _community.copyWith(
+        channels: _community.channels
+            .map((c) => c.id == channel.id ? clearedChannel : c)
+            .toList(),
+      );
     });
 
     if (isDesktop) {
@@ -543,11 +584,49 @@ class _CommunityScreenState extends State<CommunityScreen> {
                               embedded: true,
                               onLeave: () => _onLocalVoiceLeft(selected.id),
                             )
-                          : GroupChatScreen(
-                              key: ValueKey('text_${selected.id}'),
-                              chatId: selected.id,
-                              groupName: '# ${selected.name}',
-                              groupAvatar: _community.avatarUrl,
+                          : Column(
+                              children: [
+                                if ((selected.isAnnouncement &&
+                                        !_community.canManageChannels) ||
+                                    !_community.canSendMessages)
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 8,
+                                    ),
+                                    color: p.surfaceSecondary,
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.campaign_rounded,
+                                          size: 16,
+                                          color: p.textSecondary,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            selected.isAnnouncement
+                                                ? 'Канал объявлений — публиковать сообщения могут только администраторы и модераторы'
+                                                : 'У вас нет прав на отправку сообщений в этом канале',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: p.textSecondary,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                Expanded(
+                                  child: GroupChatScreen(
+                                    key: ValueKey('text_${selected.id}'),
+                                    chatId: selected.id,
+                                    groupName: '# ${selected.name}',
+                                    groupAvatar: _community.avatarUrl,
+                                  ),
+                                ),
+                              ],
                             ),
                 ),
               ],
@@ -1254,6 +1333,96 @@ class _MobileCommunityChatWrapperState
   @override
   Widget build(BuildContext context) {
     final p = context.theav;
+    final primaryColor = Theme.of(context).colorScheme.primary;
+    final knownCatIds = widget.community.categories.map((c) => c.id).toSet();
+    final uncategorized = widget.community.channels
+        .where((c) =>
+            c.categoryId == null ||
+            c.categoryId!.isEmpty ||
+            !knownCatIds.contains(c.categoryId))
+        .toList();
+
+    Widget buildChannelTile(CommunityChannel ch) {
+      final selected = ch.id == _activeChannel.id;
+      final voiceCount = ch.activeVoiceParticipants.length;
+      return ListTile(
+        dense: true,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        selected: selected,
+        leading: Icon(
+          ch.isStage
+              ? Icons.podcasts_rounded
+              : ch.isVoice
+                  ? Icons.volume_up_rounded
+                  : ch.isAnnouncement
+                      ? Icons.campaign_rounded
+                      : Icons.tag_rounded,
+          size: 20,
+        ),
+        title: Text(
+          ch.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: ch.isAudioRoom && voiceCount > 0
+            ? Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00C853).withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$voiceCount',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF00C853),
+                  ),
+                ),
+              )
+            : ch.unreadCount > 0 && !selected
+                ? Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${ch.unreadCount}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  )
+                : null,
+        onTap: () {
+          Navigator.of(context).pop();
+          if (ch.isAudioRoom) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => GroupCallScreen(
+                  callId: ch.id,
+                  chatId: ch.id,
+                  userId: 'local',
+                  title: '${widget.community.name} • ${ch.name}',
+                  isStage: ch.isStage,
+                ),
+              ),
+            );
+          } else {
+            CommunityService.resetChannelUnread(ch.id);
+            setState(() => _activeChannel = ch.copyWith(unreadCount: 0));
+          }
+        },
+      );
+    }
+
     return Scaffold(
       drawerEdgeDragWidth: 44,
       drawer: Drawer(
@@ -1276,13 +1445,14 @@ class _MobileCommunityChatWrapperState
                         ),
                       ),
                     ),
-                    IconButton(
-                      icon: Icon(Icons.tune_rounded, color: p.textSecondary),
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        widget.onOpenSettings();
-                      },
-                    ),
+                    if (widget.community.canManageCommunity)
+                      IconButton(
+                        icon: Icon(Icons.tune_rounded, color: p.textSecondary),
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          widget.onOpenSettings();
+                        },
+                      ),
                   ],
                 ),
               ),
@@ -1290,53 +1460,60 @@ class _MobileCommunityChatWrapperState
               Expanded(
                 child: ListView(
                   padding: const EdgeInsets.all(8),
-                  children: widget.community.channels.map((ch) {
-                    final selected = ch.id == _activeChannel.id;
-                    return ListTile(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      selected: selected,
-                      leading: Icon(
-                        ch.isStage
-                            ? Icons.podcasts_rounded
-                            : ch.isVoice
-                                ? Icons.volume_up_rounded
-                                : Icons.tag_rounded,
-                      ),
-                      title: Text(ch.name),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        if (ch.isAudioRoom) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => GroupCallScreen(
-                                callId: ch.id,
-                                chatId: ch.id,
-                                userId: 'local',
-                                title:
-                                    '${widget.community.name} • ${ch.name}',
-                                isStage: ch.isStage,
-                              ),
+                  children: [
+                    ...uncategorized.map(buildChannelTile),
+                    ...widget.community.categories.expand((cat) {
+                      final catChannels = widget.community.channels
+                          .where((c) => c.categoryId == cat.id)
+                          .toList();
+                      return [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                          child: Text(
+                            cat.name.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.7,
+                              color: p.textTertiary,
                             ),
-                          );
-                        } else {
-                          setState(() => _activeChannel = ch);
-                        }
-                      },
-                    );
-                  }).toList(),
+                          ),
+                        ),
+                        ...catChannels.map(buildChannelTile),
+                      ];
+                    }),
+                  ],
                 ),
               ),
             ],
           ),
         ),
       ),
-      body: GroupChatScreen(
-        key: ValueKey('mobile_comm_${_activeChannel.id}'),
-        chatId: _activeChannel.id,
-        groupName: '# ${_activeChannel.name}',
-        groupAvatar: widget.community.avatarUrl,
+      body: Column(
+        children: [
+          if ((_activeChannel.isAnnouncement &&
+                  !widget.community.canManageChannels) ||
+              !widget.community.canSendMessages)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              color: p.surfaceSecondary,
+              child: Text(
+                _activeChannel.isAnnouncement
+                    ? 'Канал объявлений — только для чтения'
+                    : 'У вас нет прав на отправку сообщений в этом канале',
+                style: TextStyle(fontSize: 12, color: p.textSecondary),
+              ),
+            ),
+          Expanded(
+            child: GroupChatScreen(
+              key: ValueKey('mobile_comm_${_activeChannel.id}'),
+              chatId: _activeChannel.id,
+              groupName: '# ${_activeChannel.name}',
+              groupAvatar: widget.community.avatarUrl,
+            ),
+          ),
+        ],
       ),
     );
   }

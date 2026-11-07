@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
+import '../screens/search/search_screen.dart';
+import '../utils/swipe_back_route.dart';
 import 'chat_service.dart';
 import 'draft_service.dart';
 import 'search_service.dart';
@@ -147,13 +149,13 @@ class ChatActionsHelper {
     required String chatName,
     ValueChanged<String>? onMessageSelected,
   }) async {
-    final result = await Navigator.pushNamed(
-      context,
-      '/search',
-      arguments: {
-        'chatId': chatId,
-        'chatName': chatName,
-      },
+    final result = await Navigator.of(context).push(
+      SwipeBackPageRoute(
+        builder: (_) => SearchScreen(
+          initialChatId: chatId,
+          initialChatName: chatName,
+        ),
+      ),
     );
     if (result is Map<String, dynamic> && result['type'] == 'message') {
       final data = result['data'];

@@ -20,10 +20,11 @@ class CommunityPermissions {
   static const int moveMembers = 1 << 14; // 16384
   static const int useSoundboard = 1 << 15; // 32768
   static const int manageStage = 1 << 16; // 65536
+  static const int kickMembers = 1 << 17; // 131072
+  static const int banMembers = 1 << 18; // 262144
 
   // Legacy aliases kept for compilation compatibility
   static const int manageMessages = manageChannels;
-  static const int kickMembers = moveMembers;
 
   static const int defaultEveryone = viewChannel |
       sendMessages |
@@ -90,9 +91,19 @@ class CommunityPermissions {
       subtitle: 'Трансляция в 1440p/4K при 120–144 FPS',
     ),
     (
+      bit: prioritySpeaker,
+      title: 'Приоритетный спикер',
+      subtitle: 'Выделение голоса в голосовых комнатах',
+    ),
+    (
       bit: muteMembers,
       title: 'Модерация микрофонов (Mute)',
       subtitle: 'Отключение микрофона участников в голосовых комнатах',
+    ),
+    (
+      bit: deafenMembers,
+      title: 'Модерация звука (Deafen)',
+      subtitle: 'Отключение звука участникам в голосовых комнатах',
     ),
     (
       bit: moveMembers,
@@ -100,9 +111,24 @@ class CommunityPermissions {
       subtitle: 'Перемещение или отключение участников из голосовых комнат',
     ),
     (
+      bit: useSoundboard,
+      title: 'Использование саундборда',
+      subtitle: 'Воспроизведение звуковых эффектов в голосовых каналах',
+    ),
+    (
       bit: manageStage,
       title: 'Управление трибуной (Stage)',
       subtitle: 'Назначение спикеров и управление эфиром на трибуне',
+    ),
+    (
+      bit: kickMembers,
+      title: 'Исключение участников (Kick)',
+      subtitle: 'Удаление участников из сообщества',
+    ),
+    (
+      bit: banMembers,
+      title: 'Блокировка участников (Ban)',
+      subtitle: 'Перманентная блокировка участников в сообществе',
     ),
   ];
 }
@@ -246,6 +272,7 @@ class CommunityRole {
   final int permissions;
   final bool isHoisted;
   final bool isMentionable;
+  final bool isEveryone;
 
   const CommunityRole({
     required this.id,
@@ -256,6 +283,7 @@ class CommunityRole {
     this.permissions = 0,
     this.isHoisted = false,
     this.isMentionable = true,
+    this.isEveryone = false,
   });
 
   CommunityRole copyWith({
@@ -264,6 +292,7 @@ class CommunityRole {
     int? permissions,
     bool? isHoisted,
     bool? isMentionable,
+    bool? isEveryone,
   }) {
     return CommunityRole(
       id: id,
@@ -274,19 +303,22 @@ class CommunityRole {
       permissions: permissions ?? this.permissions,
       isHoisted: isHoisted ?? this.isHoisted,
       isMentionable: isMentionable ?? this.isMentionable,
+      isEveryone: isEveryone ?? this.isEveryone,
     );
   }
 
   factory CommunityRole.fromJson(Map<String, dynamic> json) {
+    final roleName = (json['name'] ?? 'Участник').toString();
     return CommunityRole(
       id: (json['id'] ?? '').toString(),
       communityId: (json['community_id'] ?? '').toString(),
-      name: (json['name'] ?? 'Участник').toString(),
+      name: roleName,
       colorHex: (json['color'] ?? json['color_hex'] ?? '#5C6BC0').toString(),
       position: (json['position'] as num?)?.toInt() ?? 0,
       permissions: (json['permissions'] as num?)?.toInt() ?? 0,
       isHoisted: json['is_hoisted'] == true,
       isMentionable: json['is_mentionable'] != false,
+      isEveryone: json['is_everyone'] == true || roleName == '@everyone',
     );
   }
 
@@ -299,7 +331,45 @@ class CommunityRole {
         'permissions': permissions,
         'is_hoisted': isHoisted,
         'is_mentionable': isMentionable,
+        'is_everyone': isEveryone,
       };
+}
+
+class CommunityMember {
+  final String userId;
+  final String username;
+  final String displayName;
+  final String? avatarUrl;
+  final bool isOnline;
+  final List<String> roleIds;
+
+  const CommunityMember({
+    required this.userId,
+    required this.username,
+    required this.displayName,
+    this.avatarUrl,
+    this.isOnline = false,
+    this.roleIds = const [],
+  });
+
+  factory CommunityMember.fromJson(Map<String, dynamic> json) {
+    final rawRoles = json['role_ids'];
+    final parsedRoles = <String>[];
+    if (rawRoles is List) {
+      for (final r in rawRoles) {
+        if (r != null) parsedRoles.add(r.toString());
+      }
+    }
+    final rawAvatar = json['avatar_url']?.toString().trim();
+    return CommunityMember(
+      userId: (json['user_id'] ?? '').toString(),
+      username: (json['username'] ?? '').toString(),
+      displayName: (json['display_name'] ?? json['username'] ?? 'User').toString(),
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      isOnline: json['is_online'] == true,
+      roleIds: parsedRoles,
+    );
+  }
 }
 
 class Community {
@@ -351,6 +421,17 @@ class Community {
           (myPermissions & CommunityPermissions.manageCommunity) != 0 ||
           (myPermissions & CommunityPermissions.manageChannels) != 0 ||
           (myPermissions & CommunityPermissions.manageRoles) != 0);
+
+  bool get canManageChannels =>
+      isMember &&
+      ((myPermissions & CommunityPermissions.administrator) != 0 ||
+          (myPermissions & CommunityPermissions.manageCommunity) != 0 ||
+          (myPermissions & CommunityPermissions.manageChannels) != 0);
+
+  bool get canSendMessages =>
+      isMember &&
+      ((myPermissions & CommunityPermissions.administrator) != 0 ||
+          (myPermissions & CommunityPermissions.sendMessages) != 0);
 
   Community copyWith({
     String? id,

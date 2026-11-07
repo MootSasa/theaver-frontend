@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../models/call_models.dart';
 import '../../services/call_service.dart';
+import '../../services/call_state_provider.dart';
 import '../../services/community_service.dart';
 
 /// Bottom sheet modal for playing soundboard sounds during a voice/group call.
@@ -58,7 +60,7 @@ class _SoundboardSheetState extends State<SoundboardSheet> {
     final list = await CommunityService.getSoundboardSounds(commId);
     if (!mounted) return;
     setState(() {
-      _sounds = list.isNotEmpty ? list : _defaultSounds;
+      _sounds = [...list, ..._defaultSounds];
       _isLoading = false;
     });
   }
@@ -67,10 +69,10 @@ class _SoundboardSheetState extends State<SoundboardSheet> {
     SoundboardItem(
       id: 'default_airhorn',
       communityId: '0',
-      name: 'Airhorn',
-      emoji: '📯',
+      name: 'Гудок',
+      emoji: '📢',
       audioUrl: '',
-      durationMs: 2000,
+      durationMs: 1500,
     ),
     SoundboardItem(
       id: 'default_applause',
@@ -78,15 +80,15 @@ class _SoundboardSheetState extends State<SoundboardSheet> {
       name: 'Аплодисменты',
       emoji: '👏',
       audioUrl: '',
-      durationMs: 3000,
+      durationMs: 2500,
     ),
     SoundboardItem(
-      id: 'default_ba_dum_tss',
+      id: 'default_rimshot',
       communityId: '0',
       name: 'Ба-дум-тсс',
       emoji: '🥁',
       audioUrl: '',
-      durationMs: 2000,
+      durationMs: 1200,
     ),
     SoundboardItem(
       id: 'default_crickets',
@@ -94,28 +96,50 @@ class _SoundboardSheetState extends State<SoundboardSheet> {
       name: 'Сверчки',
       emoji: '🦗',
       audioUrl: '',
-      durationMs: 3000,
+      durationMs: 2000,
     ),
     SoundboardItem(
-      id: 'default_cheering',
+      id: 'default_tada',
       communityId: '0',
-      name: 'Ликование',
+      name: 'Та-да!',
       emoji: '🎉',
       audioUrl: '',
-      durationMs: 3000,
+      durationMs: 1400,
     ),
     SoundboardItem(
-      id: 'default_gasp',
+      id: 'default_sad_trombone',
       communityId: '0',
-      name: 'Шок',
-      emoji: '😱',
+      name: 'Тромбон',
+      emoji: '🎺',
       audioUrl: '',
-      durationMs: 2000,
+      durationMs: 2200,
+    ),
+    SoundboardItem(
+      id: 'default_drumroll',
+      communityId: '0',
+      name: 'Дробь',
+      emoji: '🪘',
+      audioUrl: '',
+      durationMs: 1800,
+    ),
+    SoundboardItem(
+      id: 'default_bell',
+      communityId: '0',
+      name: 'Колокольчик',
+      emoji: '🔔',
+      audioUrl: '',
+      durationMs: 900,
     ),
   ];
 
   Future<void> _playSound(SoundboardItem item) async {
     setState(() => _currentlyPlayingId = item.id);
+    if (mounted) {
+      context.read<CallStateProvider>().playLocalSoundboardClip(
+            soundId: item.id,
+            soundUrl: item.audioUrl,
+          );
+    }
     await CallService.playSoundboard(widget.callId, item.id);
     await Future.delayed(Duration(milliseconds: item.durationMs.clamp(500, 4000)));
     if (mounted) {

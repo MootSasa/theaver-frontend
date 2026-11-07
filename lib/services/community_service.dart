@@ -65,7 +65,7 @@ class CommunityService {
       return;
     }
     final prev = _cache[sanitized.id];
-    final merged = (prev != null &&
+    var merged = (prev != null &&
             sanitized.channels.isEmpty &&
             prev.channels.isNotEmpty)
         ? sanitized.copyWith(
@@ -76,9 +76,62 @@ class CommunityService {
             roles: sanitized.roles.isNotEmpty ? sanitized.roles : prev.roles,
           )
         : sanitized;
+    if (prev != null && merged.channels.isNotEmpty) {
+      final prevUnreadByCh = <String, int>{
+        for (final ch in prev.channels) ch.id: ch.unreadCount,
+      };
+      merged = merged.copyWith(
+        channels: merged.channels.map((ch) {
+          final existingUnread = prevUnreadByCh[ch.id] ?? 0;
+          if (ch.unreadCount == 0 && existingUnread > 0) {
+            return ch.copyWith(unreadCount: existingUnread);
+          }
+          return ch;
+        }).toList(),
+      );
+    }
     _cache[sanitized.id] = merged;
     unawaited(_persistCacheToDisk());
     unawaited(_syncCommunityToDb(merged));
+  }
+
+  /// Removes a community from memory cache, SharedPreferences, and local Drift DB.
+  static void removeCommunityFromCache(String communityId) {
+    final cleanId = communityId.startsWith('community_')
+        ? communityId.substring('community_'.length)
+        : communityId;
+    if (cleanId.isEmpty) return;
+    _cache.remove(cleanId);
+    unawaited(_persistCacheToDisk());
+    unawaited(AppDatabase().deleteChat('community_$cleanId'));
+  }
+
+  /// Increments (or sets) the unread count for a community channel and updates
+  /// the aggregate unread badge on the `community_<id>` entry in Drift.
+  static void incrementChannelUnread(String chatId, {int? absoluteUnread}) {
+    if (chatId.isEmpty || chatId.startsWith('community_')) return;
+    for (final entry in _cache.entries) {
+      final comm = entry.value;
+      final idx = comm.channels.indexWhere((ch) => ch.id == chatId);
+      if (idx != -1) {
+        final target = comm.channels[idx];
+        final nextUnread = absoluteUnread ?? (target.unreadCount + 1);
+        if (nextUnread == target.unreadCount) return;
+        final updatedChannels = List<CommunityChannel>.from(comm.channels);
+        updatedChannels[idx] = target.copyWith(unreadCount: nextUnread);
+        final updatedComm = comm.copyWith(channels: updatedChannels);
+        _cache[entry.key] = updatedComm;
+        unawaited(_persistCacheToDisk());
+        unawaited(_syncCommunityToDb(updatedComm));
+        return;
+      }
+    }
+  }
+
+  /// Resets the unread count for a community channel to 0 and updates the
+  /// aggregate unread badge on the `community_<id>` entry in Drift.
+  static void resetChannelUnread(String chatId) {
+    incrementChannelUnread(chatId, absoluteUnread: 0);
   }
 
   /// Retrieves a cached [Community] by ID, if available.
@@ -261,6 +314,8 @@ class CommunityService {
     required String name,
     String description = '',
     String? avatarUrl,
+    bool isPublic = true,
+    bool skipDefaultChannels = false,
   }) async {
     try {
       final response = await http.post(
@@ -269,7 +324,8 @@ class CommunityService {
         body: jsonEncode({
           'name': name,
           'description': description,
-          'is_public': true,
+          'is_public': isPublic,
+          'skip_default_channels': skipDefaultChannels,
           if (avatarUrl != null && avatarUrl.isNotEmpty) ...{
             'avatar_url': avatarUrl,
             'icon_url': avatarUrl,
@@ -337,6 +393,7 @@ class CommunityService {
     String? name,
     String? description,
     String? avatarUrl,
+    bool? isPublic,
   }) async {
     final cleanId = communityId.startsWith('community_')
         ? communityId.substring('community_'.length)
@@ -346,6 +403,7 @@ class CommunityService {
         name: name,
         description: description,
         avatarUrl: avatarUrl,
+        isPublic: isPublic,
       );
       cacheCommunity(updated);
       return updated;
@@ -357,6 +415,7 @@ class CommunityService {
         body: jsonEncode({
           if (name != null) 'name': name,
           if (description != null) 'description': description,
+          if (isPublic != null) 'is_public': isPublic,
           if (avatarUrl != null) ...{
             'avatar_url': avatarUrl,
             'icon_url': avatarUrl,
@@ -522,6 +581,33 @@ class CommunityService {
       debugPrint('[CommunityService] createCategory error: $e');
     }
     return null;
+  }
+
+  /// Updates a category (`PATCH /api/communities/:communityId/categories/:categoryId`).
+  static Future<bool> updateCategory(
+    String communityId,
+    String categoryId, {
+    String? name,
+    int? position,
+    bool? isPrivate,
+  }) async {
+    try {
+      final response = await http.patch(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/categories/$categoryId',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({
+          if (name != null) 'name': name,
+          if (position != null) 'position': position,
+          if (isPrivate != null) 'is_private': isPrivate,
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] updateCategory error: $e');
+      return false;
+    }
   }
 
   /// Deletes a category (`DELETE /api/communities/:communityId/categories/:categoryId`).
@@ -722,10 +808,16 @@ class CommunityService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data is Map<String, dynamic>) {
-          final map = data['role'] is Map<String, dynamic>
-              ? data['role'] as Map<String, dynamic>
-              : data;
-          return CommunityRole.fromJson(map);
+          if (data['role'] is Map<String, dynamic>) {
+            return CommunityRole.fromJson(data['role'] as Map<String, dynamic>);
+          }
+          return CommunityRole(
+            id: roleId,
+            communityId: communityId,
+            name: name ?? 'Роль',
+            colorHex: colorHex ?? '#5C6BC0',
+            permissions: permissions ?? 0,
+          );
         }
       }
     } catch (e) {
@@ -734,13 +826,113 @@ class CommunityService {
     return null;
   }
 
+  /// Deletes a role (`DELETE /api/communities/:communityId/roles/:roleId`).
+  static Future<bool> deleteRole(String communityId, String roleId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/roles/$roleId',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] deleteRole error: $e');
+      return false;
+    }
+  }
+
+  /// Lists community members (`GET /api/communities/:communityId/members`).
+  static Future<List<CommunityMember>> getMembers(String communityId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/members'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['members'] is List) {
+          return (data['members'] as List)
+              .whereType<Map>()
+              .map((m) => CommunityMember.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getMembers error: $e');
+    }
+    return const [];
+  }
+
+  /// Assigns roles to a community member (`PUT /api/communities/:communityId/members/:userId/roles`).
+  static Future<bool> setMemberRoles(
+    String communityId,
+    String userId,
+    List<String> roleIds,
+  ) async {
+    try {
+      final intIds = roleIds
+          .map((id) => int.tryParse(id))
+          .whereType<int>()
+          .toList();
+      final response = await http.put(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/members/$userId/roles',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({'role_ids': intIds}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] setMemberRoles error: $e');
+      return false;
+    }
+  }
+
+  /// Kicks a member from the community (`POST /api/communities/:communityId/members/:userId/kick`).
+  static Future<bool> kickMember(String communityId, String userId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/members/$userId/kick',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] kickMember error: $e');
+      return false;
+    }
+  }
+
+  /// Bans a member from the community (`POST /api/communities/:communityId/members/:userId/ban`).
+  static Future<bool> banMember(
+    String communityId,
+    String userId, {
+    String reason = '',
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/members/$userId/ban',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({'reason': reason}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] banMember error: $e');
+      return false;
+    }
+  }
+
   /// Generates an invite code (`POST /api/communities/:communityId/invites`).
   static Future<String?> createInviteCode(String communityId) async {
     try {
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/invites'),
         headers: await _headers(),
-        body: jsonEncode({'max_uses': 0, 'expires_in_hours': 168}),
+        body: jsonEncode({'max_uses': 0, 'expires_in_seconds': 604800}),
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);

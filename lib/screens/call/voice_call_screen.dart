@@ -383,31 +383,40 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                   AnimatedBuilder(
                     animation: _pulseCtrl,
                     builder: (context, child) {
-                      final pulse = _pulseCtrl.value;
+                      final isRinging =
+                          callProvider.activeCall?.status == 'ringing';
+                      final isAnyoneSpeaking = callProvider
+                              .activeCall?.participants
+                              .any((p) => p.isSpeaking && !p.isMuted) ??
+                          false;
+                      final showPulse = isRinging || isAnyoneSpeaking;
+                      final pulse = showPulse ? _pulseCtrl.value : 0.0;
                       return Stack(
                         alignment: Alignment.center,
                         children: [
-                          Container(
-                            width: 156 + 24 * pulse,
-                            height: 156 + 24 * pulse,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: primaryColor.withValues(
-                                alpha: 0.08 * (1 - pulse * 0.5),
+                          if (showPulse) ...[
+                            Container(
+                              width: 156 + 24 * pulse,
+                              height: 156 + 24 * pulse,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: primaryColor.withValues(
+                                  alpha: 0.08 * (1 - pulse * 0.5),
+                                ),
                               ),
                             ),
-                          ),
-                          Container(
-                            width: 136 + 12 * pulse,
-                            height: 136 + 12 * pulse,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: primaryColor.withValues(alpha: 0.35),
-                                width: 1.5,
+                            Container(
+                              width: 136 + 12 * pulse,
+                              height: 136 + 12 * pulse,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: primaryColor.withValues(alpha: 0.35),
+                                  width: 1.5,
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                           child!,
                         ],
                       );

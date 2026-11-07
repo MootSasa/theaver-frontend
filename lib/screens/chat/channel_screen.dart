@@ -30,6 +30,7 @@ import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/chat_input_bar.dart';
 import '../../widgets/chat/chat_messages_list_view.dart';
+import '../../widgets/chat/chat_messages_shimmer.dart';
 import '../../widgets/chat/chat_scroll_navigator.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/message_bubble.dart';
@@ -897,11 +898,16 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   Future<void> _loadData() async {
+    // Start loading local Drift messages immediately without waiting for network calls
+    final loadMessagesFuture = _loadMessages();
+
     // Get current user ID
     final userId = await AuthService.getUserId();
-    setState(() {
-      _currentUserId = userId;
-    });
+    if (mounted) {
+      setState(() {
+        _currentUserId = userId;
+      });
+    }
 
     // Load channel details
     final chatResult = await ChatService.getChat(widget.channelId);
@@ -941,8 +947,8 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
     }
 
-    // Load messages
-    await _loadMessages();
+    // Ensure message loading has completed
+    await loadMessagesFuture;
 
     // Mark messages as read when opening channel
     await _markMessagesAsRead();
@@ -1654,7 +1660,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       debugPrint('SyncService createPendingMessage error: $e');
     }
 
-    if (pendingMsg != null) {
+    if (pendingMsg != null && mounted) {
       pendingLocalId = pendingMsg.localId;
       final profileTheme = context.read<ProfileThemeProvider>();
       var message = Message.fromDbMessage(pendingMsg);
@@ -2234,6 +2240,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                 child: ChatMessagesListView(
                   isLoading: _isLoading,
                   isLoadingMore: _isLoadingMore,
+                  isChannel: true,
                   itemCount: _messages.length,
                   scrollController: _scrollController,
                   topPadding: topPadding + (_pinnedMessage != null ? 52.0 : 0.0),
@@ -2241,7 +2248,19 @@ class _ChannelScreenState extends State<ChannelScreen>
                   emptyTitle: 'No posts yet',
                   itemBuilder: (context, index) {
                     final message = _messages[index];
-                    return _buildChannelMessage(message, index);
+                    final isNewPost = index == 0 &&
+                        (message.sendStatus == 0 ||
+                            (DateTime.tryParse(message.createdAt)
+                                    ?.toLocal()
+                                    .isAfter(DateTime.now().subtract(
+                                        const Duration(seconds: 2))) ??
+                                false));
+                    return TelegramMessageEntrance(
+                      key: ValueKey('entrance_${message.localId ?? message.id}'),
+                      animate: isNewPost,
+                      isMe: false,
+                      child: _buildChannelMessage(message, index),
+                    );
                   },
                 ),
               ),
@@ -2252,22 +2271,26 @@ class _ChannelScreenState extends State<ChannelScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (_pinnedMessage != null)
-                      PinnedMessageBanner(
-                        message: _pinnedMessage!,
-                        canUnpin: _isAdmin,
-                        onTap: () => _scrollToMessage(_pinnedMessage!.id),
-                        onUnpin: _isAdmin
-                            ? () async {
-                                final msgId = _pinnedMessage!.id;
-                                setState(() => _pinnedMessage = null);
-                                await ChatService.unpinMessage(
-                                  chatId: widget.channelId,
-                                  messageId: msgId,
-                                );
-                              }
-                            : null,
-                      ),
+                    PinnedMessageBanner(
+                      message: _pinnedMessage,
+                      canUnpin: _isAdmin,
+                      onTap: () {
+                        final msg = _pinnedMessage;
+                        if (msg != null) _scrollToMessage(msg.id);
+                      },
+                      onUnpin: _isAdmin
+                          ? () async {
+                              final msg = _pinnedMessage;
+                              if (msg == null) return;
+                              final msgId = msg.id;
+                              setState(() => _pinnedMessage = null);
+                              await ChatService.unpinMessage(
+                                chatId: widget.channelId,
+                                messageId: msgId,
+                              );
+                            }
+                          : null,
+                    ),
                     MediaNotePlayerHeader(
                       chatId: widget.channelId,
                       onScrollToActive: () {
@@ -3718,7 +3741,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         debugPrint('SyncService createPendingMessage voice error in channel: $e');
       }
 
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
@@ -3904,7 +3927,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         debugPrint('SyncService createPendingMessage video error in channel: $e');
       }
 
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(

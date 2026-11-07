@@ -1236,16 +1236,13 @@ class ProfileScreenState extends State<ProfileScreen>
           iconBuilder: (color, size) =>
               iconoir.Phone(color: color, width: size, height: size),
           label: _tr(l10n, 'call', 'Звонок'),
-          onTap: widget.onVoiceCall ??
-              () => _showToast(_tr(l10n, 'call_not_supported', 'Звонки скоро появятся')),
+          onTap: widget.onVoiceCall ?? () => _startDirectCall(isVideo: false),
         ),
         ProfileActionButtonItem(
           iconBuilder: (color, size) =>
               iconoir.VideoCamera(color: color, width: size, height: size),
           label: _tr(l10n, 'video', 'Видео'),
-          onTap: widget.onVideoCall ??
-              () => _showToast(_tr(
-                  l10n, 'video_call_not_supported', 'Видеозвонки скоро появятся')),
+          onTap: widget.onVideoCall ?? () => _startDirectCall(isVideo: true),
         ),
         ProfileActionButtonItem(
           iconBuilder: (color, size) => _isMuted
@@ -1508,6 +1505,34 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  Future<void> _startDirectCall({required bool isVideo}) async {
+    HapticUtils.tap();
+    String? cid = widget.chatId ?? _resolvedChatId;
+    if ((cid == null || cid.isEmpty) &&
+        widget.userId != null &&
+        widget.userId!.isNotEmpty) {
+      final res = await ChatService.createChat(
+        chatType: 'private',
+        participantIds: [widget.userId!],
+      );
+      if (res['success'] == true && res['chat'] is Chat) {
+        cid = (res['chat'] as Chat).id;
+        _resolvedChatId = cid;
+      }
+    }
+    if (!mounted || cid == null || cid.isEmpty) return;
+    Navigator.of(context, rootNavigator: true).pushNamed(
+      isVideo ? '/video-call' : '/voice-call',
+      arguments: {
+        'chatId': cid,
+        'userId': widget.userId,
+        'userName': _getDisplayName(),
+        'avatarUrl': _avatarUrl,
+        'isVideo': isVideo,
+      },
+    );
+  }
+
   void _toggleMute() {
     HapticUtils.selection();
     final cid = _resolvedChatId;
@@ -1528,24 +1553,27 @@ class ProfileScreenState extends State<ProfileScreen>
 
   void _handleSearchInChat() {
     HapticUtils.tap();
-    if (widget.onSearchInChat != null) {
-      Navigator.of(context).pop();
-      widget.onSearchInChat!();
-      return;
-    }
-    final cid = _resolvedChatId;
+    final cid = widget.chatId ?? _resolvedChatId;
     if (cid != null && cid.isNotEmpty) {
       ChatActionsHelper.openSearch(
         context: context,
         chatId: cid,
         chatName: _getDisplayName(),
         onMessageSelected: (msgId) {
-          if (widget.onJumpToMessageId != null) {
+          if (mounted && Navigator.of(context).canPop()) {
             Navigator.of(context).pop();
-            widget.onJumpToMessageId!(msgId);
           }
+          widget.onJumpToMessageId?.call(msgId);
         },
       );
+      return;
+    }
+    if (widget.onSearchInChat != null) {
+      final callback = widget.onSearchInChat!;
+      Navigator.of(context).pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        callback();
+      });
     }
   }
 

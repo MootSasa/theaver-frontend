@@ -1,9 +1,13 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/link_metadata_service.dart';
+import '../../services/liquid_glass_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
 
@@ -19,6 +23,8 @@ class LinkPreviewInputBar extends StatefulWidget {
   final List<String> detectedUrls;
   final ValueChanged<LinkPreviewOptions> onOptionsChanged;
   final VoidCallback onRemove;
+  final bool enabled;
+  final bool isLite;
 
   const LinkPreviewInputBar({
     Key? key,
@@ -26,6 +32,8 @@ class LinkPreviewInputBar extends StatefulWidget {
     required this.detectedUrls,
     required this.onOptionsChanged,
     required this.onRemove,
+    this.enabled = false,
+    this.isLite = false,
   }) : super(key: key);
 
   @override
@@ -83,6 +91,55 @@ class _LinkPreviewInputBarState extends State<LinkPreviewInputBar> {
 
   @override
   Widget build(BuildContext context) {
+    final content = _buildInnerContent(context);
+    if (widget.enabled) {
+      final glassProvider = context.watch<LiquidGlassProvider?>();
+      if (glassProvider != null) {
+        final style = glassProvider.createStyle(
+          context: context,
+          cornerRadius: 16,
+          refractionIndex: 1.1,
+          refractionWidth: 24,
+          isLiteOverride: widget.isLite,
+        );
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: LiquidGlassLens(
+            style: style,
+            child: content,
+          ),
+        );
+      }
+    }
+
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.black.withValues(alpha: 0.65)
+                  : Colors.white.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isDark ? Colors.white10 : Colors.black12,
+                width: 0.5,
+              ),
+            ),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInnerContent(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final primaryColor = theme.colorScheme.primary;
@@ -91,24 +148,26 @@ class _LinkPreviewInputBarState extends State<LinkPreviewInputBar> {
     final domain = _formatUrlDomain(activeUrl);
     final thumbUrl = _metadata?.imageUrl;
 
-    final bgColor = isDark
-        ? const Color(0xFF1E293B).withValues(alpha: 0.95)
-        : Colors.white.withValues(alpha: 0.95);
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
-      padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: primaryColor.withValues(alpha: 0.3),
-          width: 1,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.0, 0.12),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+        child: Column(
+          key: ValueKey('${activeUrl}_${widget.options.showAboveText}_${widget.options.preferLargeMedia}'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
           Row(
             children: [
               if (thumbUrl != null && thumbUrl.isNotEmpty) ...[
@@ -231,6 +290,7 @@ class _LinkPreviewInputBarState extends State<LinkPreviewInputBar> {
             ],
           ),
         ],
+      ),
       ),
     );
   }

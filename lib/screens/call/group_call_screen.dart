@@ -391,86 +391,137 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   ],
                 ),
                 const SizedBox(height: 18),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Индивидуальная громкость',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white70,
+                if (participant.userId != provider.currentUserId &&
+                    participant.userId != 'local') ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Индивидуальная громкость',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white70,
+                        ),
                       ),
-                    ),
-                    Text(
-                      '$vol%',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Theme.of(context).colorScheme.primary,
+                      Text(
+                        '$vol%',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
                       ),
+                    ],
+                  ),
+                  Slider(
+                    value: vol.toDouble(),
+                    min: 0,
+                    max: 200,
+                    divisions: 40,
+                    onChanged: (v) {
+                      setModalState(() => vol = v.round());
+                      provider.setParticipantVolume(participant.userId, vol);
+                    },
+                  ),
+                  if (widget.isStage && participant.role == 'listener')
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.record_voice_over_rounded,
+                        color: Color(0xFF00E676),
+                      ),
+                      title: const Text(
+                        'Пригласить на трибуну (Спикер)',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      onTap: () {
+                        provider.moderateParticipant(
+                          participant.userId,
+                          'promote_speaker',
+                        );
+                        Navigator.of(ctx).pop();
+                      },
                     ),
-                  ],
-                ),
-                Slider(
-                  value: vol.toDouble(),
-                  min: 0,
-                  max: 200,
-                  divisions: 40,
-                  onChanged: (v) {
-                    setModalState(() => vol = v.round());
-                    provider.setParticipantVolume(participant.userId, vol);
-                  },
-                ),
-                if (widget.isStage && participant.isHandRaised)
+                  if (widget.isStage && participant.role == 'speaker')
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.hearing_rounded,
+                        color: Colors.amberAccent,
+                      ),
+                      title: const Text(
+                        'Перевести в слушатели',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      onTap: () {
+                        provider.moderateParticipant(
+                          participant.userId,
+                          'demote_listener',
+                        );
+                        Navigator.of(ctx).pop();
+                      },
+                    ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: const Icon(
-                      Icons.record_voice_over_rounded,
-                      color: Color(0xFF00E676),
+                    leading: Icon(
+                      participant.serverMuted
+                          ? Icons.mic_rounded
+                          : Icons.mic_off_rounded,
+                      color: Colors.orangeAccent,
                     ),
-                    title: const Text(
-                      'Пригласить на трибуну (Спикер)',
-                      style: TextStyle(color: Colors.white),
+                    title: Text(
+                      participant.serverMuted
+                          ? 'Включить микрофон на сервере'
+                          : 'Отключить микрофон на сервере',
+                      style: const TextStyle(color: Colors.white),
                     ),
                     onTap: () {
                       provider.moderateParticipant(
                         participant.userId,
-                        'promote_speaker',
+                        participant.serverMuted ? 'unmute' : 'mute',
                       );
                       Navigator.of(ctx).pop();
                     },
                   ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(
-                    Icons.mic_off_rounded,
-                    color: Colors.orangeAccent,
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      participant.serverDeafened
+                          ? Icons.headset_rounded
+                          : Icons.headset_off_rounded,
+                      color: Colors.orangeAccent,
+                    ),
+                    title: Text(
+                      participant.serverDeafened
+                          ? 'Включить звук на сервере'
+                          : 'Отключить звук на сервере',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    onTap: () {
+                      provider.moderateParticipant(
+                        participant.userId,
+                        participant.serverDeafened ? 'undeafen' : 'deafen',
+                      );
+                      Navigator.of(ctx).pop();
+                    },
                   ),
-                  title: const Text(
-                    'Отключить микрофон на сервере',
-                    style: TextStyle(color: Colors.white),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.person_remove_rounded,
+                      color: Colors.redAccent,
+                    ),
+                    title: const Text(
+                      'Отключить от голосового канала',
+                      style: TextStyle(color: Colors.redAccent),
+                    ),
+                    onTap: () {
+                      provider.moderateParticipant(participant.userId, 'kick');
+                      Navigator.of(ctx).pop();
+                    },
                   ),
-                  onTap: () {
-                    provider.moderateParticipant(participant.userId, 'mute');
-                    Navigator.of(ctx).pop();
-                  },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(
-                    Icons.person_remove_rounded,
-                    color: Colors.redAccent,
-                  ),
-                  title: const Text(
-                    'Отключить от голосового канала',
-                    style: TextStyle(color: Colors.redAccent),
-                  ),
-                  onTap: () {
-                    provider.moderateParticipant(participant.userId, 'kick');
-                    Navigator.of(ctx).pop();
-                  },
-                ),
+                ],
               ],
             ),
           ),
@@ -1094,8 +1145,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   final resolvedAvatar =
                       AppConfig.resolveMediaUrl(participant.avatarUrl) ?? '';
                   final isSpeaking =
-                      participant.isSpeaking ||
-                      (!participant.isMuted && pIndex == 0);
+                      participant.isSpeaking && !participant.isMuted;
                   return GestureDetector(
                     onTap: () {
                       if (showVideo) {
@@ -1513,15 +1563,35 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     CallStateProvider callProvider,
     Color primaryColor,
   ) {
+    final myParticipant = callProvider.activeCall?.participants
+        .where((p) =>
+            p.userId == callProvider.currentUserId || p.userId == 'local')
+        .firstOrNull;
+    final isStageListener =
+        widget.isStage && (myParticipant?.role == 'listener');
+
     final items = <Widget>[
       _buildDockItem(
-        icon: callProvider.isMuted
+        icon: (callProvider.isMuted || isStageListener)
             ? Icons.mic_off_rounded
             : Icons.mic_rounded,
-        label: callProvider.isMuted ? 'Вкл. микр.' : 'Микрофон',
-        danger: callProvider.isMuted,
-        active: !callProvider.isMuted,
-        onTap: () => callProvider.toggleMute(),
+        label: isStageListener
+            ? 'Слушатель'
+            : (callProvider.isMuted ? 'Вкл. микр.' : 'Микрофон'),
+        danger: callProvider.isMuted || isStageListener,
+        active: !callProvider.isMuted && !isStageListener,
+        onTap: () {
+          if (isStageListener) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Поднимите руку, чтобы выступить на трибуне'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+            return;
+          }
+          callProvider.toggleMute();
+        },
       ),
       _buildDockItem(
         icon: callProvider.isDeafened
@@ -1532,16 +1602,17 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
         active: !callProvider.isDeafened,
         onTap: () => callProvider.toggleDeafen(),
       ),
-      _buildDockItem(
-        icon: callProvider.isVideoOn
-            ? Icons.videocam_rounded
-            : Icons.videocam_off_rounded,
-        label: 'Видео',
-        active: callProvider.isVideoOn,
-        accentColor: primaryColor,
-        onTap: () => callProvider.toggleVideo(),
-      ),
-      if (callProvider.isVideoOn)
+      if (!isStageListener)
+        _buildDockItem(
+          icon: callProvider.isVideoOn
+              ? Icons.videocam_rounded
+              : Icons.videocam_off_rounded,
+          label: 'Видео',
+          active: callProvider.isVideoOn,
+          accentColor: primaryColor,
+          onTap: () => callProvider.toggleVideo(),
+        ),
+      if (callProvider.isVideoOn && !isStageListener)
         _buildDockItem(
           icon: Icons.flip_camera_ios_rounded,
           label: 'Камера',
@@ -1567,7 +1638,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           accentColor: primaryColor,
           onTap: () => _onTapGoLive(callProvider),
         ),
-      ] else
+      ] else if (!isStageListener)
         _buildDockItem(
           icon: Icons.screen_share_rounded,
           label: 'Go Live',
@@ -1589,14 +1660,16 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           label: 'Реакции',
           onTap: () => _showReactionsSheet(context, callProvider),
         ),
-      _buildDockItem(
-        icon: Icons.music_note_rounded,
-        label: 'Звуки',
-        onTap: () => SoundboardSheet.show(
-          context,
-          callId: widget.callId,
+      if (!isStageListener)
+        _buildDockItem(
+          icon: Icons.music_note_rounded,
+          label: 'Звуки',
+          onTap: () => SoundboardSheet.show(
+            context,
+            callId: callProvider.activeCall?.id ?? widget.callId,
+            communityId: callProvider.activeCall?.communityId,
+          ),
         ),
-      ),
       GestureDetector(
         onTap: () async {
           HapticFeedback.mediumImpact();

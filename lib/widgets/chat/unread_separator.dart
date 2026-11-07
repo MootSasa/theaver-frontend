@@ -594,22 +594,31 @@ class _ScrollDownFabState extends State<ScrollDownFab>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<Offset> _slideAnimation;
+  late final Animation<double> _scaleAnimation;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 350),
+      duration: const Duration(milliseconds: 260),
       value: widget.visible ? 1.0 : 0.0,
     );
     _slideAnimation = Tween<Offset>(
-      begin: const Offset(1.5, 0),
+      begin: const Offset(0.0, 0.85),
       end: Offset.zero,
     ).animate(CurvedAnimation(
       parent: _controller,
       curve: Curves.easeOutCubic,
       reverseCurve: Curves.easeInCubic,
+    ));
+    _scaleAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutBack,
+      reverseCurve: Curves.easeInBack,
     ));
   }
 
@@ -651,28 +660,45 @@ class _ScrollDownFabState extends State<ScrollDownFab>
           clipBehavior: Clip.none,
           children: [
             const Icon(Icons.keyboard_arrow_down, size: 28),
-            if (widget.unreadCount > 0)
-              Positioned(
-                top: -4,
-                right: -4,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: unreadBg,
-                    shape: BoxShape.circle,
-                  ),
-                  constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                  child: Text(
-                    widget.unreadCount > 99 ? '99+' : '${widget.unreadCount}',
-                    style: TextStyle(
-                      color: unreadText,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
+            Positioned(
+              top: -4,
+              right: -4,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                switchInCurve: Curves.easeOutBack,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (badgeChild, animation) => ScaleTransition(
+                  scale: animation,
+                  child: FadeTransition(
+                    opacity: animation,
+                    child: badgeChild,
                   ),
                 ),
+                child: widget.unreadCount > 0
+                    ? Container(
+                        key: ValueKey<int>(widget.unreadCount),
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: unreadBg,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints:
+                            const BoxConstraints(minWidth: 18, minHeight: 18),
+                        child: Text(
+                          widget.unreadCount > 99
+                              ? '99+'
+                              : '${widget.unreadCount}',
+                          style: TextStyle(
+                            color: unreadText,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    : const SizedBox.shrink(key: ValueKey<int>(0)),
               ),
+            ),
           ],
         );
 
@@ -680,14 +706,17 @@ class _ScrollDownFabState extends State<ScrollDownFab>
           ignoring: !widget.visible,
           child: SlideTransition(
             position: _slideAnimation,
-            child: GestureDetector(
-              onTap: widget.onPressed,
-              child: SizedBox(
-                width: 48,
-                height: 48,
-                child: glassEnabled
-                    ? _buildGlassButton(context, isDark, child)
-                    : _buildMatteButton(context, isDark, child),
+            child: ScaleTransition(
+              scale: _scaleAnimation,
+              child: GestureDetector(
+                onTap: widget.onPressed,
+                child: SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: glassEnabled
+                      ? _buildGlassButton(context, isDark, child)
+                      : _buildMatteButton(context, isDark, child),
+                ),
               ),
             ),
           ),

@@ -92,7 +92,7 @@ class ReplyPreviewBar extends StatelessWidget {
                 width: 0.5,
               ),
             ),
-            child: _buildContent(context),
+            child: _buildAnimatedContent(context),
           ),
         ),
       ),
@@ -114,7 +114,34 @@ class ReplyPreviewBar extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: LiquidGlassLens(
         style: style,
-        child: _buildContent(context),
+        child: _buildAnimatedContent(context),
+      ),
+    );
+  }
+
+  Widget _buildAnimatedContent(BuildContext context) {
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.centerLeft,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.0, 0.15),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        ),
+        child: KeyedSubtree(
+          key: ValueKey('${replyToMessage.id}_${isQuote}_${quoteText ?? ''}'),
+          child: _buildContent(context),
+        ),
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show MaterialPageRoute;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -40,21 +41,49 @@ class CallStateProvider extends ChangeNotifier {
     'iceServers': [
       {
         'urls': [
-          'stun:stun.cloudflare.com:3478',
-          'stun:stun.l.google.com:19302',
-          'stun:stun1.l.google.com:19302',
-          'stun:stun2.l.google.com:19302',
+          'turns:turn.theaver.app:443?transport=tcp',
+          'turn:turn.theaver.app:3478?transport=udp',
+          'turn:turn.theaver.app:3478?transport=tcp',
+          'stun:turn.theaver.app:3478',
         ],
       },
     ],
+    'iceCandidatePoolSize': 2,
     'sdpSemantics': 'unified-plan',
     'ContinualGatheringPolicy': 'gather_continually',
   };
+
+  /// Elevates candidate priority for TURN relay candidates so WebRTC tests
+  /// our turn.theaver.app relay as the highest priority candidate pair,
+  /// bypassing any blocked or slow P2P/STUN checks on mobile networks.
+  static String _prioritizeRelayCandidate(String candidateStr) {
+    if (!candidateStr.contains('typ relay')) return candidateStr;
+    final parts = candidateStr.split(' ');
+    if (parts.length >= 8 && parts[6] == 'typ' && parts[7] == 'relay') {
+      // Default host priority is ~2130706431. Setting to 2140000000 ensures relay is prioritized above host & srflx.
+      parts[3] = '2140000000';
+      return parts.join(' ');
+    }
+    return candidateStr;
+  }
+
+  static String _prioritizeRelayInSdp(String sdp) {
+    if (!sdp.contains('typ relay')) return sdp;
+    final lines = sdp.split('\r\n');
+    final mapped = lines.map((line) {
+      if (line.startsWith('a=candidate:') && line.contains('typ relay')) {
+        return _prioritizeRelayCandidate(line);
+      }
+      return line;
+    });
+    return mapped.join('\r\n');
+  }
 
   void updateIceServers(List<Map<String, dynamic>>? servers) {
     if (servers == null || servers.isEmpty) return;
     _rtcConfiguration = {
       'iceServers': servers,
+      'iceCandidatePoolSize': 2,
       'sdpSemantics': 'unified-plan',
       'ContinualGatheringPolicy': 'gather_continually',
     };
@@ -68,24 +97,177 @@ class CallStateProvider extends ChangeNotifier {
   String? _otherDeviceActiveChatId;
   String? get otherDeviceActiveChatId => _otherDeviceActiveChatId;
 
-  // High-Fidelity Audio Mode
-  bool _highFidelityAudio = true;
+  // High-Fidelity Audio Mode (48kHz stereo music mode vs voice DSP mode)
+  bool _highFidelityAudio = false;
   bool get highFidelityAudio => _highFidelityAudio;
-  void toggleHighFidelityAudio() {
+  Future<void> toggleHighFidelityAudio() async {
     _highFidelityAudio = !_highFidelityAudio;
     notifyListeners();
+    if (_activeCall != null && _localUserStream != null) {
+      try {
+        final audioConstraints = _highFidelityAudio
+            ? <String, dynamic>{
+                'echoCancellation': false,
+                'noiseSuppression': false,
+                'autoGainControl': false,
+                'sampleRate': 48000,
+                'channelCount': 2,
+              }
+            : <String, dynamic>{
+                'echoCancellation': true,
+                'noiseSuppression': true,
+                'autoGainControl': true,
+              };
+        final newAudioStream = await navigator.mediaDevices.getUserMedia({
+          'audio': audioConstraints,
+          'video': false,
+        });
+        final newTracks = newAudioStream.getAudioTracks();
+        if (newTracks.isNotEmpty) {
+          final newTrack = newTracks.first;
+          newTrack.enabled = !_isMuted;
+          final oldTracks = _localUserStream?.getAudioTracks() ?? const [];
+          for (final pc in _peerConnections.values) {
+            try {
+              final senders = await pc.getSenders();
+              for (final s in senders) {
+                if (s.track?.kind == 'audio') {
+                  await s.replaceTrack(newTrack);
+                }
+              }
+            } catch (_) {}
+          }
+          for (final t in oldTracks) {
+            try {
+              t.stop();
+            } catch (_) {}
+          }
+          try {
+            await _localUserStream?.dispose();
+          } catch (_) {}
+          _localUserStream = newAudioStream;
+        }
+      } catch (e) {
+        debugPrint('[CallStateProvider] toggleHighFidelityAudio replaceTrack error: $e');
+      }
+    }
   }
 
   // Soundboard audio player
   AudioPlayer? _soundboardPlayer;
-  Future<void> _playSoundboardClip(String soundUrl) async {
+  Future<void> playLocalSoundboardClip({
+    String? soundId,
+    String? soundUrl,
+    double volume = 1.0,
+  }) =>
+      _playSoundboardClip(
+        soundUrl ?? '',
+        soundId: soundId,
+        volume: volume,
+      );
+
+  Future<void> _playSoundboardClip(
+    String soundUrl, {
+    String? soundId,
+    double volume = 1.0,
+  }) async {
     try {
       _soundboardPlayer ??= AudioPlayer();
-      await _soundboardPlayer!.setUrl(soundUrl);
+      await _soundboardPlayer!.setVolume(volume.clamp(0.0, 1.0));
+      if (soundUrl.isNotEmpty) {
+        await _soundboardPlayer!.setUrl(soundUrl);
+      } else {
+        final wavBytes = _synthesizeDefaultSoundboardWav(soundId ?? 'default_bell');
+        await _soundboardPlayer!.setAudioSource(
+          AudioSource.uri(Uri.dataFromBytes(wavBytes, mimeType: 'audio/wav')),
+        );
+      }
       await _soundboardPlayer!.play();
     } catch (e) {
       debugPrint('[CallStateProvider] soundboard play error: $e');
     }
+  }
+
+  Uint8List _synthesizeDefaultSoundboardWav(String soundId) {
+    const sampleRate = 22050;
+    List<double> freqs;
+    int durationMs;
+    switch (soundId) {
+      case 'default_airhorn':
+        freqs = [480.0, 600.0, 720.0];
+        durationMs = 650;
+        break;
+      case 'default_rimshot':
+        freqs = [190.0, 330.0, 520.0];
+        durationMs = 450;
+        break;
+      case 'default_applause':
+        freqs = [440.0, 554.37, 659.25];
+        durationMs = 600;
+        break;
+      case 'default_crickets':
+        freqs = [1800.0, 2200.0];
+        durationMs = 500;
+        break;
+      case 'default_tada':
+        freqs = [523.25, 659.25, 783.99, 1046.50];
+        durationMs = 700;
+        break;
+      case 'default_sad_trombone':
+        freqs = [392.0, 369.99, 349.23, 329.63];
+        durationMs = 800;
+        break;
+      case 'default_drumroll':
+        freqs = [140.0, 210.0];
+        durationMs = 550;
+        break;
+      default:
+        freqs = [880.0, 1318.5];
+        durationMs = 400;
+        break;
+    }
+    final numSamples = (sampleRate * durationMs) ~/ 1000;
+    final dataSize = numSamples * 2;
+    final buffer = ByteData(44 + dataSize);
+    // RIFF header
+    const header = [
+      0x52, 0x49, 0x46, 0x46, // "RIFF"
+      0x00, 0x00, 0x00, 0x00, // chunk size
+      0x57, 0x41, 0x56, 0x45, // "WAVE"
+      0x66, 0x6d, 0x74, 0x20, // "fmt "
+      16, 0, 0, 0, // PCM chunk size
+      1, 0, // AudioFormat = 1 (PCM)
+      1, 0, // NumChannels = 1
+    ];
+    for (var i = 0; i < header.length; i++) {
+      buffer.setUint8(i, header[i]);
+    }
+    buffer.setUint32(4, 36 + dataSize, Endian.little);
+    buffer.setUint32(24, sampleRate, Endian.little);
+    buffer.setUint32(28, sampleRate * 2, Endian.little);
+    buffer.setUint16(32, 2, Endian.little);
+    buffer.setUint16(34, 16, Endian.little);
+    buffer.setUint8(36, 0x64); // 'd'
+    buffer.setUint8(37, 0x61); // 'a'
+    buffer.setUint8(38, 0x74); // 't'
+    buffer.setUint8(39, 0x61); // 'a'
+    buffer.setUint32(40, dataSize, Endian.little);
+
+    for (var i = 0; i < numSamples; i++) {
+      final t = i / sampleRate;
+      final progress = i / numSamples;
+      final env = progress < 0.08
+          ? (progress / 0.08)
+          : (1.0 - ((progress - 0.08) / 0.92)).clamp(0.0, 1.0);
+      final segmentIdx = (progress * freqs.length).floor().clamp(0, freqs.length - 1);
+      final f = freqs[segmentIdx];
+      final sampleVal = (math.sin(2 * math.pi * f * t) * 0.65 +
+              math.sin(4 * math.pi * f * t) * 0.25) *
+          env;
+      final pcm = (sampleVal * 24000).round().clamp(-32768, 32767);
+      buffer.setInt16(44 + i * 2, pcm, Endian.little);
+    }
+    return buffer.buffer.asUint8List();
   }
 
   /// Transfers the active call on other device to this device via global banner.
@@ -796,6 +978,19 @@ class CallStateProvider extends ChangeNotifier {
     }
 
     _activeCall = session;
+    final myServerParticipant = session.participants
+        .where((p) => p.userId == currentUserId)
+        .firstOrNull;
+    if (myServerParticipant != null &&
+        (myServerParticipant.serverMuted ||
+            myServerParticipant.isMuted ||
+            (session.callType == 'stage' &&
+                myServerParticipant.role == 'listener'))) {
+      _isMuted = true;
+      for (final t in _localUserStream?.getAudioTracks() ?? const []) {
+        t.enabled = false;
+      }
+    }
     if (session.iceServers != null) {
       updateIceServers(session.iceServers);
     }
@@ -989,6 +1184,20 @@ class CallStateProvider extends ChangeNotifier {
           title: accepted.title.isNotEmpty ? accepted.title : incoming.title,
         );
         _activeCall = session;
+        final myAcceptedParticipant = accepted.participants
+            .where((p) => p.userId == currentUserId)
+            .firstOrNull;
+        if (myAcceptedParticipant != null &&
+            (myAcceptedParticipant.serverMuted ||
+                myAcceptedParticipant.isMuted ||
+                (session.callType == 'stage' &&
+                    myAcceptedParticipant.role == 'listener'))) {
+          _isMuted = true;
+          for (final t in _localUserStream?.getAudioTracks() ?? const []) {
+            t.enabled = false;
+          }
+          _updateLocalParticipant(isMuted: true);
+        }
         if (session.streams.isNotEmpty) {
           _focusedStream = session.streams.first;
           for (final s in session.streams) {
@@ -1064,9 +1273,9 @@ class CallStateProvider extends ChangeNotifier {
       try {
         final audioConstraints = _highFidelityAudio
             ? <String, dynamic>{
-                'echoCancellation': true,
-                'noiseSuppression': true,
-                'autoGainControl': true,
+                'echoCancellation': false,
+                'noiseSuppression': false,
+                'autoGainControl': false,
                 'sampleRate': 48000,
                 'channelCount': 2,
               }
@@ -1238,11 +1447,12 @@ class CallStateProvider extends ChangeNotifier {
     pc.onIceCandidate = (RTCIceCandidate candidate) {
       final call = _activeCall;
       if (call == null || candidate.candidate == null) return;
+      final prioritizedCandidateStr = _prioritizeRelayCandidate(candidate.candidate!);
       _sendCallSignal(call, {
         'type': 'ice_candidate',
         'target_user_id': peerId,
         'from_user_id': _currentUserId,
-        'candidate': candidate.candidate,
+        'candidate': prioritizedCandidateStr,
         'sdp_mid': candidate.sdpMid,
         'sdp_m_line_index': candidate.sdpMLineIndex,
       });
@@ -1380,27 +1590,30 @@ class CallStateProvider extends ChangeNotifier {
     try {
       final params = sender.parameters;
       if (params.encodings != null && params.encodings!.isNotEmpty) {
+        double actualTrackHeight = 0;
+        try {
+          final track = sender.track ?? _localDisplayStream?.getVideoTracks().firstOrNull;
+          if (track != null) {
+            final settings = track.getSettings();
+            final h = settings['height'];
+            final w = settings['width'];
+            if (h is num && h > 0) {
+              actualTrackHeight = h.toDouble();
+              if (w is num && w > 0 && w < h) {
+                actualTrackHeight = w.toDouble();
+              }
+            }
+          }
+        } catch (_) {}
+
         for (final encoding in params.encodings!) {
           encoding.maxBitrate = config.bitrateKbps * 1000;
           encoding.maxFramerate = config.fps;
 
           double scale = 1.0;
-          final isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-          if (isMobile) {
-            // Target longest edge for mobile screens (portrait or landscape):
-            // 720p -> 1280, 1080p -> 1920, 1440p -> 2560
-            final targetMax = config.height >= 1440
-                ? 2560.0
-                : (config.height >= 1080 ? 1920.0 : 1280.0);
-            scale = 2400.0 / targetMax;
-            if (scale < 1.0) scale = 1.0;
-          } else {
-            if (config.height > 0) {
-              scale = 1080.0 / config.height;
-              if (scale < 1.0) scale = 1.0;
-            }
+          if (config.height > 0 && actualTrackHeight > config.height) {
+            scale = (actualTrackHeight / config.height).clamp(1.0, 4.0);
           }
-          if (scale > 4.0) scale = 4.0;
           encoding.scaleResolutionDownBy = scale;
         }
         params.degradationPreference =
@@ -1490,16 +1703,23 @@ class CallStateProvider extends ChangeNotifier {
     MediaStreamTrack? track,
   ) async {
     await ensureRenderersInitialized();
+    final peerVol = ((_activeCall?.participants
+                    .where((p) => p.userId == peerId)
+                    .firstOrNull
+                    ?.volume ??
+                100) /
+            100.0)
+        .clamp(0.0, 2.0);
     for (final audioTrack in stream.getAudioTracks()) {
-      audioTrack.enabled = !_isDeafened;
+      audioTrack.enabled = !_isDeafened && peerVol > 0.0;
       try {
-        await Helper.setVolume(_isDeafened ? 0.0 : 1.0, audioTrack);
+        await Helper.setVolume(_isDeafened ? 0.0 : peerVol, audioTrack);
       } catch (_) {}
     }
     if (track != null && track.kind == 'audio') {
-      track.enabled = !_isDeafened;
+      track.enabled = !_isDeafened && peerVol > 0.0;
       try {
-        await Helper.setVolume(_isDeafened ? 0.0 : 1.0, track);
+        await Helper.setVolume(_isDeafened ? 0.0 : peerVol, track);
       } catch (_) {}
     }
 
@@ -1585,8 +1805,15 @@ class CallStateProvider extends ChangeNotifier {
 
   void _handleRemoteTrackOnly(String peerId, MediaStreamTrack track) async {
     if (track.kind == 'audio') {
-      track.enabled = !_isDeafened;
-      Helper.setVolume(_isDeafened ? 0.0 : 1.0, track).catchError((_) {});
+      final peerVol = ((_activeCall?.participants
+                      .where((p) => p.userId == peerId)
+                      .firstOrNull
+                      ?.volume ??
+                  100) /
+              100.0)
+          .clamp(0.0, 2.0);
+      track.enabled = !_isDeafened && peerVol > 0.0;
+      Helper.setVolume(_isDeafened ? 0.0 : peerVol, track).catchError((_) {});
       unawaited(_configureCallAudioSession());
     } else if (track.kind == 'video') {
       try {
@@ -1629,6 +1856,7 @@ class CallStateProvider extends ChangeNotifier {
       if (_isScreenSharing && sdp.isNotEmpty) {
         sdp = _applySdpCodecAndBitrate(sdp, _streamConfig);
       }
+      sdp = _prioritizeRelayInSdp(sdp);
       final mungedOffer = RTCSessionDescription(sdp, offer.type);
       RTCSessionDescription offerToSet = mungedOffer;
       try {
@@ -1760,14 +1988,15 @@ class CallStateProvider extends ChangeNotifier {
         }
 
         await _attachLocalTracksToPeer(pc);
-        await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
+        final remoteOfferSdp = _prioritizeRelayInSdp(sdp);
+        await pc.setRemoteDescription(RTCSessionDescription(remoteOfferSdp, 'offer'));
         await _flushPendingCandidates(fromUserId, pc);
 
         final answer = await pc.createAnswer({
           'offerToReceiveAudio': 1,
           'offerToReceiveVideo': 1,
         });
-        final answerSdp = answer.sdp ?? '';
+        final answerSdp = _prioritizeRelayInSdp(answer.sdp ?? '');
         final localAnswer = RTCSessionDescription(answerSdp, answer.type);
         await pc.setLocalDescription(localAnswer);
         try {
@@ -1799,12 +2028,13 @@ class CallStateProvider extends ChangeNotifier {
           });
         }
       } else if (signalType == 'answer') {
-        final sdp = (signal['sdp'] ?? '').toString();
+        var sdp = (signal['sdp'] ?? '').toString();
         if (sdp.isEmpty) return;
         if (pc.signalingState == RTCSignalingState.RTCSignalingStateStable) {
           await _flushPendingCandidates(fromUserId, pc);
           return;
         }
+        sdp = _prioritizeRelayInSdp(sdp);
         await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
         await _flushPendingCandidates(fromUserId, pc);
         try {
@@ -1816,8 +2046,9 @@ class CallStateProvider extends ChangeNotifier {
           }
         } catch (_) {}
       } else if (signalType == 'ice_candidate') {
-        final candidateStr = (signal['candidate'] ?? '').toString();
-        if (candidateStr.isEmpty) return;
+        final rawCandidateStr = (signal['candidate'] ?? '').toString();
+        if (rawCandidateStr.isEmpty) return;
+        final candidateStr = _prioritizeRelayCandidate(rawCandidateStr);
         final sdpMid = signal['sdp_mid']?.toString();
         final sdpMLineIndex = signal['sdp_m_line_index'] is int
             ? signal['sdp_m_line_index'] as int
@@ -1903,6 +2134,18 @@ class CallStateProvider extends ChangeNotifier {
   }
 
   Future<void> toggleMute() async {
+    final call = _activeCall;
+    if (_isMuted && call != null) {
+      final myP = call.participants
+          .where((p) => p.userId == _currentUserId || p.userId == 'local')
+          .firstOrNull;
+      if (myP != null &&
+          (myP.serverMuted ||
+              (call.callType == 'stage' && myP.role == 'listener'))) {
+        // Server-muted or stage listener cannot unmute without promotion
+        return;
+      }
+    }
     _isMuted = !_isMuted;
     final tracks = _localUserStream?.getAudioTracks() ?? const [];
     for (final t in tracks) {
@@ -1910,7 +2153,6 @@ class CallStateProvider extends ChangeNotifier {
     }
     _updateLocalParticipant(isMuted: _isMuted);
     notifyListeners();
-    final call = _activeCall;
     if (call != null) {
       if (!call.id.startsWith('local_')) {
         await CallService.updateState(call.id, isMuted: _isMuted);
@@ -1955,6 +2197,15 @@ class CallStateProvider extends ChangeNotifier {
 
   Future<void> toggleVideo() async {
     if (_isTogglingVideo) return;
+    final active = _activeCall;
+    if (!_isVideoOn && active != null && active.callType == 'stage') {
+      final myP = active.participants
+          .where((p) => p.userId == _currentUserId || p.userId == 'local')
+          .firstOrNull;
+      if (myP != null && myP.role == 'listener') {
+        return;
+      }
+    }
     _isTogglingVideo = true;
     try {
       final targetVideoState = !_isVideoOn;
@@ -2057,6 +2308,14 @@ class CallStateProvider extends ChangeNotifier {
   Future<bool> startScreenShare(StreamConfig config) async {
     final call = _activeCall;
     if (call == null) return false;
+    if (call.callType == 'stage') {
+      final myP = call.participants
+          .where((p) => p.userId == _currentUserId || p.userId == 'local')
+          .firstOrNull;
+      if (myP != null && myP.role == 'listener') {
+        return false;
+      }
+    }
     await ensureRenderersInitialized();
 
     _streamConfig = config;
@@ -2124,10 +2383,16 @@ class CallStateProvider extends ChangeNotifier {
               'frameRate': config.fps.toDouble(),
             },
           },
-          'audio': false,
+          'audio': config.includeAudio,
         };
-        displayStream =
-            await navigator.mediaDevices.getDisplayMedia(desktopConstraints);
+        try {
+          displayStream =
+              await navigator.mediaDevices.getDisplayMedia(desktopConstraints);
+        } catch (_) {
+          desktopConstraints['audio'] = false;
+          displayStream =
+              await navigator.mediaDevices.getDisplayMedia(desktopConstraints);
+        }
       } else {
         // Web
         final webConstraints = <String, dynamic>{
@@ -2441,10 +2706,25 @@ class CallStateProvider extends ChangeNotifier {
   void setParticipantVolume(String userId, int volume) {
     final call = _activeCall;
     if (call == null) return;
+    final clampedVol = volume.clamp(0, 200);
     final updated = call.participants
-        .map((p) => p.userId == userId ? p.copyWith(volume: volume) : p)
+        .map((p) => p.userId == userId ? p.copyWith(volume: clampedVol) : p)
         .toList();
     _activeCall = call.copyWith(participants: updated);
+
+    final gain = _isDeafened ? 0.0 : (clampedVol / 100.0).clamp(0.0, 2.0);
+    final streams = <MediaStream?>[
+      _remotePrimaryStreams[userId],
+      _remoteDisplayStreams[userId],
+      _participantRenderers[userId]?.srcObject,
+    ];
+    for (final s in streams) {
+      if (s == null) continue;
+      for (final audioTrack in s.getAudioTracks()) {
+        audioTrack.enabled = !_isDeafened && clampedVol > 0;
+        Helper.setVolume(gain, audioTrack).catchError((_) {});
+      }
+    }
     notifyListeners();
   }
 
@@ -2470,12 +2750,52 @@ class CallStateProvider extends ChangeNotifier {
             )
             .toList(),
       );
+    } else if (action == 'unmute') {
+      _activeCall = call.copyWith(
+        participants: call.participants
+            .map(
+              (p) => p.userId == userId
+                  ? p.copyWith(serverMuted: false)
+                  : p,
+            )
+            .toList(),
+      );
+    } else if (action == 'deafen') {
+      _activeCall = call.copyWith(
+        participants: call.participants
+            .map(
+              (p) => p.userId == userId
+                  ? p.copyWith(isDeafened: true, serverDeafened: true)
+                  : p,
+            )
+            .toList(),
+      );
+    } else if (action == 'undeafen') {
+      _activeCall = call.copyWith(
+        participants: call.participants
+            .map(
+              (p) => p.userId == userId
+                  ? p.copyWith(serverDeafened: false)
+                  : p,
+            )
+            .toList(),
+      );
     } else if (action == 'promote_speaker') {
       _activeCall = call.copyWith(
         participants: call.participants
             .map(
               (p) => p.userId == userId
                   ? p.copyWith(role: 'speaker', isHandRaised: false)
+                  : p,
+            )
+            .toList(),
+      );
+    } else if (action == 'demote_listener') {
+      _activeCall = call.copyWith(
+        participants: call.participants
+            .map(
+              (p) => p.userId == userId
+                  ? p.copyWith(role: 'listener', isMuted: true)
                   : p,
             )
             .toList(),
@@ -2688,8 +3008,63 @@ class CallStateProvider extends ChangeNotifier {
     if (_elapsed.isNegative) _elapsed = Duration.zero;
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       _elapsed += const Duration(seconds: 1);
+      unawaited(_pollVoiceActivity());
       notifyListeners();
     });
+  }
+
+  Future<void> _pollVoiceActivity() async {
+    final call = _activeCall;
+    if (call == null || _peerConnections.isEmpty) return;
+    final speakingUserIds = <String>{};
+    final myId = _currentUserId ?? 'local';
+
+    for (final entry in _peerConnections.entries) {
+      final peerId = entry.key;
+      final pc = entry.value;
+      try {
+        final stats = await pc.getStats();
+        for (final report in stats) {
+          final type = report.type.toLowerCase();
+          final vals = report.values;
+          if (type.contains('inbound-rtp') || type.contains('track')) {
+            final kind = (vals['kind'] ?? vals['mediaType'] ?? '').toString();
+            if (kind == 'audio') {
+              final level = vals['audioLevel'] ?? vals['audio_level'];
+              if (level is num && level > 0.015) {
+                speakingUserIds.add(peerId);
+              }
+            }
+          } else if (type.contains('media-source') && !_isMuted) {
+            final kind = (vals['kind'] ?? '').toString();
+            if (kind == 'audio') {
+              final level = vals['audioLevel'] ?? vals['audio_level'];
+              if (level is num && level > 0.015) {
+                speakingUserIds.add(myId);
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    final currentCall = _activeCall;
+    if (currentCall == null) return;
+    bool changed = false;
+    final updatedParticipants = currentCall.participants.map((p) {
+      final uid = (p.userId == 'local' || p.userId == myId) ? myId : p.userId;
+      final shouldSpeak = !p.isMuted && speakingUserIds.contains(uid);
+      if (p.isSpeaking != shouldSpeak) {
+        changed = true;
+        return p.copyWith(isSpeaking: shouldSpeak);
+      }
+      return p;
+    }).toList();
+
+    if (changed) {
+      _activeCall = currentCall.copyWith(participants: updatedParticipants);
+      notifyListeners();
+    }
   }
 
   void _updateLocalParticipant({
@@ -2867,6 +3242,7 @@ class CallStateProvider extends ChangeNotifier {
 
       case 'call_participant_updated':
       case 'call_state_changed':
+      case 'call_participant_moderated':
         final call = _activeCall;
         if (call == null) break;
         final callId = (payload['call_id'] ?? '').toString();
@@ -2880,25 +3256,47 @@ class CallStateProvider extends ChangeNotifier {
         } else {
           final userId = (payload['user_id'] ?? '').toString();
           final isSharing = payload['is_screen_sharing'] as bool?;
+          final srvMute = payload['server_mute'] as bool?;
+          final srvDeaf = payload['server_deaf'] as bool?;
+          final stageRole = payload['stage_role']?.toString();
+
+          if (userId == _currentUserId) {
+            if (srvMute == true || (call.callType == 'stage' && stageRole == 'listener')) {
+              _isMuted = true;
+              for (final t in _localUserStream?.getAudioTracks() ?? const []) {
+                t.enabled = false;
+              }
+              if (call.callType == 'stage' && stageRole == 'listener') {
+                if (_isVideoOn) unawaited(toggleVideo());
+                if (_isScreenSharing) unawaited(stopScreenShare());
+              }
+            }
+            if (srvDeaf == true && !_isDeafened) {
+              unawaited(toggleDeafen());
+            }
+          }
+
           final updated = call.participants.map((p) {
             if (p.userId != userId) return p;
             final selfMute =
                 (payload['self_mute'] ?? payload['is_muted']) as bool?;
-            final srvMute = payload['server_mute'] as bool?;
             final selfDeaf =
                 (payload['self_deaf'] ?? payload['is_deafened']) as bool?;
-            final srvDeaf = payload['server_deaf'] as bool?;
+            final effectiveSrvMute = srvMute ?? p.serverMuted;
+            final effectiveSrvDeaf = srvDeaf ?? p.serverDeafened;
+            final effectiveRole = stageRole ?? p.role;
             return p.copyWith(
-              isMuted: (srvMute ?? p.serverMuted) || (selfMute ?? p.isMuted),
-              isDeafened:
-                  (srvDeaf ?? p.serverDeafened) || (selfDeaf ?? p.isDeafened),
+              isMuted: effectiveSrvMute ||
+                  (call.callType == 'stage' && effectiveRole == 'listener') ||
+                  (selfMute ?? p.isMuted),
+              isDeafened: effectiveSrvDeaf || (selfDeaf ?? p.isDeafened),
               serverMuted: srvMute,
               serverDeafened: srvDeaf,
               isVideoOn: payload['is_video_on'] as bool?,
               isScreenSharing: isSharing,
               isHandRaised: payload['is_hand_raised'] as bool?,
               isSpeaking: payload['is_speaking'] as bool?,
-              role: payload['stage_role']?.toString(),
+              role: stageRole,
             );
           }).toList();
           final updatedStreams = (isSharing == false && userId.isNotEmpty)
@@ -2915,6 +3313,72 @@ class CallStateProvider extends ChangeNotifier {
               _activeCall!.streams.isNotEmpty ? _activeCall!.streams.first : null;
         }
         notifyListeners();
+        break;
+
+      case 'call_participant_kicked':
+        final call = _activeCall;
+        if (call == null) break;
+        final callId = (payload['call_id'] ?? '').toString();
+        if (callId.isNotEmpty && call.id != callId && call.chatId != payload['chat_id']?.toString()) break;
+        final kickedUserId = (payload['user_id'] ?? '').toString();
+        if (kickedUserId == _currentUserId) {
+          leaveCall(notifyServer: false);
+        } else if (kickedUserId.isNotEmpty) {
+          _closePeerConnection(kickedUserId);
+          _activeCall = call.copyWith(
+            participants: call.participants.where((p) => p.userId != kickedUserId).toList(),
+            streams: call.streams.where((s) => s.streamerId != kickedUserId).toList(),
+          );
+          notifyListeners();
+        }
+        break;
+
+      case 'call_participant_moved':
+        final call = _activeCall;
+        if (call == null) break;
+        final callId = (payload['call_id'] ?? '').toString();
+        if (callId.isNotEmpty && call.id != callId && call.chatId != payload['chat_id']?.toString()) break;
+        final movedUserId = (payload['user_id'] ?? '').toString();
+        final targetChatId = (payload['target_chat_id'] ?? '').toString();
+        if (movedUserId == _currentUserId && targetChatId.isNotEmpty) {
+          final commId = call.communityId;
+          unawaited(() async {
+            await leaveCall(notifyServer: false);
+            await startOrJoinCall(
+              chatId: targetChatId,
+              chatTitle: 'Голосовой канал',
+              callType: 'group',
+              communityId: commId,
+            );
+          }());
+        } else if (movedUserId.isNotEmpty) {
+          _closePeerConnection(movedUserId);
+          _activeCall = call.copyWith(
+            participants: call.participants.where((p) => p.userId != movedUserId).toList(),
+            streams: call.streams.where((s) => s.streamerId != movedUserId).toList(),
+          );
+          notifyListeners();
+        }
+        break;
+
+      case 'call_recording_started':
+        final call = _activeCall;
+        if (call == null) break;
+        final callId = (payload['call_id'] ?? '').toString();
+        if (callId.isEmpty || call.id == callId) {
+          _isRecording = true;
+          notifyListeners();
+        }
+        break;
+
+      case 'call_recording_stopped':
+        final call = _activeCall;
+        if (call == null) break;
+        final callId = (payload['call_id'] ?? '').toString();
+        if (callId.isEmpty || call.id == callId) {
+          _isRecording = false;
+          notifyListeners();
+        }
         break;
 
       case 'call_stream_started':
@@ -3049,7 +3513,6 @@ class CallStateProvider extends ChangeNotifier {
         }
         break;
 
-      case 'call.transferred_elsewhere':
       case 'call_transferred_elsewhere':
         final callId = (payload['call_id'] ?? '').toString();
         if (_activeCall != null && (_activeCall!.id == callId || callId.isEmpty)) {
@@ -3058,7 +3521,7 @@ class CallStateProvider extends ChangeNotifier {
         }
         break;
 
-      case 'call.user_active_call_state':
+      case 'call_user_active_call_state':
         final callId = (payload['call_id'] ?? '').toString();
         final chatId = (payload['chat_id'] ?? '').toString();
         final title = (payload['title'] ?? '').toString();
@@ -3075,7 +3538,7 @@ class CallStateProvider extends ChangeNotifier {
         notifyListeners();
         break;
 
-      case 'call.peer_device_transferred':
+      case 'call_peer_device_transferred':
         final callId = (payload['call_id'] ?? '').toString();
         final peerUserId = (payload['user_id'] ?? '').toString();
         if (_activeCall != null && (_activeCall!.id == callId || callId.isEmpty)) {
@@ -3087,11 +3550,11 @@ class CallStateProvider extends ChangeNotifier {
         }
         break;
 
-      case 'call.soundboard_played':
+      case 'call_soundboard_played':
         final soundUrl = (payload['file_url'] ?? payload['sound_url'] ?? '').toString();
-        if (soundUrl.isNotEmpty) {
-          unawaited(_playSoundboardClip(soundUrl));
-        }
+        final soundId = (payload['sound_id'] ?? '').toString();
+        final vol = (payload['volume'] is num) ? (payload['volume'] as num).toDouble() : 1.0;
+        unawaited(_playSoundboardClip(soundUrl, soundId: soundId, volume: vol));
         break;
 
       case 'call_answered_elsewhere':

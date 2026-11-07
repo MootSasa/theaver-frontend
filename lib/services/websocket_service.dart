@@ -36,6 +36,7 @@ enum WebSocketEventType {
   messagePinned,
   messageUnpinned,
   callbackQueryAnswer,
+  callEvent,
   rpcResult,
   rpcError,
 }
@@ -62,21 +63,24 @@ class WsRpcException implements Exception {
 /// WebSocket event data
 class WebSocketEvent {
   final WebSocketEventType type;
+  final String rawType;
   final Map<String, dynamic> data;
   final int timestamp;
 
   WebSocketEvent({
     required this.type,
+    this.rawType = '',
     required this.data,
     required this.timestamp,
   });
 
   factory WebSocketEvent.fromJson(Map<String, dynamic> json) {
-    final parsedType = _parseEventType(json['type'] as String?);
+    final rawTypeStr = json['type']?.toString() ?? '';
+    final parsedType = _parseEventType(rawTypeStr);
     final rawData = json['data'];
     Map<String, dynamic> eventData;
     if (rawData is Map<String, dynamic>) {
-      eventData = rawData;
+      eventData = Map<String, dynamic>.from(rawData);
     } else if (rawData is Map) {
       eventData = Map<String, dynamic>.from(rawData);
     } else if (parsedType == WebSocketEventType.rpcResult ||
@@ -85,14 +89,25 @@ class WebSocketEvent {
     } else {
       eventData = <String, dynamic>{};
     }
+    if (rawTypeStr.isNotEmpty) {
+      eventData['__raw_type'] = rawTypeStr;
+      eventData.putIfAbsent('type', () => rawTypeStr);
+    }
     return WebSocketEvent(
       type: parsedType,
+      rawType: rawTypeStr,
       data: eventData,
       timestamp: json['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     );
   }
 
   static WebSocketEventType _parseEventType(String? type) {
+    if (type != null &&
+        (type.startsWith('call.') ||
+            type.startsWith('call_') ||
+            type.startsWith('community.'))) {
+      return WebSocketEventType.callEvent;
+    }
     switch (type) {
       case 'connected':
         return WebSocketEventType.connected;

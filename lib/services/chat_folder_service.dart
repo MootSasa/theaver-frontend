@@ -55,6 +55,29 @@ class ChatFolderService extends ChangeNotifier {
     syncFromCloud();
   }
 
+  void _ensureCommunitiesFolder() {
+    for (int i = 0; i < _folders.length; i++) {
+      if (_folders[i].id == 'all' &&
+          !_folders[i].includedTypes.contains('community')) {
+        _folders[i] = _folders[i].copyWith(
+          includedTypes: [..._folders[i].includedTypes, 'community'],
+        );
+      }
+    }
+    if (!_folders.any((f) => f.id == 'communities')) {
+      _folders.add(
+        ChatFolder(
+          id: 'communities',
+          name: 'Сообщества',
+          iconName: 'community',
+          includedTypes: const ['community'],
+          order: _folders.length,
+          isDefault: false,
+        ),
+      );
+    }
+  }
+
   Future<void> _loadFromLocal() async {
     final key = _storageKey(_currentUserId);
     final jsonStr = _prefs.getString(key);
@@ -65,7 +88,10 @@ class ChatFolderService extends ChangeNotifier {
             .map((item) => ChatFolder.fromJson(item as Map<String, dynamic>))
             .toList();
         _folders.sort((a, b) => a.order.compareTo(b.order));
-        if (_folders.isNotEmpty) return;
+        if (_folders.isNotEmpty) {
+          _ensureCommunitiesFolder();
+          return;
+        }
       } catch (e) {
         debugPrint('[ChatFolderService] Error parsing local folders: $e');
       }
@@ -105,6 +131,7 @@ class ChatFolderService extends ChangeNotifier {
                 .map((item) => ChatFolder.fromJson(item as Map<String, dynamic>))
                 .toList();
             _folders.sort((a, b) => a.order.compareTo(b.order));
+            _ensureCommunitiesFolder();
             await _saveToLocal();
             notifyListeners();
           } else if (_folders.isNotEmpty) {

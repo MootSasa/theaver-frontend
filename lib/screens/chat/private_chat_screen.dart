@@ -43,6 +43,7 @@ import '../../widgets/chat/visible_message_detector.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
 import '../../widgets/chat/chat_history_calendar.dart';
+import '../../widgets/chat/chat_messages_shimmer.dart';
 import '../../widgets/chat/chat_scroll_navigator.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
@@ -2483,11 +2484,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _loadData() async {
+    // Start loading local Drift messages immediately without waiting for network calls
+    final loadMessagesFuture = _loadMessages();
+
     // Get current user ID
     final userId = await AuthService.getUserId();
-    setState(() {
-      _currentUserId = userId;
-    });
+    if (mounted) {
+      setState(() {
+        _currentUserId = userId;
+      });
+    }
 
     // Load chat details
     final chatResult = await ChatService.getChat(widget.chatId);
@@ -2561,7 +2567,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
     }
 
-    // Get unread info before loading messages
+    // Get unread info
     final unreadInfo = await ChatService.getUnreadInfo(chatId: widget.chatId);
     if (unreadInfo['success'] == true && mounted) {
       final serverUnread = unreadInfo['unread_count'] as int? ?? 0;
@@ -2593,8 +2599,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       debugPrint('Error loading keyboard height: $e');
     }
 
-    // Load messages
-    await _loadMessages();
+    // Ensure message loading has completed
+    await loadMessagesFuture;
 
     // Scroll to initial message if specified (e.g. from cross-chat navigation)
     if (widget.initialMessageId != null) {
@@ -3406,7 +3412,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
 
       // 2. Мгновенно добавить в UI со статусом "sending"
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId; // non-null capture для замыканий
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg);
@@ -3857,84 +3863,92 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         : math.max(targetPanelHeight, bottomInset);
 
     Widget buildMessageList(double bottomOffset) {
-      if (_isLoading) {
-        return const Center(child: CircularProgressIndicator());
-      }
-      if (_messages.isEmpty) {
+      Widget listContent;
+      if (_isLoading && _messages.isEmpty) {
+        listContent = ChatMessagesShimmerSkeleton(
+          key: const ValueKey('private_chat_shimmer'),
+          topPadding: topPadding,
+          bottomPadding: _inputHeight + bottomOffset,
+        );
+      } else if (_messages.isEmpty) {
         if (_isBot) {
-          return BotWelcomeCard(
-            botName: widget.otherUserName ?? _chatName,
-            botUsername: _otherUsername,
-            botInfo: _botInfo,
-            onCommandTap: (cmd) => _sendMessage(cleanText: cmd),
+          listContent = KeyedSubtree(
+            key: const ValueKey('private_chat_bot_welcome'),
+            child: BotWelcomeCard(
+              botName: widget.otherUserName ?? _chatName,
+              botUsername: _otherUsername,
+              botInfo: _botInfo,
+              onCommandTap: (cmd) => _sendMessage(cleanText: cmd),
+            ),
+          );
+        } else {
+          listContent = Center(
+            key: const ValueKey('private_chat_empty'),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.chat_bubble_outline,
+                  size: 64,
+                  color: Colors.grey[400],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No messages yet',
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Start the conversation!',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[500],
+                  ),
+                ),
+              ],
+            ),
           );
         }
-        return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.chat_bubble_outline,
-                size: 64,
-                color: Colors.grey[400],
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'No messages yet',
-                style: TextStyle(
-                  fontSize: 18,
-                  color: Colors.grey[600],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Start the conversation!',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[500],
-                ),
-              ),
-            ],
+      } else {
+        final int baseCount = _feedItems.length;
+        final int totalItemCount = baseCount + (_isLoadingMore ? 1 : 0);
+
+        listContent = ListView.builder(
+          key: const ValueKey('private_chat_messages_list'),
+          controller: _scrollController,
+          reverse: true,
+          cacheExtent: 1500.0,
+          addRepaintBoundaries: false,
+          // В glass-режиме добавляем верхний отступ,
+          // чтобы сообщения не прятались за glass AppBar
+          padding: EdgeInsets.only(
+            top: topPadding,
+            bottom: _inputHeight + bottomOffset,
           ),
+          itemCount: totalItemCount,
+          itemBuilder: (context, index) {
+            // Older messages loading shimmer at the top of the reversed list
+            if (_isLoadingMore && index == baseCount) {
+              return const ChatHistoryLoadMoreShimmer();
+            }
+
+            if (index < 0 || index >= _feedItems.length) {
+              return const SizedBox.shrink();
+            }
+
+            return _buildFeedItem(index);
+          },
         );
       }
 
-      final int baseCount = _feedItems.length;
-      final int totalItemCount = baseCount + (_isLoadingMore ? 1 : 0);
-
-      return ListView.builder(
-        controller: _scrollController,
-        reverse: true,
-        cacheExtent: 600.0,
-        addRepaintBoundaries: false,
-        // В glass-режиме добавляем верхний отступ,
-        // чтобы сообщения не прятались за glass AppBar
-        padding: EdgeInsets.only(
-          top: topPadding,
-          bottom: _inputHeight + bottomOffset,
-        ),
-        itemCount: totalItemCount,
-        itemBuilder: (context, index) {
-          // Older messages loading spinner at the top of the reversed list
-          if (_isLoadingMore && index == baseCount) {
-            return const Padding(
-              padding: EdgeInsets.all(12.0),
-              child: Center(
-                child: SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            );
-          }
-
-          if (index < 0 || index >= _feedItems.length) {
-            return const SizedBox.shrink();
-          }
-
-          return _buildFeedItem(index);
-        },
+      return AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        child: listContent,
       );
     }
 
@@ -3997,19 +4011,24 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                       height: math.max(safeBottom + 52.0, 52.0),
                     ),
                     // Баннер закреплённого сообщения
-                    if (_pinnedMessage != null)
-                      Positioned(
-                        top: MediaQuery.paddingOf(context).top +
-                            kFloatingAppBarTotalHeight +
-                            4,
-                        left: 8,
-                        right: 8,
-                        child: PinnedMessageBanner(
-                          message: _pinnedMessage!,
-                          onTap: () => _scrollToMessage(_pinnedMessage!.id),
-                          onUnpin: () => _togglePinMessage(_pinnedMessage!),
-                        ),
+                    Positioned(
+                      top: MediaQuery.paddingOf(context).top +
+                          kFloatingAppBarTotalHeight +
+                          4,
+                      left: 0,
+                      right: 0,
+                      child: PinnedMessageBanner(
+                        message: _pinnedMessage,
+                        onTap: () {
+                          final msg = _pinnedMessage;
+                          if (msg != null) _scrollToMessage(msg.id);
+                        },
+                        onUnpin: () {
+                          final msg = _pinnedMessage;
+                          if (msg != null) _togglePinMessage(msg);
+                        },
                       ),
+                    ),
                     // Плеер видео/аудио (помещаем в корневой Stack, чтобы hitTest работал)
                     Positioned(
                       top: MediaQuery.paddingOf(context).top +
@@ -4487,7 +4506,20 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       items.add(UnreadSeparator(key: _unreadSeparatorKey));
     }
 
-    items.add(messageWidget);
+    final isNewMessage = index == 0 &&
+        (message.sendStatus == 0 ||
+            (DateTime.tryParse(message.createdAt)
+                    ?.toLocal()
+                    .isAfter(DateTime.now().subtract(const Duration(seconds: 2))) ??
+                false));
+    items.add(
+      TelegramMessageEntrance(
+        key: ValueKey('entrance_${message.localId ?? message.id}'),
+        animate: isNewMessage,
+        isMe: isMe,
+        child: messageWidget,
+      ),
+    );
 
     return RepaintBoundary(
       child: Column(
@@ -4602,8 +4634,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (_isBot && _isBotCommandsOpen && commands.isNotEmpty)
+        if (_isBot && commands.isNotEmpty)
           BotCommandsPopup(
+            isOpen: _isBotCommandsOpen,
             commands: commands,
             filterQuery: _textController.text,
             onClose: () => setState(() => _isBotCommandsOpen = false),
@@ -4670,8 +4703,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           },
           slowmodeRemainingSeconds: _slowmodeRemainingSeconds,
         ),
-        if (hasReplyKb && _isReplyKeyboardOpen)
+        if (hasReplyKb)
           ReplyKeyboardPanel(
+            isOpen: _isReplyKeyboardOpen,
             rows: replyKb,
             onButtonPressed: (btnText) {
               _textController.text = btnText;
@@ -4959,7 +4993,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         debugPrint('SyncService createPendingMessage voice error: $e');
       }
 
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
@@ -5151,7 +5185,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         debugPrint('SyncService createPendingMessage error: $e');
       }
 
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
@@ -5430,9 +5464,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Start a video call with the other user
   void _startVideoCall() {
-    if (_otherUserId == null) {
+    if (_chatType == 'saved' || widget.chatId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to start call - user not found')),
+        const SnackBar(content: Text('Unable to start call in this chat')),
       );
       return;
     }
@@ -5440,8 +5474,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       '/video-call',
       arguments: {
         'chatId': widget.chatId,
-        'userId': _otherUserId,
+        'userId': _otherUserId ?? widget.otherUserId,
         'userName': _chatName,
+        'avatarUrl': _chatAvatar ?? widget.otherUserAvatar,
         'isVideo': true,
       },
     );
@@ -5449,9 +5484,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Start a voice call with the other user
   void _startVoiceCall() {
-    if (_otherUserId == null) {
+    if (_chatType == 'saved' || widget.chatId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to start call - user not found')),
+        const SnackBar(content: Text('Unable to start call in this chat')),
       );
       return;
     }
@@ -5459,8 +5494,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       '/voice-call',
       arguments: {
         'chatId': widget.chatId,
-        'userId': _otherUserId,
+        'userId': _otherUserId ?? widget.otherUserId,
         'userName': _chatName,
+        'avatarUrl': _chatAvatar ?? widget.otherUserAvatar,
         'isVideo': false,
       },
     );

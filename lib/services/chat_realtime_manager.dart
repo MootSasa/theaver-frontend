@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' as drift;
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/community_models.dart';
 import '../utils/date_time_utils.dart';
 import 'community_service.dart';
 import 'database/app_database.dart';
@@ -238,17 +239,25 @@ class ChatRealtimeManager {
             ? rawInboxHwm.toInt()
             : int.tryParse(rawInboxHwm?.toString() ?? '');
         if (unreadChatId != null) {
-          try {
-            if (inboxHwm != null && inboxHwm > 0) {
-              await AppDatabase().updateChatReadHwm(
-                unreadChatId,
-                lastReadInboxMessageId: inboxHwm,
-                unreadCount: unreadCount,
-              );
-            } else {
-              await AppDatabase().updateUnreadCount(unreadChatId, unreadCount);
-            }
-          } catch (_) {}
+          if (CommunityService.isCommunityChannelId(unreadChatId)) {
+            CommunityService.incrementChannelUnread(
+              unreadChatId,
+              absoluteUnread: unreadCount,
+            );
+          } else {
+            try {
+              if (inboxHwm != null && inboxHwm > 0) {
+                await AppDatabase().updateChatReadHwm(
+                  unreadChatId,
+                  lastReadInboxMessageId: inboxHwm,
+                  unreadCount: unreadCount,
+                );
+              } else {
+                await AppDatabase()
+                    .updateUnreadCount(unreadChatId, unreadCount);
+              }
+            } catch (_) {}
+          }
         }
         _dispatchForChat(unreadChatId,
             (s) => s.onUnreadCountUpdated?.call(event));
@@ -332,6 +341,28 @@ class ChatRealtimeManager {
         break;
 
       default:
+        final rawNorm = (event.rawType.isNotEmpty
+                ? event.rawType
+                : (event.data['__raw_type'] ?? event.data['type'] ?? '')
+                    .toString())
+            .replaceAll('.', '_');
+        final payload = event.data['payload'] is Map<String, dynamic>
+            ? event.data['payload'] as Map<String, dynamic>
+            : event.data;
+        if (rawNorm == 'community_updated') {
+          final commMap = payload['community'] is Map
+              ? Map<String, dynamic>.from(payload['community'] as Map)
+              : null;
+          if (commMap != null) {
+            CommunityService.cacheCommunity(Community.fromJson(commMap));
+          }
+        } else if (rawNorm == 'community_deleted') {
+          final commId =
+              (payload['community_id'] ?? payload['id'] ?? '').toString();
+          if (commId.isNotEmpty) {
+            CommunityService.removeCommunityFromCache(commId);
+          }
+        }
         break;
     }
   }
@@ -392,6 +423,11 @@ class ChatRealtimeManager {
       if (isCommunityChannel) {
         if (existing != null) {
           await AppDatabase().deleteChat(chatId);
+        }
+        final hasActiveSub =
+            (_subscriptions[chatId]?.isNotEmpty ?? false);
+        if (!hasActiveSub) {
+          CommunityService.incrementChannelUnread(chatId);
         }
       } else if (existing == null) {
         await AppDatabase().saveChat(ChatsCompanion(

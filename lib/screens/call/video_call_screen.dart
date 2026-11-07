@@ -1,12 +1,16 @@
+import 'dart:io' show Platform;
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import '../../models/call_models.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
+import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
 
 /// 1-on-1 Video Call & High-FPS Screen Share Screen with Liquid Glass & Material Matte
@@ -138,10 +142,19 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       }
       return;
     }
-    final config = await StreamQualitySheet.show(
-      context,
-      initialConfig: provider.streamConfig,
-    );
+    StreamConfig? config;
+    if (kIsWeb ||
+        (!Platform.isWindows && !Platform.isMacOS && !Platform.isLinux)) {
+      config = await StreamQualitySheet.show(
+        context,
+        initialConfig: provider.streamConfig,
+      );
+    } else {
+      config = await DesktopSourcePickerModal.show(
+        context,
+        initialConfig: provider.streamConfig,
+      );
+    }
     if (config != null) {
       await provider.startScreenShare(config);
     }

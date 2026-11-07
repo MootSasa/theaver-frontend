@@ -45,6 +45,7 @@ import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/chat_input_bar.dart';
 import '../../widgets/chat/chat_messages_list_view.dart';
+import '../../widgets/chat/chat_messages_shimmer.dart';
 import '../../widgets/chat/visible_message_detector.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
@@ -78,6 +79,7 @@ import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/proximity_audio_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
+import '../call/group_call_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
   static const String routeName = '/group_chat';
@@ -1582,11 +1584,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _loadData() async {
+    // Start loading local Drift messages immediately without waiting for network calls
+    final loadMessagesFuture = _loadMessages();
+
     // Get current user ID
     final userId = await AuthService.getUserId();
-    setState(() {
-      _currentUserId = userId;
-    });
+    if (mounted) {
+      setState(() {
+        _currentUserId = userId;
+      });
+    }
 
     // Load chat details
     final chatResult = await ChatService.getChat(widget.chatId);
@@ -1611,7 +1618,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     }
 
-    // Get unread info before loading messages
+    // Get unread info
     final unreadInfo = await ChatService.getUnreadInfo(chatId: widget.chatId);
     if (unreadInfo['success'] == true && mounted) {
       final serverUnread = unreadInfo['unread_count'] as int? ?? 0;
@@ -1628,8 +1635,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       } catch (_) {}
     }
 
-    // Load messages
-    await _loadMessages();
+    // Ensure message loading has completed
+    await loadMessagesFuture;
 
     // Scroll to initial message if specified
     if (widget.initialMessageId != null) {
@@ -2342,7 +2349,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         debugPrint('SyncService createPendingMessage error: $e');
       }
 
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg);
@@ -3853,6 +3860,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   groupName: displayName,
                   groupAvatar: widget.groupAvatar ?? _groupAvatar,
                   heroTag: displayName,
+                  onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
                 ),
                 onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: () => Navigator.push(
@@ -3863,6 +3871,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                         groupName: displayName,
                         groupAvatar: widget.groupAvatar ?? _groupAvatar,
                         heroTag: displayName,
+                        onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
                       ),
                     )),
                 onViewProfile: () => Navigator.push(
@@ -3873,13 +3882,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                         groupName: displayName,
                         groupAvatar: widget.groupAvatar ?? _groupAvatar,
                         heroTag: displayName,
+                        onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
                       ),
                     )),
                 onVoiceCall: () {
-                  /* TODO: Voice call */
+                  Navigator.of(context, rootNavigator: true).push(
+                    MaterialPageRoute(
+                      builder: (_) => GroupCallScreen(
+                        callId: widget.chatId,
+                        chatId: widget.chatId,
+                        userId: _currentUserId ?? 'local',
+                        title: displayName,
+                      ),
+                    ),
+                  );
                 },
                 onVideoCall: () {
-                  /* TODO: Video call */
+                  Navigator.of(context, rootNavigator: true).push(
+                    MaterialPageRoute(
+                      builder: (_) => GroupCallScreen(
+                        callId: widget.chatId,
+                        chatId: widget.chatId,
+                        userId: _currentUserId ?? 'local',
+                        title: displayName,
+                      ),
+                    ),
+                  );
                 },
                 onSearch: () {
                   ChatActionsHelper.openSearch(
@@ -3932,19 +3960,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (_pinnedMessage != null)
-                  PinnedMessageBanner(
-                    message: _pinnedMessage!,
-                    onTap: () => _scrollToMessage(_pinnedMessage!.id),
-                    onUnpin: () async {
-                      final msgId = _pinnedMessage!.id;
-                      setState(() => _pinnedMessage = null);
-                      await ChatService.unpinMessage(
-                        chatId: widget.chatId,
-                        messageId: msgId,
-                      );
-                    },
-                  ),
+                PinnedMessageBanner(
+                  message: _pinnedMessage,
+                  onTap: () {
+                    final msg = _pinnedMessage;
+                    if (msg != null) _scrollToMessage(msg.id);
+                  },
+                  onUnpin: () async {
+                    final msg = _pinnedMessage;
+                    if (msg == null) return;
+                    final msgId = msg.id;
+                    setState(() => _pinnedMessage = null);
+                    await ChatService.unpinMessage(
+                      chatId: widget.chatId,
+                      messageId: msgId,
+                    );
+                  },
+                ),
                 MediaNotePlayerHeader(
                   chatId: widget.chatId,
                   onScrollToActive: () {
@@ -4579,7 +4611,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         ),
       );
     }
-    items.add(messageWidget);
+    final isNewMessage = index == 0 &&
+        (message.sendStatus == 0 ||
+            (DateTime.tryParse(message.createdAt)
+                    ?.toLocal()
+                    .isAfter(DateTime.now().subtract(const Duration(seconds: 2))) ??
+                false));
+    items.add(
+      TelegramMessageEntrance(
+        key: ValueKey('entrance_${message.localId ?? message.id}'),
+        animate: isNewMessage,
+        isMe: message.senderId == _currentUserId,
+        child: messageWidget,
+      ),
+    );
 
     return RepaintBoundary(child: Column(children: items));
   }
@@ -4978,7 +5023,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         debugPrint('SyncService createPendingMessage voice error: $e');
       }
 
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
@@ -5170,7 +5215,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         debugPrint('SyncService createPendingMessage error: $e');
       }
 
-      if (pendingMsg != null) {
+      if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
