@@ -41,8 +41,9 @@ class CallStateProvider extends ChangeNotifier {
     'iceServers': [
       {
         'urls': [
-          'turns:turn.theaver.app:443?transport=tcp',
+          'turn:turn.theaver.app:443?transport=udp',
           'turn:turn.theaver.app:3478?transport=udp',
+          'turns:turn.theaver.app:443?transport=tcp',
           'turn:turn.theaver.app:3478?transport=tcp',
           'stun:turn.theaver.app:3478',
         ],
@@ -53,15 +54,22 @@ class CallStateProvider extends ChangeNotifier {
     'ContinualGatheringPolicy': 'gather_continually',
   };
 
-  /// Elevates candidate priority for TURN relay candidates so WebRTC tests
-  /// our turn.theaver.app relay as the highest priority candidate pair,
-  /// bypassing any blocked or slow P2P/STUN checks on mobile networks.
+  /// Prioritizes ICE candidates for high-throughput & DPI-resilient media transport:
+  /// 1) UDP TURN relay (`2140000000`) — highest priority: bypasses inter-ISP P2P DPI/CGNAT
+  ///    while keeping pure UDP transport (zero TCP head-of-line blocking for 60-144 FPS video).
+  /// 2) Private LAN host (`~2130706431` native) — direct same-Wi-Fi/LAN communication.
+  /// 3) TCP/TLS TURN relay (`2120000000`) — automatic fallback when all UDP is blocked by firewall/DPI,
+  ///    still prioritized above slow public STUN (`srflx` ~`1694498815`).
   static String _prioritizeRelayCandidate(String candidateStr) {
     if (!candidateStr.contains('typ relay')) return candidateStr;
     final parts = candidateStr.split(' ');
     if (parts.length >= 8 && parts[6] == 'typ' && parts[7] == 'relay') {
-      // Default host priority is ~2130706431. Setting to 2140000000 ensures relay is prioritized above host & srflx.
-      parts[3] = '2140000000';
+      final proto = parts[2].toLowerCase();
+      if (proto == 'udp') {
+        parts[3] = '2140000000';
+      } else {
+        parts[3] = '2120000000';
+      }
       return parts.join(' ');
     }
     return candidateStr;
@@ -1616,8 +1624,12 @@ class CallStateProvider extends ChangeNotifier {
           }
           encoding.scaleResolutionDownBy = scale;
         }
-        params.degradationPreference =
-            RTCDegradationPreference.MAINTAIN_RESOLUTION;
+        // Use MAINTAIN_RESOLUTION only when user explicitly chose 'detail' (text clarity).
+        // For 'motion' (default), use BALANCED so temporary bandwidth dips or TCP jitter
+        // never drop framerate down to <1 FPS while preserving full resolution/FPS when link allows.
+        params.degradationPreference = config.contentHint == 'detail'
+            ? RTCDegradationPreference.MAINTAIN_RESOLUTION
+            : RTCDegradationPreference.BALANCED;
         await sender.setParameters(params);
       }
     } catch (e) {
@@ -1626,15 +1638,17 @@ class CallStateProvider extends ChangeNotifier {
   }
 
   /// Munges SDP to prioritize the chosen video codec (H264, VP8, VP9, AV1)
-  /// and injects bitrate limits (b=AS, b=TIAS).
+  /// and injects bitrate limits (b=AS, b=TIAS) plus libwebrtc x-google-* bitrate hints
+  /// so GCC starts near the target bitrate instead of starving at 300 kbps.
   String _applySdpCodecAndBitrate(String sdp, StreamConfig config) {
     try {
       final lines = sdp.split('\r\n');
       final newLines = <String>[];
       final targetCodec = config.codec.toUpperCase().trim();
 
-      // Find payload types matching targetCodec
+      // Find payload types matching targetCodec and all video codec payload types
       final preferredPayloadTypes = <String>[];
+      final allVideoPayloadTypes = <String>{};
       final rtpmapRegex =
           RegExp(r'^a=rtpmap:(\d+)\s+([A-Za-z0-9_-]+)/', caseSensitive: false);
 
@@ -1643,6 +1657,13 @@ class CallStateProvider extends ChangeNotifier {
         if (match != null) {
           final pt = match.group(1)!;
           final codecName = match.group(2)!.toUpperCase();
+          if (codecName == 'H264' ||
+              codecName == 'VP8' ||
+              codecName == 'VP9' ||
+              codecName == 'AV1' ||
+              codecName == 'AV1X') {
+            allVideoPayloadTypes.add(pt);
+          }
           if (codecName == targetCodec ||
               (targetCodec == 'H264' && codecName == 'H264') ||
               (targetCodec == 'VP8' && codecName == 'VP8') ||
@@ -1653,6 +1674,13 @@ class CallStateProvider extends ChangeNotifier {
           }
         }
       }
+
+      final maxBitrateKbps = config.bitrateKbps > 0 ? config.bitrateKbps : 6000;
+      final startBitrateKbps =
+          (maxBitrateKbps * 0.75).round().clamp(1500, maxBitrateKbps);
+      final minBitrateKbps =
+          (maxBitrateKbps * 0.25).round().clamp(600, startBitrateKbps);
+      final fmtpSeenPts = <String>{};
 
       bool inVideoSection = false;
       for (int i = 0; i < lines.length; i++) {
@@ -1673,9 +1701,14 @@ class CallStateProvider extends ChangeNotifier {
             }
             newLines.add('${header.join(' ')} ${reordered.join(' ')}');
             if (config.bitrateKbps > 0) {
-              newLines.add('b=AS:${config.bitrateKbps}');
-              newLines.add('b=TIAS:${config.bitrateKbps * 1000}');
+              newLines.add('b=AS:$maxBitrateKbps');
+              newLines.add('b=TIAS:${maxBitrateKbps * 1000}');
             }
+            continue;
+          } else if (config.bitrateKbps > 0) {
+            newLines.add(line);
+            newLines.add('b=AS:$maxBitrateKbps');
+            newLines.add('b=TIAS:${maxBitrateKbps * 1000}');
             continue;
           }
         } else if (line.startsWith('m=')) {
@@ -1687,7 +1720,41 @@ class CallStateProvider extends ChangeNotifier {
           continue;
         }
 
+        if (inVideoSection && line.startsWith('a=fmtp:')) {
+          final spaceIdx = line.indexOf(' ');
+          if (spaceIdx > 7) {
+            final pt = line.substring(7, spaceIdx);
+            if (allVideoPayloadTypes.contains(pt)) {
+              fmtpSeenPts.add(pt);
+              if (!line.contains('x-google-max-bitrate')) {
+                newLines.add(
+                  '$line;x-google-max-bitrate=$maxBitrateKbps;x-google-start-bitrate=$startBitrateKbps;x-google-min-bitrate=$minBitrateKbps',
+                );
+                continue;
+              }
+            }
+          }
+        }
+
         newLines.add(line);
+
+        if (inVideoSection && line.startsWith('a=rtpmap:')) {
+          final match = rtpmapRegex.firstMatch(line);
+          if (match != null) {
+            final pt = match.group(1)!;
+            if (allVideoPayloadTypes.contains(pt)) {
+              // Check if a=fmtp:<pt> already exists later in SDP; if not, inject it right after rtpmap
+              final hasFmtp =
+                  lines.any((l) => l.startsWith('a=fmtp:$pt '));
+              if (!hasFmtp && !fmtpSeenPts.contains(pt)) {
+                fmtpSeenPts.add(pt);
+                newLines.add(
+                  'a=fmtp:$pt x-google-max-bitrate=$maxBitrateKbps;x-google-start-bitrate=$startBitrateKbps;x-google-min-bitrate=$minBitrateKbps',
+                );
+              }
+            }
+          }
+        }
       }
 
       return newLines.join('\r\n');
@@ -1996,9 +2063,17 @@ class CallStateProvider extends ChangeNotifier {
           'offerToReceiveAudio': 1,
           'offerToReceiveVideo': 1,
         });
-        final answerSdp = _prioritizeRelayInSdp(answer.sdp ?? '');
+        var answerSdp = answer.sdp ?? '';
+        if (_isScreenSharing && answerSdp.isNotEmpty) {
+          answerSdp = _applySdpCodecAndBitrate(answerSdp, _streamConfig);
+        }
+        answerSdp = _prioritizeRelayInSdp(answerSdp);
         final localAnswer = RTCSessionDescription(answerSdp, answer.type);
-        await pc.setLocalDescription(localAnswer);
+        try {
+          await pc.setLocalDescription(localAnswer);
+        } catch (_) {
+          await pc.setLocalDescription(answer);
+        }
         try {
           final senders = await pc.getSenders();
           for (final s in senders) {
@@ -2007,25 +2082,35 @@ class CallStateProvider extends ChangeNotifier {
             }
           }
         } catch (_) {}
+        final activeAnswer = await pc.getLocalDescription() ?? localAnswer;
         await _sendCallSignal(call, {
           'type': 'answer',
           'target_user_id': fromUserId,
           'from_user_id': myId,
-          'sdp': localAnswer.sdp,
-          'sdp_type': localAnswer.type,
+          'sdp': activeAnswer.sdp,
+          'sdp_type': activeAnswer.type,
         });
 
-        // If we are sharing screen or camera, renegotiate as offerer so that
-        // our preferred codecs (VP9/H264/AV1) and display tracks are fully established!
+        // Only renegotiate as offerer if we have more active local video tracks than
+        // active sending video transceivers in the answered SDP (avoids ping-pong renegotiation loops).
         if (_isScreenSharing || _isVideoOn) {
-          Future.delayed(const Duration(milliseconds: 250), () async {
-            if (_activeCall?.id == call.id && _peerConnections[fromUserId] == pc) {
-              if (pc.signalingState == RTCSignalingState.RTCSignalingStateStable) {
-                await _attachLocalTracksToPeer(pc);
-                await _createAndSendOffer(fromUserId, pc, forceRenegotiation: true);
+          final localVideoCount =
+              (_isVideoOn ? (_localCameraStream?.getVideoTracks().length ?? 0) : 0) +
+              (_isScreenSharing ? (_localDisplayStream?.getVideoTracks().length ?? 0) : 0);
+          final answerVideoSendLines = RegExp(r'^a=send(recv|only)', multiLine: true)
+              .allMatches(activeAnswer.sdp ?? '')
+              .length;
+          // 1 audio + localVideoCount video tracks expected
+          if (answerVideoSendLines < 1 + localVideoCount) {
+            Future.delayed(const Duration(milliseconds: 300), () async {
+              if (_activeCall?.id == call.id && _peerConnections[fromUserId] == pc) {
+                if (pc.signalingState == RTCSignalingState.RTCSignalingStateStable) {
+                  await _attachLocalTracksToPeer(pc);
+                  await _createAndSendOffer(fromUserId, pc, forceRenegotiation: true);
+                }
               }
-            }
-          });
+            });
+          }
         }
       } else if (signalType == 'answer') {
         var sdp = (signal['sdp'] ?? '').toString();
@@ -2336,12 +2421,32 @@ class CallStateProvider extends ChangeNotifier {
         }
         await NotificationService().promoteCallToMediaProjection();
 
+        // Align Android MediaProjection capture dimensions to multiples of 16
+        // using the user's selected resolution & FPS so hardware MediaCodec never falls back to CPU.
+        final targetW = ((config.width > 0 ? config.width : 1920) ~/ 16) * 16;
+        final targetH = ((config.height > 0 ? config.height : 1080) ~/ 16) * 16;
         final androidConstraints = <String, dynamic>{
-          'video': true,
+          'video': {
+            'mandatory': {
+              'minWidth': targetW,
+              'maxWidth': targetW,
+              'minHeight': targetH,
+              'maxHeight': targetH,
+              'minFrameRate': 15,
+              'maxFrameRate': config.fps,
+            },
+          },
           'audio': false,
         };
-        displayStream =
-            await navigator.mediaDevices.getDisplayMedia(androidConstraints);
+        try {
+          displayStream =
+              await navigator.mediaDevices.getDisplayMedia(androidConstraints);
+        } catch (_) {
+          displayStream = await navigator.mediaDevices.getDisplayMedia({
+            'video': true,
+            'audio': false,
+          });
+        }
       } else if (!kIsWeb &&
           (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
         // Desktop C++ flutter_webrtc requires desktopCapturer.getSources() to populate
