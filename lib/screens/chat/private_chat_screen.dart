@@ -32,6 +32,7 @@ import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/emoji_effect_cache_service.dart';
 import '../../services/emoji_interaction_manager.dart';
+import '../../services/sticker_service.dart';
 import '../../services/database/app_database.dart';
 import '../../l10n/app_localizations.dart';
 import 'package:drift/drift.dart' show Value;
@@ -143,6 +144,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Timer? _transitionTimer;
   late final AnimationController _emojiPanelController;
   late final Animation<double> _emojiPanelAnimation;
+  late final ChatStickerInputTarget _stickerInputTarget;
+  final List<MessageEntity> _pendingCustomEmojiEntities = [];
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
   final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
@@ -432,6 +435,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onRaiseToListenFirstUnplayed: _onRaiseToListenFirstUnplayed,
     );
     NotificationService().addActiveChat(widget.chatId);
+    _stickerInputTarget = ChatStickerInputTarget(
+      chatId: widget.chatId,
+      chatTitle: widget.otherUserName,
+      avatarUrl: widget.otherUserAvatar,
+      onInsertEmoji: _insertEmojiText,
+      onBackspace: _handleBackspace,
+      onInsertCustomEmoji: _insertCustomEmojiItem,
+      onSendSticker: _sendStickerMessage,
+      onSendGif: _sendGifMessage,
+    );
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
 
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -488,6 +502,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           activeId == _registeredTileId &&
           !Platform.isAndroid &&
           !Platform.isIOS) {
+        StickerService.instance.registerInputTarget(_stickerInputTarget);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted &&
               !_isSelectionMode &&
@@ -796,6 +811,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onFocusChanged() {
+    if (_inputFocusNode.hasFocus) {
+      StickerService.instance.registerInputTarget(_stickerInputTarget);
+    }
     if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
       DraftService().flushDraft(widget.chatId);
     }
@@ -1346,6 +1364,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onEmojiToggle() {
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    if (TilingLayoutController.instance.isWorkspaceMounted &&
+        !TilingLayoutController.instance.isSinglePane) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.setFocusedTile(_registeredTileId!);
+      }
+      TilingLayoutController.instance.toggleEmojiSidecar();
+      return;
+    }
+
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     _transitionTimer?.cancel();
 
@@ -1432,6 +1460,129 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         text: newText,
         selection: TextSelection.collapsed(offset: selection.start),
       );
+    }
+  }
+
+  void _insertEmojiText(String emoji) {
+    final text = _textController.text;
+    final selection = _textController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, emoji);
+    _textController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+  }
+
+  void _insertCustomEmojiItem(StickerItem item) {
+    final String fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final text = _textController.text;
+    final selection = _textController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0 || start > text.length) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, fallback);
+    _pendingCustomEmojiEntities.add(
+      MessageEntity(
+        type: 'custom_emoji',
+        offset: start,
+        length: fallback.length,
+        customEmojiId: item.id.toString(),
+        documentUrl: item.fileUrl,
+        format: item.format,
+      ),
+    );
+    _textController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + fallback.length),
+    );
+  }
+
+  Future<void> _sendStickerMessage(StickerItem item) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final payload = <String, dynamic>{
+      'url': item.fileUrl,
+      'width': item.width,
+      'height': item.height,
+      'format': item.format,
+      'sticker_id': item.id,
+      'pack_id': item.packId,
+      if (item.effectAnimationUrl.isNotEmpty)
+        'effect_animation_url': item.effectAnimationUrl,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: fallback,
+        messageType: 'sticker',
+        fileUrl: item.fileUrl,
+        fileName: 'sticker.${item.format}',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+              _updateFeedItems();
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      }
+    } catch (e) {
+      debugPrint('Error sending sticker: $e');
+    }
+  }
+
+  Future<void> _sendGifMessage(GifItemModel gif) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final payload = <String, dynamic>{
+      'url': gif.url,
+      'preview_url': gif.previewUrl,
+      'width': gif.width,
+      'height': gif.height,
+      'gif_id': gif.id,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: 'GIF',
+        messageType: 'gif',
+        fileUrl: gif.url,
+        fileName: 'animation.gif',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+              _updateFeedItems();
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      }
+    } catch (e) {
+      debugPrint('Error sending gif: $e');
     }
   }
 
@@ -3138,8 +3289,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     try {
       final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
       final String effectiveContentText = cleanText ?? parsed!.cleanText;
+      final List<MessageEntity> mergedEntities = [
+        ...(entities ?? (parsed?.entities ?? const <MessageEntity>[])),
+        ..._pendingCustomEmojiEntities.where(
+          (ce) =>
+              ce.offset >= 0 &&
+              ce.offset + ce.length <= effectiveContentText.length,
+        ),
+      ];
+      _pendingCustomEmojiEntities.clear();
       final List<MessageEntity>? effectiveEntities =
-          entities ?? (parsed?.entities.isNotEmpty == true ? parsed!.entities : null);
+          mergedEntities.isNotEmpty ? mergedEntities : null;
 
       // CASE 1: MULTIPLE VISUAL ATTACHMENTS (ALBUM: chunked into batches of up to 10 items)
       if (_attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
@@ -4125,6 +4285,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                   onClose: _closeEmojiPanel,
                                   height: targetPanelHeight,
                                   isVisible: isPanelRendered,
+                                  onCustomEmojiSelected: _insertCustomEmojiItem,
+                                  onStickerSelected: _sendStickerMessage,
+                                  onGifSelected: _sendGifMessage,
                                 ),
                               ),
                             ),
@@ -5890,6 +6053,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _handleTileBack,
       );
     }
+    StickerService.instance.unregisterInputTarget(_stickerInputTarget);
 
     // Clear the open chat indicator in the provider
     try {

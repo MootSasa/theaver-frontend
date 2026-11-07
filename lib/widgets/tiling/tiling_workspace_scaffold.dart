@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
@@ -17,9 +18,12 @@ import '../../screens/main/main_screen.dart';
 import '../../screens/search/search_screen.dart';
 import '../../services/community_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../services/sticker_service.dart';
 import '../../services/tiling_layout_controller.dart';
+import '../../theme/theav_theme.dart';
 import '../../utils/swipe_back_route.dart';
 import '../chat/chat_scaffold.dart';
+import '../chat/emoji_sticker_panel.dart';
 import 'static_tile_cache_boundary.dart';
 import 'tile_drag_preview_overlay.dart';
 import 'tile_resize_divider.dart';
@@ -574,15 +578,28 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   }
 
   /// Многооконный тайлинговый режим (`>= 640px`):
-  /// `[MainScreen (320..480px) | Divider | ChatWorkspaceArea]`.
+  /// `[MainScreen (320..480px) | Divider | ChatWorkspaceArea | (Docked EmojiStickerSidecar)]`.
   Widget _buildMultiPaneLayout(double totalWidth, double totalHeight) {
     const seamThickness = TileResizeDivider.kSeamThickness;
     const overlaySpan = TileResizeDivider.kOverlaySpan;
 
-    final minRightRequired = (_controller.chatTiles.length == 2 &&
+    final bool showSidecar = _controller.isEmojiSidecarOpen;
+    final bool dockSidecar =
+        showSidecar && _controller.canDockEmojiSidecar(totalWidth);
+    final double dockedSidecarWidth = dockSidecar
+        ? _controller.sidecarWidth.clamp(
+            TilingLayoutController.kMinSidecarWidth,
+            TilingLayoutController.kMaxSidecarWidth,
+          )
+        : 0.0;
+    final double dockedSidecarTotalSpan =
+        dockSidecar ? (dockedSidecarWidth + seamThickness) : 0.0;
+
+    final minChatAreaRequired = (_controller.chatTiles.length == 2 &&
             _controller.effectiveSplitAxis == Axis.horizontal)
         ? TilingLayoutController.kMinTileWidth * 2
         : TilingLayoutController.kMinTileWidth;
+    final minRightRequired = minChatAreaRequired + dockedSidecarTotalSpan;
 
     final maxAllowedLeft = math.min(
       TilingLayoutController.kMaxLeftTileWidth,
@@ -596,7 +613,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       maxAllowedLeft,
     );
     final rightLeft = leftWidth + seamThickness;
-    final rightWidth = math.max(0.0, totalWidth - rightLeft);
+    final rightWidth =
+        math.max(0.0, totalWidth - rightLeft - dockedSidecarTotalSpan);
 
     return Stack(
       fit: StackFit.expand,
@@ -615,9 +633,35 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           height: totalHeight,
           child: Container(
             key: _rightWorkspaceKey,
-            child: _buildRightChatWorkspace(),
+            child: _buildRightChatWorkspace(
+              isSidecarDocked: dockSidecar,
+            ),
           ),
         ),
+        if (dockSidecar) ...[
+          Positioned(
+            left: rightLeft + rightWidth + seamThickness,
+            top: 0,
+            width: dockedSidecarWidth,
+            height: totalHeight,
+            child: _buildEmojiStickerSidecar(isFloating: false),
+          ),
+          Positioned(
+            left: rightLeft + rightWidth + (seamThickness - overlaySpan) * 0.5,
+            top: 0,
+            width: overlaySpan,
+            height: totalHeight,
+            child: TileResizeDivider(
+              lineAxis: Axis.vertical,
+              onDelta: (dx) => _controller.updateSidecarWidth(dx),
+              onDoubleTap: () {
+                final diff = _controller.sidecarWidth -
+                    TilingLayoutController.kDefaultSidecarWidth;
+                _controller.updateSidecarWidth(diff);
+              },
+            ),
+          ),
+        ],
         Positioned(
           left: leftWidth + (seamThickness - overlaySpan) * 0.5,
           top: 0,
@@ -637,7 +681,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     );
   }
 
-  Widget _buildRightChatWorkspace() {
+  Widget _buildRightChatWorkspace({bool isSidecarDocked = false}) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final areaW = constraints.maxWidth;
@@ -645,6 +689,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
         final tiles = _controller.chatTiles;
         final drag = _controller.activeDrag;
         final dropSlot = _controller.hoveredDropSlot;
+        final bool showFloatingSidecar =
+            _controller.isEmojiSidecarOpen && !isSidecarDocked && tiles.isNotEmpty;
 
         // 1. Ни один чат не открыт -> обои темы + «Выберите чат»
         if (tiles.isEmpty) {
@@ -695,12 +741,26 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
         // 3. Стандартное отображение 1 открытого тайла чата
         if (tiles.length == 1) {
+          final double overlayW = math.min(
+            TilingLayoutController.kDefaultSidecarWidth,
+            math.max(260.0, areaW - 16.0),
+          );
           return Stack(
             fit: StackFit.expand,
             children: [
               Positioned.fill(
                 child: _buildChatTileWidget(tiles.first),
               ),
+              if (showFloatingSidecar)
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  left: math.max(8.0, areaW - overlayW - 8.0),
+                  top: 8.0,
+                  width: overlayW,
+                  height: math.max(240.0, areaH - 16.0),
+                  child: _buildEmojiStickerSidecar(isFloating: true),
+                ),
               if (drag != null && dropSlot == TilingDropSlot.replace)
                 Positioned.fill(
                   child: GlassDropPlaceholder(
@@ -716,6 +776,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
         final axis = _controller.effectiveSplitAxis;
         const seamThickness = TileResizeDivider.kSeamThickness;
         const overlaySpan = TileResizeDivider.kOverlaySpan;
+        final activeTile = _controller.focusedChatTile ?? tiles.first;
+        final bool isFirstActive = activeTile.tileId == tiles[0].tileId;
 
         if (axis == Axis.horizontal) {
           final usableW = math.max(0.0, areaW - seamThickness);
@@ -726,6 +788,18 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           final bool showFullReplaceOverlay = drag != null &&
               dropSlot == TilingDropSlot.replace &&
               _controller.hoveredTargetTileId == null;
+
+          // В режиме Flyout Overlay при 2 чатах панель открывается поверх НЕАКТИВНОГО тайла,
+          // чтобы не перекрывать чат, в котором пользователь печатает.
+          final double targetTileLeft = isFirstActive ? (firstW + seamThickness) : 0.0;
+          final double targetTileWidth = isFirstActive ? secondW : firstW;
+          final double overlayW = math.min(
+            TilingLayoutController.kDefaultSidecarWidth,
+            math.max(260.0, targetTileWidth - 16.0),
+          );
+          final double overlayLeft = isFirstActive
+              ? targetTileLeft + 8.0
+              : math.max(8.0, firstW - overlayW - 8.0);
 
           return Stack(
             fit: StackFit.expand,
@@ -760,6 +834,16 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   },
                 ),
               ),
+              if (showFloatingSidecar)
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  left: overlayLeft,
+                  top: 8.0,
+                  width: overlayW,
+                  height: math.max(240.0, areaH - 16.0),
+                  child: _buildEmojiStickerSidecar(isFloating: true),
+                ),
               if (showFullReplaceOverlay)
                 Positioned.fill(
                   child: GlassDropPlaceholder(
@@ -782,6 +866,15 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           final bool showFullReplaceOverlay = drag != null &&
               dropSlot == TilingDropSlot.replace &&
               _controller.hoveredTargetTileId == null;
+
+          // В вертикальном сплите Flyout Overlay располагается поверх НЕАКТИВНОГО тайла
+          // (над нижним чатом, если фокус в верхнем, и над верхним, если фокус в нижнем).
+          final double overlayTop =
+              isFirstActive ? (firstH + seamThickness + 8.0) : 8.0;
+          final double overlayHeight = math.max(
+            200.0,
+            (isFirstActive ? secondH : firstH) - 16.0,
+          );
 
           return Stack(
             fit: StackFit.expand,
@@ -826,6 +919,16 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   },
                 ),
               ),
+              if (showFloatingSidecar)
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  left: 8.0,
+                  top: overlayTop,
+                  width: math.max(260.0, areaW - 16.0),
+                  height: overlayHeight,
+                  child: _buildEmojiStickerSidecar(isFloating: true),
+                ),
               if (showFullReplaceOverlay)
                 Positioned.fill(
                   child: GlassDropPlaceholder(
@@ -837,6 +940,124 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           );
         }
       },
+    );
+  }
+
+  /// Единая боковая или плавающая панель Эмодзи / GIF / Стикеров в многооконном режиме.
+  /// Отображает индикатор целевого активного чата в шапке (`40px`) и направляет все клики
+  /// в [StickerService.instance.activeInputTarget].
+  Widget _buildEmojiStickerSidecar({required bool isFloating}) {
+    final theme = TheavTheme.of(context);
+    final activeTile = _controller.focusedChatTile;
+    final targetName = activeTile?.chatName.isNotEmpty == true
+        ? activeTile!.chatName
+        : 'Активный чат';
+    final initial = targetName.isNotEmpty ? targetName[0].toUpperCase() : '#';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.secondaryBg,
+        borderRadius: isFloating ? BorderRadius.circular(16) : BorderRadius.zero,
+        border: isFloating
+            ? Border.all(color: theme.dividerColor, width: 0.5)
+            : Border(
+                left: BorderSide(color: theme.dividerColor, width: 0.5),
+              ),
+        boxShadow: isFloating
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.28),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ]
+            : const [],
+      ),
+      clipBehavior: isFloating ? Clip.antiAlias : Clip.none,
+      child: Column(
+        children: [
+          Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: theme.secondaryBg,
+              border: Border(
+                bottom: BorderSide(color: theme.dividerColor, width: 0.5),
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 24,
+                  height: 24,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: theme.inputBg,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: theme.dividerColor, width: 0.5),
+                  ),
+                  child: Text(
+                    initial,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: theme.textPrimary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    targetName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: theme.textPrimary,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: _controller.closeEmojiSidecar,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: iconoir.Xmark(
+                      width: 18,
+                      height: 18,
+                      color: theme.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: EmojiStickerPanel(
+              expandToAvailableHeight: true,
+              isVisible: true,
+              onBackspace: () {
+                StickerService.instance.activeInputTarget?.onBackspace();
+              },
+              onClose: _controller.closeEmojiSidecar,
+              onEmojiSelected: (emoji) {
+                StickerService.instance.activeInputTarget?.onInsertEmoji(emoji);
+              },
+              onCustomEmojiSelected: (item) {
+                StickerService.instance.activeInputTarget
+                    ?.onInsertCustomEmoji(item);
+              },
+              onStickerSelected: (item) {
+                StickerService.instance.activeInputTarget?.onSendSticker(item);
+              },
+              onGifSelected: (gif) {
+                StickerService.instance.activeInputTarget?.onSendGif(gif);
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 

@@ -8,6 +8,7 @@ import 'package:lottie/lottie.dart';
 import '../services/emoji_effect_cache_service.dart';
 import '../services/emoji_haptic_service.dart';
 import '../services/emoji_interaction_manager.dart';
+import '../services/sticker_service.dart';
 
 class EmojiUtils {
   static const String _fontFamily = 'AppleEmoji';
@@ -32,6 +33,33 @@ class EmojiUtils {
     if (kIsWeb) return null;
     if (isApplePlatform) return _appleSystemFontFamily;
     return _fontFamily;
+  }
+
+  /// Applies the platform Apple Color Emoji font family / fallback to [base] or creates a [TextStyle].
+  static TextStyle emojiTextStyle({
+    TextStyle? base,
+    double? fontSize,
+    double? height,
+    Color? color,
+  }) {
+    final effectiveBase = base ??
+        TextStyle(
+          fontSize: fontSize,
+          height: height,
+          color: color,
+        );
+    final fam = effectiveFontFamily;
+    if (fam == null) return effectiveBase;
+    return effectiveBase.copyWith(
+      fontFamily: fam,
+      fontSize: fontSize ?? effectiveBase.fontSize,
+      height: height ?? effectiveBase.height,
+      color: color ?? effectiveBase.color,
+      fontFamilyFallback: <String>[
+        fam,
+        ...?effectiveBase.fontFamilyFallback,
+      ],
+    );
   }
 
   /// Tracks message keys that have already auto-played so rebuilding within
@@ -1084,7 +1112,7 @@ class _EmojiSilhouetteShimmerState extends State<_EmojiSilhouetteShimmer>
   }
 }
 
-/// Overlay manager for anchored emoji effects loaded from server & local cache.
+/// Overlay manager for anchored emoji and sticker effects loaded from server & local cache.
 class EmojiEffectOverlay {
   static Future<void> show({
     required BuildContext context,
@@ -1095,7 +1123,58 @@ class EmojiEffectOverlay {
   }) async {
     final composition = await EmojiEffectCacheService.instance.getEffectComposition(emoji);
     if (composition == null || !context.mounted) return;
+    _insertEffectOverlay(
+      context: context,
+      emoji: emoji,
+      composition: composition,
+      layerLink: layerLink,
+      emojiSize: emojiSize,
+      isMe: isMe,
+      effectSize: _EmojiEffectWidget.defaultEffectSize,
+    );
+  }
 
+  /// Displays a full-screen Telegram-compatible effect anchored to a sticker or custom emoji.
+  /// Uses [effectUrl] (`.tgs` or `.json` 512x512 composition) if non-empty, otherwise falls back
+  /// to the standard emoji effect for [fallbackEmoji] if available.
+  static Future<void> showStickerEffect({
+    required BuildContext context,
+    String? effectUrl,
+    String? fallbackEmoji,
+    required LayerLink layerLink,
+    required double stickerSize,
+    required bool isMe,
+  }) async {
+    LottieComposition? composition;
+    if (effectUrl != null && effectUrl.trim().isNotEmpty) {
+      composition = await StickerService.instance.getLottieComposition(effectUrl.trim());
+    }
+    if (composition == null && fallbackEmoji != null && fallbackEmoji.trim().isNotEmpty) {
+      composition = await EmojiEffectCacheService.instance.getEffectComposition(fallbackEmoji.trim());
+    }
+    if (composition == null || !context.mounted) return;
+
+    final double computedEffectSize = (stickerSize * 2.4).clamp(384.0, 512.0);
+    _insertEffectOverlay(
+      context: context,
+      emoji: fallbackEmoji ?? '',
+      composition: composition,
+      layerLink: layerLink,
+      emojiSize: stickerSize,
+      isMe: isMe,
+      effectSize: computedEffectSize,
+    );
+  }
+
+  static void _insertEffectOverlay({
+    required BuildContext context,
+    required String emoji,
+    required LottieComposition composition,
+    required LayerLink layerLink,
+    required double emojiSize,
+    required bool isMe,
+    required double effectSize,
+  }) {
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return;
 
@@ -1120,13 +1199,14 @@ class EmojiEffectOverlay {
       builder: (context) => Positioned(
         left: 0,
         top: 0,
-        width: _EmojiEffectWidget.effectSize,
-        height: _EmojiEffectWidget.effectSize,
+        width: effectSize,
+        height: effectSize,
         child: _EmojiEffectWidget(
           emoji: emoji,
           composition: composition,
           layerLink: layerLink,
           emojiSize: emojiSize,
+          customEffectSize: effectSize,
           isMe: isMe,
           jitterOffset: randomOffset,
           onComplete: safeRemove,
@@ -1139,12 +1219,13 @@ class EmojiEffectOverlay {
 }
 
 class _EmojiEffectWidget extends StatefulWidget {
-  static const double effectSize = 384.0;
+  static const double defaultEffectSize = 384.0;
 
   final String emoji;
   final LottieComposition composition;
   final LayerLink layerLink;
   final double emojiSize;
+  final double customEffectSize;
   final bool isMe;
   final Offset jitterOffset;
   final VoidCallback onComplete;
@@ -1154,6 +1235,7 @@ class _EmojiEffectWidget extends StatefulWidget {
     required this.composition,
     required this.layerLink,
     required this.emojiSize,
+    this.customEffectSize = defaultEffectSize,
     required this.isMe,
     required this.jitterOffset,
     required this.onComplete,
@@ -1174,16 +1256,18 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
       vsync: this,
       duration: widget.composition.duration,
     );
-    final effectCodepoint =
-        EmojiEffectCacheService.instance.resolveEffectCodepoint(widget.emoji);
-    if (effectCodepoint != null) {
-      final totalFrames =
-          (widget.composition.endFrame - widget.composition.startFrame).round();
-      _hapticBinding = EmojiHapticService.instance.attachEmojiEffect(
-        _controller,
-        effectCodepoint,
-        totalFrames: totalFrames > 0 ? totalFrames : 180,
-      );
+    if (widget.emoji.isNotEmpty) {
+      final effectCodepoint =
+          EmojiEffectCacheService.instance.resolveEffectCodepoint(widget.emoji);
+      if (effectCodepoint != null) {
+        final totalFrames =
+            (widget.composition.endFrame - widget.composition.startFrame).round();
+        _hapticBinding = EmojiHapticService.instance.attachEmojiEffect(
+          _controller,
+          effectCodepoint,
+          totalFrames: totalFrames > 0 ? totalFrames : 180,
+        );
+      }
     }
     _controller.forward().whenComplete(() {
       if (mounted) {
@@ -1201,9 +1285,9 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
 
   @override
   Widget build(BuildContext context) {
-    const double effectSize = _EmojiEffectWidget.effectSize;
+    final double effectSize = widget.customEffectSize;
 
-    // In Telegram's 512x512 emoji effect compositions, the emitter origin sits
+    // In Telegram's 512x512 emoji & premium sticker effect compositions, the emitter origin sits
     // at x ≈ 392 (+0.265 * effectSize from horizontal center) and y = 256 (center).
     final double hShift = widget.isMe
         ? -effectSize * 0.265

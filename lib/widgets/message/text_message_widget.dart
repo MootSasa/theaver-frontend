@@ -16,6 +16,7 @@ import '../../utils/entity_parser.dart';
 import 'code_block_widget.dart';
 import 'collapsible_blockquote_widget.dart';
 import 'spoiler_text_widget.dart';
+import '../chat/sticker_item_widget.dart';
 
 // --- НАСТРОЙКИ СТИЛЯ ТЕКСТОВОГО СООБЩЕНИЯ ---
 /// Стандартный размер шрифта сообщений.
@@ -679,13 +680,20 @@ class _DirectEntityMessageRendererState
           continue;
         }
 
-        // Check if this slice begins an inline LaTeX formula
+        // Check if this slice begins an inline LaTeX formula or custom emoji
         MessageEntity? inlineLatex;
+        MessageEntity? inlineCustomEmoji;
         for (final e in localEntities) {
           if (e.type == 'latex_inline' &&
               e.offset <= sliceStart &&
               (e.offset + e.length) >= sliceEnd) {
             inlineLatex = e;
+            break;
+          }
+          if (e.type == 'custom_emoji' &&
+              e.offset <= sliceStart &&
+              (e.offset + e.length) >= sliceEnd) {
+            inlineCustomEmoji = e;
             break;
           }
         }
@@ -724,6 +732,38 @@ class _DirectEntityMessageRendererState
 
           // Advance i past latexEnd
           while (i < sortedPoints.length - 1 && sortedPoints[i] < latexEnd) {
+            i++;
+          }
+          continue;
+        }
+
+        if (inlineCustomEmoji != null) {
+          final emojiEnd = (inlineCustomEmoji.offset + inlineCustomEmoji.length)
+              .clamp(sliceEnd, segmentText.length);
+          final fallbackChar =
+              segmentText.substring(inlineCustomEmoji.offset, emojiEnd);
+          Widget emojiChild = Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 1.0),
+            child: InlineCustomEmojiWidget(
+              customEmojiId: inlineCustomEmoji.customEmojiId ?? '',
+              directUrl: inlineCustomEmoji.documentUrl,
+              directFormat: inlineCustomEmoji.format,
+              fallbackEmoji: fallbackChar,
+              size: (rangeBaseStyle.fontSize ?? _kMessageFontSize) + 3.0,
+              isMe: widget.isMe,
+              adaptiveTextColor: rangeBaseStyle.color,
+            ),
+          );
+          if (isSpoilerHidden) {
+            emojiChild = Opacity(opacity: 0.0, child: emojiChild);
+          }
+          children.add(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: emojiChild,
+            ),
+          );
+          while (i < sortedPoints.length - 1 && sortedPoints[i] < emojiEnd) {
             i++;
           }
           continue;

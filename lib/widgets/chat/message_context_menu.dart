@@ -5,17 +5,21 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
+import '../../screens/stickers/sticker_pack_detail_sheet.dart';
 import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/message_context_menu_service.dart';
+import '../../services/sticker_service.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../theme/viewport_gradient_box.dart';
 import '../tiling/static_tile_cache_boundary.dart';
+import 'sticker_item_widget.dart';
 import 'telegram_avatar_stack.dart';
 
 class MessageContextMenu extends StatefulWidget {
@@ -147,6 +151,9 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
   // Read / Listened status & group readers sub-view state
   bool _showingReadersList = false;
+  bool _showingExpandedReactions = false;
+  final TextEditingController _reactionSearchController = TextEditingController();
+  String _reactionSearchQuery = '';
   bool _loadingReaders = false;
   List<Map<String, dynamic>> _readers = const [];
   int _readCount = 0;
@@ -409,6 +416,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
   @override
   void dispose() {
+    _reactionSearchController.dispose();
     _releaseBackdropIsolation?.call();
     _releaseBackdropIsolation = null;
     MessageContextMenuService().clearActiveBlurMessage();
@@ -1160,24 +1168,35 @@ class MessageContextMenuState extends State<MessageContextMenu>
                             maxHeight: maxAvailableHeight,
                             maxWidth: (size.width - 16.0).clamp(220.0, 300.0),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: showAbove
-                                ? CrossAxisAlignment.end
-                                : CrossAxisAlignment.start,
-                            children: [
-                              if (!_showingReadersList) ...[
-                                _buildEmojiPanel(theme, maxAvailableHeight),
-                                const SizedBox(width: 8),
-                              ],
-                              Flexible(
-                                child: _buildActionPanel(
-                                  theme,
-                                  maxAvailableHeight,
-                                  showAbove: showAbove,
-                                ),
-                              ),
-                            ],
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            switchInCurve: Curves.easeOutCubic,
+                            switchOutCurve: Curves.easeInCubic,
+                            child: _showingExpandedReactions
+                                ? _buildExpandedReactionsView(
+                                    theme,
+                                    maxAvailableHeight,
+                                  )
+                                : Row(
+                                    key: const ValueKey('compact_context_menu_row'),
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: showAbove
+                                        ? CrossAxisAlignment.end
+                                        : CrossAxisAlignment.start,
+                                    children: [
+                                      if (!_showingReadersList) ...[
+                                        _buildEmojiPanel(theme, maxAvailableHeight),
+                                        const SizedBox(width: 8),
+                                      ],
+                                      Flexible(
+                                        child: _buildActionPanel(
+                                          theme,
+                                          maxAvailableHeight,
+                                          showAbove: showAbove,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                           ),
                         ),
                       ),
@@ -1265,46 +1284,367 @@ class MessageContextMenuState extends State<MessageContextMenu>
       ),
       child: Material(
         type: MaterialType.transparency,
-        child: ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(
-            overscroll: false,
-            scrollbars: false,
-          ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: emojis.map((emoji) {
-                final isSelected = widget.selectedEmojis.contains(emoji);
-                return InkWell(
-                  onTap: () {
-                    HapticUtils.tap();
-                    _handleDismiss(() => widget.onReaction(emoji));
-                  },
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    margin:
-                        const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                    padding: const EdgeInsets.all(4),
-                    decoration: isSelected
-                        ? BoxDecoration(
-                            color: theme.colorScheme.primaryContainer,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: theme.colorScheme.primary,
-                              width: 1.5,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  if (notification is ScrollUpdateNotification &&
+                      notification.metrics.pixels -
+                              notification.metrics.maxScrollExtent >=
+                          36.0 &&
+                      !_showingExpandedReactions) {
+                    HapticUtils.selection();
+                    setState(() => _showingExpandedReactions = true);
+                  }
+                  return false;
+                },
+                child: ScrollConfiguration(
+                  behavior: ScrollConfiguration.of(context).copyWith(
+                    overscroll: false,
+                    scrollbars: false,
+                  ),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(top: 8, bottom: 2),
+                    physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics(),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: emojis.map((emoji) {
+                        final isSelected = widget.selectedEmojis.contains(emoji);
+                        return InkWell(
+                          onTap: () {
+                            HapticUtils.tap();
+                            _handleDismiss(() => widget.onReaction(emoji));
+                          },
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 2,
                             ),
-                          )
-                        : null,
-                    child: Center(
-                      child: EmojiUtils.appleEmoji(emoji, size: 24),
+                            padding: const EdgeInsets.all(4),
+                            decoration: isSelected
+                                ? BoxDecoration(
+                                    color: theme.colorScheme.primaryContainer,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: theme.colorScheme.primary,
+                                      width: 1.5,
+                                    ),
+                                  )
+                                : null,
+                            child: Center(
+                              child: EmojiUtils.appleEmoji(emoji, size: 24),
+                            ),
+                          ),
+                        );
+                      }).toList(),
                     ),
                   ),
-                );
-              }).toList(),
+                ),
+              ),
             ),
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 4),
+              child: InkWell(
+                onTap: () {
+                  HapticUtils.selection();
+                  StickerService.instance.ensureInitialized();
+                  setState(() => _showingExpandedReactions = true);
+                },
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.08),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: iconoir.NavArrowDown(
+                      width: 18,
+                      height: 18,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExpandedReactionsView(ThemeData theme, double maxHeight) {
+    final query = _reactionSearchQuery.trim().toLowerCase();
+    final installedEmojiPacks = StickerService.instance.installedEmojiPacks;
+
+    final List<String> allStandardEmojis = [];
+    final seenStd = <String>{};
+    for (final e in EmojiUtils.getFrequentEmojis()) {
+      if (query.isEmpty || e.contains(query)) {
+        if (seenStd.add(e)) allStandardEmojis.add(e);
+      }
+    }
+    for (final cat in defaultEmojiSet) {
+      for (final e in cat.emoji) {
+        if (query.isEmpty ||
+            e.emoji.contains(query) ||
+            e.name.toLowerCase().contains(query)) {
+          if (seenStd.add(e.emoji)) allStandardEmojis.add(e.emoji);
+        }
+      }
+    }
+
+    return Container(
+      key: const ValueKey('expanded_reactions_view'),
+      width: 280,
+      constraints: BoxConstraints(
+        maxHeight: math.min(maxHeight, 340.0),
+      ),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.14),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
+        ],
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  InkWell(
+                    onTap: () {
+                      HapticUtils.selection();
+                      setState(() => _showingExpandedReactions = false);
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: iconoir.NavArrowLeft(
+                        width: 18,
+                        height: 18,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Container(
+                      height: 32,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.07),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          iconoir.Search(
+                            width: 15,
+                            height: 15,
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: TextField(
+                              controller: _reactionSearchController,
+                              onChanged: (v) =>
+                                  setState(() => _reactionSearchQuery = v),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                              decoration: InputDecoration(
+                                hintText: 'Поиск реакций',
+                                hintStyle: TextStyle(
+                                  fontSize: 13,
+                                  color: theme.colorScheme.onSurface
+                                      .withValues(alpha: 0.45),
+                                ),
+                                border: InputBorder.none,
+                                isDense: true,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: CustomScrollView(
+                shrinkWrap: true,
+                physics: const ClampingScrollPhysics(),
+                slivers: [
+                  // All installed custom emoji packs 100% expanded
+                  for (final pack in installedEmojiPacks) ...[
+                    Builder(
+                      builder: (context) {
+                        final filtered = query.isEmpty
+                            ? pack.items
+                            : pack.items
+                                .where((i) => i.matchesLocalQuery(query))
+                                .toList();
+                        if (filtered.isEmpty) {
+                          return const SliverToBoxAdapter(
+                            child: SizedBox.shrink(),
+                          );
+                        }
+                        return SliverMainAxisGroup(
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                                child: Text(
+                                  pack.title.toUpperCase(),
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.4,
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.55),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            SliverPadding(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              sliver: SliverGrid(
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 6,
+                                  mainAxisSpacing: 6,
+                                  crossAxisSpacing: 6,
+                                ),
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, idx) {
+                                    final item = filtered[idx];
+                                    final keyStr = 'custom:${item.id}';
+                                    final isSelected =
+                                        widget.selectedEmojis.contains(keyStr);
+                                    return InkWell(
+                                      onTap: () {
+                                        HapticUtils.tap();
+                                        _handleDismiss(
+                                          () => widget.onReaction(keyStr),
+                                        );
+                                      },
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Container(
+                                        decoration: isSelected
+                                            ? BoxDecoration(
+                                                color: theme.colorScheme
+                                                    .primaryContainer,
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                                border: Border.all(
+                                                  color:
+                                                      theme.colorScheme.primary,
+                                                  width: 1.5,
+                                                ),
+                                              )
+                                            : null,
+                                        child: Center(
+                                          child: StickerMediaView(
+                                            fileUrl: item.fileUrl,
+                                            format: item.format,
+                                            width: 26,
+                                            height: 26,
+                                            animate: true,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  childCount: filtered.length,
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                      child: Text(
+                        'СТАНДАРТНЫЕ РЕАКЦИИ',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.4,
+                          color: theme.colorScheme.onSurface
+                              .withValues(alpha: 0.55),
+                        ),
+                      ),
+                    ),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                    sliver: SliverGrid(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 6,
+                        mainAxisSpacing: 6,
+                        crossAxisSpacing: 6,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, idx) {
+                          final emoji = allStandardEmojis[idx];
+                          final isSelected =
+                              widget.selectedEmojis.contains(emoji);
+                          return InkWell(
+                            onTap: () {
+                              HapticUtils.tap();
+                              _handleDismiss(() => widget.onReaction(emoji));
+                            },
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              decoration: isSelected
+                                  ? BoxDecoration(
+                                      color:
+                                          theme.colorScheme.primaryContainer,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: theme.colorScheme.primary,
+                                        width: 1.5,
+                                      ),
+                                    )
+                                  : null,
+                              child: Center(
+                                child: EmojiUtils.appleEmoji(emoji, size: 24),
+                              ),
+                            ),
+                          );
+                        },
+                        childCount: allStandardEmojis.length,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1438,6 +1778,79 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               theme,
                               enabled: !isSending,
                             ),
+                          if (widget.message != null &&
+                              (widget.message!.messageType == 'gif' ||
+                                  widget.message!.messageType == 'animation') &&
+                              widget.message!.fileUrl != null)
+                            _buildActionItem(
+                              (c) => StickerService.instance.isGifSaved(
+                                widget.message!.id,
+                                widget.message!.fileUrl!,
+                              )
+                                  ? iconoir.BookmarkSolid(
+                                      color: c,
+                                      width: 20,
+                                      height: 20,
+                                    )
+                                  : iconoir.Bookmark(
+                                      color: c,
+                                      width: 20,
+                                      height: 20,
+                                    ),
+                              StickerService.instance.isGifSaved(
+                                widget.message!.id,
+                                widget.message!.fileUrl!,
+                              )
+                                  ? 'Удалить из сохранённых GIF'
+                                  : 'Сохранить GIF',
+                              () {
+                                final msg = widget.message!;
+                                final url = msg.fileUrl!;
+                                if (StickerService.instance.isGifSaved(
+                                  msg.id,
+                                  url,
+                                )) {
+                                  StickerService.instance.removeSavedGif(msg.id);
+                                } else {
+                                  StickerService.instance.saveGif(
+                                    GifItemModel(
+                                      id: msg.id,
+                                      url: url,
+                                      previewUrl: url,
+                                    ),
+                                  );
+                                }
+                              },
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.message != null &&
+                              widget.message!.messageType == 'sticker') ...[
+                            if (widget.message!.mediaPayload?['pack_id'] !=
+                                    null &&
+                                widget.message!.mediaPayload!['pack_id']
+                                    .toString()
+                                    .isNotEmpty)
+                              _buildActionItem(
+                                (c) => iconoir.Folder(
+                                  color: c,
+                                  width: 20,
+                                  height: 20,
+                                ),
+                                'Открыть набор',
+                                () {
+                                  final packId = widget
+                                      .message!.mediaPayload!['pack_id']
+                                      .toString();
+                                  StickerPackDetailSheet.show(
+                                    context,
+                                    packIdOrSlug: packId,
+                                  );
+                                },
+                                theme,
+                                enabled: !isSending,
+                              ),
+                          ],
                           const Divider(height: 1),
                           _buildActionItem(
                             (c) => iconoir.Trash(color: c, width: 20, height: 20),

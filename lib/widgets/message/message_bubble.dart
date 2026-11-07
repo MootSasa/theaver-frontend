@@ -35,6 +35,8 @@ import 'poll_message_widget.dart';
 import 'call_message_widget.dart';
 import 'unsupported_message_widget.dart';
 import 'dice_message_widget.dart';
+import 'sticker_message_widget.dart';
+import '../chat/sticker_item_widget.dart';
 import 'message_interactive_state.dart';
 import 'inline_keyboard_widget.dart';
 import '../tiling/tile_viewport_scope.dart';
@@ -838,14 +840,25 @@ class MessageBubble extends StatelessWidget {
         clean.endsWith('.aac');
   }
 
+  bool get _isSticker =>
+      _hasMedia && message.messageType == 'sticker';
+
+  bool get _isGif =>
+      _hasMedia &&
+      (message.messageType == 'gif' || message.messageType == 'animation');
+
   bool get _isImage =>
       _hasMedia &&
+      !_isSticker &&
+      !_isGif &&
       (message.messageType == 'image' ||
           message.messageType == 'photo' ||
           _isImageUrl(message.fileUrl!));
 
   bool get _isVideo =>
       _hasMedia &&
+      !_isSticker &&
+      !_isGif &&
       !_isRoundVideo &&
       (message.messageType == 'video' || _isVideoUrl(message.fileUrl!));
 
@@ -862,7 +875,9 @@ class MessageBubble extends StatelessWidget {
       _hasMedia && (message.isRound || message.messageType == 'round');
 
   bool get _hasCaption {
-    if (!_hasMedia || _isRoundVideo || _isVoice) return false;
+    if (!_hasMedia || _isRoundVideo || _isVoice || _isSticker || _isGif) {
+      return false;
+    }
     final trimmed = message.content.trim();
     if (trimmed.isEmpty) return false;
     if (trimmed == message.fileName) return false;
@@ -875,6 +890,27 @@ class MessageBubble extends StatelessWidget {
     if (message.messageType == 'dice') return true;
     return message.messageType == 'text' &&
         EmojiUtils.isDiceEmoji(message.content);
+  }
+
+  List<MessageEntity> get _customEmojiOnlyEntities {
+    if (_hasMedia || message.messageType != 'text' || message.entities.isEmpty) {
+      return const [];
+    }
+    final customEntities =
+        message.entities.where((e) => e.type == 'custom_emoji').toList();
+    if (customEntities.isEmpty ||
+        customEntities.length > 3 ||
+        customEntities.length != message.entities.length) {
+      return const [];
+    }
+    final totalEntityLen =
+        customEntities.fold<int>(0, (sum, e) => sum + e.length);
+    final nonSpaceLen =
+        message.content.replaceAll(RegExp(r'\s+'), '').length;
+    if (totalEntityLen >= nonSpaceLen && nonSpaceLen > 0) {
+      return customEntities;
+    }
+    return const [];
   }
 
   int get _emojiOnlyCount {
@@ -891,8 +927,15 @@ class MessageBubble extends StatelessWidget {
     final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
     final bool hasCaption = !isUnsupported && _hasCaption;
     final bool isDice = _isDice;
-    final int emojiCount = (!isUnsupported && !hasMedia && !isDice) ? _emojiOnlyCount : 0;
-    final bool isBigEmoji = (emojiCount > 0) || isDice;
+    final List<MessageEntity> customEmojiOnly =
+        (!isUnsupported && !hasMedia && !isDice)
+            ? _customEmojiOnlyEntities
+            : const [];
+    final int emojiCount = (!isUnsupported && !hasMedia && !isDice && customEmojiOnly.isEmpty)
+        ? _emojiOnlyCount
+        : 0;
+    final bool isBigEmoji =
+        (emojiCount > 0) || customEmojiOnly.isNotEmpty || isDice;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
@@ -1213,7 +1256,34 @@ class MessageBubble extends StatelessWidget {
         ),
       );
     } else if (isBigEmoji) {
-      if (emojiCount == 1) {
+      if (customEmojiOnly.isNotEmpty) {
+        final double itemSize = customEmojiOnly.length == 1 ? 115.2 : 64.0;
+        textBodyWidget = Padding(
+          padding: const EdgeInsets.only(
+            top: 4.0,
+            bottom: 18.0,
+            left: 4.0,
+            right: 4.0,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: customEmojiOnly.map((ent) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2.0),
+                child: InlineCustomEmojiWidget(
+                  customEmojiId: ent.customEmojiId ?? '',
+                  directUrl: ent.documentUrl,
+                  directFormat: ent.format,
+                  fallbackEmoji: message.content,
+                  size: itemSize,
+                  isMe: isMe,
+                  enableTapEffect: true,
+                ),
+              );
+            }).toList(),
+          ),
+        );
+      } else if (emojiCount == 1) {
         const double emojiFontSize = 64.0;
         final String stableKey = message.localId ?? message.id;
         final bool shouldAutoPlay = message.sendStatus == 0 ||
@@ -1320,7 +1390,7 @@ class MessageBubble extends StatelessWidget {
       );
 
       Widget innerContent;
-      if (_isRoundVideo || _isVoice || (_isAudio && !hasCaption)) {
+      if (_isSticker || _isGif || _isRoundVideo || _isVoice || (_isAudio && !hasCaption)) {
         innerContent = mediaWidget;
       } else if (hasCaption) {
         Widget captionWidget = MetaData(
@@ -1436,7 +1506,7 @@ class MessageBubble extends StatelessWidget {
       }
     }
 
-    final EdgeInsets bubblePadding = (isBigEmoji || _isRoundVideo)
+    final EdgeInsets bubblePadding = (isBigEmoji || _isRoundVideo || _isSticker)
         ? EdgeInsets.zero
         : _isVoice
             ? const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4.0)
@@ -1627,6 +1697,57 @@ class MessageBubble extends StatelessWidget {
     String resolvedUrl, {
     double mediaHeight = 220.0,
   }) {
+    if (_isSticker) {
+      final meta = message.mediaPayload ?? const <String, dynamic>{};
+      final stickerId = meta['sticker_id']?.toString();
+      final packId = meta['pack_id']?.toString();
+      final format = meta['format']?.toString() ?? 'webp';
+      final effectUrl = meta['effect_animation_url']?.toString();
+      final String stableKey = message.localId ?? message.id;
+      final bool shouldAutoPlay = message.sendStatus == 0 ||
+          (DateTimeUtils.parseUtcDateTime(message.createdAt)
+                  ?.isAfter(DateTime.now().subtract(const Duration(seconds: 3))) ??
+              false);
+
+      return StickerMessageWidget(
+        key: ValueKey('sticker_$stableKey'),
+        imageUrl: resolvedUrl,
+        format: format,
+        stickerId: stickerId,
+        packId: packId,
+        effectAnimationUrl: effectUrl,
+        fallbackEmoji: message.content.trim().isNotEmpty ? message.content.trim() : null,
+        isSentByMe: isMe,
+        autoPlayEffect: shouldAutoPlay,
+        messageKeyId: stableKey,
+        floatingTimestampBadge: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: _buildFloatingMetadata(context),
+        ),
+      );
+    }
+
+    if (_isGif) {
+      return GifMessageWidget(
+        key: ValueKey('gif_${message.localId ?? message.id}'),
+        gifUrl: resolvedUrl,
+        width: message.mediaWidth,
+        height: message.mediaHeight,
+        floatingTimestampBadge: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.52),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: _buildFloatingMetadata(context),
+        ),
+      );
+    }
+
     if (_isRoundVideo) {
       final double circleSize = math.min(240.0, TileViewportScope.widthOf(context) * 0.68);
       return VideoMessageWidget(

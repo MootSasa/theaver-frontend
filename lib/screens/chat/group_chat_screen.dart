@@ -78,6 +78,7 @@ import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/proximity_audio_service.dart';
+import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../call/group_call_screen.dart';
 
@@ -118,6 +119,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Timer? _transitionTimer;
   late AnimationController _emojiPanelController;
   late Animation<double> _emojiPanelAnimation;
+  late final ChatStickerInputTarget _stickerInputTarget;
+  final List<MessageEntity> _pendingCustomEmojiEntities = [];
   String? _lastActiveTileId;
 
   bool get _isDesktopPlatform =>
@@ -383,6 +386,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _loadCachedKeyboardHeight();
     _initWebSocket();
     _inputFocusNode.addListener(_onFocusChanged);
+    _stickerInputTarget = ChatStickerInputTarget(
+      chatId: widget.chatId,
+      controller: _messageController,
+      onBackspace: _handleBackspace,
+      onInsertEmoji: _insertEmojiText,
+      onInsertCustomEmoji: _insertCustomEmojiItem,
+      onSendSticker: _sendStickerMessage,
+      onSendGif: _sendGifMessage,
+    );
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    StickerService.instance.loadMyPacks();
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
@@ -526,6 +540,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _lastActiveTileId = currentActive;
       final myTileId = _registeredTileId ?? TileViewportScope.maybeTileIdOf(context);
       if (myTileId != null && currentActive == myTileId) {
+        StickerService.instance.registerInputTarget(_stickerInputTarget);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_isSelectionMode && _tabController.index == 0) {
             _inputFocusNode.requestFocus();
@@ -621,6 +636,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onFocusChanged() {
+    if (_inputFocusNode.hasFocus) {
+      StickerService.instance.registerInputTarget(_stickerInputTarget);
+    }
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
     } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
@@ -686,6 +704,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onEmojiToggle() {
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    if (TilingLayoutController.instance.isWorkspaceMounted &&
+        !TilingLayoutController.instance.isSinglePane) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.setFocusedTile(_registeredTileId!);
+      }
+      TilingLayoutController.instance.toggleEmojiSidecar();
+      return;
+    }
+
     _transitionTimer?.cancel();
     final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
 
@@ -781,6 +809,135 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       selection: TextSelection.collapsed(offset: newBefore.length),
     );
     _onInputTextChanged(newText);
+  }
+
+  void _insertEmojiText(String emoji) {
+    final text = _messageController.text;
+    final selection = _messageController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0 || start > text.length) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, emoji);
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+    _onInputTextChanged(newText);
+  }
+
+  void _insertCustomEmojiItem(StickerItem item) {
+    final String fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final text = _messageController.text;
+    final selection = _messageController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0 || start > text.length) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, fallback);
+    _pendingCustomEmojiEntities.add(
+      MessageEntity(
+        type: 'custom_emoji',
+        offset: start,
+        length: fallback.length,
+        customEmojiId: item.id.toString(),
+        documentUrl: item.fileUrl,
+        format: item.format,
+      ),
+    );
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + fallback.length),
+    );
+    _onInputTextChanged(newText);
+  }
+
+  Future<void> _sendStickerMessage(StickerItem item) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final payload = <String, dynamic>{
+      'url': item.fileUrl,
+      'width': item.width,
+      'height': item.height,
+      'format': item.format,
+      'sticker_id': item.id,
+      'pack_id': item.packId,
+      if (item.effectAnimationUrl.isNotEmpty)
+        'effect_animation_url': item.effectAnimationUrl,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: fallback,
+        messageType: 'sticker',
+        fileUrl: item.fileUrl,
+        fileName: 'sticker.${item.format}',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+              _updateFeedItems();
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else if (res['message'] != null && mounted) {
+        GlassToastService().show(context, res['message'].toString());
+      }
+    } catch (e) {
+      debugPrint('Error sending sticker in group: $e');
+    }
+  }
+
+  Future<void> _sendGifMessage(GifItemModel gif) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final payload = <String, dynamic>{
+      'url': gif.url,
+      'preview_url': gif.previewUrl,
+      'width': gif.width,
+      'height': gif.height,
+      'gif_id': gif.id,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: 'GIF',
+        messageType: 'gif',
+        fileUrl: gif.url,
+        fileName: 'animation.gif',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+              _updateFeedItems();
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else if (res['message'] != null && mounted) {
+        GlassToastService().show(context, res['message'].toString());
+      }
+    } catch (e) {
+      debugPrint('Error sending gif in group: $e');
+    }
   }
 
   @override
@@ -2069,8 +2226,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     try {
       final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
       final String effectiveContentText = cleanText ?? parsed!.cleanText;
+      final List<MessageEntity> mergedEntities = [
+        ...(entities ?? (parsed?.entities ?? const <MessageEntity>[])),
+        ..._pendingCustomEmojiEntities.where(
+          (ce) =>
+              ce.offset >= 0 &&
+              ce.offset + ce.length <= effectiveContentText.length,
+        ),
+      ];
+      _pendingCustomEmojiEntities.clear();
       final List<MessageEntity>? effectiveEntities =
-          entities ?? (parsed?.entities.isNotEmpty == true ? parsed!.entities : null);
+          mergedEntities.isNotEmpty ? mergedEntities : null;
 
       // CASE 1: MULTIPLE VISUAL ATTACHMENTS (ALBUM: chunked into batches of up to 10 items)
       if (_attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
@@ -3606,6 +3772,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _transitionTimer?.cancel();
     _stickyDateStateNotifier.dispose();
     _emojiPanelController.dispose();
+    StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _inputFocusNode.removeListener(_onFocusChanged);
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
@@ -4150,6 +4317,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                       controller: _messageController,
                       onBackspace: _handleBackspace,
                       onClose: _closeEmojiPanel,
+                      onCustomEmojiSelected: _insertCustomEmojiItem,
+                      onStickerSelected: _sendStickerMessage,
+                      onGifSelected: _sendGifMessage,
                       height: _keyboardHeight + safeBottom,
                       isVisible: _showEmojiPanel,
                     ),

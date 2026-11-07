@@ -133,6 +133,13 @@ class TilingLayoutController extends ChangeNotifier {
   /// Брейкпоинт для 3 колонок: [MainScreen (320) | Chat 1 (320) | Chat 2 (320)] = 960px
   static const double kThreeColumnBreakpoint = kMinTileWidth * 3;
 
+  /// Брейкпоинт для 4 колонок: [MainScreen (320) | Chat 1 (320) | Chat 2 (320) | EmojiSidecar (320)] = 1280px
+  static const double kFourColumnBreakpoint = kMinTileWidth * 4;
+
+  static const double kDefaultSidecarWidth = 340.0;
+  static const double kMinSidecarWidth = 320.0;
+  static const double kMaxSidecarWidth = 420.0;
+
   /// Минимальная высота окна для вертикального сплита двух чатов: 2 * 280 = 560px
   static const double kVerticalSplitHeightBreakpoint = kMinVerticalSplitTileHeight * 2;
 
@@ -174,6 +181,62 @@ class TilingLayoutController extends ChangeNotifier {
   /// Пропорция деления правой области между 1-м и 2-м тайлом чата (0.0 .. 1.0).
   double _chatSplitRatio = 0.5;
   double get chatSplitRatio => _chatSplitRatio;
+
+  // === Боковая панель стикеров, GIF и эмодзи (EmojiStickerSidecar) ===
+  bool _isEmojiSidecarOpen = false;
+  bool get isEmojiSidecarOpen => _isEmojiSidecarOpen && _chatTiles.isNotEmpty;
+
+  double _sidecarWidth = kDefaultSidecarWidth;
+  double get sidecarWidth => _sidecarWidth;
+
+  /// Определяет, достаточно ли ширины окна для стыковки [EmojiStickerSidecar]
+  /// отдельной колонкой справа (`Docked Push`), не нарушая минимум 320px на тайл.
+  /// Если возвращает `false`, панель открывается в режиме `Flyout Overlay`
+  /// поверх НЕАКТИВНОГО тайла чата (или справа в 1-чатном режиме < 960px).
+  bool canDockEmojiSidecar([double? totalWidth]) {
+    if (_chatTiles.isEmpty) return false;
+    final w = totalWidth ?? _windowSize.width;
+    if (_chatTiles.length == 1) {
+      return w >= kThreeColumnBreakpoint;
+    }
+    if (_effectiveSplitAxis == Axis.horizontal) {
+      return w >= kFourColumnBreakpoint;
+    }
+    return w >= kThreeColumnBreakpoint;
+  }
+
+  void openEmojiSidecar() {
+    if (_chatTiles.isEmpty) return;
+    if (!_isEmojiSidecarOpen) {
+      _isEmojiSidecarOpen = true;
+      _clampLeftTileWidthForWindow(_windowSize.width);
+      notifyListeners();
+    }
+  }
+
+  void closeEmojiSidecar() {
+    if (_isEmojiSidecarOpen) {
+      _isEmojiSidecarOpen = false;
+      _clampLeftTileWidthForWindow(_windowSize.width);
+      notifyListeners();
+    }
+  }
+
+  void toggleEmojiSidecar() {
+    if (_isEmojiSidecarOpen) {
+      closeEmojiSidecar();
+    } else {
+      openEmojiSidecar();
+    }
+  }
+
+  void updateSidecarWidth(double deltaDx) {
+    final nextWidth = (_sidecarWidth - deltaDx).clamp(kMinSidecarWidth, kMaxSidecarWidth);
+    if ((nextWidth - _sidecarWidth).abs() > 0.1) {
+      _sidecarWidth = nextWidth;
+      notifyListeners();
+    }
+  }
 
   Size _windowSize = const Size(1100, 750);
   Size get windowSize => _windowSize;
@@ -734,6 +797,7 @@ class TilingLayoutController extends ChangeNotifier {
       _activeTileId = kLeftTileId;
       _lastFocusedChatTileId = null;
       _singlePaneShowingChat = false;
+      _isEmojiSidecarOpen = false;
     }
 
     _recalculateSplitAndWindowLocks();
@@ -792,6 +856,7 @@ class TilingLayoutController extends ChangeNotifier {
     _activeTileId = kLeftTileId;
     _lastFocusedChatTileId = null;
     _singlePaneShowingChat = false;
+    _isEmojiSidecarOpen = false;
     _activeDrag = null;
     _hoveredDropSlot = null;
     _hoveredTargetTileId = null;
@@ -1320,6 +1385,12 @@ class TilingLayoutController extends ChangeNotifier {
           return true;
         }
       }
+    }
+
+    // 2.5. Если открыта боковая панель эмодзи/стикеров/GIF в многооконном режиме — закрываем её первой
+    if (_isEmojiSidecarOpen && _chatTiles.isNotEmpty) {
+      closeEmojiSidecar();
+      return true;
     }
 
     // 3. Проверяем вложенный Navigator целевого тайла
