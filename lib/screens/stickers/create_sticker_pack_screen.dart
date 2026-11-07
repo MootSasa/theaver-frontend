@@ -484,7 +484,7 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
               const SizedBox(height: 6),
               _buildFeatureNote(
                 theme,
-                'Локальная двуязычная индексация (RU/EN) по эмодзи, слоям Lottie и семантике',
+                'Локальная мультиязычная индексация по эмодзи, слоям Lottie и семантике',
               ),
             ],
           ),
@@ -835,7 +835,7 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
                                 ),
                                 decoration: InputDecoration(
                                   isDense: true,
-                                  labelText: 'Теги для поиска (RU/EN)',
+                                  labelText: 'Теги для поиска (на любом языке)',
                                   labelStyle: TextStyle(
                                     fontSize: 11.5,
                                     color: theme.textSecondary,

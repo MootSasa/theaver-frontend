@@ -122,13 +122,17 @@ class _StickerMediaViewState extends State<StickerMediaView> {
           fit: widget.fit,
         );
       } else if (_composition != null) {
-        content = Lottie(
-          composition: _composition,
-          width: widget.width,
-          height: widget.height,
-          fit: widget.fit,
-          animate: widget.animate,
-          repeat: widget.repeat,
+        content = RepaintBoundary(
+          child: Lottie(
+            composition: _composition,
+            width: widget.width,
+            height: widget.height,
+            fit: widget.fit,
+            animate: widget.animate,
+            repeat: widget.repeat,
+            frameRate:
+                widget.width <= 80 ? const FrameRate(30) : FrameRate.max,
+          ),
         );
       } else if (_bakedFirstFrame != null) {
         content = RawImage(
@@ -142,13 +146,19 @@ class _StickerMediaViewState extends State<StickerMediaView> {
       }
     } else {
       final resolvedUrl = StickerService.resolveUrl(widget.fileUrl);
+      final isStaticWebp = widget.format.toLowerCase() == 'webp';
+      final int? targetCacheWidth = isStaticWebp && widget.width.isFinite
+          ? (widget.width * 2.5).round().clamp(64, 512)
+          : null;
       content = Image.network(
         resolvedUrl,
         width: widget.width,
         height: widget.height,
+        cacheWidth: targetCacheWidth,
         fit: widget.fit,
         gaplessPlayback: true,
-        filterQuality: FilterQuality.medium,
+        filterQuality:
+            widget.width <= 80 ? FilterQuality.low : FilterQuality.medium,
         errorBuilder: (_, __, ___) => SizedBox(
           width: widget.width,
           height: widget.height,

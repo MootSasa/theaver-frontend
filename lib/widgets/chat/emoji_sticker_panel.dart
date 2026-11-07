@@ -429,7 +429,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     final isDark = theme.brightness == Brightness.dark;
     final glassProvider = context.watch<LiquidGlassProvider>();
 
-    if (!glassProvider.enabled && opacity <= 0) return const SizedBox.shrink();
+    if (opacity <= 0.01) return const SizedBox.shrink();
 
     final Widget searchContent = Opacity(
       opacity: opacity.clamp(0.0, 1.0),
@@ -626,6 +626,13 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       child: _buildEmojiSetSelector(isGrouped: true),
       builder: (context, selectorWidget) {
         final collapse = _searchCollapseController.value;
+        if (collapse >= 0.98) {
+          return SizedBox(
+            height: _kEmojiSelectorHeight,
+            child: selectorWidget!,
+          );
+        }
+
         final textOpacity =
             Curves.easeOut.transform((1.0 - collapse * 1.5).clamp(0.0, 1.0));
         final fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
@@ -642,7 +649,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
               child: Transform.scale(
                 scale: 1.0 - (collapse * 0.15),
                 child: _buildSearch(
-                  'Поиск эмодзи на русском и английском',
+                  'Поиск эмодзи',
                   _emojiSearchController,
                   _emojiSearchQuery,
                   _onEmojiQueryChanged,
@@ -655,7 +662,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           ),
         );
 
-        if (glassProvider.enabled && sharedStyle != null) {
+        if (glassProvider.enabled &&
+            sharedStyle != null &&
+            collapse > 0.01 &&
+            collapse < 0.98) {
           return SizedBox(
             height: _kEmojiSelectorHeight + _kSearchHeight,
             child: LiquidGlassBlender(
@@ -699,6 +709,13 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       child: _buildStickerSetSelector(),
       builder: (context, selectorWidget) {
         final collapse = _stickerCollapseController.value;
+        if (collapse >= 0.98) {
+          return SizedBox(
+            height: _kEmojiSelectorHeight,
+            child: selectorWidget!,
+          );
+        }
+
         final textOpacity =
             Curves.easeOut.transform((1.0 - collapse * 1.5).clamp(0.0, 1.0));
         final fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
@@ -715,7 +732,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
               child: Transform.scale(
                 scale: 1.0 - (collapse * 0.15),
                 child: _buildSearch(
-                  'Поиск стикеров или ссылка t.me/addstickers/...',
+                  'Поиск стикеров',
                   _stickerSearchController,
                   _stickerSearchQuery,
                   _onStickerQueryChanged,
@@ -728,7 +745,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           ),
         );
 
-        if (glassProvider.enabled && sharedStyle != null) {
+        if (glassProvider.enabled &&
+            sharedStyle != null &&
+            collapse > 0.01 &&
+            collapse < 0.98) {
           return SizedBox(
             height: _kEmojiSelectorHeight + _kSearchHeight,
             child: LiquidGlassBlender(
@@ -838,10 +858,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     _ensureStickerSectionKeys();
     List<CategoryEmoji> categories = [...defaultEmojiSet];
 
-    if (_displayedRecentEmojis.isNotEmpty) {
-      categories.insert(0, CategoryEmoji(Category.RECENT, _displayedRecentEmojis));
-    }
-
     final installedEmojiPacks = StickerService.instance.installedEmojiPacks;
     final bool isSearching = _emojiSearchQuery.trim().isNotEmpty;
 
@@ -857,6 +873,10 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
         return 38.0 + rows * cellSize + (rows - 1) * 8.0;
       }
 
+      if (_displayedRecentEmojis.isNotEmpty) {
+        _emojiSectionOffsets['recent'] = cursorY;
+        cursorY += sectionHeight(_displayedRecentEmojis.length);
+      }
       for (final pack in installedEmojiPacks) {
         if (pack.items.isNotEmpty) {
           _emojiSectionOffsets['srv_${pack.id}'] = cursorY;
@@ -868,9 +888,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
         cursorY += sectionHeight(pack.emojis.length);
       }
       for (final cat in categories) {
-        if (cat.category == Category.RECENT) {
-          _emojiSectionOffsets['recent'] = cursorY;
-        } else if (cat.category == Category.SMILEYS) {
+        if (cat.category == Category.SMILEYS) {
           _emojiSectionOffsets['standard'] = cursorY;
         }
         cursorY += sectionHeight(cat.emoji.length);
@@ -879,15 +897,23 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
 
     List<StickerItem> matchingCustomEmojiItems = [];
     if (isSearching) {
-      final query = _emojiSearchQuery.trim().toLowerCase();
+      if (_displayedRecentEmojis.isNotEmpty) {
+        categories.insert(
+          0,
+          CategoryEmoji(Category.RECENT, _displayedRecentEmojis),
+        );
+      }
+      final query = _emojiSearchQuery.trim();
       categories = categories
           .map((cat) {
             return CategoryEmoji(
               cat.category,
               cat.emoji
-                  .where((e) =>
-                      e.emoji.contains(query) ||
-                      e.name.toLowerCase().contains(query))
+                  .where((e) => EmojiUtils.matchesEmojiSearch(
+                        e.emoji,
+                        e.name,
+                        query,
+                      ))
                   .toList(),
             );
           })
@@ -912,7 +938,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     return CustomScrollView(
       controller: _gridScrollController,
       physics: const _EmojiScrollPhysics(parent: ClampingScrollPhysics()),
-      cacheExtent: 600,
+      cacheExtent: 180,
       slivers: [
         const SliverToBoxAdapter(child: SizedBox(height: _kEmojiHeaderHeight)),
         if (isSearching && _isTelegramPackLink(_emojiSearchQuery))
@@ -926,6 +952,13 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             emojiColumns: emojiColumns,
           ),
         if (!isSearching) ...[
+          if (_displayedRecentEmojis.isNotEmpty)
+            ..._buildCategorySlivers(
+              CategoryEmoji(Category.RECENT, _displayedRecentEmojis),
+              _sectionKeys['recent'],
+              emojiColumns: emojiColumns,
+              skipFilter: true,
+            ),
           // All installed server Custom Emoji packs rendered 100% expanded by default
           for (final pack in installedEmojiPacks)
             if (pack.items.isNotEmpty)
@@ -1061,10 +1094,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }) {
     final theme = TheavTheme.of(context);
     if (!skipFilter && _emojiSearchQuery.isNotEmpty) {
-      final query = _emojiSearchQuery.toLowerCase();
+      final query = _emojiSearchQuery.trim();
       final filteredEmojis = categoryEmoji.emoji
-          .where((e) =>
-              e.emoji.contains(query) || e.name.toLowerCase().contains(query))
+          .where((e) => EmojiUtils.matchesEmojiSearch(e.emoji, e.name, query))
           .toList();
       if (filteredEmojis.isEmpty) return [];
       categoryEmoji = CategoryEmoji(categoryEmoji.category, filteredEmojis);
@@ -1191,6 +1223,12 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
               ),
               () => _scrollToEmojiSectionById('recent'),
             ),
+          for (final srvPack in installedEmojiPacks)
+            _buildServerPackSelectorIcon(
+              srvPack,
+              () => _scrollToEmojiSectionById('srv_${srvPack.id}'),
+            ),
+          for (var pack in sortedPacks) _buildSelectorPackIcon(pack),
           _buildVectorSelectorButton(
             iconoir.Emoji(
               width: 20,
@@ -1199,12 +1237,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             ),
             () => _scrollToEmojiSectionById('standard'),
           ),
-          for (final srvPack in installedEmojiPacks)
-            _buildServerPackSelectorIcon(
-              srvPack,
-              () => _scrollToEmojiSectionById('srv_${srvPack.id}'),
-            ),
-          for (var pack in sortedPacks) _buildSelectorPackIcon(pack),
           _buildVectorSelectorButton(
             iconoir.Plus(
               width: 20,
@@ -1560,6 +1592,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     return CustomScrollView(
       controller: _gifScrollController,
       physics: const ClampingScrollPhysics(),
+      cacheExtent: 180,
       slivers: [
         const SliverToBoxAdapter(child: SizedBox(height: _kSearchHeight + 8)),
         if (!isSearching && savedGifs.isNotEmpty) ...[
@@ -1687,6 +1720,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                     Image.network(
                       resolvedUrl,
                       fit: BoxFit.cover,
+                      cacheWidth: 240,
+                      filterQuality: FilterQuality.low,
                       gaplessPlayback: true,
                       errorBuilder: (_, __, ___) => Center(
                         child: Text(
@@ -1830,7 +1865,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     return CustomScrollView(
       controller: _stickerScrollController,
       physics: const _EmojiScrollPhysics(parent: ClampingScrollPhysics()),
-      cacheExtent: 600,
+      cacheExtent: 180,
       slivers: [
         const SliverToBoxAdapter(child: SizedBox(height: _kEmojiHeaderHeight)),
         if (isSearching && _isTelegramPackLink(_stickerSearchQuery))
@@ -2459,10 +2494,16 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   void _updateRecentEmojis(Emoji emoji) {
+    final wasEmpty = _displayedRecentEmojis.isEmpty;
     _recentEmojis.removeWhere((e) => e.emoji == emoji.emoji);
     _recentEmojis.insert(0, emoji);
     if (_recentEmojis.length > 45) {
       _recentEmojis = _recentEmojis.sublist(0, 45);
+    }
+    if (wasEmpty && mounted) {
+      setState(() {
+        _displayedRecentEmojis = List<Emoji>.from(_recentEmojis);
+      });
     }
     _saveRecentEmojis();
   }

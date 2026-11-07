@@ -157,13 +157,11 @@ class StickerItem {
         'has_alpha': hasAlpha,
       };
 
-  /// Matches query against local bilingual descriptions, OCR, tags, pack title, and emojis.
+  /// Matches query against local multilingual descriptions, OCR, tags, pack title, and emojis across all languages.
   bool matchesLocalQuery(String rawQuery) {
     final q = rawQuery.trim().toLowerCase();
     if (q.isEmpty) return true;
-    for (final e in emojiList) {
-      if (e.contains(q)) return true;
-    }
+    if (EmojiUtils.matchesAnyEmojiInList(emojiList, q)) return true;
     if (ocrText.toLowerCase().contains(q)) return true;
     if (visualDescriptionRu.toLowerCase().contains(q)) return true;
     if (visualDescriptionEn.toLowerCase().contains(q)) return true;
@@ -520,11 +518,12 @@ class StickerService extends ChangeNotifier {
     }
     _initialized = true;
     await Future.wait([
-      refreshStickerPacks(),
-      refreshCustomEmojiPacks(),
-      refreshFavoritesAndRecents(),
-      refreshSavedAndTrendingGifs(),
+      refreshStickerPacks(notify: false),
+      refreshCustomEmojiPacks(notify: false),
+      refreshFavoritesAndRecents(notify: false),
+      refreshSavedAndTrendingGifs(notify: false),
     ]);
+    notifyListeners();
   }
 
   Future<Map<String, String>> _authHeaders() async {
@@ -535,7 +534,7 @@ class StickerService extends ChangeNotifier {
     };
   }
 
-  Future<void> refreshStickerPacks() async {
+  Future<void> refreshStickerPacks({bool notify = true}) async {
     try {
       final headers = await _authHeaders();
       final resp = await http.get(
@@ -557,7 +556,7 @@ class StickerService extends ChangeNotifier {
               .toList();
           _indexPacksInCache(_installedStickerPacks);
           _indexPacksInCache(_featuredStickerPacks);
-          notifyListeners();
+          if (notify) notifyListeners();
         }
       }
     } catch (e) {
@@ -565,7 +564,7 @@ class StickerService extends ChangeNotifier {
     }
   }
 
-  Future<void> refreshCustomEmojiPacks() async {
+  Future<void> refreshCustomEmojiPacks({bool notify = true}) async {
     try {
       final headers = await _authHeaders();
       final resp = await http.get(
@@ -587,7 +586,7 @@ class StickerService extends ChangeNotifier {
               .toList();
           _indexPacksInCache(_installedEmojiPacks);
           _indexPacksInCache(_featuredEmojiPacks);
-          notifyListeners();
+          if (notify) notifyListeners();
         }
       }
     } catch (e) {
@@ -595,7 +594,7 @@ class StickerService extends ChangeNotifier {
     }
   }
 
-  Future<void> refreshFavoritesAndRecents() async {
+  Future<void> refreshFavoritesAndRecents({bool notify = true}) async {
     try {
       final headers = await _authHeaders();
       final results = await Future.wait([
@@ -632,13 +631,13 @@ class StickerService extends ChangeNotifier {
           }
         }
       }
-      notifyListeners();
+      if (notify) notifyListeners();
     } catch (e) {
       debugPrint('StickerService.refreshFavoritesAndRecents error: $e');
     }
   }
 
-  Future<void> refreshSavedAndTrendingGifs() async {
+  Future<void> refreshSavedAndTrendingGifs({bool notify = true}) async {
     try {
       final headers = await _authHeaders();
       final results = await Future.wait([
@@ -669,7 +668,7 @@ class StickerService extends ChangeNotifier {
               .toList();
         }
       }
-      notifyListeners();
+      if (notify) notifyListeners();
     } catch (e) {
       debugPrint('StickerService.refreshSavedAndTrendingGifs error: $e');
     }
@@ -1213,25 +1212,55 @@ class StickerService extends ChangeNotifier {
     }
   }
 
+  Future<Directory?>? _lottieCacheDirFuture;
+  int _activeLottieLoads = 0;
+  final List<Completer<void>> _lottieLoadWaiters = [];
+  static const int _kMaxConcurrentLottieLoads = 6;
+
+  static Uint8List _decompressGzipBytesIsolate(Uint8List raw) {
+    final decompressed = GZipDecoder().decodeBytes(raw);
+    return Uint8List.fromList(decompressed);
+  }
+
+  Future<Directory?> _getLottieCacheDir() {
+    if (kIsWeb) return Future.value(null);
+    return _lottieCacheDirFuture ??= () async {
+      try {
+        final dir = await getApplicationSupportDirectory();
+        final cacheDir = Directory(p.join(dir.path, 'sticker_lottie_cache'));
+        if (!await cacheDir.exists()) {
+          await cacheDir.create(recursive: true);
+        }
+        return cacheDir;
+      } catch (_) {
+        return null;
+      }
+    }();
+  }
+
   Future<LottieComposition?> _loadLottieCompositionInternal(
       String fullUrl) async {
+    if (_activeLottieLoads >= _kMaxConcurrentLottieLoads) {
+      final waiter = Completer<void>();
+      _lottieLoadWaiters.add(waiter);
+      await waiter.future;
+    }
+    _activeLottieLoads++;
     try {
       Uint8List? bytes;
       File? cacheFile;
 
       if (!kIsWeb) {
         try {
-          final dir = await getApplicationSupportDirectory();
-          final cacheDir = Directory(p.join(dir.path, 'sticker_lottie_cache'));
-          if (!await cacheDir.exists()) {
-            await cacheDir.create(recursive: true);
-          }
-          final safeKey = base64Url
-              .encode(utf8.encode(fullUrl))
-              .replaceAll('=', '');
-          cacheFile = File(p.join(cacheDir.path, '$safeKey.json'));
-          if (await cacheFile.exists()) {
-            bytes = await cacheFile.readAsBytes();
+          final cacheDir = await _getLottieCacheDir();
+          if (cacheDir != null) {
+            final safeKey = base64Url
+                .encode(utf8.encode(fullUrl))
+                .replaceAll('=', '');
+            cacheFile = File(p.join(cacheDir.path, '$safeKey.json'));
+            if (await cacheFile.exists()) {
+              bytes = await cacheFile.readAsBytes();
+            }
           }
         } catch (_) {}
       }
@@ -1241,17 +1270,16 @@ class StickerService extends ChangeNotifier {
         if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
           return null;
         }
-        Uint8List raw = resp.bodyBytes;
-        // Decompress gzip if .tgs (magic bytes 0x1f 0x8b)
-        if (raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b) {
-          final decompressed = GZipDecoder().decodeBytes(raw);
-          bytes = Uint8List.fromList(decompressed);
-        } else {
-          bytes = raw;
+        final Uint8List raw = resp.bodyBytes;
+        // Decompress gzip if .tgs (magic bytes 0x1f 0x8b) in background isolate
+        final Uint8List decoded =
+            (raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b)
+                ? await compute(_decompressGzipBytesIsolate, raw)
+                : raw;
+        if (cacheFile != null && decoded.isNotEmpty) {
+          unawaited(cacheFile.writeAsBytes(decoded));
         }
-        if (cacheFile != null && bytes.isNotEmpty) {
-          unawaited(cacheFile.writeAsBytes(bytes));
-        }
+        bytes = decoded;
       }
 
       final comp = await LottieComposition.fromBytes(bytes);
@@ -1260,6 +1288,11 @@ class StickerService extends ChangeNotifier {
     } catch (e) {
       debugPrint('StickerService.getLottieComposition error ($fullUrl): $e');
       return null;
+    } finally {
+      _activeLottieLoads--;
+      if (_lottieLoadWaiters.isNotEmpty) {
+        _lottieLoadWaiters.removeAt(0).complete();
+      }
     }
   }
 
