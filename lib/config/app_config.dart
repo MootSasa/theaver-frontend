@@ -92,18 +92,21 @@ class AppConfig {
       // Automatically load dynamic package info from platform (pubspec.yaml)
       try {
         final info = await PackageInfo.fromPlatform();
-        if (appVersion != '1.0.0' && appVersion.isNotEmpty) {
+        if (hasEnvAppVersion && appVersion.isNotEmpty) {
           _currentVersion = appVersion;
-        } else if (info.version.isNotEmpty) {
+        } else if (info.version.isNotEmpty && appVersion == '1.0.0') {
           _currentVersion = info.version;
         }
-        if (appBuildNumber > 1) {
+        if (hasEnvBuildNumber && appBuildNumber > 1) {
           _currentBuildNumber = appBuildNumber;
         } else {
           final b = int.tryParse(info.buildNumber);
           if (b != null && b > 0) {
             // Normalize Flutter --split-per-abi versionCode (abiPrefix * 1000 + buildNumber)
-            _currentBuildNumber = (b >= 1000 && b < 10000) ? (b % 1000) : b;
+            final normalized = (b >= 1000 && b < 10000) ? (b % 1000) : b;
+            if (normalized > _currentBuildNumber) {
+              _currentBuildNumber = normalized;
+            }
           }
         }
       } catch (_) {}
@@ -449,11 +452,15 @@ class AppConfig {
   /// Application name
   static const String appName = 'Theaver';
 
+  /// Whether APP_VERSION / APP_BUILD_NUMBER were explicitly passed via --dart-define
+  static const bool hasEnvAppVersion = bool.hasEnvironment('APP_VERSION');
+  static const bool hasEnvBuildNumber = bool.hasEnvironment('APP_BUILD_NUMBER');
+
   /// Compile-time / default application version
-  static const String appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
+  static const String appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.19.0-beta.401');
 
   /// Compile-time / default application build number
-  static const int appBuildNumber = int.fromEnvironment('APP_BUILD_NUMBER', defaultValue: 1);
+  static const int appBuildNumber = int.fromEnvironment('APP_BUILD_NUMBER', defaultValue: 401);
 
   /// Compile-time / default build date
   static const String _defaultBuildDate = '08.08.2026';
@@ -501,7 +508,7 @@ class AppConfig {
   static Future<void> syncWebVersionFromServer({String? channel}) async {
     // If this Web bundle was compiled by CI with an explicit APP_VERSION and is served on a production subdomain,
     // keep its exact compiled version metadata.
-    if (appVersion != '1.0.0' && appVersion.isNotEmpty && webDomainChannel != null) {
+    if (hasEnvAppVersion && appVersion.isNotEmpty && webDomainChannel != null) {
       return;
     }
     try {

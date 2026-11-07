@@ -66,15 +66,7 @@ def parse_tag_sort_key(tag_str):
 
 
 def get_all_version_tags():
-    # Return list of version tags sorted by semantic version descending
-    # First try tags reachable from HEAD
-    out, code = run_git(["tag", "--merged", "HEAD", "-l", "v[0-9]*"])
-    if code == 0 and out.strip():
-        tags = [t.strip() for t in out.strip().splitlines() if t.strip()]
-        if tags:
-            tags.sort(key=parse_tag_sort_key, reverse=True)
-            return tags
-    # Fallback to all version tags in repo
+    # Return list of all version tags in repository sorted by semantic version descending
     out, code = run_git(["tag", "-l", "v[0-9]*"])
     if code == 0 and out.strip():
         tags = [t.strip() for t in out.strip().splitlines() if t.strip()]
@@ -276,6 +268,8 @@ def main():
     parser.add_argument("--custom-version", default="", help="Custom version if bump=custom.")
     parser.add_argument("--output-file", default="release_notes.md", help="File to write release notes to.")
     parser.add_argument("--github-output", action="store_true", help="Set outputs in $GITHUB_OUTPUT.")
+    parser.add_argument("--sync-local", action="store_true",
+                        help="Sync calculated version and build number into pubspec.yaml and lib/config/app_config.dart for local builds.")
 
     args = parser.parse_args()
 
@@ -370,9 +364,42 @@ def main():
 
     changelog = generate_changelog(version, channel, categorized)
 
-    # Write release notes to file
-    with open(args.output_file, "w", encoding="utf-8") as f:
-        f.write(changelog)
+    if args.sync_local:
+        pub_path = "pubspec.yaml"
+        if os.path.exists(pub_path):
+            with open(pub_path, "r", encoding="utf-8") as pf:
+                pub_text = pf.read()
+            new_pub_text = re.sub(
+                r"(?m)^version:\s*[^\r\n]+",
+                f"version: {clean_version}+{build_number}",
+                pub_text,
+                count=1,
+            )
+            with open(pub_path, "w", encoding="utf-8") as pf:
+                pf.write(new_pub_text)
+            print(f"Updated {pub_path} -> version: {clean_version}+{build_number}")
+
+        cfg_path = os.path.join("lib", "config", "app_config.dart")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as cf:
+                cfg_text = cf.read()
+            cfg_text = re.sub(
+                r"String\.fromEnvironment\('APP_VERSION',\s*defaultValue:\s*'[^']*'\)",
+                f"String.fromEnvironment('APP_VERSION', defaultValue: '{version}')",
+                cfg_text,
+            )
+            cfg_text = re.sub(
+                r"int\.fromEnvironment\('APP_BUILD_NUMBER',\s*defaultValue:\s*\d+\)",
+                f"int.fromEnvironment('APP_BUILD_NUMBER', defaultValue: {build_number})",
+                cfg_text,
+            )
+            with open(cfg_path, "w", encoding="utf-8") as cf:
+                cf.write(cfg_text)
+            print(f"Updated {cfg_path} -> APP_VERSION='{version}', APP_BUILD_NUMBER={build_number}")
+    else:
+        # Write release notes to file
+        with open(args.output_file, "w", encoding="utf-8") as f:
+            f.write(changelog)
 
     # Print summary
     print(f"Channel:        {channel}")

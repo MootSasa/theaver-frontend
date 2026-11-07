@@ -107,6 +107,9 @@ class Chat {
       'file',
       'dice',
       'call',
+      'sticker',
+      'gif',
+      'animation',
     };
     return !supportedTypes.contains(lastMessageType!.toLowerCase());
   }
@@ -850,7 +853,12 @@ class Message {
       senderAvatarUrl: json['sender_avatar_url']?.toString(),
       fileUrl: () {
         final raw = json['file_url']?.toString().trim();
-        return (raw != null && raw.isNotEmpty) ? raw : null;
+        if (raw != null && raw.isNotEmpty) return raw;
+        final payloadUrl = (parsedMediaPayload?['url'] ??
+                parsedMediaPayload?['file_url'])
+            ?.toString()
+            .trim();
+        return (payloadUrl != null && payloadUrl.isNotEmpty) ? payloadUrl : null;
       }(),
       fileName: () {
         final raw = json['file_name']?.toString().trim();
@@ -1052,7 +1060,15 @@ class Message {
       senderAvatarUrl: model.senderAvatarUrl,
       fileUrl: (model.fileUrl != null && model.fileUrl!.trim().isNotEmpty)
           ? model.fileUrl!.trim()
-          : null,
+          : () {
+              final payloadUrl = (dbMediaPayload?['url'] ??
+                      dbMediaPayload?['file_url'])
+                  ?.toString()
+                  .trim();
+              return (payloadUrl != null && payloadUrl.isNotEmpty)
+                  ? payloadUrl
+                  : null;
+            }(),
       fileName: (model.fileName != null && model.fileName!.trim().isNotEmpty)
           ? model.fileName!.trim()
           : null,
