@@ -190,6 +190,7 @@ class CommunityChannel {
   bool get isStage => channelType == 'stage';
   bool get isAudioRoom => isVoice || isStage;
   bool get isAnnouncement => channelType == 'announcement';
+  bool get isWhiteboard => channelType == 'whiteboard';
 
   CommunityChannel copyWith({
     String? id,

@@ -12,6 +12,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
+import '../../widgets/whiteboard/interactive_whiteboard.dart';
 
 /// 1-on-1 Video Call & High-FPS Screen Share Screen with Liquid Glass & Material Matte
 /// controls, draggable local camera preview, and Minimize to Top Banner + PiP.
@@ -564,7 +565,24 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                         ],
                       ),
                     ),
-                  const Spacer(),
+                  if (callProvider.isWhiteboardOpen)
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(22),
+                          child: InteractiveWhiteboard(
+                            roomId: callProvider.activeCall?.id ?? widget.callId,
+                            chatId: callProvider.activeCall?.chatId ?? widget.chatId,
+                            title: 'Доска • $peerTitle',
+                            embeddedInCall: true,
+                            onClose: () => callProvider.setWhiteboardOpen(false),
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    const Spacer(),
                   if (callProvider.isScreenSharing)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
@@ -750,6 +768,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
             accentColor: primaryColor,
             onTap: () => _onTapScreenShare(callProvider),
           ),
+        _buildDockIcon(
+          icon: Icons.draw_rounded,
+          label: 'Доска',
+          active: callProvider.isWhiteboardOpen,
+          accentColor: const Color(0xFFAA00FF),
+          onTap: () => callProvider.toggleWhiteboard(),
+        ),
         _buildDockIcon(
           icon: callProvider.isSpeakerOn
               ? Icons.volume_up_rounded

@@ -15,6 +15,7 @@ import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/soundboard_sheet.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
+import '../../widgets/whiteboard/interactive_whiteboard.dart';
 
 /// Group Voice/Video Call, Go Live Screen Share Stage, and Community Stage Room Screen.
 ///
@@ -1106,9 +1107,31 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                 ),
               ),
 
-            // Participants Grid
-            Expanded(
-              child: GridView.builder(
+            // Interactive Miro-style Collaborative Whiteboard Stage OR Participants Grid
+            if (callProvider.isWhiteboardOpen)
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    12,
+                    0,
+                    12,
+                    96 + (widget.embedded ? 0 : MediaQuery.of(context).padding.bottom),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(22),
+                    child: InteractiveWhiteboard(
+                      roomId: call?.id ?? widget.callId,
+                      chatId: call?.chatId ?? widget.chatId,
+                      title: 'Доска • $title',
+                      embeddedInCall: true,
+                      onClose: () => callProvider.setWhiteboardOpen(false),
+                    ),
+                  ),
+                ),
+              )
+            else
+              Expanded(
+                child: GridView.builder(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 110),
                 gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: 200,
@@ -1646,6 +1669,13 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           accentColor: primaryColor,
           onTap: () => _onTapGoLive(callProvider),
         ),
+      _buildDockItem(
+        icon: Icons.draw_rounded,
+        label: 'Доска',
+        active: callProvider.isWhiteboardOpen,
+        accentColor: const Color(0xFFAA00FF),
+        onTap: () => callProvider.toggleWhiteboard(),
+      ),
       if (widget.isStage)
         _buildDockItem(
           icon: Icons.front_hand_rounded,

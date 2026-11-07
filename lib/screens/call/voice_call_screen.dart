@@ -14,6 +14,7 @@ import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/soundboard_sheet.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
+import '../../widgets/whiteboard/interactive_whiteboard.dart';
 import 'video_call_screen.dart';
 
 /// 1-on-1 Voice Call Screen with Material Matte & Liquid Glass control dock,
@@ -377,9 +378,26 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                     ),
                   ),
 
-                  const Spacer(),
+                  if (callProvider.isWhiteboardOpen)
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(22),
+                          child: InteractiveWhiteboard(
+                            roomId: callProvider.activeCall?.id ?? widget.callId,
+                            chatId: callProvider.activeCall?.chatId ?? widget.chatId,
+                            title: 'Доска • $peerTitle',
+                            embeddedInCall: true,
+                            onClose: () => callProvider.setWhiteboardOpen(false),
+                          ),
+                        ),
+                      ),
+                    )
+                  else ...[
+                    const Spacer(),
 
-                  // Center Avatar with Speaking Pulse Rings
+                    // Center Avatar with Speaking Pulse Rings
                   AnimatedBuilder(
                     animation: _pulseCtrl,
                     builder: (context, child) {
@@ -509,7 +527,8 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                     ),
                   ],
 
-                  const Spacer(),
+                    const Spacer(),
+                  ],
 
                   // Bottom Floating Control Dock (LiquidGlassLens or Material Matte)
                   Padding(
@@ -674,6 +693,16 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
             accentColor: primaryColor,
             onTap: () => _onTapScreenShare(callProvider),
           ),
+        _buildControlButton(
+          icon: Icons.draw_rounded,
+          label: 'Доска',
+          active: callProvider.isWhiteboardOpen,
+          accentColor: const Color(0xFFAA00FF),
+          onTap: () {
+            HapticFeedback.selectionClick();
+            callProvider.toggleWhiteboard();
+          },
+        ),
         _buildControlButton(
           icon: Icons.music_note_rounded,
           label: 'Звуки',

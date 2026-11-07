@@ -259,23 +259,28 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
                 segments: const [
                   ButtonSegment(
                     value: 'text',
-                    icon: Icon(Icons.tag_rounded, size: 16),
+                    icon: Icon(Icons.tag_rounded, size: 15),
                     label: Text('Текст'),
                   ),
                   ButtonSegment(
                     value: 'announcement',
-                    icon: Icon(Icons.campaign_rounded, size: 16),
+                    icon: Icon(Icons.campaign_rounded, size: 15),
                     label: Text('Анонсы'),
                   ),
                   ButtonSegment(
                     value: 'voice',
-                    icon: Icon(Icons.volume_up_rounded, size: 16),
+                    icon: Icon(Icons.volume_up_rounded, size: 15),
                     label: Text('Голос'),
                   ),
                   ButtonSegment(
                     value: 'stage',
-                    icon: Icon(Icons.podcasts_rounded, size: 16),
+                    icon: Icon(Icons.podcasts_rounded, size: 15),
                     label: Text('Трибуна'),
+                  ),
+                  ButtonSegment(
+                    value: 'whiteboard',
+                    icon: Icon(Icons.draw_rounded, size: 15),
+                    label: Text('Доска'),
                   ),
                 ],
                 selected: {selectedType},
@@ -802,12 +807,16 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
                                   ? Icons.podcasts_rounded
                                   : ch.isVoice
                                       ? Icons.volume_up_rounded
-                                      : ch.isAnnouncement
-                                          ? Icons.campaign_rounded
-                                          : Icons.tag_rounded,
+                                      : ch.isWhiteboard
+                                          ? Icons.draw_rounded
+                                          : ch.isAnnouncement
+                                              ? Icons.campaign_rounded
+                                              : Icons.tag_rounded,
                               color: ch.isAudioRoom
                                   ? const Color(0xFF00C853)
-                                  : primaryColor,
+                                  : ch.isWhiteboard
+                                      ? const Color(0xFFAA00FF)
+                                      : primaryColor,
                             ),
                             title: Text(
                               ch.name,
@@ -821,9 +830,11 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
                                   ? 'Трибуна (Stage)'
                                   : ch.isVoice
                                       ? 'Голосовой канал + Go Live 144 FPS'
-                                      : ch.isAnnouncement
-                                          ? 'Канал объявлений'
-                                          : 'Текстовый канал',
+                                      : ch.isWhiteboard
+                                          ? 'Интерактивная доска (Miro-style)'
+                                          : ch.isAnnouncement
+                                              ? 'Канал объявлений'
+                                              : 'Текстовый канал',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: p.textSecondary,

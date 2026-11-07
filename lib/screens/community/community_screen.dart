@@ -15,6 +15,7 @@ import '../../services/community_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
+import '../../widgets/whiteboard/interactive_whiteboard.dart';
 import '../call/group_call_screen.dart';
 import '../chat/group_chat_screen.dart';
 import 'community_settings_sheet.dart';
@@ -584,7 +585,14 @@ class _CommunityScreenState extends State<CommunityScreen> {
                               embedded: true,
                               onLeave: () => _onLocalVoiceLeft(selected.id),
                             )
-                          : Column(
+                          : selected.isWhiteboard
+                              ? InteractiveWhiteboard(
+                                  key: ValueKey('wb_${selected.id}'),
+                                  roomId: selected.id,
+                                  chatId: selected.id,
+                                  title: '${_community.name} • ${selected.name}',
+                                )
+                              : Column(
                               children: [
                                 if ((selected.isAnnouncement &&
                                         !_community.canManageChannels) ||
@@ -1030,13 +1038,17 @@ class _CommunityScreenState extends State<CommunityScreen> {
         ? Icons.podcasts_rounded
         : ch.isVoice
             ? Icons.volume_up_rounded
-            : ch.isAnnouncement
-                ? Icons.campaign_rounded
-                : Icons.tag_rounded;
+            : ch.isWhiteboard
+                ? Icons.draw_rounded
+                : ch.isAnnouncement
+                    ? Icons.campaign_rounded
+                    : Icons.tag_rounded;
 
     final Color iconColor = ch.isAudioRoom
         ? const Color(0xFF00C853)
-        : (isSelected ? primaryColor : p.textSecondary);
+        : ch.isWhiteboard
+            ? const Color(0xFFAA00FF)
+            : (isSelected ? primaryColor : p.textSecondary);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 3),
@@ -1356,9 +1368,11 @@ class _MobileCommunityChatWrapperState
               ? Icons.podcasts_rounded
               : ch.isVoice
                   ? Icons.volume_up_rounded
-                  : ch.isAnnouncement
-                      ? Icons.campaign_rounded
-                      : Icons.tag_rounded,
+                  : ch.isWhiteboard
+                      ? Icons.draw_rounded
+                      : ch.isAnnouncement
+                          ? Icons.campaign_rounded
+                          : Icons.tag_rounded,
           size: 20,
         ),
         title: Text(
@@ -1489,32 +1503,43 @@ class _MobileCommunityChatWrapperState
           ),
         ),
       ),
-      body: Column(
-        children: [
-          if ((_activeChannel.isAnnouncement &&
-                  !widget.community.canManageChannels) ||
-              !widget.community.canSendMessages)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              color: p.surfaceSecondary,
-              child: Text(
-                _activeChannel.isAnnouncement
-                    ? 'Канал объявлений — только для чтения'
-                    : 'У вас нет прав на отправку сообщений в этом канале',
-                style: TextStyle(fontSize: 12, color: p.textSecondary),
+      body: _activeChannel.isWhiteboard
+          ? SafeArea(
+              child: InteractiveWhiteboard(
+                key: ValueKey('mobile_wb_${_activeChannel.id}'),
+                roomId: _activeChannel.id,
+                chatId: _activeChannel.id,
+                title: '${widget.community.name} • ${_activeChannel.name}',
+                onClose: () => Navigator.of(context).maybePop(),
               ),
+            )
+          : Column(
+              children: [
+                if ((_activeChannel.isAnnouncement &&
+                        !widget.community.canManageChannels) ||
+                    !widget.community.canSendMessages)
+                  Container(
+                    width: double.infinity,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    color: p.surfaceSecondary,
+                    child: Text(
+                      _activeChannel.isAnnouncement
+                          ? 'Канал объявлений — только для чтения'
+                          : 'У вас нет прав на отправку сообщений в этом канале',
+                      style: TextStyle(fontSize: 12, color: p.textSecondary),
+                    ),
+                  ),
+                Expanded(
+                  child: GroupChatScreen(
+                    key: ValueKey('mobile_comm_${_activeChannel.id}'),
+                    chatId: _activeChannel.id,
+                    groupName: '# ${_activeChannel.name}',
+                    groupAvatar: widget.community.avatarUrl,
+                  ),
+                ),
+              ],
             ),
-          Expanded(
-            child: GroupChatScreen(
-              key: ValueKey('mobile_comm_${_activeChannel.id}'),
-              chatId: _activeChannel.id,
-              groupName: '# ${_activeChannel.name}',
-              groupAvatar: widget.community.avatarUrl,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

@@ -107,6 +107,33 @@ class CallStateProvider extends ChangeNotifier {
 
   // High-Fidelity Audio Mode (48kHz stereo music mode vs voice DSP mode)
   bool _highFidelityAudio = false;
+
+  // Interactive Collaborative Whiteboard state inside active call
+  bool _isWhiteboardOpen = false;
+  bool get isWhiteboardOpen => _isWhiteboardOpen;
+
+  void setWhiteboardOpen(bool open, {bool broadcast = true}) {
+    if (_isWhiteboardOpen == open) return;
+    _isWhiteboardOpen = open;
+    notifyListeners();
+    final call = _activeCall;
+    if (broadcast && call != null) {
+      _broadcastWebRtcCallRelay(
+        call.chatId,
+        'call_whiteboard_toggled',
+        {
+          'call_id': call.id,
+          'chat_id': call.chatId,
+          'open': open,
+          'user_id': _currentUserId ?? 'local',
+        },
+      );
+    }
+  }
+
+  void toggleWhiteboard() {
+    setWhiteboardOpen(!_isWhiteboardOpen, broadcast: true);
+  }
   bool get highFidelityAudio => _highFidelityAudio;
   Future<void> toggleHighFidelityAudio() async {
     _highFidelityAudio = !_highFidelityAudio;
@@ -2925,6 +2952,7 @@ class CallStateProvider extends ChangeNotifier {
     _isMinimized = false;
     _isScreenSharing = false;
     _previewOwnScreenShare = false;
+    _isWhiteboardOpen = false;
     _isVideoOn = false;
     _isRecording = false;
     _reactions.clear();
@@ -3594,6 +3622,14 @@ class CallStateProvider extends ChangeNotifier {
 
       case 'call_signal':
         _handleSignalingPayload(payload);
+        break;
+
+      case 'call_whiteboard_toggled':
+        final open = payload['open'] == true;
+        if (_activeCall != null && _isWhiteboardOpen != open) {
+          _isWhiteboardOpen = open;
+          notifyListeners();
+        }
         break;
 
       case 'call_reaction':
