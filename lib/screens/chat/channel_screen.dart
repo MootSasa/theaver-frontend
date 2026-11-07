@@ -69,6 +69,7 @@ import '../../widgets/chat/pinned_message_banner.dart';
 import '../../widgets/message/inline_keyboard_widget.dart';
 import '../settings/profile_screen.dart';
 import '../../services/tiling_layout_controller.dart';
+import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 
 
@@ -601,6 +602,96 @@ class _ChannelScreenState extends State<ChannelScreen>
       text: newText,
       selection: TextSelection.collapsed(offset: newBefore.length),
     );
+  }
+
+  void _insertCustomEmojiItem(StickerItem item) {
+    _messageController.insertCustomEmoji(item);
+  }
+
+  Future<void> _sendStickerMessage(StickerItem item) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': item.fileUrl,
+      'width': item.width,
+      'height': item.height,
+      'format': item.format,
+      'sticker_id': item.id,
+      'pack_id': item.packId,
+      if (item.effectAnimationUrl.isNotEmpty)
+        'effect_animation_url': item.effectAnimationUrl,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.channelId,
+        content: fallback,
+        messageType: 'sticker',
+        fileUrl: item.fileUrl,
+        fileName: 'sticker.${item.format}',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else if (res['message'] != null && mounted) {
+        GlassToastService().show(context, res['message'].toString());
+      }
+    } catch (e) {
+      debugPrint('Error sending sticker in channel: $e');
+    }
+  }
+
+  Future<void> _sendGifMessage(GifItemModel gif) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final localId = 'local_gif_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': gif.url,
+      'preview_url': gif.previewUrl,
+      'width': gif.width,
+      'height': gif.height,
+      'gif_id': gif.id,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.channelId,
+        content: 'GIF',
+        messageType: 'gif',
+        fileUrl: gif.url,
+        fileName: 'animation.gif',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else if (res['message'] != null && mounted) {
+        GlassToastService().show(context, res['message'].toString());
+      }
+    } catch (e) {
+      debugPrint('Error sending gif in channel: $e');
+    }
   }
 
   @override
@@ -2321,6 +2412,9 @@ class _ChannelScreenState extends State<ChannelScreen>
                         controller: _messageController,
                         onBackspace: _handleBackspace,
                         onClose: _closeEmojiPanel,
+                        onCustomEmojiSelected: _insertCustomEmojiItem,
+                        onStickerSelected: _sendStickerMessage,
+                        onGifSelected: _sendGifMessage,
                         height: _keyboardHeight,
                         isVisible: _showEmojiPanel,
                       ),

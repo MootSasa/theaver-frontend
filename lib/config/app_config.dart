@@ -371,6 +371,12 @@ class AppConfig {
       return trimmed;
     }
 
+    if (trimmed.startsWith('/api/') || trimmed.startsWith('api/')) {
+      final apiBase = baseUrl.replaceAll(RegExp(r'/+$'), '');
+      final path = trimmed.startsWith('/') ? trimmed : '/$trimmed';
+      return '$apiBase$path';
+    }
+
     final base = storageUrl.replaceAll(RegExp(r'/+$'), '');
     final path = trimmed.startsWith('/') ? trimmed : '/$trimmed';
     return '$base$path';

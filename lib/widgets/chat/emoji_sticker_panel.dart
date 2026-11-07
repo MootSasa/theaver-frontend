@@ -228,47 +228,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   void _initMockPacks() {
-    _customPacks = [
-      CustomEmojiPack(
-        id: 'premium_stars',
-        name: 'Premium Stars',
-        emojis: const [
-          Emoji('⭐', 'star звезда'),
-          Emoji('🌟', 'glowing star сияющая звезда'),
-          Emoji('✨', 'sparkles искры'),
-          Emoji('💫', 'dizzy головокружение'),
-          Emoji('🌠', 'shooting star падающая звезда'),
-        ],
-      ),
-      CustomEmojiPack(
-        id: 'cool_faces',
-        name: 'Cool Faces',
-        emojis: const [
-          Emoji('😎', 'sunglasses крутой очки'),
-          Emoji('😏', 'smirking ухмылка'),
-          Emoji('🥵', 'hot жарко'),
-          Emoji('🥶', 'cold холодно'),
-          Emoji('🥸', 'disguise маскировка'),
-        ],
-      ),
-      CustomEmojiPack(
-        id: 'animal_party',
-        name: 'Animal Party',
-        emojis: const [
-          Emoji('🥳', 'party face праздник вечеринка'),
-          Emoji('🦁', 'lion лев'),
-          Emoji('🐯', 'tiger тигр'),
-          Emoji('🦒', 'giraffe жираф'),
-          Emoji('🦊', 'fox лиса'),
-        ],
-      ),
-    ];
-
+    _customPacks = [];
     _sectionKeys['recent'] = GlobalKey();
     _sectionKeys['standard'] = GlobalKey();
-    for (var pack in _customPacks) {
-      _sectionKeys[pack.id] = GlobalKey();
-    }
     _ensureStickerSectionKeys();
   }
 

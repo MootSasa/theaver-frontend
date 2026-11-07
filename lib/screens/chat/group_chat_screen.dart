@@ -837,6 +837,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final replyTo = _replyToMessage;
     _cancelReply();
     final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
     final payload = <String, dynamic>{
       'url': item.fileUrl,
       'width': item.width,
@@ -847,6 +848,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       if (item.effectAnimationUrl.isNotEmpty)
         'effect_animation_url': item.effectAnimationUrl,
     };
+    final optimistic = Message(
+      id: localId,
+      localId: localId,
+      chatId: widget.chatId,
+      senderId: _currentUserId ?? '',
+      content: fallback,
+      messageType: 'sticker',
+      fileUrl: item.fileUrl,
+      fileName: 'sticker.${item.format}',
+      mediaPayload: payload,
+      replyToMessageId: replyTo?.id,
+      isEdited: false,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      senderName: 'You',
+      sendStatus: 0,
+    );
+    if (mounted) {
+      setState(() {
+        _messages.insert(0, optimistic);
+        _updateFeedItems();
+      });
+      _scrollToBottom();
+    }
     try {
       final res = await ChatService.sendMessage(
         chatId: widget.chatId,
@@ -856,30 +880,51 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         fileName: 'sticker.${item.format}',
         mediaPayload: payload,
         replyToMessageId: replyTo?.id,
+        localId: localId,
       );
       if (res['success'] == true && res['message'] is Message) {
         final sent = res['message'] as Message;
         if (mounted) {
           setState(() {
-            if (!_messages.any((m) => m.id == sent.id)) {
+            final idx = _messages.indexWhere(
+              (m) => m.localId == localId || m.id == localId || m.id == sent.id,
+            );
+            if (idx != -1) {
+              _messages[idx] = sent.copyWith(localId: localId, sendStatus: 1);
+            } else {
               _messages.insert(0, sent);
-              _updateFeedItems();
             }
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
         await AppDatabase().saveMessage(_messageToCompanion(sent));
-      } else if (res['message'] != null && mounted) {
-        GlassToastService().show(context, res['message'].toString());
+      } else {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+            _updateFeedItems();
+          });
+          if (res['message'] != null) {
+            GlassToastService().show(context, res['message'].toString());
+          }
+        }
       }
     } catch (e) {
       debugPrint('Error sending sticker in group: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+          _updateFeedItems();
+        });
+      }
     }
   }
 
   Future<void> _sendGifMessage(GifItemModel gif) async {
     final replyTo = _replyToMessage;
     _cancelReply();
+    final localId = 'local_gif_${DateTime.now().microsecondsSinceEpoch}';
     final payload = <String, dynamic>{
       'url': gif.url,
       'preview_url': gif.previewUrl,
@@ -887,6 +932,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       'height': gif.height,
       'gif_id': gif.id,
     };
+    final optimistic = Message(
+      id: localId,
+      localId: localId,
+      chatId: widget.chatId,
+      senderId: _currentUserId ?? '',
+      content: 'GIF',
+      messageType: 'gif',
+      fileUrl: gif.url,
+      fileName: 'animation.gif',
+      mediaPayload: payload,
+      replyToMessageId: replyTo?.id,
+      isEdited: false,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      senderName: 'You',
+      sendStatus: 0,
+    );
+    if (mounted) {
+      setState(() {
+        _messages.insert(0, optimistic);
+        _updateFeedItems();
+      });
+      _scrollToBottom();
+    }
     try {
       final res = await ChatService.sendMessage(
         chatId: widget.chatId,
@@ -896,24 +964,45 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         fileName: 'animation.gif',
         mediaPayload: payload,
         replyToMessageId: replyTo?.id,
+        localId: localId,
       );
       if (res['success'] == true && res['message'] is Message) {
         final sent = res['message'] as Message;
         if (mounted) {
           setState(() {
-            if (!_messages.any((m) => m.id == sent.id)) {
+            final idx = _messages.indexWhere(
+              (m) => m.localId == localId || m.id == localId || m.id == sent.id,
+            );
+            if (idx != -1) {
+              _messages[idx] = sent.copyWith(localId: localId, sendStatus: 1);
+            } else {
               _messages.insert(0, sent);
-              _updateFeedItems();
             }
+            _updateFeedItems();
           });
           _scrollToBottom();
         }
         await AppDatabase().saveMessage(_messageToCompanion(sent));
-      } else if (res['message'] != null && mounted) {
-        GlassToastService().show(context, res['message'].toString());
+      } else {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+            _updateFeedItems();
+          });
+          GlassToastService().show(
+            context,
+            res['message']?.toString() ?? 'Не удалось отправить GIF',
+          );
+        }
       }
     } catch (e) {
       debugPrint('Error sending gif in group: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+          _updateFeedItems();
+        });
+      }
     }
   }
 

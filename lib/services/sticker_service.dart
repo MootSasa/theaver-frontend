@@ -504,8 +504,20 @@ class StickerService extends ChangeNotifier {
     }
   }
 
+  static const Set<String> _removedDefaultPackSlugs = {
+    'theaver_reactions',
+    'theaver_animals',
+    'theaver_emoji_status',
+    'theaver_emoji_pets',
+  };
+
   Future<void> ensureInitialized({bool forceRefresh = false}) async {
-    if (_initialized && !forceRefresh) return;
+    if (_initialized && !forceRefresh) {
+      if (_trendingGifs.isEmpty) {
+        refreshSavedAndTrendingGifs();
+      }
+      return;
+    }
     _initialized = true;
     await Future.wait([
       refreshStickerPacks(),
@@ -536,10 +548,12 @@ class StickerService extends ChangeNotifier {
           _installedStickerPacks = (data['installed'] as List? ?? [])
               .whereType<Map>()
               .map((m) => StickerPack.fromJson(Map<String, dynamic>.from(m)))
+              .where((p) => !_removedDefaultPackSlugs.contains(p.shortName))
               .toList();
           _featuredStickerPacks = (data['featured'] as List? ?? [])
               .whereType<Map>()
               .map((m) => StickerPack.fromJson(Map<String, dynamic>.from(m)))
+              .where((p) => !_removedDefaultPackSlugs.contains(p.shortName))
               .toList();
           _indexPacksInCache(_installedStickerPacks);
           _indexPacksInCache(_featuredStickerPacks);
@@ -564,10 +578,12 @@ class StickerService extends ChangeNotifier {
           _installedEmojiPacks = (data['installed'] as List? ?? [])
               .whereType<Map>()
               .map((m) => StickerPack.fromJson(Map<String, dynamic>.from(m)))
+              .where((p) => !_removedDefaultPackSlugs.contains(p.shortName))
               .toList();
           _featuredEmojiPacks = (data['featured'] as List? ?? [])
               .whereType<Map>()
               .map((m) => StickerPack.fromJson(Map<String, dynamic>.from(m)))
+              .where((p) => !_removedDefaultPackSlugs.contains(p.shortName))
               .toList();
           _indexPacksInCache(_installedEmojiPacks);
           _indexPacksInCache(_featuredEmojiPacks);
