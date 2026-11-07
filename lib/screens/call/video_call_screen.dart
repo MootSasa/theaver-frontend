@@ -39,6 +39,7 @@ class VideoCallScreen extends StatefulWidget {
 class _VideoCallScreenState extends State<VideoCallScreen> {
   Offset _localPreviewOffset = const Offset(16, 92);
   bool _hadActiveCall = false;
+  bool _isLeavingCall = false;
   bool _showControls = true;
   bool _showingTransferDialog = false;
 
@@ -123,10 +124,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   Future<void> _endCall(CallStateProvider provider) async {
+    if (_isLeavingCall) return;
+    _isLeavingCall = true;
+    _hadActiveCall = false;
     HapticFeedback.mediumImpact();
-    await provider.leaveCall();
-    if (mounted) {
-      Navigator.of(context).maybePop();
+    FocusManager.instance.primaryFocus?.unfocus();
+    provider.leaveCall();
+    if (mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     }
   }
 
@@ -198,10 +203,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final callProvider = context.watch<CallStateProvider>();
     if (callProvider.hasActiveCall) {
       _hadActiveCall = true;
-    } else if (_hadActiveCall) {
+    } else if (_hadActiveCall && !_isLeavingCall) {
       _hadActiveCall = false;
+      _isLeavingCall = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) Navigator.of(context).maybePop();
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
       });
     }
     final glassProvider = context.watch<LiquidGlassProvider>();
@@ -231,7 +239,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     return PopScope(
       canPop: true,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop && callProvider.hasActiveCall) {
+        if (didPop && !_isLeavingCall && callProvider.hasActiveCall) {
           callProvider.setMinimized(true);
         }
       },
@@ -784,6 +792,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
           onTap: () => callProvider.toggleSpeaker(),
         ),
         GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: () => _endCall(callProvider),
           child: Container(
             width: 50,

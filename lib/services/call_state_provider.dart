@@ -2936,11 +2936,17 @@ class CallStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Leaves and cleans up the active call.
+  /// Leaves and cleans up the active call immediately on the UI thread,
+  /// running WebRTC and HTTP teardown asynchronously in the background.
   Future<void> leaveCall({bool notifyServer = true}) async {
     final call = _activeCall;
     final wasScreenSharing = _isScreenSharing;
     final localStreamId = _activeLocalStreamInfo?.id;
+    final camStream = _localCameraStream;
+    final userStream = _localUserStream;
+    final displayStream = _localDisplayStream;
+    final renderersToDispose = _streamRenderers.values.toList();
+
     _ringingTimeoutTimer?.cancel();
     _ringingTimeoutTimer = null;
     _timer?.cancel();
@@ -2955,9 +2961,22 @@ class CallStateProvider extends ChangeNotifier {
     _isWhiteboardOpen = false;
     _isVideoOn = false;
     _isRecording = false;
+    _localCameraStream = null;
+    _localUserStream = null;
+    _localDisplayStream = null;
     _reactions.clear();
     _remoteDisplayStreams.clear();
     _participantRotations.clear();
+    _streamRenderers.clear();
+
+    if (_renderersInitialized) {
+      localRenderer.srcObject = null;
+      remoteRenderer.srcObject = null;
+      screenShareRenderer.srcObject = null;
+    }
+
+    // Notify UI listeners immediately so call screens & whiteboard exit on the first tap
+    notifyListeners();
 
     unawaited(NotificationService().stopCallForegroundService());
     if (call != null) {
@@ -2969,64 +2988,58 @@ class CallStateProvider extends ChangeNotifier {
       );
     }
 
-    await _closeAllPeerConnections();
+    unawaited(() async {
+      await _closeAllPeerConnections();
 
-    try {
-      for (final t in _localCameraStream?.getTracks() ?? const []) {
-        t.stop();
-      }
-      await _localCameraStream?.dispose();
-    } catch (_) {}
-    _localCameraStream = null;
-
-    try {
-      for (final t in _localUserStream?.getTracks() ?? const []) {
-        t.stop();
-      }
-      await _localUserStream?.dispose();
-    } catch (_) {}
-    _localUserStream = null;
-
-    try {
-      for (final t in _localDisplayStream?.getTracks() ?? const []) {
-        t.stop();
-      }
-      await _localDisplayStream?.dispose();
-    } catch (_) {}
-    _localDisplayStream = null;
-
-    if (_renderersInitialized) {
-      localRenderer.srcObject = null;
-      remoteRenderer.srcObject = null;
-      screenShareRenderer.srcObject = null;
-    }
-    for (final r in _streamRenderers.values) {
-      r.srcObject = null;
-      r.dispose();
-    }
-    _streamRenderers.clear();
-    notifyListeners();
-
-    if (notifyServer && call != null) {
-      if (!call.id.startsWith('local_')) {
-        if (wasScreenSharing) {
-          await CallService.stopStream(call.id, localStreamId ?? 'mine');
+      try {
+        for (final t in camStream?.getTracks() ?? const []) {
+          t.stop();
         }
-        await CallService.leaveCall(call.id);
+        await camStream?.dispose();
+      } catch (_) {}
+
+      try {
+        for (final t in userStream?.getTracks() ?? const []) {
+          t.stop();
+        }
+        await userStream?.dispose();
+      } catch (_) {}
+
+      try {
+        for (final t in displayStream?.getTracks() ?? const []) {
+          t.stop();
+        }
+        await displayStream?.dispose();
+      } catch (_) {}
+
+      for (final r in renderersToDispose) {
+        try {
+          r.srcObject = null;
+          await r.dispose();
+        } catch (_) {}
       }
-      final isOneOnOne = !call.isGroupOrCommunity &&
-          call.callType != 'group' &&
-          call.callType != 'stage';
-      _broadcastWebRtcCallRelay(
-        call.chatId,
-        isOneOnOne ? 'call_ended' : 'call_participant_left',
-        {
-          'call_id': call.id,
-          'chat_id': call.chatId,
-          'user_id': _currentUserId ?? 'local',
-        },
-      );
-    }
+
+      if (notifyServer && call != null) {
+        if (!call.id.startsWith('local_')) {
+          if (wasScreenSharing) {
+            await CallService.stopStream(call.id, localStreamId ?? 'mine');
+          }
+          await CallService.leaveCall(call.id);
+        }
+        final isOneOnOne = !call.isGroupOrCommunity &&
+            call.callType != 'group' &&
+            call.callType != 'stage';
+        _broadcastWebRtcCallRelay(
+          call.chatId,
+          isOneOnOne ? 'call_ended' : 'call_participant_left',
+          {
+            'call_id': call.id,
+            'chat_id': call.chatId,
+            'user_id': _currentUserId ?? 'local',
+          },
+        );
+      }
+    }());
   }
 
   CallSession _mergeUpdatedCallSession(CallSession current, CallSession incoming) {

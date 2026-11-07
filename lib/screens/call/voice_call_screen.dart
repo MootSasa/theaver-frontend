@@ -43,6 +43,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulseCtrl;
   bool _hadActiveCall = false;
+  bool _isLeavingCall = false;
   bool _showingTransferDialog = false;
 
   void _showDeviceTransferDialog(
@@ -135,10 +136,14 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
   }
 
   Future<void> _endCall(CallStateProvider provider) async {
+    if (_isLeavingCall) return;
+    _isLeavingCall = true;
+    _hadActiveCall = false;
     HapticFeedback.mediumImpact();
-    await provider.leaveCall();
-    if (mounted) {
-      Navigator.of(context).maybePop();
+    FocusManager.instance.primaryFocus?.unfocus();
+    provider.leaveCall();
+    if (mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     }
   }
 
@@ -183,10 +188,13 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     }
     if (callProvider.hasActiveCall) {
       _hadActiveCall = true;
-    } else if (_hadActiveCall) {
+    } else if (_hadActiveCall && !_isLeavingCall) {
       _hadActiveCall = false;
+      _isLeavingCall = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) Navigator.of(context).maybePop();
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
       });
     }
     final glassProvider = context.watch<LiquidGlassProvider>();
@@ -201,7 +209,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
     return PopScope(
       canPop: true,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop && callProvider.hasActiveCall) {
+        if (didPop && !_isLeavingCall && callProvider.hasActiveCall) {
           callProvider.setMinimized(true);
         }
       },
@@ -716,6 +724,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
           },
         ),
         GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: () => _endCall(callProvider),
           child: Container(
             width: 52,

@@ -12,6 +12,8 @@ enum WhiteboardTool {
   rectangle,
   ellipse,
   diamond,
+  triangle,
+  line,
   arrow,
   text,
   eraser,
@@ -24,10 +26,21 @@ enum WhiteboardGridStyle {
   none,
 }
 
+/// Resize handle identifier for interactive manipulation in `Select` mode.
+enum WhiteboardResizeHandle {
+  topLeft,
+  topRight,
+  bottomLeft,
+  bottomRight,
+  lineStart,
+  lineEnd,
+}
+
 /// A single vector or card element on the collaborative whiteboard.
 class WhiteboardElement {
   final String id;
-  final String type; // 'stroke' | 'highlighter' | 'sticky' | 'rectangle' | 'ellipse' | 'diamond' | 'arrow' | 'text'
+  final String
+      type; // 'stroke' | 'highlighter' | 'sticky' | 'rectangle' | 'ellipse' | 'diamond' | 'triangle' | 'line' | 'arrow' | 'text'
   final String authorId;
   final String authorName;
   final double x;
@@ -37,6 +50,10 @@ class WhiteboardElement {
   final List<Offset> points;
   final int colorValue;
   final double strokeWidth;
+  final String strokeStyle; // 'solid' | 'dashed' | 'dotted'
+  final String fillStyle; // 'translucent' | 'solid' | 'none'
+  final double fontSize;
+  final double opacity;
   final String text;
   final int updatedAt;
 
@@ -52,6 +69,10 @@ class WhiteboardElement {
     this.points = const [],
     this.colorValue = 0xFF2979FF,
     this.strokeWidth = 4.0,
+    this.strokeStyle = 'solid',
+    this.fillStyle = 'translucent',
+    this.fontSize = 16.0,
+    this.opacity = 1.0,
     this.text = '',
     this.updatedAt = 0,
   });
@@ -61,10 +82,13 @@ class WhiteboardElement {
   bool get isStroke => type == 'stroke' || type == 'highlighter';
   bool get isSticky => type == 'sticky';
   bool get isText => type == 'text';
+  bool get isLineOrArrow => type == 'arrow' || type == 'line';
   bool get isShape =>
       type == 'rectangle' ||
       type == 'ellipse' ||
       type == 'diamond' ||
+      type == 'triangle' ||
+      type == 'line' ||
       type == 'arrow';
 
   /// Normalized bounding box in canvas coordinates.
@@ -83,7 +107,7 @@ class WhiteboardElement {
       final pad = math.max(strokeWidth, 8.0);
       return Rect.fromLTRB(minX - pad, minY - pad, maxX + pad, maxY + pad);
     }
-    if (type == 'arrow') {
+    if (isLineOrArrow) {
       final minX = math.min(x, x + width);
       final maxX = math.max(x, x + width);
       final minY = math.min(y, y + height);
@@ -95,6 +119,99 @@ class WhiteboardElement {
     final w = width.abs().clamp(24.0, 4000.0);
     final h = height.abs().clamp(24.0, 4000.0);
     return Rect.fromLTWH(left, top, w, h);
+  }
+
+  /// Checks whether a point in canvas coordinates hits one of the resize handles.
+  WhiteboardResizeHandle? hitTestHandle(Offset p, {double radius = 14.0}) {
+    if (isStroke) return null;
+    if (isLineOrArrow) {
+      final start = Offset(x, y);
+      final end = Offset(x + width, y + height);
+      if ((p - start).distance <= radius) {
+        return WhiteboardResizeHandle.lineStart;
+      }
+      if ((p - end).distance <= radius) {
+        return WhiteboardResizeHandle.lineEnd;
+      }
+      return null;
+    }
+    final inflated = bounds.inflate(6);
+    if ((p - inflated.topLeft).distance <= radius) {
+      return WhiteboardResizeHandle.topLeft;
+    }
+    if ((p - inflated.topRight).distance <= radius) {
+      return WhiteboardResizeHandle.topRight;
+    }
+    if ((p - inflated.bottomLeft).distance <= radius) {
+      return WhiteboardResizeHandle.bottomLeft;
+    }
+    if ((p - inflated.bottomRight).distance <= radius) {
+      return WhiteboardResizeHandle.bottomRight;
+    }
+    return null;
+  }
+
+  /// Returns a resized copy of this element when dragging `handle` to `scenePoint`.
+  WhiteboardElement resizedByHandle(
+    WhiteboardResizeHandle handle,
+    Offset scenePoint,
+  ) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (isLineOrArrow) {
+      final start = Offset(x, y);
+      final end = Offset(x + width, y + height);
+      if (handle == WhiteboardResizeHandle.lineStart) {
+        return copyWith(
+          x: scenePoint.dx,
+          y: scenePoint.dy,
+          width: end.dx - scenePoint.dx,
+          height: end.dy - scenePoint.dy,
+          updatedAt: now,
+        );
+      } else {
+        return copyWith(
+          width: scenePoint.dx - start.dx,
+          height: scenePoint.dy - start.dy,
+          updatedAt: now,
+        );
+      }
+    }
+
+    final b = bounds;
+    double left = b.left;
+    double top = b.top;
+    double right = b.right;
+    double bottom = b.bottom;
+    const minSize = 36.0;
+
+    switch (handle) {
+      case WhiteboardResizeHandle.topLeft:
+        left = math.min(scenePoint.dx, right - minSize);
+        top = math.min(scenePoint.dy, bottom - minSize);
+        break;
+      case WhiteboardResizeHandle.topRight:
+        right = math.max(scenePoint.dx, left + minSize);
+        top = math.min(scenePoint.dy, bottom - minSize);
+        break;
+      case WhiteboardResizeHandle.bottomLeft:
+        left = math.min(scenePoint.dx, right - minSize);
+        bottom = math.max(scenePoint.dy, top + minSize);
+        break;
+      case WhiteboardResizeHandle.bottomRight:
+        right = math.max(scenePoint.dx, left + minSize);
+        bottom = math.max(scenePoint.dy, top + minSize);
+        break;
+      default:
+        break;
+    }
+
+    return copyWith(
+      x: left,
+      y: top,
+      width: (right - left).clamp(minSize, 3200.0),
+      height: (bottom - top).clamp(minSize, 3200.0),
+      updatedAt: now,
+    );
   }
 
   /// Checks whether a point in canvas coordinates hits this element.
@@ -112,7 +229,7 @@ class WhiteboardElement {
       }
       return false;
     }
-    if (type == 'arrow') {
+    if (isLineOrArrow) {
       final start = Offset(x, y);
       final end = Offset(x + width, y + height);
       return _distanceToSegment(p, start, end) <= tolerance + strokeWidth;
@@ -157,6 +274,10 @@ class WhiteboardElement {
     List<Offset>? points,
     int? colorValue,
     double? strokeWidth,
+    String? strokeStyle,
+    String? fillStyle,
+    double? fontSize,
+    double? opacity,
     String? text,
     int? updatedAt,
   }) {
@@ -172,6 +293,10 @@ class WhiteboardElement {
       points: points ?? this.points,
       colorValue: colorValue ?? this.colorValue,
       strokeWidth: strokeWidth ?? this.strokeWidth,
+      strokeStyle: strokeStyle ?? this.strokeStyle,
+      fillStyle: fillStyle ?? this.fillStyle,
+      fontSize: fontSize ?? this.fontSize,
+      opacity: opacity ?? this.opacity,
       text: text ?? this.text,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -206,6 +331,10 @@ class WhiteboardElement {
       points: parsedPoints,
       colorValue: (json['color'] as num?)?.toInt() ?? 0xFF2979FF,
       strokeWidth: (json['stroke_width'] as num?)?.toDouble() ?? 4.0,
+      strokeStyle: (json['stroke_style'] ?? 'solid').toString(),
+      fillStyle: (json['fill_style'] ?? 'translucent').toString(),
+      fontSize: (json['font_size'] as num?)?.toDouble() ?? 16.0,
+      opacity: ((json['opacity'] as num?)?.toDouble() ?? 1.0).clamp(0.1, 1.0),
       text: (json['text'] ?? '').toString(),
       updatedAt: (json['updated_at'] as num?)?.toInt() ?? 0,
     );
@@ -229,6 +358,10 @@ class WhiteboardElement {
               .toList(),
         'color': colorValue,
         'stroke_width': strokeWidth,
+        if (strokeStyle != 'solid') 'stroke_style': strokeStyle,
+        if (fillStyle != 'translucent') 'fill_style': fillStyle,
+        if (fontSize != 16.0) 'font_size': fontSize,
+        if (opacity < 0.99) 'opacity': (opacity * 100).roundToDouble() / 100,
         if (text.isNotEmpty) 'text': text,
         'updated_at': updatedAt,
       };

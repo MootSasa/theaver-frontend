@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
@@ -8,7 +9,7 @@ import 'account_manager.dart';
 import 'auth_service.dart';
 import 'websocket_service.dart';
 
-/// REST + WebSocket synchronization service for Miro-style Interactive Whiteboards.
+/// REST & real-time synchronization service for the Miro-style Interactive Whiteboard.
 class WhiteboardService {
   static Future<Map<String, String>> _headers() async {
     final token = await AuthService.getToken();
@@ -18,9 +19,9 @@ class WhiteboardService {
     };
   }
 
-  /// Fetches all persisted elements on the board (`GET /api/whiteboards/:roomId`).
+  /// Fetches all persisted elements on a board (`GET /api/whiteboards/:roomId`).
   static Future<List<WhiteboardElement>> fetchElements(String roomId) async {
-    if (roomId.isEmpty || roomId.startsWith('local_')) return const [];
+    if (roomId.isEmpty || roomId.startsWith('local_')) return [];
     try {
       final response = await http.get(
         Uri.parse('${AppConfig.baseUrl}/api/whiteboards/$roomId'),
@@ -28,22 +29,22 @@ class WhiteboardService {
       );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        if (data is Map<String, dynamic> && data['elements'] is List) {
-          final rawList = data['elements'] as List;
-          return rawList
+        final list = data['elements'];
+        if (list is List) {
+          return list
               .whereType<Map>()
-              .map((m) => WhiteboardElement.fromJson(Map<String, dynamic>.from(m)))
-              .where((e) => e.id.isNotEmpty)
+              .map((m) =>
+                  WhiteboardElement.fromJson(Map<String, dynamic>.from(m)))
               .toList();
         }
       }
     } catch (e) {
       debugPrint('[WhiteboardService] fetchElements error: $e');
     }
-    return const [];
+    return [];
   }
 
-  /// Sends a board event (`POST /api/whiteboards/:roomId/events`).
+  /// Posts a whiteboard mutation or cursor/laser event (`POST /api/whiteboards/:roomId/events`).
   static Future<bool> postEvent(
     String roomId,
     Map<String, dynamic> payload,
@@ -113,12 +114,18 @@ class WhiteboardController extends ChangeNotifier {
   final List<Map<String, WhiteboardElement>> _redoStack = [];
   final Map<String, WhiteboardRemoteCursor> _remoteCursors = {};
   final List<LaserTrailPoint> _localLaserTrail = [];
+  final List<int> _customColors = [];
 
   WhiteboardTool _activeTool = WhiteboardTool.pen;
   int _activeColor = 0xFF2979FF;
   double _activeStrokeWidth = 4.0;
+  String _activeStrokeStyle = 'solid'; // 'solid' | 'dashed' | 'dotted'
+  String _activeFillStyle = 'translucent'; // 'translucent' | 'solid' | 'none'
+  double _activeFontSize = 16.0;
+  double _activeOpacity = 1.0;
   WhiteboardGridStyle _gridStyle = WhiteboardGridStyle.dots;
   String? _selectedElementId;
+  WhiteboardResizeHandle? _activeResizeHandle;
   WhiteboardElement? _activeDraftElement;
   bool _isLoading = false;
 
@@ -139,6 +146,10 @@ class WhiteboardController extends ChangeNotifier {
   WhiteboardTool get activeTool => _activeTool;
   int get activeColor => _activeColor;
   double get activeStrokeWidth => _activeStrokeWidth;
+  String get activeStrokeStyle => _activeStrokeStyle;
+  String get activeFillStyle => _activeFillStyle;
+  double get activeFontSize => _activeFontSize;
+  double get activeOpacity => _activeOpacity;
   WhiteboardGridStyle get gridStyle => _gridStyle;
   String? get selectedElementId => _selectedElementId;
   WhiteboardElement? get selectedElement =>
@@ -147,6 +158,7 @@ class WhiteboardController extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get canUndo => _undoStack.isNotEmpty;
   bool get canRedo => _redoStack.isNotEmpty;
+  List<int> get customColors => List.unmodifiable(_customColors);
 
   List<WhiteboardElement> get elements {
     final list = _elements.values.toList();
@@ -201,9 +213,11 @@ class WhiteboardController extends ChangeNotifier {
     _activeTool = tool;
     if (tool != WhiteboardTool.select) {
       _selectedElementId = null;
+      _activeResizeHandle = null;
     }
     if (tool == WhiteboardTool.sticky &&
-        !stickyPalette.contains(_activeColor)) {
+        !stickyPalette.contains(_activeColor) &&
+        !_customColors.contains(_activeColor)) {
       _activeColor = stickyPalette.first;
     } else if (tool != WhiteboardTool.sticky &&
         stickyPalette.contains(_activeColor)) {
@@ -212,9 +226,19 @@ class WhiteboardController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setColor(int colorValue) {
+  void setColor(int colorValue, {bool addToCustom = false}) {
     _activeColor = colorValue;
-    if (_selectedElementId != null && _elements.containsKey(_selectedElementId)) {
+    if (addToCustom &&
+        !defaultPalette.contains(colorValue) &&
+        !stickyPalette.contains(colorValue)) {
+      _customColors.remove(colorValue);
+      _customColors.insert(0, colorValue);
+      if (_customColors.length > 8) {
+        _customColors.removeLast();
+      }
+    }
+    if (_selectedElementId != null &&
+        _elements.containsKey(_selectedElementId)) {
       _saveUndoSnapshot();
       final updated = _elements[_selectedElementId!]!.copyWith(
         colorValue: colorValue,
@@ -227,11 +251,92 @@ class WhiteboardController extends ChangeNotifier {
   }
 
   void setStrokeWidth(double width) {
-    _activeStrokeWidth = width.clamp(1.5, 28.0);
-    if (_selectedElementId != null && _elements.containsKey(_selectedElementId)) {
+    _activeStrokeWidth = width.clamp(1.0, 48.0);
+    if (_selectedElementId != null &&
+        _elements.containsKey(_selectedElementId)) {
       _saveUndoSnapshot();
       final updated = _elements[_selectedElementId!]!.copyWith(
         strokeWidth: _activeStrokeWidth,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      _elements[updated.id] = updated;
+      _broadcastUpsert(updated);
+    }
+    notifyListeners();
+  }
+
+  void setStrokeStyle(String style) {
+    _activeStrokeStyle = style;
+    if (_selectedElementId != null &&
+        _elements.containsKey(_selectedElementId)) {
+      _saveUndoSnapshot();
+      final updated = _elements[_selectedElementId!]!.copyWith(
+        strokeStyle: style,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      _elements[updated.id] = updated;
+      _broadcastUpsert(updated);
+    }
+    notifyListeners();
+  }
+
+  void cycleStrokeStyle() {
+    final current = selectedElement?.strokeStyle ?? _activeStrokeStyle;
+    final next = switch (current) {
+      'solid' => 'dashed',
+      'dashed' => 'dotted',
+      _ => 'solid',
+    };
+    setStrokeStyle(next);
+  }
+
+  void setFillStyle(String style) {
+    _activeFillStyle = style;
+    if (_selectedElementId != null &&
+        _elements.containsKey(_selectedElementId)) {
+      _saveUndoSnapshot();
+      final updated = _elements[_selectedElementId!]!.copyWith(
+        fillStyle: style,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      _elements[updated.id] = updated;
+      _broadcastUpsert(updated);
+    }
+    notifyListeners();
+  }
+
+  void cycleFillStyle() {
+    final current = selectedElement?.fillStyle ?? _activeFillStyle;
+    final next = switch (current) {
+      'translucent' => 'solid',
+      'solid' => 'none',
+      _ => 'translucent',
+    };
+    setFillStyle(next);
+  }
+
+  void setFontSize(double size) {
+    _activeFontSize = size.clamp(10.0, 64.0);
+    if (_selectedElementId != null &&
+        _elements.containsKey(_selectedElementId)) {
+      _saveUndoSnapshot();
+      final updated = _elements[_selectedElementId!]!.copyWith(
+        fontSize: _activeFontSize,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      );
+      _elements[updated.id] = updated;
+      _broadcastUpsert(updated);
+    }
+    notifyListeners();
+  }
+
+  void setOpacity(double opacity) {
+    _activeOpacity = opacity.clamp(0.1, 1.0);
+    if (_selectedElementId != null &&
+        _elements.containsKey(_selectedElementId)) {
+      _saveUndoSnapshot();
+      final updated = _elements[_selectedElementId!]!.copyWith(
+        opacity: _activeOpacity,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       );
       _elements[updated.id] = updated;
@@ -258,6 +363,7 @@ class WhiteboardController extends ChangeNotifier {
   void selectElement(String? id) {
     if (_selectedElementId == id) return;
     _selectedElementId = id;
+    _activeResizeHandle = null;
     notifyListeners();
   }
 
@@ -278,6 +384,7 @@ class WhiteboardController extends ChangeNotifier {
       ..clear()
       ..addAll(prev);
     _selectedElementId = null;
+    _activeResizeHandle = null;
     notifyListeners();
   }
 
@@ -290,6 +397,7 @@ class WhiteboardController extends ChangeNotifier {
       ..clear()
       ..addAll(next);
     _selectedElementId = null;
+    _activeResizeHandle = null;
     notifyListeners();
   }
 
@@ -327,6 +435,19 @@ class WhiteboardController extends ChangeNotifier {
     }
 
     if (_activeTool == WhiteboardTool.select) {
+      // First check if dragging a resize handle of the currently selected element
+      final currentSelected = selectedElement;
+      if (currentSelected != null) {
+        final handle = currentSelected.hitTestHandle(scenePoint);
+        if (handle != null) {
+          _activeResizeHandle = handle;
+          _saveUndoSnapshot();
+          notifyListeners();
+          return;
+        }
+      }
+
+      _activeResizeHandle = null;
       final hit = _hitTestTopElement(scenePoint);
       _selectedElementId = hit?.id;
       if (hit != null) {
@@ -351,19 +472,27 @@ class WhiteboardController extends ChangeNotifier {
         points: [scenePoint],
         colorValue: _activeColor,
         strokeWidth: _activeTool == WhiteboardTool.highlighter
-            ? (_activeStrokeWidth * 3.2).clamp(14.0, 36.0)
+            ? (_activeStrokeWidth * 2.6).clamp(10.0, 48.0)
             : _activeStrokeWidth,
+        strokeStyle: _activeTool == WhiteboardTool.highlighter
+            ? 'solid'
+            : _activeStrokeStyle,
+        opacity: _activeOpacity,
         updatedAt: now,
       );
       notifyListeners();
     } else if (_activeTool == WhiteboardTool.rectangle ||
         _activeTool == WhiteboardTool.ellipse ||
         _activeTool == WhiteboardTool.diamond ||
+        _activeTool == WhiteboardTool.triangle ||
+        _activeTool == WhiteboardTool.line ||
         _activeTool == WhiteboardTool.arrow) {
       final shapeType = switch (_activeTool) {
         WhiteboardTool.rectangle => 'rectangle',
         WhiteboardTool.ellipse => 'ellipse',
         WhiteboardTool.diamond => 'diamond',
+        WhiteboardTool.triangle => 'triangle',
+        WhiteboardTool.line => 'line',
         WhiteboardTool.arrow => 'arrow',
         _ => 'rectangle',
       };
@@ -378,6 +507,10 @@ class WhiteboardController extends ChangeNotifier {
         height: 1,
         colorValue: _activeColor,
         strokeWidth: _activeStrokeWidth,
+        strokeStyle: _activeStrokeStyle,
+        fillStyle: _activeFillStyle,
+        fontSize: _activeFontSize,
+        opacity: _activeOpacity,
         updatedAt: now,
       );
       notifyListeners();
@@ -404,12 +537,17 @@ class WhiteboardController extends ChangeNotifier {
       if (_selectedElementId != null &&
           _elements.containsKey(_selectedElementId)) {
         final current = _elements[_selectedElementId!]!;
-        final moved = current.translated(sceneDelta.dx, sceneDelta.dy);
-        _elements[moved.id] = moved;
+        final WhiteboardElement updated;
+        if (_activeResizeHandle != null) {
+          updated = current.resizedByHandle(_activeResizeHandle!, scenePoint);
+        } else {
+          updated = current.translated(sceneDelta.dx, sceneDelta.dy);
+        }
+        _elements[updated.id] = updated;
         final now = DateTime.now().millisecondsSinceEpoch;
         if (now - _lastDraftSentMs >= 45) {
           _lastDraftSentMs = now;
-          _broadcastUpsert(moved, persistToServer: false);
+          _broadcastUpsert(updated, persistToServer: false);
         }
         notifyListeners();
       }
@@ -445,6 +583,7 @@ class WhiteboardController extends ChangeNotifier {
 
   void endInteraction() {
     if (_activeTool == WhiteboardTool.select) {
+      _activeResizeHandle = null;
       if (_selectedElementId != null &&
           _elements.containsKey(_selectedElementId)) {
         _broadcastUpsert(_elements[_selectedElementId!]!);
@@ -456,9 +595,7 @@ class WhiteboardController extends ChangeNotifier {
     if (draft == null) return;
     _activeDraftElement = null;
 
-    if (draft.isShape &&
-        draft.width.abs() < 6 &&
-        draft.height.abs() < 6) {
+    if (draft.isShape && draft.width.abs() < 6 && draft.height.abs() < 6) {
       notifyListeners();
       return;
     }
@@ -490,11 +627,14 @@ class WhiteboardController extends ChangeNotifier {
       width: isSticky ? 190 : 220,
       height: isSticky ? 190 : 64,
       colorValue: isSticky
-          ? (stickyPalette.contains(_activeColor)
+          ? (stickyPalette.contains(_activeColor) ||
+                  _customColors.contains(_activeColor)
               ? _activeColor
               : stickyPalette.first)
           : _activeColor,
       strokeWidth: _activeStrokeWidth,
+      fontSize: _activeFontSize,
+      opacity: _activeOpacity,
       text: initialText.isNotEmpty
           ? initialText
           : (isSticky ? 'Новая заметка...' : 'Текст'),
@@ -508,7 +648,61 @@ class WhiteboardController extends ChangeNotifier {
     return elem;
   }
 
-  /// Updates the text or color of an existing Sticky Note / Text / Shape element.
+  /// Duplicates the selected or specified element with a `(24, 24)` offset.
+  WhiteboardElement? duplicateElement([String? id]) {
+    final targetId = id ?? _selectedElementId;
+    if (targetId == null || !_elements.containsKey(targetId)) return null;
+    _saveUndoSnapshot();
+    final original = _elements[targetId]!;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final clone = original.translated(24, 24).copyWith(
+          id: 'wb_${_currentUserId}_$now',
+          authorId: _currentUserId,
+          authorName: _currentUserName,
+          updatedAt: now,
+        );
+    _elements[clone.id] = clone;
+    _selectedElementId = clone.id;
+    _broadcastUpsert(clone);
+    notifyListeners();
+    return clone;
+  }
+
+  /// Moves the selected or specified element to the top of the z-order.
+  void bringToFront([String? id]) {
+    final targetId = id ?? _selectedElementId;
+    if (targetId == null || !_elements.containsKey(targetId)) return;
+    _saveUndoSnapshot();
+    int maxUpdated = DateTime.now().millisecondsSinceEpoch;
+    for (final e in _elements.values) {
+      if (e.updatedAt >= maxUpdated) {
+        maxUpdated = e.updatedAt + 1;
+      }
+    }
+    final updated = _elements[targetId]!.copyWith(updatedAt: maxUpdated);
+    _elements[targetId] = updated;
+    _broadcastUpsert(updated);
+    notifyListeners();
+  }
+
+  /// Moves the selected or specified element to the bottom of the z-order.
+  void sendToBack([String? id]) {
+    final targetId = id ?? _selectedElementId;
+    if (targetId == null || !_elements.containsKey(targetId)) return;
+    _saveUndoSnapshot();
+    int minUpdated = DateTime.now().millisecondsSinceEpoch;
+    for (final e in _elements.values) {
+      if (e.updatedAt <= minUpdated) {
+        minUpdated = math.max(1, e.updatedAt - 1);
+      }
+    }
+    final updated = _elements[targetId]!.copyWith(updatedAt: minUpdated);
+    _elements[targetId] = updated;
+    _broadcastUpsert(updated);
+    notifyListeners();
+  }
+
+  /// Updates the text or properties of an existing element.
   void updateElement(WhiteboardElement updated) {
     _saveUndoSnapshot();
     final stamped = updated.copyWith(
@@ -527,6 +721,7 @@ class WhiteboardController extends ChangeNotifier {
     _elements.remove(targetId);
     if (_selectedElementId == targetId) {
       _selectedElementId = null;
+      _activeResizeHandle = null;
     }
     _broadcastDelete(targetId);
     notifyListeners();
@@ -538,6 +733,7 @@ class WhiteboardController extends ChangeNotifier {
     _saveUndoSnapshot();
     _elements.clear();
     _selectedElementId = null;
+    _activeResizeHandle = null;
     notifyListeners();
 
     final effectiveRoomId =
@@ -768,6 +964,7 @@ class WhiteboardController extends ChangeNotifier {
           _elements.remove(elemId);
           if (_selectedElementId == elemId) {
             _selectedElementId = null;
+            _activeResizeHandle = null;
           }
           notifyListeners();
         }
@@ -777,6 +974,7 @@ class WhiteboardController extends ChangeNotifier {
         if (_elements.isNotEmpty) {
           _elements.clear();
           _selectedElementId = null;
+          _activeResizeHandle = null;
           notifyListeners();
         }
         break;

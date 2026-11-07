@@ -368,10 +368,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
         return;
       }
     }
-    _selectedChannel = _community.channels.firstWhere(
-      (c) => !c.isAudioRoom,
-      orElse: () => _community.channels.first,
-    );
+    _selectedChannel = _community.channels
+        .where((c) => !c.isAudioRoom)
+        .firstOrNull;
   }
 
   Future<void> _fetchFreshCommunity() async {
@@ -545,10 +544,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         final isDesktop = constraints.maxWidth >= 680;
 
         if (isDesktop) {
-          final selected = _selectedChannel ??
-              (_community.channels.isNotEmpty
-                  ? _community.channels.first
-                  : null);
+          final selected = _selectedChannel;
           return Scaffold(
             backgroundColor: p.bgBase,
             body: Row(

@@ -49,6 +49,21 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   static const List<String> _quickReactions = ['👍', '❤️', '🔥', '🎉', '👏', '😂'];
   bool _isFocusView = true;
   bool _showingTransferDialog = false;
+  bool _hadActiveCall = false;
+  bool _isLeavingCall = false;
+
+  void _leaveGroupCall(CallStateProvider callProvider) {
+    if (_isLeavingCall) return;
+    _isLeavingCall = true;
+    _hadActiveCall = false;
+    HapticFeedback.mediumImpact();
+    FocusManager.instance.primaryFocus?.unfocus();
+    callProvider.leaveCall();
+    widget.onLeave?.call();
+    if (!widget.embedded && mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
 
   void _showDeviceTransferDialog(BuildContext context, CallStateProvider callProvider) {
     if (_showingTransferDialog) return;
@@ -584,6 +599,19 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   @override
   Widget build(BuildContext context) {
     final callProvider = context.watch<CallStateProvider>();
+    if (callProvider.hasActiveCall) {
+      _hadActiveCall = true;
+    } else if (_hadActiveCall && !_isLeavingCall) {
+      _hadActiveCall = false;
+      _isLeavingCall = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        widget.onLeave?.call();
+        if (!widget.embedded && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
+    }
     final glassProvider = context.watch<LiquidGlassProvider>();
     final useGlass = glassProvider.enabled;
     final isFullGlass = glassProvider.isFull;
@@ -1570,7 +1598,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     return PopScope(
       canPop: true,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop && callProvider.hasActiveCall) {
+        if (didPop && !_isLeavingCall && callProvider.hasActiveCall) {
           callProvider.setMinimized(true);
         }
       },
@@ -1700,48 +1728,53 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
             communityId: callProvider.activeCall?.communityId,
           ),
         ),
-      GestureDetector(
-        onTap: () async {
-          HapticFeedback.mediumImpact();
-          await callProvider.leaveCall();
-          widget.onLeave?.call();
-          if (!widget.embedded && context.mounted) {
-            Navigator.of(context).maybePop();
-          }
-        },
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: const BoxDecoration(
-            color: Colors.redAccent,
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(
-            Icons.call_end_rounded,
-            color: Colors.white,
-            size: 22,
-          ),
-        ),
-      ),
     ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          physics: const BouncingScrollPhysics(),
+        return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minWidth: constraints.maxWidth - 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                for (int i = 0; i < items.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 8),
-                  items[i],
-                ],
-              ],
-            ),
+          child: Row(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minWidth: (constraints.maxWidth - 76).clamp(0.0, 9999.0),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        for (int i = 0; i < items.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 8),
+                          items[i],
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _leaveGroupCall(callProvider),
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: const BoxDecoration(
+                    color: Colors.redAccent,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.call_end_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
