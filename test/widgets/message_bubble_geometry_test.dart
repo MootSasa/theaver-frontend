@@ -20,7 +20,8 @@ class _TestAppLocalizations extends AppLocalizations {
   _TestAppLocalizations(super.locale, this.translations);
 
   @override
-  String translate(String key) => translations[key] ?? key;
+  String translate(String key, [Map<String, String>? params]) =>
+      translations[key] ?? key;
 }
 
 class _TestAppLocalizationsDelegate

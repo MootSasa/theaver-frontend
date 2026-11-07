@@ -899,11 +899,6 @@ class TheavThemeService extends ChangeNotifier {
           }
         } else {
           var fullUrl = url;
-          if (fullUrl.contains('storage.miptgram.ru')) {
-            fullUrl = fullUrl.replaceAll('storage.miptgram.ru', 'storage.theaver.app');
-          } else if (fullUrl.contains('miptgram.ru')) {
-            fullUrl = fullUrl.replaceAll('miptgram.ru', 'theaver.app');
-          }
           if (fullUrl.startsWith('/')) {
             fullUrl = '${AppConfig.baseUrl}$fullUrl';
           }

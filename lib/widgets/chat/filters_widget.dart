@@ -15,6 +15,7 @@ class FiltersWidget extends StatelessWidget {
     'Personal',
     'Groups',
     'Channels',
+    'Communities',
     'Folders',
   ];
 

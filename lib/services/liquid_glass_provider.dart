@@ -57,7 +57,7 @@ class LiquidGlassProvider extends ChangeNotifier {
     return _lightAngle;
   }
 
-  /// Создает унифицированный [LiquidGlassStyle] для приложения Miptgram,
+  /// Создает унифицированный [LiquidGlassStyle] для приложения Theaver,
   /// адаптированный под текущую тему, угол освещения и режим (full/lite).
   LiquidGlassStyle createStyle({
     BuildContext? context,

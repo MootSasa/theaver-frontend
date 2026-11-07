@@ -192,12 +192,6 @@ class WallpaperProvider extends ChangeNotifier {
     final uid = targetUserId ?? _currentUserId;
     if (uid == null || uid.isEmpty) return;
 
-    if (remoteUrl.contains('storage.miptgram.ru')) {
-      remoteUrl = remoteUrl.replaceAll('storage.miptgram.ru', 'storage.theaver.app');
-    } else if (remoteUrl.contains('miptgram.ru')) {
-      remoteUrl = remoteUrl.replaceAll('miptgram.ru', 'theaver.app');
-    }
-
     if (kIsWeb) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_wallpaperUrlKey(uid), remoteUrl);

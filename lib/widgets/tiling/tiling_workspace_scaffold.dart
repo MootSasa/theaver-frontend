@@ -4,12 +4,18 @@ import 'package:flutter/services.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/community_models.dart';
+import '../../screens/call/video_call_screen.dart';
+import '../../screens/call/voice_call_screen.dart';
 import '../../screens/chat/channel_screen.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
 import '../../screens/chat/system_notifications_screen.dart';
 import '../../screens/chat/user_profile_screen.dart';
+import '../../screens/community/community_screen.dart';
 import '../../screens/main/main_screen.dart';
+import '../../screens/search/search_screen.dart';
+import '../../services/community_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/swipe_back_route.dart';
@@ -221,6 +227,50 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
         settings: settings,
       );
     }
+    if (settings.name == '/search') {
+      final args = settings.arguments as Map<String, dynamic>? ?? {};
+      final chatId = args['chatId']?.toString();
+      final chatName = args['chatName']?.toString();
+      return SwipeBackPageRoute(
+        builder: (_) => SearchScreen(
+          initialChatId: chatId,
+          initialChatName: chatName,
+        ),
+        settings: settings,
+      );
+    }
+    if (settings.name == '/voice-call') {
+      final args = settings.arguments as Map<String, dynamic>? ?? {};
+      final chatId = args['chatId']?.toString() ?? '0';
+      final peerName = (args['peerName'] ?? args['userName'])?.toString();
+      final avatarUrl = args['avatarUrl']?.toString();
+      return MaterialPageRoute(
+        builder: (_) => VoiceCallScreen(
+          callId: chatId,
+          chatId: chatId,
+          isCaller: true,
+          peerName: peerName,
+          peerAvatarUrl: avatarUrl,
+        ),
+        settings: settings,
+      );
+    }
+    if (settings.name == '/video-call') {
+      final args = settings.arguments as Map<String, dynamic>? ?? {};
+      final chatId = args['chatId']?.toString() ?? '0';
+      final peerName = (args['peerName'] ?? args['userName'])?.toString();
+      final avatarUrl = args['avatarUrl']?.toString();
+      return MaterialPageRoute(
+        builder: (_) => VideoCallScreen(
+          callId: chatId,
+          chatId: chatId,
+          isCaller: true,
+          peerName: peerName,
+          peerAvatarUrl: avatarUrl,
+        ),
+        settings: settings,
+      );
+    }
     return null;
   }
 
@@ -311,6 +361,21 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
   Widget _buildChatRootScreen(ChatTileDescriptor descriptor) {
     switch (descriptor.chatType) {
+      case 'community':
+        final rawCommId = descriptor.otherUserId ??
+            (descriptor.chatId.startsWith('community_')
+                ? descriptor.chatId.substring('community_'.length)
+                : descriptor.chatId);
+        final cached = CommunityService.getCachedCommunity(rawCommId) ??
+            Community(
+              id: rawCommId,
+              name: descriptor.chatName.isNotEmpty
+                  ? descriptor.chatName
+                  : 'Сообщество',
+              avatarUrl: descriptor.avatarUrl,
+              createdAt: DateTime.now(),
+            );
+        return CommunityScreen(community: cached);
       case 'group':
         return GroupChatScreen(
           chatId: descriptor.chatId,

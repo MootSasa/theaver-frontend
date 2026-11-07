@@ -9,7 +9,7 @@ QueryExecutor openConnection([String? name]) {
     final dbFolder = await getApplicationDocumentsDirectory();
     final fileName = (name != null && name.isNotEmpty)
         ? (name.endsWith('.db') ? name : '$name.db')
-        : 'miptgram.db';
+        : 'theaver.db';
     final file = File(p.join(dbFolder.path, fileName));
     return NativeDatabase.createInBackground(file);
   });
@@ -36,7 +36,7 @@ Future<void> deleteAllDatabaseFiles() async {
       for (final entity in entities) {
         if (entity is File) {
           final filename = p.basename(entity.path);
-          if (filename.startsWith('miptgram') &&
+          if (filename.startsWith('theaver') &&
               (filename.endsWith('.db') ||
                   filename.endsWith('.db-wal') ||
                   filename.endsWith('.db-shm'))) {

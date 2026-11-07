@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'chat_messages_shimmer.dart';
 
 /// Unified message list view for chat screens supporting reverse scrolling,
-/// top shader mask for floating glass app bar, empty state, and loading spinner.
+/// top shader mask for floating glass app bar, empty state, and Telegram-style loading shimmer.
 class ChatMessagesListView extends StatelessWidget {
   final bool isLoading;
   final int itemCount;
@@ -17,6 +18,7 @@ class ChatMessagesListView extends StatelessWidget {
   final bool reverse;
   final bool enableTopShaderMask;
   final bool isLoadingMore;
+  final bool isChannel;
 
   const ChatMessagesListView({
     Key? key,
@@ -33,18 +35,22 @@ class ChatMessagesListView extends StatelessWidget {
     this.reverse = true,
     this.enableTopShaderMask = true,
     this.isLoadingMore = false,
+    this.isChannel = false,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    if (isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(),
+    Widget content;
+    if (isLoading && itemCount == 0) {
+      content = ChatMessagesShimmerSkeleton(
+        key: const ValueKey('chat_shimmer_loading'),
+        topPadding: topPadding,
+        bottomPadding: bottomPadding,
+        isChannel: isChannel,
       );
-    }
-
-    if (itemCount == 0) {
-      return Center(
+    } else if (itemCount == 0) {
+      content = Center(
+        key: const ValueKey('chat_empty_state'),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -77,39 +83,36 @@ class ChatMessagesListView extends StatelessWidget {
           ],
         ),
       );
+    } else {
+      final totalCount = itemCount + (isLoadingMore ? 1 : 0);
+
+      content = ListView.builder(
+        key: const ValueKey('chat_messages_list'),
+        controller: scrollController,
+        reverse: reverse,
+        cacheExtent: 1500.0,
+        addRepaintBoundaries: false,
+        padding: EdgeInsets.only(
+          top: topPadding,
+          left: 8,
+          right: 8,
+          bottom: bottomPadding,
+        ),
+        itemCount: totalCount,
+        itemBuilder: (context, index) {
+          if (isLoadingMore && index == itemCount) {
+            return const ChatHistoryLoadMoreShimmer();
+          }
+          return itemBuilder(context, index);
+        },
+      );
     }
 
-    final totalCount = itemCount + (isLoadingMore ? 1 : 0);
-
-    final listView = ListView.builder(
-      controller: scrollController,
-      reverse: reverse,
-      cacheExtent: 600.0,
-      addRepaintBoundaries: false,
-      padding: EdgeInsets.only(
-        top: topPadding,
-        left: 8,
-        right: 8,
-        bottom: bottomPadding,
-      ),
-      itemCount: totalCount,
-      itemBuilder: (context, index) {
-        if (isLoadingMore && index == itemCount) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12.0),
-            child: Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          );
-        }
-        return itemBuilder(context, index);
-      },
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      child: content,
     );
-
-    return listView;
   }
 }

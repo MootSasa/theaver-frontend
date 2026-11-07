@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
+import '../screens/search/search_screen.dart';
+import '../utils/swipe_back_route.dart';
 import 'chat_service.dart';
 import 'draft_service.dart';
+import 'search_service.dart';
 import 'database/app_database.dart';
 
 /// ChatActionsHelper provides unified, tested implementations of common chat actions
@@ -140,19 +143,28 @@ class ChatActionsHelper {
   }
 
   /// Opens chat messages search screen
-  static void openSearch({
+  static Future<void> openSearch({
     required BuildContext context,
     required String chatId,
     required String chatName,
-  }) {
-    Navigator.pushNamed(
-      context,
-      '/search',
-      arguments: {
-        'chatId': chatId,
-        'chatName': chatName,
-      },
+    ValueChanged<String>? onMessageSelected,
+  }) async {
+    final result = await Navigator.of(context).push(
+      SwipeBackPageRoute(
+        builder: (_) => SearchScreen(
+          initialChatId: chatId,
+          initialChatName: chatName,
+        ),
+      ),
     );
+    if (result is Map<String, dynamic> && result['type'] == 'message') {
+      final data = result['data'];
+      if (data is SearchResultMessage && data.id.isNotEmpty) {
+        onMessageSelected?.call(data.id);
+      } else if (data is Map && data['id'] != null) {
+        onMessageSelected?.call(data['id'].toString());
+      }
+    }
   }
 
   /// Toggles mute status on server and notifies UI

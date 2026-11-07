@@ -77,6 +77,13 @@ class LiquidGlassInputField extends StatefulWidget {
   final VoidCallback? onEditLastMessage;
   final bool isEmojiPanelOpen;
   final VoidCallback? onTapInputWhenEmojiOpen;
+  final bool showBotCommandsButton;
+  final bool isBotCommandsOpen;
+  final VoidCallback? onToggleBotCommands;
+  final bool hasReplyKeyboard;
+  final bool isReplyKeyboardOpen;
+  final VoidCallback? onToggleReplyKeyboard;
+  final int slowmodeRemainingSeconds;
 
   const LiquidGlassInputField({
     Key? key,
@@ -105,6 +112,13 @@ class LiquidGlassInputField extends StatefulWidget {
     this.onEditLastMessage,
     this.isEmojiPanelOpen = false,
     this.onTapInputWhenEmojiOpen,
+    this.showBotCommandsButton = false,
+    this.isBotCommandsOpen = false,
+    this.onToggleBotCommands,
+    this.hasReplyKeyboard = false,
+    this.isReplyKeyboardOpen = false,
+    this.onToggleReplyKeyboard,
+    this.slowmodeRemainingSeconds = 0,
   }) : super(key: key);
 
   @override
@@ -520,7 +534,12 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                 width: 0.5,
               ),
             ),
-            child: _buildInputRow(context),
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.bottomCenter,
+              child: _buildInputRow(context),
+            ),
           ),
         ),
       ),
@@ -546,7 +565,12 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       child: LiquidGlassLens(
         style: style,
         child: RepaintBoundary(
-          child: _buildInputRow(context),
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomCenter,
+            child: _buildInputRow(context),
+          ),
         ),
       ),
     );
@@ -566,22 +590,143 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
           child: widget.onEmoji != null
               ? GestureDetector(
                   onTap: widget.onEmoji,
+                  behavior: HitTestBehavior.opaque,
                   child: Container(
                     width: _kEmojiButtonSize,
                     height: _kEmojiButtonSize,
                     alignment: Alignment.center,
-                    child: iconoir.Emoji(
-                      width: _kEmojiIconSize,
-                      height: _kEmojiIconSize,
-                      color: iconColor,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      switchInCurve: Curves.easeOutBack,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: (child, animation) => ScaleTransition(
+                        scale: Tween<double>(begin: 0.75, end: 1.0).animate(animation),
+                        child: FadeTransition(opacity: animation, child: child),
+                      ),
+                      child: iconoir.Emoji(
+                        key: ValueKey<bool>(widget.isEmojiPanelOpen),
+                        width: _kEmojiIconSize,
+                        height: _kEmojiIconSize,
+                        color: widget.isEmojiPanelOpen ? rightButtonBg : iconColor,
+                      ),
                     ),
                   ),
                 )
               : const SizedBox.shrink(),
         ),
-        if (widget.onEmoji != null) const SizedBox(width: 4),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.centerLeft,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            switchInCurve: Curves.easeOutBack,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, animation) => ScaleTransition(
+              scale: animation,
+              child: FadeTransition(opacity: animation, child: child),
+            ),
+            child: widget.showBotCommandsButton
+                ? Padding(
+                    key: const ValueKey('bot_cmd_btn'),
+                    padding: const EdgeInsets.only(left: 2, bottom: 8, top: 8),
+                    child: GestureDetector(
+                      onTap: widget.onToggleBotCommands,
+                      behavior: HitTestBehavior.opaque,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeOutCubic,
+                        height: 30,
+                        padding: const EdgeInsets.symmetric(horizontal: 9),
+                        decoration: BoxDecoration(
+                          color: widget.isBotCommandsOpen
+                              ? rightButtonBg
+                              : rightButtonBg.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        alignment: Alignment.center,
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          switchInCurve: Curves.easeOutBack,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: (child, animation) => RotationTransition(
+                            turns: Tween<double>(begin: 0.85, end: 1.0).animate(animation),
+                            child: ScaleTransition(
+                              scale: Tween<double>(begin: 0.6, end: 1.0).animate(animation),
+                              child: FadeTransition(opacity: animation, child: child),
+                            ),
+                          ),
+                          child: widget.isBotCommandsOpen
+                              ? const iconoir.Xmark(
+                                  key: ValueKey('bot_cmd_close'),
+                                  width: 16,
+                                  height: 16,
+                                  color: Colors.white,
+                                )
+                              : Text(
+                                  '/',
+                                  key: const ValueKey('bot_cmd_slash'),
+                                  style: TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 16,
+                                    color: rightButtonBg,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(key: ValueKey('bot_cmd_empty')),
+          ),
+        ),
+        if (widget.onEmoji != null || widget.showBotCommandsButton)
+          const SizedBox(width: 4),
         Expanded(
           child: _buildTextField(context),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            switchInCurve: Curves.easeOutBack,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, animation) => ScaleTransition(
+              scale: animation,
+              child: FadeTransition(opacity: animation, child: child),
+            ),
+            child: widget.hasReplyKeyboard
+                ? Padding(
+                    key: const ValueKey('reply_kb_btn'),
+                    padding: const EdgeInsets.only(left: 2, bottom: 6, top: 6),
+                    child: GestureDetector(
+                      onTap: widget.onToggleReplyKeyboard,
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        width: 34,
+                        height: _kActionButtonSize,
+                        alignment: Alignment.center,
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          switchInCurve: Curves.easeOutBack,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: (child, animation) => ScaleTransition(
+                            scale: Tween<double>(begin: 0.8, end: 1.0).animate(animation),
+                            child: FadeTransition(opacity: animation, child: child),
+                          ),
+                          child: iconoir.ViewGrid(
+                            key: ValueKey<bool>(widget.isReplyKeyboardOpen),
+                            width: 22,
+                            height: 22,
+                            color: widget.isReplyKeyboardOpen ? rightButtonBg : iconColor,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(key: ValueKey('reply_kb_empty')),
+          ),
         ),
         if (widget.onAttach != null) const SizedBox(width: 4),
         Padding(
@@ -589,28 +734,41 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
           child: widget.onAttach != null
               ? GestureDetector(
                   onTap: widget.onAttach,
+                  behavior: HitTestBehavior.opaque,
                   child: Container(
                     width: _kActionButtonSize,
                     height: _kActionButtonSize,
                     alignment: Alignment.center,
                     child: widget.attachIconWidget ??
-                        (widget.hasAttachments
-                            ? iconoir.PlusCircle(
-                                width: _kActionIconSize,
-                                height: _kActionIconSize,
-                                color: iconColor,
-                              )
-                            : (widget.attachIcon != Icons.attach_file
-                                ? Icon(
-                                    widget.attachIcon,
-                                    size: _kActionIconSize,
-                                    color: iconColor,
-                                  )
-                                : iconoir.Attachment(
-                                    width: _kActionIconSize,
-                                    height: _kActionIconSize,
-                                    color: iconColor,
-                                  ))),
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          switchInCurve: Curves.easeOutBack,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: (child, animation) => ScaleTransition(
+                            scale: Tween<double>(begin: 0.7, end: 1.0).animate(animation),
+                            child: FadeTransition(opacity: animation, child: child),
+                          ),
+                          child: widget.hasAttachments
+                              ? iconoir.PlusCircle(
+                                  key: const ValueKey('attach_plus'),
+                                  width: _kActionIconSize,
+                                  height: _kActionIconSize,
+                                  color: rightButtonBg,
+                                )
+                              : (widget.attachIcon != Icons.attach_file
+                                  ? Icon(
+                                      widget.attachIcon,
+                                      key: ValueKey(widget.attachIcon),
+                                      size: _kActionIconSize,
+                                      color: iconColor,
+                                    )
+                                  : iconoir.Attachment(
+                                      key: const ValueKey('attach_clip'),
+                                      width: _kActionIconSize,
+                                      height: _kActionIconSize,
+                                      color: iconColor,
+                                    )),
+                        ),
                   ),
                 )
               : const SizedBox.shrink(),
@@ -803,13 +961,74 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: widget.controller,
       builder: (context, value, child) {
+        final isSlowmodeLocked = widget.slowmodeRemainingSeconds > 0;
         final canSend = value.text.isNotEmpty || widget.hasAttachments;
-        final color = widget.isSending ? Colors.grey : rightButtonBg;
+        final color = (widget.isSending || isSlowmodeLocked)
+            ? Colors.grey
+            : rightButtonBg;
+
+        final Widget activeIcon;
+        if (widget.isSending) {
+          activeIcon = const SizedBox(
+            key: ValueKey('sending'),
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
+          );
+        } else if (isSlowmodeLocked) {
+          activeIcon = Text(
+            '${widget.slowmodeRemainingSeconds}s',
+            key: const ValueKey('slowmode'),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          );
+        } else if (canSend) {
+          activeIcon = const iconoir.SendDiagonalSolid(
+            key: ValueKey('send'),
+            width: 22,
+            height: 22,
+            color: Colors.white,
+          );
+        } else {
+          activeIcon = KeyedSubtree(
+            key: const ValueKey('media_record'),
+            child: AnimatedBuilder(
+              animation: _mediaFlipController,
+              builder: (context, child) {
+                final angle = _mediaFlipController.value * math.pi;
+                final isVideo = _mediaFlipController.value >= 0.5;
+                return Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.identity()
+                    ..setEntry(3, 2, 0.002)
+                    ..rotateY(angle + (isVideo ? math.pi : 0)),
+                  child: isVideo
+                      ? const iconoir.VideoCamera(
+                          width: 22,
+                          height: 22,
+                          color: Colors.white,
+                        )
+                      : const iconoir.MicrophoneSolid(
+                          width: 22,
+                          height: 22,
+                          color: Colors.white,
+                        ),
+                );
+              },
+            ),
+          );
+        }
 
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
-            if (widget.isSending) return;
+            if (widget.isSending || isSlowmodeLocked) return;
             if (canSend) {
               widget.onSend?.call();
             } else {
@@ -817,7 +1036,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressStart: (details) {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onStartVideoRecord?.call();
             } else {
@@ -826,7 +1045,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressMoveUpdate: (details) {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onVideoRecordMove?.call(details.offsetFromOrigin);
             } else {
@@ -834,7 +1053,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressEnd: (details) {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onVideoRecordEnd?.call();
             } else {
@@ -842,14 +1061,16 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressCancel: () {
-            if (canSend || widget.isSending) return;
+            if (canSend || widget.isSending || isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onVideoRecordCancel?.call();
             } else {
               widget.onVoiceRecordCancel?.call();
             }
           },
-          child: Container(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
             width: _kActionButtonSize,
             height: _kActionButtonSize,
             decoration: BoxDecoration(
@@ -857,40 +1078,19 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
-            child: widget.isSending
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : (canSend
-                    ? const iconoir.SendDiagonalSolid(
-                        width: 22, height: 22, color: Colors.white)
-                    : AnimatedBuilder(
-                        animation: _mediaFlipController,
-                        builder: (context, child) {
-                          final angle = _mediaFlipController.value * math.pi;
-                          final isVideo = _mediaFlipController.value >= 0.5;
-                          return Transform(
-                            alignment: Alignment.center,
-                            transform: Matrix4.identity()
-                              ..setEntry(3, 2, 0.002)
-                              ..rotateY(angle + (isVideo ? math.pi : 0)),
-                            child: isVideo
-                                ? const iconoir.VideoCamera(
-                                    width: 22,
-                                    height: 22,
-                                    color: Colors.white,
-                                  )
-                                : const iconoir.MicrophoneSolid(
-                                    width: 22,
-                                    height: 22,
-                                    color: Colors.white,
-                                  ),
-                          );
-                        },
-                      )),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              switchInCurve: Curves.easeOutBack,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) => ScaleTransition(
+                scale: Tween<double>(begin: 0.4, end: 1.0).animate(animation),
+                child: FadeTransition(
+                  opacity: animation,
+                  child: child,
+                ),
+              ),
+              child: activeIcon,
+            ),
           ),
         );
       },

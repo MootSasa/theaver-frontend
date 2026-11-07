@@ -70,7 +70,39 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<String?> _promptTwoFactorPassword() async {
+    final controller = TextEditingController();
+    final l10n = context.l10n;
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(l10n.translate('security_2fa')),
+        content: TextField(
+          controller: controller,
+          obscureText: true,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: l10n.translate('security_2fa_password_label'),
+            border: const OutlineInputBorder(),
+          ),
+          onSubmitted: (val) => Navigator.pop(ctx, val),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: Text(l10n.translate('cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: Text(l10n.translate('confirm')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _login({String? twoFactorPassword}) async {
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -84,6 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final result = await AuthService.login(
         usernameOrEmail: _emailController.text.trim(),
         password: _passwordController.text,
+        twoFactorPassword: twoFactorPassword,
       );
 
       if (!mounted) return;
@@ -105,6 +138,15 @@ class _LoginScreenState extends State<LoginScreen> {
             SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
             (route) => false,
           );
+        }
+      } else if (result['requires_2fa'] == true && twoFactorPassword == null) {
+        setState(() {
+          _isLoading = false;
+        });
+        final entered2FA = await _promptTwoFactorPassword();
+        if (!mounted) return;
+        if (entered2FA != null && entered2FA.isNotEmpty) {
+          await _login(twoFactorPassword: entered2FA);
         }
       } else {
         setState(() {

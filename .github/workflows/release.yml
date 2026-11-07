@@ -113,9 +113,13 @@ jobs:
         run: |
           if [ -n "$GOOGLE_SERVICES" ]; then
             echo "$GOOGLE_SERVICES" > android/app/google-services.json
+          elif [ ! -f android/app/google-services.json ] && [ -f android/app/google-services.json.example ]; then
+            cp android/app/google-services.json.example android/app/google-services.json
           fi
           if [ -n "$AGCONNECT_SERVICES" ]; then
             echo "$AGCONNECT_SERVICES" > android/app/agconnect-services.json
+          elif [ ! -f android/app/agconnect-services.json ] && [ -f android/app/agconnect-services.json.example ]; then
+            cp android/app/agconnect-services.json.example android/app/agconnect-services.json
           fi
           if [ -n "$DEBUG_KEYSTORE_B64" ]; then
             mkdir -p ~/.android
@@ -754,10 +758,8 @@ jobs:
       - name: Deploy to Theaver API & MinIO Storage
         continue-on-error: true
         env:
-          THEAVER_API_URL: ${{ secrets.THEAVER_API_URL || secrets.MIPTGRAM_API_URL }}
-          THEAVER_ADMIN_SECRET: ${{ secrets.THEAVER_ADMIN_SECRET || secrets.MIPTGRAM_ADMIN_SECRET }}
-          MIPTGRAM_API_URL: ${{ secrets.THEAVER_API_URL || secrets.MIPTGRAM_API_URL }}
-          MIPTGRAM_ADMIN_SECRET: ${{ secrets.THEAVER_ADMIN_SECRET || secrets.MIPTGRAM_ADMIN_SECRET }}
+          THEAVER_API_URL: ${{ secrets.THEAVER_API_URL }}
+          THEAVER_ADMIN_SECRET: ${{ secrets.THEAVER_ADMIN_SECRET }}
         run: |
           FORCE_FLAG=""
           if [ "${{ inputs.force_update }}" = "true" ]; then

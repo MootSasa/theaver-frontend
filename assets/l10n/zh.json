@@ -61,7 +61,7 @@
   "chat_no_chats": "没有聊天",
   "chat_start_new": "点击下方按钮开始新聊天",
   "chat_with_user": "与用户 {userId} 聊天",
-  "chat_type_message": "输入消息...",
+  "chat_type_message": "消息",
   "chat_camera": "相机",
   "chat_gallery": "相册",
   "chat_location": "位置",

@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'auth_service.dart';
 import 'avatar_sync_service.dart';
 import 'chat_service.dart';
+import 'community_service.dart';
 import 'file_service.dart';
 import 'media_cache_manager.dart';
 import 'websocket_service.dart';
@@ -46,12 +47,26 @@ class SyncService {
         return;
       }
 
+      final tooLong = result['too_long'] == true;
       final events = result['events'] as List<dynamic>? ?? [];
-      final maxUsn = result['max_usn'] as int? ?? lastUsn;
+      final maxUsn = (result['max_usn'] as num?)?.toInt() ??
+          (result['current_usn'] as num?)?.toInt() ??
+          lastUsn;
       final hasMore = result['has_more'] as bool? ?? false;
 
+      if (tooLong) {
+        debugPrint(
+            'SyncService: Server returned too_long=true, advancing USN to $maxUsn');
+        await _db.setLastKnownUsn(userId, maxUsn);
+        return;
+      }
+
       for (final event in events) {
-        await _applyEvent(event as Map<String, dynamic>);
+        if (event is Map<String, dynamic>) {
+          await _applyEvent(event);
+        } else if (event is Map) {
+          await _applyEvent(Map<String, dynamic>.from(event));
+        }
       }
 
       // Обновить USN
@@ -72,32 +87,75 @@ class SyncService {
   Future<void> _applyEvent(Map<String, dynamic> event) async {
     final eventType = event['event_type'] as String?;
     final payload = event['payload'] as Map<String, dynamic>? ?? {};
-    final chatId = event['chat_id']?.toString();
+    final chatId =
+        event['chat_id']?.toString() ?? payload['chat_id']?.toString();
 
     switch (eventType) {
       case 'new_message':
         await _applyNewMessage(payload);
         break;
       case 'edit_message':
+      case 'message_edited':
         await _applyEditMessage(payload);
         break;
       case 'delete_message':
+      case 'message_deleted':
         await _applyDeleteMessage(payload);
         break;
       case 'read_status':
+      case 'message_read':
+      case 'unread_count_updated':
         await _applyReadStatus(payload);
+        break;
+      case 'message_listened':
+        break;
+      case 'message_pinned':
+      case 'pin_message':
+        final pinChatId = payload['chat_id']?.toString() ?? chatId;
+        final rawPinId = payload['pinned_message_id'] ?? payload['message_id'];
+        final pinId = rawPinId is num
+            ? rawPinId.toInt()
+            : int.tryParse(rawPinId?.toString() ?? '');
+        if (pinChatId != null) {
+          await _db.updateChatPinnedMessageId(pinChatId, pinId);
+        }
+        break;
+      case 'message_unpinned':
+      case 'unpin_message':
+        final unpinChatId = payload['chat_id']?.toString() ?? chatId;
+        final rawNextPinId = payload['pinned_message_id'];
+        final nextPinId = rawNextPinId is num
+            ? rawNextPinId.toInt()
+            : int.tryParse(rawNextPinId?.toString() ?? '');
+        if (unpinChatId != null) {
+          await _db.updateChatPinnedMessageId(unpinChatId, nextPinId);
+        }
         break;
       case 'new_chat':
         await _applyNewChat(payload);
         break;
       case 'chat_update':
-        await _applyChatUpdate(payload);
+      case 'chat_updated':
+      case 'chat_pinned':
+        await _applyChatUpdate({
+          if (chatId != null) 'chat_id': chatId,
+          ...payload,
+        });
         break;
       case 'delete_chat':
+      case 'chat_deleted':
         if (chatId != null) {
           await _db.deleteChat(chatId);
           await _db.deleteMessagesForChat(chatId);
         }
+        break;
+      case 'history_cleared':
+        if (chatId != null) {
+          await _db.deleteMessagesForChat(chatId);
+          await _db.refreshChatLastMessageFromDb(chatId);
+        }
+        break;
+      case 'draft_updated':
         break;
       default:
         debugPrint('SyncService: Unknown event type: $eventType');
@@ -105,7 +163,8 @@ class SyncService {
   }
 
   Future<void> _applyNewMessage(Map<String, dynamic> payload) async {
-    final serverId = payload['message_id']?.toString();
+    final serverId =
+        (payload['message_id'] ?? payload['id'])?.toString();
     final chatId = payload['chat_id']?.toString();
     if (serverId == null || chatId == null) return;
 
@@ -139,12 +198,30 @@ class SyncService {
         payload['invert_media'] == 1 ||
         payload['invert_media'] == 'true';
     final String? groupedId = payload['grouped_id']?.toString();
-    String? mediaPayloadStr;
-    if (payload['media_payload'] != null) {
-      mediaPayloadStr = payload['media_payload'] is String
-          ? payload['media_payload'] as String
-          : jsonEncode(payload['media_payload']);
+    Map<String, dynamic> mediaPayloadMap = {};
+    if (payload['media_payload'] is Map) {
+      mediaPayloadMap =
+          Map<String, dynamic>.from(payload['media_payload'] as Map);
+    } else if (payload['media_payload'] is String &&
+        (payload['media_payload'] as String).isNotEmpty) {
+      try {
+        final decoded = jsonDecode(payload['media_payload'] as String);
+        if (decoded is Map) {
+          mediaPayloadMap = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
     }
+    if (payload['reply_markup'] != null) {
+      mediaPayloadMap['reply_markup'] = payload['reply_markup'];
+    }
+    if (payload['via_bot_id'] != null) {
+      mediaPayloadMap['via_bot_id'] = payload['via_bot_id'];
+    }
+    if (payload['via_bot_username'] != null) {
+      mediaPayloadMap['via_bot_username'] = payload['via_bot_username'];
+    }
+    final String? mediaPayloadStr =
+        mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
 
     await _db.saveMessage(MessagesCompanion(
       serverId: Value(serverId),
@@ -178,6 +255,22 @@ class SyncService {
       senderAvatarUrl: Value(payload['sender_avatar_url']?.toString()),
       createdAt: Value(payload['created_at']?.toString() ??
           DateTime.now().toIso8601String()),
+      isForward: Value(payload['is_forward'] == true ||
+          payload['is_forwarded'] == true ||
+          payload['forward_from_id'] != null ||
+          payload['forwarded_from_user_id'] != null ||
+          payload['forwarded_from_chat_id'] != null ||
+          (payload['forward_from_name'] != null &&
+              payload['forward_from_name'].toString().isNotEmpty) ||
+          (payload['forwarded_from_name'] != null &&
+              payload['forwarded_from_name'].toString().isNotEmpty)),
+      forwardFromId: Value((payload['forward_from_id'] ??
+              payload['forwarded_from_user_id'] ??
+              payload['forwarded_from_chat_id'])
+          ?.toString()),
+      forwardFromName: Value(
+          (payload['forward_from_name'] ?? payload['forwarded_from_name'])
+              ?.toString()),
       entities: Value(entitiesStr),
       linkPreviewOptions: Value(linkPreviewOptionsStr),
       mediaPayload: Value(mediaPayloadStr),
@@ -187,8 +280,19 @@ class SyncService {
       groupedId: Value(groupedId),
     ));
 
-    // Also update chat's last message if message is newer
+    final isCommunityChannel =
+        payload['community_id'] != null ||
+        CommunityService.isCommunityChannelId(chatId);
+
+    // Also update chat's last message if message is newer (only for standalone chats, not community channels)
     final chat = await _db.getChat(chatId);
+    if (isCommunityChannel) {
+      if (chat != null) {
+        await _db.deleteChat(chatId);
+      }
+      return;
+    }
+
     final msgCreatedAt = payload['created_at']?.toString() ?? '';
     final safeCreatedAt = msgCreatedAt.isNotEmpty
         ? msgCreatedAt
@@ -287,10 +391,36 @@ class SyncService {
 
   Future<void> _applyReadStatus(Map<String, dynamic> payload) async {
     final chatId = payload['chat_id']?.toString();
-    final unreadCount = payload['unread_count'] as int? ?? 0;
     if (chatId == null) return;
 
-    await _db.updateUnreadCount(chatId, unreadCount);
+    final unreadCount = payload['unread_count'] as int?;
+    final rawInboxHwm = payload['last_read_inbox_message_id'];
+    final inboxHwm = rawInboxHwm is num
+        ? rawInboxHwm.toInt()
+        : int.tryParse(rawInboxHwm?.toString() ?? '');
+    final rawOutboxHwm =
+        payload['last_read_outbox_message_id'] ?? payload['max_id'];
+    final outboxHwm = rawOutboxHwm is num
+        ? rawOutboxHwm.toInt()
+        : int.tryParse(rawOutboxHwm?.toString() ?? '');
+
+    if (outboxHwm != null && outboxHwm > 0) {
+      final myUserId = await AuthService.getUserId() ?? '';
+      await _db.markOutboxMessagesReadUpTo(
+        chatId,
+        myUserId,
+        outboxHwm,
+        readAt: payload['read_at']?.toString(),
+      );
+    }
+    if ((inboxHwm != null && inboxHwm > 0) || unreadCount != null) {
+      await _db.updateChatReadHwm(
+        chatId,
+        lastReadInboxMessageId: inboxHwm,
+        lastReadOutboxMessageId: outboxHwm,
+        unreadCount: unreadCount,
+      );
+    }
   }
 
   Future<void> _applyNewChat(Map<String, dynamic> payload) async {

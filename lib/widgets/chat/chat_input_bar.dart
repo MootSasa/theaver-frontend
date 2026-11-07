@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/entity_parser.dart';
 import 'link_preview_input_bar.dart';
 import 'liquid_glass_input_field.dart';
@@ -66,6 +67,13 @@ class ChatInputBar extends StatefulWidget {
   final VoidCallback? onEditLastMessage;
   final bool isEmojiPanelOpen;
   final VoidCallback? onTapInputWhenEmojiOpen;
+  final bool showBotCommandsButton;
+  final bool isBotCommandsOpen;
+  final VoidCallback? onToggleBotCommands;
+  final bool hasReplyKeyboard;
+  final bool isReplyKeyboardOpen;
+  final VoidCallback? onToggleReplyKeyboard;
+  final int slowmodeRemainingSeconds;
 
   const ChatInputBar({
     Key? key,
@@ -112,6 +120,13 @@ class ChatInputBar extends StatefulWidget {
     this.onEditLastMessage,
     this.isEmojiPanelOpen = false,
     this.onTapInputWhenEmojiOpen,
+    this.showBotCommandsButton = false,
+    this.isBotCommandsOpen = false,
+    this.onToggleBotCommands,
+    this.hasReplyKeyboard = false,
+    this.isReplyKeyboardOpen = false,
+    this.onToggleReplyKeyboard,
+    this.slowmodeRemainingSeconds = 0,
   }) : super(key: key);
 
   @override
@@ -259,165 +274,238 @@ class _ChatInputBarState extends State<ChatInputBar> {
     return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].contains(ext);
   }
 
+  Widget _buildEditingBanner(
+    BuildContext context,
+    bool glassEnabled,
+    bool isLite,
+  ) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          iconoir.EditPencil(
+            color: theme.colorScheme.primary,
+            width: 16,
+            height: 16,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              widget.editingTitle ??
+                  context.l10n.translate('chat_editing_title'),
+              style: TextStyle(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          if (widget.onCancelEditing != null)
+            IconButton(
+              icon: iconoir.Xmark(
+                width: 18,
+                height: 18,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+              ),
+              onPressed: widget.onCancelEditing,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            ),
+        ],
+      ),
+    );
+
+    if (glassEnabled) {
+      final glassProvider = context.watch<LiquidGlassProvider?>();
+      if (glassProvider != null) {
+        final style = glassProvider.createStyle(
+          context: context,
+          cornerRadius: 16,
+          refractionIndex: 1.1,
+          refractionWidth: 24,
+          isLiteOverride: isLite,
+        );
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: LiquidGlassLens(
+            style: style,
+            child: content,
+          ),
+        );
+      }
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.black.withValues(alpha: 0.65)
+                  : Colors.white.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isDark ? Colors.white10 : Colors.black12,
+                width: 0.5,
+              ),
+            ),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final glassProvider = context.watch<LiquidGlassProvider?>();
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
 
+    final hasLinkPreview = _detectedUrls.isNotEmpty &&
+        _effectiveLinkPreviewOptions != null &&
+        !_effectiveLinkPreviewOptions!.isDisabled;
+
     final Widget column = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // 1. Link Preview Input Bar (when URLs detected and not disabled)
-        if (_detectedUrls.isNotEmpty &&
-            _effectiveLinkPreviewOptions != null &&
-            !_effectiveLinkPreviewOptions!.isDisabled)
-          LinkPreviewInputBar(
-            options: _effectiveLinkPreviewOptions!,
-            detectedUrls: _detectedUrls,
-            onOptionsChanged: (opts) {
-              setState(() => _internalLinkPreviewOptions = opts);
-              widget.onLinkPreviewOptionsChanged?.call(opts);
-            },
-            onRemove: () {
-              const disabled = LinkPreviewOptions(isDisabled: true);
-              setState(() {
-                _internalLinkPreviewOptions = disabled;
-                _linkPreviewDismissed = true;
-              });
-              widget.onLinkPreviewOptionsChanged?.call(disabled);
-            },
-          ),
+        _GlassSafeAnimatedSection(
+          visible: hasLinkPreview,
+          child: hasLinkPreview
+              ? LinkPreviewInputBar(
+                  options: _effectiveLinkPreviewOptions!,
+                  detectedUrls: _detectedUrls,
+                  enabled: glassEnabled,
+                  isLite: isLite,
+                  onOptionsChanged: (opts) {
+                    setState(() => _internalLinkPreviewOptions = opts);
+                    widget.onLinkPreviewOptionsChanged?.call(opts);
+                  },
+                  onRemove: () {
+                    const disabled = LinkPreviewOptions(isDisabled: true);
+                    setState(() {
+                      _internalLinkPreviewOptions = disabled;
+                      _linkPreviewDismissed = true;
+                    });
+                    widget.onLinkPreviewOptionsChanged?.call(disabled);
+                  },
+                )
+              : null,
+        ),
 
         // 2. Editing message banner
-        if (widget.isEditing)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.5),
-            child: Row(
-              children: [
-                iconoir.EditPencil(
-                  color: Theme.of(context).colorScheme.primary,
-                  width: 16,
-                  height: 16,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.editingTitle ??
-                        context.l10n.translate('chat_editing_title'),
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                if (widget.onCancelEditing != null)
-                  IconButton(
-                    icon: const iconoir.Xmark(
-                      width: 18,
-                      height: 18,
-                    ),
-                    onPressed: widget.onCancelEditing,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-              ],
-            ),
-          ),
+        _GlassSafeAnimatedSection(
+          visible: widget.isEditing,
+          child: widget.isEditing
+              ? _buildEditingBanner(context, glassEnabled, isLite)
+              : null,
+        ),
 
         // 3. Reply/Quote preview bar
-        if (widget.replyToMessage != null)
-          ReplyPreviewBar(
-            replyToMessage: widget.replyToMessage!,
-            isQuote: widget.isQuote,
-            quoteText: widget.quoteText,
-            quoteOffset: widget.quoteOffset,
-            quoteLength: widget.quoteLength,
-            onClose: widget.onCancelReply ?? () {},
-            onTap: widget.onTapReply,
-            enabled: glassEnabled,
-            isLite: isLite,
-            currentUserId: widget.currentUserId,
-          ),
+        _GlassSafeAnimatedSection(
+          visible: widget.replyToMessage != null,
+          child: widget.replyToMessage != null
+              ? ReplyPreviewBar(
+                  replyToMessage: widget.replyToMessage!,
+                  isQuote: widget.isQuote,
+                  quoteText: widget.quoteText,
+                  quoteOffset: widget.quoteOffset,
+                  quoteLength: widget.quoteLength,
+                  onClose: widget.onCancelReply ?? () {},
+                  onTap: widget.onTapReply,
+                  enabled: glassEnabled,
+                  isLite: isLite,
+                  currentUserId: widget.currentUserId,
+                )
+              : null,
+        ),
 
         // 4. Attached files preview list
-        if (widget.attachedFiles.isNotEmpty)
-          Container(
-            height: 80,
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: widget.attachedFiles.length,
-              itemBuilder: (context, index) {
-                final fileName = index < widget.attachedFileNames.length
-                    ? widget.attachedFileNames[index]
-                    : '';
-                return Container(
-                  width: 80,
-                  margin: const EdgeInsets.only(right: 8),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: _isImageFile(fileName)
-                              ? Image.file(
-                                  widget.attachedFiles[index],
-                                  fit: BoxFit.cover,
-                                )
-                              : Container(
-                                  color: Colors.grey[300],
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      const iconoir.Page(
-                                        width: 28,
-                                        height: 28,
+        _GlassSafeAnimatedSection(
+          visible: widget.attachedFiles.isNotEmpty,
+          child: widget.attachedFiles.isNotEmpty
+              ? Container(
+                  height: 80,
+                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: widget.attachedFiles.length,
+                    itemBuilder: (context, index) {
+                      final fileName = index < widget.attachedFileNames.length
+                          ? widget.attachedFileNames[index]
+                          : '';
+                      return Container(
+                        width: 80,
+                        margin: const EdgeInsets.only(right: 8),
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: _isImageFile(fileName)
+                                    ? Image.file(
+                                        widget.attachedFiles[index],
+                                        fit: BoxFit.cover,
+                                      )
+                                    : Container(
+                                        color: Colors.grey[300],
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            const iconoir.Page(
+                                              width: 28,
+                                              height: 28,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              fileName,
+                                              style:
+                                                  const TextStyle(fontSize: 10),
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        fileName,
-                                        style: const TextStyle(fontSize: 10),
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                        ),
-                      ),
-                      if (widget.onRemoveAttachment != null)
-                        Positioned(
-                          top: 2,
-                          right: 2,
-                          child: GestureDetector(
-                            onTap: () => widget.onRemoveAttachment!(index),
-                            child: Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: const BoxDecoration(
-                                color: Colors.black54,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const iconoir.Xmark(
-                                color: Colors.white,
-                                width: 14,
-                                height: 14,
                               ),
                             ),
-                          ),
+                            if (widget.onRemoveAttachment != null)
+                              Positioned(
+                                top: 2,
+                                right: 2,
+                                child: GestureDetector(
+                                  onTap: () =>
+                                      widget.onRemoveAttachment!(index),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: const BoxDecoration(
+                                      color: Colors.black54,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const iconoir.Xmark(
+                                      color: Colors.white,
+                                      width: 14,
+                                      height: 14,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                    ],
+                      );
+                    },
                   ),
-                );
-              },
-            ),
-          ),
+                )
+              : null,
+        ),
 
         // 5. Upload progress
         if (widget.isUploading)
@@ -451,7 +539,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
                             'Add a caption...')
                         : (AppLocalizations.of(context)
                                 ?.translate('chat_type_message') ??
-                            'Type a message...')),
+                            'Сообщение')),
                 onChanged: widget.onChanged,
                 onSend: widget.isSending ? null : _handleSend,
                 onAttach: widget.onAttach,
@@ -470,6 +558,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 onEditLastMessage: widget.isEditing ? null : widget.onEditLastMessage,
                 isEmojiPanelOpen: widget.isEmojiPanelOpen,
                 onTapInputWhenEmojiOpen: widget.onTapInputWhenEmojiOpen,
+                showBotCommandsButton: widget.showBotCommandsButton,
+                isBotCommandsOpen: widget.isBotCommandsOpen,
+                onToggleBotCommands: widget.onToggleBotCommands,
+                hasReplyKeyboard: widget.hasReplyKeyboard,
+                isReplyKeyboardOpen: widget.isReplyKeyboardOpen,
+                onToggleReplyKeyboard: widget.onToggleReplyKeyboard,
+                slowmodeRemainingSeconds: widget.slowmodeRemainingSeconds,
               ),
             ),
             if (widget.trailing != null) widget.trailing!,
@@ -478,10 +573,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       ],
     );
 
-    if (glassEnabled &&
-        !isLite &&
-        glassProvider != null &&
-        widget.replyToMessage != null) {
+    if (glassEnabled && !isLite && glassProvider != null) {
       return LiquidGlassBlender(
         smoothness: 0,
         style: glassProvider.createStyle(
@@ -495,5 +587,104 @@ class _ChatInputBarState extends State<ChatInputBar> {
     }
 
     return column;
+  }
+}
+
+/// Geometric appear/disappear wrapper for Liquid Glass contextual bars
+/// (`ReplyPreviewBar`, `LinkPreviewInputBar`, editing banner, attachments).
+///
+/// Strictly adheres to the Liquid Glass rule: NEVER applies `FadeTransition`
+/// or `Opacity` to the `LiquidGlassLens` shape. Instead, animates height
+/// (`ClipRect` + `Align(heightFactor)`) and vertical slide (`SlideTransition`),
+/// retaining the last active child while animating out so closing transitions
+/// play smoothly.
+class _GlassSafeAnimatedSection extends StatefulWidget {
+  final bool visible;
+  final Widget? child;
+
+  const _GlassSafeAnimatedSection({
+    Key? key,
+    required this.visible,
+    required this.child,
+  }) : super(key: key);
+
+  @override
+  State<_GlassSafeAnimatedSection> createState() =>
+      _GlassSafeAnimatedSectionState();
+}
+
+class _GlassSafeAnimatedSectionState extends State<_GlassSafeAnimatedSection>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _heightFactor;
+  late final Animation<Offset> _slideAnimation;
+  Widget? _cachedChild;
+
+  @override
+  void initState() {
+    super.initState();
+    _cachedChild = widget.child;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      value: (widget.visible && widget.child != null) ? 1.0 : 0.0,
+    );
+    final curved = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _heightFactor = Tween<double>(begin: 0.0, end: 1.0).animate(curved);
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0.0, 0.25),
+      end: Offset.zero,
+    ).animate(curved);
+  }
+
+  @override
+  void didUpdateWidget(covariant _GlassSafeAnimatedSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.child != null) {
+      _cachedChild = widget.child;
+    }
+    if (widget.visible != oldWidget.visible) {
+      if (widget.visible && _cachedChild != null) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        if ((_controller.isDismissed && !widget.visible) ||
+            _cachedChild == null) {
+          return const SizedBox.shrink();
+        }
+        return IgnorePointer(
+          ignoring: !widget.visible,
+          child: ClipRect(
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              heightFactor: _heightFactor.value,
+              child: SlideTransition(
+                position: _slideAnimation,
+                child: _cachedChild,
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }

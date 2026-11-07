@@ -15,13 +15,6 @@ String? getValidAvatarUrl(String? url) {
   // data: URLs are valid (base64 encoded avatars)
   if (url.startsWith('data:')) return url;
 
-  // Upgrade legacy miptgram.ru URLs to the current domain
-  if (url.contains('storage.miptgram.ru')) {
-    url = url.replaceAll('storage.miptgram.ru', 'storage.theaver.app');
-  } else if (url.contains('miptgram.ru')) {
-    url = url.replaceAll('miptgram.ru', 'theaver.app');
-  }
-
   // Rewrite internal/local MinIO URLs (localhost:9000 / 127.0.0.1:9000 / minio:9000) to public storageUrl
   if (url.startsWith('http://localhost:9000') ||
       url.startsWith('http://127.0.0.1:9000') ||

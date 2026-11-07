@@ -1,12 +1,17 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:just_audio/just_audio.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
+import '../../services/liquid_glass_provider.dart';
 import '../../services/voice_note_recorder_service.dart';
 
 /// Full-featured Telegram-style overlay for recording voice messages.
@@ -331,123 +336,245 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
     final isDark = theme.brightness == Brightness.dark;
+    final p = context.theav;
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final useGlass = glassProvider.enabled;
+    final isFullGlass = glassProvider.isFull;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
     final elapsedText = _formatDuration(widget.recorderService.elapsed);
 
-    return FadeTransition(
-      opacity: _fadeController,
-      child: Stack(
-        children: [
-          // 1. Transparent touch blocker behind overlay when locked
-          if (_isLocked)
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () {},
-              ),
-            ),
+    final entranceCurve = CurvedAnimation(
+      parent: _fadeController,
+      curve: Curves.easeOutCubic,
+    );
+    final lockDismissFactor =
+        (1.0 - (_dragOffsetX.abs() / 60.0)).clamp(0.0, 1.0);
 
-          // 2. Lock pill (when holding and sliding up)
-          if (!_isLocked)
-            Positioned(
-              right: 16,
-              bottom: 74 + bottomPadding + (_dragOffsetY.clamp(-90.0, 0.0) * -0.5),
-              child: Opacity(
-                opacity: (1.0 - (_dragOffsetX.abs() / 60.0)).clamp(0.0, 1.0),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xE01C1C1E) : const Color(0xF0FFFFFF),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.18),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: const Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      iconoir.Lock(width: 18, height: 18, color: Colors.grey),
-                      SizedBox(height: 4),
-                      iconoir.NavArrowUp(width: 16, height: 16, color: Colors.grey),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+    final lockPillContent = Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        iconoir.Lock(width: 18, height: 18, color: p.textSecondary),
+        const SizedBox(height: 4),
+        iconoir.NavArrowUp(width: 16, height: 16, color: p.textSecondary),
+      ],
+    );
 
-          // 3. Bottom Recording Bar
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Reply/Quote banner if attached
-                if (widget.replyToMessage != null)
-                  _buildReplyBanner(context, isDark, primaryColor),
+    final innerControls = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(animation),
+          child: child,
+        ),
+      ),
+      child: KeyedSubtree(
+        key: ValueKey<bool>(_isLocked),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: SizedBox(
+            height: 52,
+            child: _isLocked
+                ? _buildLockedControls(context, primaryColor, elapsedText)
+                : _buildHoldControls(context, primaryColor, elapsedText),
+          ),
+        ),
+      ),
+    );
 
-                // Main Bar Container
-                Container(
-                  padding: EdgeInsets.fromLTRB(14, 8, 14, 8 + bottomPadding),
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xF51E1E20) : const Color(0xF8F7F7F8),
-                    border: Border(
-                      top: BorderSide(
-                        color: isDark ? Colors.white12 : Colors.black12,
-                        width: 0.5,
-                      ),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 8,
-                        offset: const Offset(0, -2),
-                      ),
-                    ],
-                  ),
-                  child: SizedBox(
-                    height: 48,
-                    child: _isLocked
-                        ? _buildLockedControls(context, primaryColor, elapsedText)
-                        : _buildHoldControls(context, primaryColor, elapsedText),
-                  ),
-                ),
-              ],
+    return Stack(
+      children: [
+        // 1. Transparent touch blocker behind overlay when locked
+        if (_isLocked)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () {},
             ),
           ),
-        ],
-      ),
+
+        // 2. Lock pill (when holding and sliding up) — geometric scale only on outer glass
+        if (!_isLocked && lockDismissFactor > 0.02)
+          Positioned(
+            right: 16,
+            bottom:
+                74 + bottomPadding + (_dragOffsetY.clamp(-90.0, 0.0) * -0.5),
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.7, end: 1.0).animate(entranceCurve),
+              child: Transform.scale(
+                scale: 0.75 + 0.25 * lockDismissFactor,
+                child: useGlass
+                    ? SizedBox(
+                        width: 40,
+                        height: 56,
+                        child: LiquidGlassLens(
+                          style: glassProvider.createStyle(
+                            context: context,
+                            cornerRadius: 20,
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.07)
+                                : Colors.white.withValues(alpha: 0.45),
+                            refractionIndex: isFullGlass ? 1.12 : 1.05,
+                            refractionWidth: 20.0,
+                          ),
+                          child: Opacity(
+                            opacity: lockDismissFactor,
+                            child: Center(child: lockPillContent),
+                          ),
+                        ),
+                      )
+                    : ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: BackdropFilter.grouped(
+                          filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                          child: Container(
+                            width: 40,
+                            height: 56,
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? p.surfaceElevated.withValues(alpha: 0.88)
+                                  : Colors.white.withValues(alpha: 0.90),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: p.borderSubtle,
+                                width: 0.5,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.16),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: Opacity(
+                              opacity: lockDismissFactor,
+                              child: Center(child: lockPillContent),
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+
+        // 3. Bottom Recording Capsule (geometric slide/scale entrance — no outer fade)
+        Positioned(
+          left: 10,
+          right: 10,
+          bottom: 6 + bottomPadding,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.35),
+              end: Offset.zero,
+            ).animate(entranceCurve),
+            child: ScaleTransition(
+              scale:
+                  Tween<double>(begin: 0.95, end: 1.0).animate(entranceCurve),
+              alignment: Alignment.bottomCenter,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Reply/Quote banner if attached
+                  if (widget.replyToMessage != null)
+                    _buildReplyBanner(
+                      context,
+                      isDark,
+                      primaryColor,
+                      useGlass,
+                      isFullGlass,
+                      p,
+                      glassProvider,
+                    ),
+
+                  // Main Capsule
+                  SizedBox(
+                    height: 52,
+                    width: double.infinity,
+                    child: useGlass
+                        ? LiquidGlassLens(
+                            style: glassProvider.createStyle(
+                              context: context,
+                              cornerRadius: 26,
+                              color: isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.white.withValues(alpha: 0.45),
+                              refractionIndex: isFullGlass ? 1.12 : 1.05,
+                              refractionWidth: 24.0,
+                            ),
+                            child: innerControls,
+                          )
+                        : ClipRRect(
+                            borderRadius: BorderRadius.circular(26),
+                            child: BackdropFilter.grouped(
+                              filter:
+                                  ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                              child: Container(
+                                height: 52,
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? p.surfaceElevated
+                                          .withValues(alpha: 0.88)
+                                      : Colors.white.withValues(alpha: 0.90),
+                                  borderRadius: BorderRadius.circular(26),
+                                  border: Border.all(
+                                    color: p.borderSubtle,
+                                    width: 0.5,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color:
+                                          Colors.black.withValues(alpha: 0.12),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: innerControls,
+                              ),
+                            ),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _buildReplyBanner(BuildContext context, bool isDark, Color primaryColor) {
+  Widget _buildReplyBanner(
+    BuildContext context,
+    bool isDark,
+    Color primaryColor,
+    bool useGlass,
+    bool isFullGlass,
+    TheavPalette p,
+    LiquidGlassProvider glassProvider,
+  ) {
     final senderName = widget.replyToMessage?.senderName ?? 'User';
     final preview = widget.isQuote && widget.quoteText != null
         ? widget.quoteText!
         : (widget.replyToMessage?.content ?? '');
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    final bannerRow = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xCC2C2C2E) : const Color(0xEEFFFFFF),
-        borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: primaryColor, width: 3.5)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 6,
-          ),
-        ],
-      ),
       child: Row(
         children: [
-          const Icon(Icons.reply_rounded, size: 16, color: Colors.grey),
+          Container(
+            width: 3,
+            height: 28,
+            decoration: BoxDecoration(
+              color: primaryColor,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Icon(Icons.reply_rounded, size: 16, color: p.textSecondary),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -466,7 +593,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
                 ),
                 Text(
                   preview,
-                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  style: TextStyle(fontSize: 11, color: p.textSecondary),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -476,9 +603,50 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
           if (widget.onCancelReply != null)
             GestureDetector(
               onTap: widget.onCancelReply,
-              child: const Icon(Icons.close, size: 16, color: Colors.grey),
+              child: Icon(Icons.close, size: 16, color: p.textSecondary),
             ),
         ],
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: SizedBox(
+        height: 44,
+        width: double.infinity,
+        child: useGlass
+            ? LiquidGlassLens(
+                style: glassProvider.createStyle(
+                  context: context,
+                  cornerRadius: 16,
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.06)
+                      : Colors.white.withValues(alpha: 0.42),
+                  refractionIndex: isFullGlass ? 1.1 : 1.04,
+                  refractionWidth: 20.0,
+                ),
+                child: bannerRow,
+              )
+            : ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: BackdropFilter.grouped(
+                  filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? p.surfaceElevated.withValues(alpha: 0.86)
+                          : Colors.white.withValues(alpha: 0.88),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: p.borderSubtle,
+                        width: 0.5,
+                      ),
+                    ),
+                    child: bannerRow,
+                  ),
+                ),
+              ),
       ),
     );
   }

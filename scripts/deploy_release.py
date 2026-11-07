@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deploy compiled release artifacts to Miptgram API and MinIO storage,
+Deploy compiled release artifacts to Theaver API and MinIO storage,
 and register them in the PostgreSQL database.
 Can be executed in GitHub Actions or locally.
 """
@@ -305,11 +305,11 @@ def main():
 
     args = parser.parse_args()
 
-    api_url = (args.api_url or os.environ.get("THEAVER_API_URL") or os.environ.get("MIPTGRAM_API_URL") or "https://api.theaver.app").rstrip("/")
-    admin_secret = args.admin_secret or os.environ.get("THEAVER_ADMIN_SECRET") or os.environ.get("MIPTGRAM_ADMIN_SECRET") or ""
+    api_url = (args.api_url or os.environ.get("THEAVER_API_URL") or "https://api.theaver.app").rstrip("/")
+    admin_secret = args.admin_secret or os.environ.get("THEAVER_ADMIN_SECRET") or ""
 
     if not admin_secret:
-        msg = "[Deploy] WARNING: THEAVER_ADMIN_SECRET (or MIPTGRAM_ADMIN_SECRET) is not configured. Skipping deployment to Theaver API."
+        msg = "[Deploy] WARNING: THEAVER_ADMIN_SECRET is not configured. Skipping deployment to Theaver API."
         if args.strict:
             print(msg, file=sys.stderr, flush=True)
             sys.exit(1)

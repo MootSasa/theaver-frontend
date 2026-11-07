@@ -130,14 +130,14 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
     _currentY = newY;
 
     final prevOffset = _offsetNotifier.value;
-    if ((newX - prevOffset.dx).abs() >= 0.25 ||
-        (newY - prevOffset.dy).abs() >= 0.25) {
+    if ((newX - prevOffset.dx).abs() >= 0.08 ||
+        (newY - prevOffset.dy).abs() >= 0.08) {
       _offsetNotifier.value = Offset(newX, newY);
     }
 
     // If movement has settled below visual perception and target is near center,
     // pause the animation loop to conserve CPU/GPU cycles.
-    if (diffX < 0.05 && diffY < 0.05 && _targetX.abs() < 0.2 && _targetY.abs() < 0.2) {
+    if (diffX < 0.02 && diffY < 0.02 && _targetX.abs() < 0.1 && _targetY.abs() < 0.1) {
       _targetX = 0.0;
       _targetY = 0.0;
       _currentX = 0.0;
@@ -179,17 +179,16 @@ class _MotionWallpaperWrapperState extends State<MotionWallpaperWrapper>
     return ClipRect(
       child: ValueListenableBuilder<Offset>(
         valueListenable: _offsetNotifier,
-        child: RepaintBoundary(child: widget.child),
-        builder: (context, offset, staticChild) {
-          if (offset == Offset.zero) {
-            return staticChild!;
-          }
-          return Transform.scale(
+        child: RepaintBoundary(
+          child: Transform.scale(
             scale: 1.15,
-            child: Transform.translate(
-              offset: offset,
-              child: staticChild,
-            ),
+            child: widget.child,
+          ),
+        ),
+        builder: (context, offset, staticChild) {
+          return Transform.translate(
+            offset: offset,
+            child: staticChild,
           );
         },
       ),

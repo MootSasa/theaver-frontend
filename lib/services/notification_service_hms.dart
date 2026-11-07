@@ -150,6 +150,19 @@ class HMSPushService {
     }
   }
 
+  /// Зарегистрировать фоновый обработчик HMS Push сообщений
+  Future<void> registerBackgroundMessageHandler(
+    void Function(RemoteMessage remoteMessage) handler,
+  ) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await Push.registerBackgroundMessageHandler(handler);
+      debugPrint('HMSPushService: background message handler registered');
+    } catch (e) {
+      debugPrint('HMSPushService: registerBackgroundMessageHandler error: $e');
+    }
+  }
+
   /// Инициализация обработчиков сообщений
   void setupMessageHandlers() {
     Push.getTokenStream.listen((token) {

@@ -29,6 +29,7 @@ import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/search_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/avatar_crop_utils.dart';
 import '../../utils/date_time_utils.dart';
@@ -1235,16 +1236,13 @@ class ProfileScreenState extends State<ProfileScreen>
           iconBuilder: (color, size) =>
               iconoir.Phone(color: color, width: size, height: size),
           label: _tr(l10n, 'call', 'Звонок'),
-          onTap: widget.onVoiceCall ??
-              () => _showToast(_tr(l10n, 'call_not_supported', 'Звонки скоро появятся')),
+          onTap: widget.onVoiceCall ?? () => _startDirectCall(isVideo: false),
         ),
         ProfileActionButtonItem(
           iconBuilder: (color, size) =>
               iconoir.VideoCamera(color: color, width: size, height: size),
           label: _tr(l10n, 'video', 'Видео'),
-          onTap: widget.onVideoCall ??
-              () => _showToast(_tr(
-                  l10n, 'video_call_not_supported', 'Видеозвонки скоро появятся')),
+          onTap: widget.onVideoCall ?? () => _startDirectCall(isVideo: true),
         ),
         ProfileActionButtonItem(
           iconBuilder: (color, size) => _isMuted
@@ -1507,6 +1505,34 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  Future<void> _startDirectCall({required bool isVideo}) async {
+    HapticUtils.tap();
+    String? cid = widget.chatId ?? _resolvedChatId;
+    if ((cid == null || cid.isEmpty) &&
+        widget.userId != null &&
+        widget.userId!.isNotEmpty) {
+      final res = await ChatService.createChat(
+        chatType: 'private',
+        participantIds: [widget.userId!],
+      );
+      if (res['success'] == true && res['chat'] is Chat) {
+        cid = (res['chat'] as Chat).id;
+        _resolvedChatId = cid;
+      }
+    }
+    if (!mounted || cid == null || cid.isEmpty) return;
+    Navigator.of(context, rootNavigator: true).pushNamed(
+      isVideo ? '/video-call' : '/voice-call',
+      arguments: {
+        'chatId': cid,
+        'userId': widget.userId,
+        'userName': _getDisplayName(),
+        'avatarUrl': _avatarUrl,
+        'isVideo': isVideo,
+      },
+    );
+  }
+
   void _toggleMute() {
     HapticUtils.selection();
     final cid = _resolvedChatId;
@@ -1527,18 +1553,27 @@ class ProfileScreenState extends State<ProfileScreen>
 
   void _handleSearchInChat() {
     HapticUtils.tap();
-    if (widget.onSearchInChat != null) {
-      Navigator.maybePop(context);
-      widget.onSearchInChat!();
-      return;
-    }
-    final cid = _resolvedChatId;
+    final cid = widget.chatId ?? _resolvedChatId;
     if (cid != null && cid.isNotEmpty) {
       ChatActionsHelper.openSearch(
         context: context,
         chatId: cid,
         chatName: _getDisplayName(),
+        onMessageSelected: (msgId) {
+          if (mounted && Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+          widget.onJumpToMessageId?.call(msgId);
+        },
       );
+      return;
+    }
+    if (widget.onSearchInChat != null) {
+      final callback = widget.onSearchInChat!;
+      Navigator.of(context).pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        callback();
+      });
     }
   }
 
@@ -1768,17 +1803,13 @@ class ProfileScreenState extends State<ProfileScreen>
       final dio = Dio();
       String targetUserId = query.replaceFirst('@', '');
 
-      // Если введён username — ищем пользователя через поиск
-      final searchResp = await dio.get(
-        '${AppConfig.baseUrl}/api/users/search',
-        queryParameters: {'q': targetUserId},
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
-      );
-      if (searchResp.statusCode == 200 && searchResp.data is Map) {
-        final users = searchResp.data['users'] as List?;
-        if (users != null && users.isNotEmpty) {
-          targetUserId = (users.first['id'] ?? users.first['user_id']).toString();
-        }
+      // Если введён username — ищем пользователя через единый поиск
+      final foundUsers = await SearchService.searchUsers(query: targetUserId);
+      if (foundUsers.isNotEmpty) {
+        final exact = foundUsers.where(
+          (u) => u.username.toLowerCase() == targetUserId.toLowerCase() || u.id == targetUserId,
+        );
+        targetUserId = exact.isNotEmpty ? exact.first.id : foundUsers.first.id;
       }
 
       await dio.post(

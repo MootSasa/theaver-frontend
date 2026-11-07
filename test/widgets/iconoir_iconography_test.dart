@@ -18,7 +18,7 @@ import 'package:theaver/widgets/message/message_actions_widget.dart';
 class _TestAppLocalizations extends AppLocalizations {
   _TestAppLocalizations(super.locale);
   @override
-  String translate(String key) => key;
+  String translate(String key, [Map<String, String>? params]) => key;
 }
 
 class _TestAppLocalizationsDelegate

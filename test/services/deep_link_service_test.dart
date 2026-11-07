@@ -60,35 +60,18 @@ void main() {
       expect(channel.identifier, equals('custom_channel_3'));
     });
 
-    test('parses custom scheme miptgram:// URLs', () {
-      final profile = DeepLinkService.parseUri(Uri.parse('miptgram://u/custom_user_1'));
-      expect(profile, isNotNull);
-      expect(profile!.type, equals(DeepLinkType.userProfile));
-      expect(profile.identifier, equals('custom_user_1'));
-
-      final invite = DeepLinkService.parseUri(Uri.parse('miptgram://join/custom_invite_2'));
-      expect(invite, isNotNull);
-      expect(invite!.type, equals(DeepLinkType.groupInvite));
-      expect(invite.identifier, equals('custom_invite_2'));
-
-      final channel = DeepLinkService.parseUri(Uri.parse('miptgram://c/custom_channel_3'));
-      expect(channel, isNotNull);
-      expect(channel!.type, equals(DeepLinkType.channel));
-      expect(channel.identifier, equals('custom_channel_3'));
-    });
-
-    test('parses custom scheme miptgram:/// with leading slash path segments', () {
-      final profile = DeepLinkService.parseUri(Uri.parse('miptgram:///u/custom_user_4'));
+    test('parses custom scheme theaver:/// with leading slash path segments', () {
+      final profile = DeepLinkService.parseUri(Uri.parse('theaver:///u/custom_user_4'));
       expect(profile, isNotNull);
       expect(profile!.type, equals(DeepLinkType.userProfile));
       expect(profile.identifier, equals('custom_user_4'));
 
-      final invite = DeepLinkService.parseUri(Uri.parse('miptgram:///join/custom_invite_5'));
+      final invite = DeepLinkService.parseUri(Uri.parse('theaver:///join/custom_invite_5'));
       expect(invite, isNotNull);
       expect(invite!.type, equals(DeepLinkType.groupInvite));
       expect(invite.identifier, equals('custom_invite_5'));
 
-      final channel = DeepLinkService.parseUri(Uri.parse('miptgram:///c/custom_channel_6'));
+      final channel = DeepLinkService.parseUri(Uri.parse('theaver:///c/custom_channel_6'));
       expect(channel, isNotNull);
       expect(channel!.type, equals(DeepLinkType.channel));
       expect(channel.identifier, equals('custom_channel_6'));

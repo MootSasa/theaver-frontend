@@ -402,6 +402,15 @@ class TheavPalette {
   Color get reactionInactiveBackground => _reactionInactiveBackground ?? surface;
   Color get reactionActiveText => _reactionActiveText ?? primary;
 
+  Color get textPrimary => onSurface;
+  Color get textSecondary => subtext;
+  Color get textTertiary => onSurface.withValues(alpha: 0.45);
+  Color get bgBase => background;
+  Color get surfacePrimary => surface;
+  Color get surfaceSecondary => surface.withValues(alpha: 0.85);
+  Color get surfaceElevated => chatInputBackground;
+  Color get borderSubtle => divider;
+
   /// Optional multi-color vertical gradient for outgoing message bubbles
   /// (viewport-anchored continuous mask). If null or < 2 colors, solid
   /// [chatBubbleOutgoing] is used.
@@ -788,6 +797,9 @@ class TheavThemeExtension extends ThemeExtension<TheavThemeExtension> {
     required this.bubbleRadius,
   });
 
+  Color get glassSurfaceColor => palette.surface.withValues(alpha: 0.86);
+  Color get glassBorderColor => palette.onSurface.withValues(alpha: 0.14);
+
   @override
   ThemeExtension<TheavThemeExtension> copyWith({
     TheavPalette? palette,
@@ -925,6 +937,32 @@ class TheavTheme {
           bubbleRadius: bubbleRadius,
         ),
       ],
+    );
+  }
+}
+
+extension TheavContextExtension on BuildContext {
+  TheavPalette get theav {
+    final theme = Theme.of(this);
+    final ext = theme.extension<TheavThemeExtension>();
+    if (ext != null) return ext.palette;
+    final cs = theme.colorScheme;
+    return TheavPalette(
+      primary: cs.primary,
+      onPrimary: cs.onPrimary,
+      background: theme.scaffoldBackgroundColor,
+      surface: cs.surface,
+      onSurface: cs.onSurface,
+      appBarBackground: theme.appBarTheme.backgroundColor ?? cs.surface,
+      appBarForeground: theme.appBarTheme.foregroundColor ?? cs.onSurface,
+      chatBubbleOutgoing: cs.primary,
+      chatBubbleOutgoingText: cs.onPrimary,
+      chatBubbleOutgoingSubtext: cs.onPrimary.withValues(alpha: 0.7),
+      chatBubbleIncoming: cs.surface,
+      chatBubbleIncomingText: cs.onSurface,
+      chatBubbleIncomingSubtext: cs.onSurface.withValues(alpha: 0.6),
+      chatDateBadge: cs.surface.withValues(alpha: 0.8),
+      chatDateBadgeText: cs.onSurface,
     );
   }
 }

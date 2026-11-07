@@ -102,7 +102,7 @@ class RotationPageTransitionsBuilder extends PageTransitionsBuilder {
   }
 }
 
-/// Custom screen transition animations for Miptgram.
+/// Custom screen transition animations for Theaver.
 class ScreenTransitionAnimations {
   /// Fade transition builder.
   static PageTransitionsBuilder get fadeTransition => const FadePageTransitionsBuilder();

@@ -10,7 +10,7 @@ void main() {
         'latest_build': 42,
         'min_supported_build': 10,
         'force_update': false,
-        'download_url': 'https://storage.theaver.app/releases/miptgram-v1.2.0.apk',
+        'download_url': 'https://storage.theaver.app/releases/theaver-v1.2.0.apk',
         'apk_size_bytes': 47185920, // ~45.0 MB
         'sha256': 'abc123def456',
         'release_notes': '• Voice calls improvements\n• Bug fixes',
@@ -23,7 +23,7 @@ void main() {
       expect(info.latestBuild, equals(42));
       expect(info.minSupportedBuild, equals(10));
       expect(info.forceUpdate, isFalse);
-      expect(info.downloadUrl, equals('https://storage.theaver.app/releases/miptgram-v1.2.0.apk'));
+      expect(info.downloadUrl, equals('https://storage.theaver.app/releases/theaver-v1.2.0.apk'));
       expect(info.apkSizeBytes, equals(47185920));
       expect(info.sha256, equals('abc123def456'));
       expect(info.releaseNotes, contains('Voice calls'));

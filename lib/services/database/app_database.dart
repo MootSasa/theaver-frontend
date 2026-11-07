@@ -32,6 +32,15 @@ class Chats extends Table {
   TextColumn get lastMessageFileUrl => text().nullable()();
   TextColumn get lastMessageGroupedId => text().nullable()();
   TextColumn get otherUserId => text().nullable()();
+  IntColumn get lastReadInboxMessageId =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get lastReadOutboxMessageId =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get pinnedMessageId => integer().nullable()();
+  TextColumn get username => text().nullable()();
+  BoolColumn get isPublic => boolean().withDefault(const Constant(false))();
+  BoolColumn get isBot => boolean().withDefault(const Constant(false))();
+  BoolColumn get isVerified => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -153,8 +162,8 @@ class AppDatabase extends _$AppDatabase {
 
   static QueryExecutor _openConnection(String userId) {
     final dbName = (userId.isNotEmpty && userId != 'default')
-        ? 'miptgram_$userId'
-        : 'miptgram';
+        ? 'theaver_$userId'
+        : 'theaver';
     return impl.openConnection(dbName);
   }
 
@@ -167,8 +176,8 @@ class AppDatabase extends _$AppDatabase {
       } catch (_) {}
     }
     final dbName = (userId.isNotEmpty && userId != 'default')
-        ? 'miptgram_$userId'
-        : 'miptgram';
+        ? 'theaver_$userId'
+        : 'theaver';
     try {
       await impl.deleteDatabaseFile(dbName);
     } catch (_) {}
@@ -193,7 +202,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -298,6 +307,29 @@ class AppDatabase extends _$AppDatabase {
               'ALTER TABLE chats ADD COLUMN other_user_id TEXT',
             );
           }
+          if (from < 10) {
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_read_inbox_message_id INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN last_read_outbox_message_id INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN pinned_message_id INTEGER',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN username TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0',
+            );
+          }
         },
       );
 
@@ -352,6 +384,10 @@ class AppDatabase extends _$AppDatabase {
   /// 3) По дате последнего сообщения / обновления (updatedAt DESC)
   Stream<List<DbChat>> watchChats({int filter = 0}) {
     final query = select(chats);
+    // Исключаем сообщества и каналы сообществ из общего списка чатов
+    query.where((t) =>
+        t.chatType.isNotValue('community') &
+        t.chatType.isNotValue('community_channel'));
     // Скрываем пустые приватные чаты-«призраки» (должно быть сообщение или закрепление)
     query.where((t) =>
         t.chatType.isNotValue('private') |
@@ -381,7 +417,10 @@ class AppDatabase extends _$AppDatabase {
     await ensureInitialized();
     final pattern = '%$query%';
     return (select(chats)
-          ..where((t) => t.name.like(pattern) | t.lastMessage.like(pattern))
+          ..where((t) =>
+              (t.name.like(pattern) | t.lastMessage.like(pattern)) &
+              t.chatType.isNotValue('community') &
+              t.chatType.isNotValue('community_channel'))
           ..orderBy([
             (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
             (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
@@ -393,7 +432,9 @@ class AppDatabase extends _$AppDatabase {
   /// Реактивный подсчёт общего числа непрочитанных сообщений
   Stream<int> watchTotalUnread() {
     final sumCol = chats.unreadCount.sum();
-    final query = selectOnly(chats)..addColumns([sumCol]);
+    final query = selectOnly(chats)
+      ..addColumns([sumCol])
+      ..where(chats.chatType.isNotValue('community') & chats.chatType.isNotValue('community_channel'));
     return query.watchSingleOrNull().map((row) => row?.read(sumCol) ?? 0);
   }
 
@@ -401,6 +442,9 @@ class AppDatabase extends _$AppDatabase {
   Future<List<DbChat>> getChats() async {
     await ensureInitialized();
     return (select(chats)
+          ..where((t) =>
+              t.chatType.isNotValue('community') &
+              t.chatType.isNotValue('community_channel'))
           ..orderBy([
             (t) => OrderingTerm(expression: t.chatType.equals('saved'), mode: OrderingMode.desc),
             (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
@@ -943,6 +987,100 @@ class AppDatabase extends _$AppDatabase {
     ));
   }
 
+  /// Обновить High-Water Mark прочтения чата (lastReadInboxMessageId / lastReadOutboxMessageId)
+  Future<void> updateChatReadHwm(
+    String chatId, {
+    int? lastReadInboxMessageId,
+    int? lastReadOutboxMessageId,
+    int? unreadCount,
+  }) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    final existing = await getChat(chatId);
+    if (existing == null) return;
+
+    final nextInbox = lastReadInboxMessageId != null &&
+            lastReadInboxMessageId > existing.lastReadInboxMessageId
+        ? lastReadInboxMessageId
+        : existing.lastReadInboxMessageId;
+    final nextOutbox = lastReadOutboxMessageId != null &&
+            lastReadOutboxMessageId > existing.lastReadOutboxMessageId
+        ? lastReadOutboxMessageId
+        : existing.lastReadOutboxMessageId;
+
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        lastReadInboxMessageId: Value(nextInbox),
+        lastReadOutboxMessageId: Value(nextOutbox),
+        unreadCount:
+            unreadCount != null ? Value(unreadCount) : const Value.absent(),
+      ),
+    );
+  }
+
+  /// Обновить ID закреплённого сообщения в чате
+  Future<void> updateChatPinnedMessageId(
+    String chatId,
+    int? pinnedMessageId,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        pinnedMessageId: Value(pinnedMessageId),
+      ),
+    );
+  }
+
+  /// Пометить исходящие сообщения пользователя в чате прочитанными до maxMessageId (O(1) HWM)
+  Future<void> markOutboxMessagesReadUpTo(
+    String chatId,
+    String myUserId,
+    int maxMessageId, {
+    String? readAt,
+  }) async {
+    if (chatId.isEmpty || maxMessageId <= 0) return;
+    await ensureInitialized();
+    await updateChatReadHwm(
+      chatId,
+      lastReadOutboxMessageId: maxMessageId,
+    );
+    final effectiveReadAt = readAt ?? DateTime.now().toUtc().toIso8601String();
+    final unreadOutbox = await (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (myUserId.isNotEmpty ? t.senderId.equals(myUserId) : const Constant(true)) &
+              t.isRead.equals(false)))
+        .get();
+    if (unreadOutbox.isEmpty) return;
+
+    await batch((b) {
+      for (final msg in unreadOutbox) {
+        final sid = int.tryParse(msg.serverId ?? msg.localId) ?? 0;
+        if (sid > 0 && sid <= maxMessageId) {
+          Map<String, dynamic> mp = {};
+          if (msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty) {
+            try {
+              final decoded = jsonDecode(msg.mediaPayload!);
+              if (decoded is Map) {
+                mp = Map<String, dynamic>.from(decoded);
+              }
+            } catch (_) {}
+          }
+          mp['read_at'] ??= effectiveReadAt;
+          b.update(
+            messages,
+            MessagesCompanion(
+              isRead: const Value(true),
+              mediaPayload: Value(jsonEncode(mp)),
+            ),
+            where: (t) => t.localId.equals(msg.localId),
+          );
+        }
+      }
+    });
+  }
+
   // === SYNC STATE ===
 
   /// Получить последний USN для пользователя
@@ -1080,6 +1218,63 @@ class AppDatabase extends _$AppDatabase {
         return hasFile;
       });
     return stmt.get();
+  }
+
+  /// Локальный мгновенный поиск по чатам (Unicode / регистронезависимый)
+  Future<List<DbChat>> searchChatsLocal(String query, {int limit = 20}) async {
+    final qLower = query.trim().toLowerCase();
+    if (qLower.isEmpty) return [];
+    await ensureInitialized();
+    final allChats = await getChats();
+    final matched = <DbChat>[];
+    for (final c in allChats) {
+      final nameMatch = c.name.toLowerCase().contains(qLower);
+      final usernameMatch =
+          c.username != null && c.username!.toLowerCase().contains(qLower);
+      if (nameMatch || usernameMatch) {
+        matched.add(c);
+        if (matched.length >= limit) break;
+      }
+    }
+    return matched;
+  }
+
+  /// Локальный мгновенный поиск по сообщениям (с поддержкой регистронезависимого поиска кириллицы/латиницы)
+  Future<List<DbMessage>> searchMessagesLocal(
+    String query, {
+    String? chatId,
+    int limit = 30,
+  }) async {
+    final qLower = query.trim().toLowerCase();
+    if (qLower.isEmpty) return [];
+    await ensureInitialized();
+
+    final trimmedChatId = chatId?.trim() ?? '';
+    final stmt = select(messages)
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
+
+    if (trimmedChatId.isNotEmpty) {
+      stmt
+        ..where((t) => t.chatId.equals(trimmedChatId))
+        ..limit(2000);
+    } else {
+      stmt.limit(3000);
+    }
+
+    final candidates = await stmt.get();
+    final matched = <DbMessage>[];
+    for (final m in candidates) {
+      final contentMatch = m.content.toLowerCase().contains(qLower);
+      final fileMatch =
+          m.fileName != null && m.fileName!.toLowerCase().contains(qLower);
+      final senderMatch =
+          m.senderName != null && m.senderName!.toLowerCase().contains(qLower);
+      if (contentMatch || fileMatch || senderMatch) {
+        matched.add(m);
+        if (matched.length >= limit) break;
+      }
+    }
+    return matched;
   }
 
   /// Очистить все данные локальной базы (сообщения, чаты, состояние синхронизации, карты)

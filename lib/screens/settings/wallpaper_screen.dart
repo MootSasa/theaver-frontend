@@ -293,8 +293,10 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: SwitchListTile(
-                title: Text(
+              child: Material(
+                type: MaterialType.transparency,
+                child: SwitchListTile(
+                  title: Text(
                   l10n.translate('wallpaper_motion'),
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                 ),
@@ -305,11 +307,12 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
                 secondary: const Icon(Icons.screen_rotation, color: Color(0xFF0088CC)),
                 value: _currentWallpaper.motionEnabled,
                 activeColor: const Color(0xFF0088CC),
-                onChanged: (val) {
-                  setState(() {
-                    _currentWallpaper = _currentWallpaper.copyWith(motionEnabled: val);
-                  });
-                },
+                  onChanged: (val) {
+                    setState(() {
+                      _currentWallpaper = _currentWallpaper.copyWith(motionEnabled: val);
+                    });
+                  },
+                ),
               ),
             ),
           ),
@@ -505,7 +508,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
             ],
           ),
           Slider(
-            value: _currentWallpaper.blurRadius,
+            value: _currentWallpaper.blurRadius.clamp(0.0, 25.0),
             min: 0.0,
             max: 25.0,
             divisions: 25,
@@ -526,7 +529,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
             ],
           ),
           Slider(
-            value: _currentWallpaper.dimming,
+            value: _currentWallpaper.dimming.clamp(0.0, 0.75),
             min: 0.0,
             max: 0.75,
             divisions: 15,

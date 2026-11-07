@@ -12,6 +12,7 @@ import '../../utils/haptic_utils.dart';
 import '../../screens/chat/create_private_chat_screen.dart';
 import '../../screens/chat/create_group_screen.dart';
 import '../../screens/chat/create_channel_screen.dart';
+import '../../screens/chat/create_chat_screen.dart';
 import '../../screens/settings/settings_screen.dart';
 import '../../screens/settings/profile_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
@@ -47,6 +48,7 @@ import '../../services/update_service.dart';
 import '../settings/widgets/update_dialog.dart';
 import '../../widgets/chat/round_video_thumbnail.dart';
 import '../../widgets/chat/media_note_player_header.dart';
+import '../../widgets/call/call_device_transfer_banner.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
 import '../../services/notification_service.dart';
 import '../../services/proximity_audio_service.dart';
@@ -57,7 +59,12 @@ import '../../services/voice_playback_service.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../widgets/chat/swipeable_chat_tile.dart';
+import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
+import '../../models/community_models.dart';
+import '../../services/community_service.dart';
+import '../community/community_screen.dart';
+import '../community/create_community_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({Key? key}) : super(key: key);
@@ -99,15 +106,101 @@ class _MainScreenState extends State<MainScreen>
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
+  String _searchFilter = 'all'; // all, chats, users, groups, channels, messages
+  Timer? _searchDebounce;
+  UnifiedSearchResult _unifiedSearchResult = UnifiedSearchResult.empty;
+  final Set<String> _joiningPeerIds = {};
 
-  // Chats list
+  // Chats list & Communities
   List<Chat> _chats = [];
+  List<Community> _communities = [];
   bool _isLoadingChats = true;
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
   String? _currentUserId;
   final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
   final Map<String, ({String action, String? userName, Timer timer})>
       _chatTypingStates = {};
+
+  Future<void> _loadCommunities() async {
+    final list = await CommunityService.getCommunities();
+    if (!mounted) return;
+    final staleChannelIds = _chats
+        .where((c) => CommunityService.isCommunityChannelId(c.id))
+        .map((c) => c.id)
+        .toList();
+    if (staleChannelIds.isNotEmpty) {
+      try {
+        await AppDatabase(_currentUserId).batchDeleteChats(staleChannelIds);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _communities = list.where((c) => c.isMember).toList();
+      _chats.removeWhere((c) => CommunityService.isCommunityChannelId(c.id));
+    });
+  }
+
+  Chat _communityToChat(Community c) {
+    final activeVoice = c.activeVoiceCount;
+    final subtitle = activeVoice > 0
+        ? '🔊 $activeVoice в голосовом • ${c.memberCount} участн.'
+        : (c.description.isNotEmpty
+            ? c.description
+            : '${c.memberCount} участн. • Сообщество');
+    return Chat(
+      id: 'community_${c.id}',
+      chatType: 'community',
+      name: c.name,
+      avatarUrl: c.avatarUrl,
+      lastMessage: subtitle,
+      lastMessageTime: c.createdAt.toIso8601String(),
+      lastMessageType: 'text',
+      updatedAt: c.createdAt.toIso8601String(),
+      unreadCount: c.totalUnreadCount,
+      otherUserId: c.id,
+    );
+  }
+
+  List<Chat> get _chatsWithCommunities {
+    final visibleChats = _chats
+        .where((c) => !CommunityService.isCommunityChannelId(c.id))
+        .toList();
+    final existingIds = visibleChats.map((c) => c.id).toSet();
+    final communityChats = _communities
+        .where((c) => c.isMember)
+        .map(_communityToChat)
+        .where((cc) => !existingIds.contains(cc.id))
+        .toList();
+    return [...visibleChats, ...communityChats];
+  }
+
+  void _onCommunityCreated(Community createdCommunity) {
+    if (!createdCommunity.isMember) return;
+    CommunityService.cacheCommunity(createdCommunity);
+    if (!mounted) return;
+    setState(() {
+      _communities = [
+        createdCommunity,
+        ..._communities.where((c) => c.id != createdCommunity.id),
+      ];
+      _chats.removeWhere((c) => CommunityService.isCommunityChannelId(c.id));
+    });
+  }
+
+  Future<void> _showCreateCommunityDialog({bool initialJoinMode = false}) async {
+    await Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => CreateCommunityScreen(
+          initialJoinMode: initialJoinMode,
+          onCommunityCreated: _onCommunityCreated,
+        ),
+      ),
+    );
+    if (mounted) {
+      _loadCommunities();
+    }
+  }
 
   void _initChatsStream() {
     _chatsStreamSubscription?.cancel();
@@ -118,6 +211,11 @@ class _MainScreenState extends State<MainScreen>
       final mappedChats = <Chat>[];
       bool hasSaved = false;
       for (final dbChat in dbChats) {
+        if (dbChat.chatType == 'community' ||
+            dbChat.chatType == 'community_channel' ||
+            CommunityService.isCommunityChannelId(dbChat.chatId)) {
+          continue;
+        }
         final chat = _dbChatToChat(dbChat);
         // Only keep one saved chat
         if (chat.chatType == 'saved') {
@@ -153,18 +251,17 @@ class _MainScreenState extends State<MainScreen>
   // Central folder morph menu
   bool _isFolderMenuOpen = false;
 
-  // Animation controllers for Material mode top bar morphing
+  // Bottom-right '+' create chat morph menu
+  bool _isCreateMenuOpen = false;
+
+  // Animation controllers for Material mode top/bottom bar morphing
   late final AnimationController _classicTopMenuController;
   late final AnimationController _classicFolderMenuController;
+  late final AnimationController _classicCreateMenuController;
   late final CurvedAnimation _classicTopMenuAnimation;
   late final CurvedAnimation _classicFolderMenuAnimation;
+  late final CurvedAnimation _classicCreateMenuAnimation;
   int _topMenuTabIndex = 1;
-
-  // Search results
-  List<SearchResultUser> _users = [];
-  List<SearchResultGroup> _groups = [];
-  List<SearchResultChannel> _channels = [];
-  List<SearchResultMessage> _messages = [];
 
   // Loading states
   bool _isLoading = false;
@@ -202,6 +299,16 @@ class _MainScreenState extends State<MainScreen>
       parent: _classicFolderMenuController,
       curve: Curves.easeInOutCubic,
       reverseCurve: Curves.easeInOutCubic,
+    );
+    _classicCreateMenuController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 220),
+    );
+    _classicCreateMenuAnimation = CurvedAnimation(
+      parent: _classicCreateMenuController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
     );
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
@@ -243,6 +350,10 @@ class _MainScreenState extends State<MainScreen>
       _closeFolderMenu();
       return true;
     }
+    if (_isCreateMenuOpen) {
+      _closeCreateMenu();
+      return true;
+    }
     if (_isSelectMode) {
       _exitSelectMode();
       return true;
@@ -276,8 +387,9 @@ class _MainScreenState extends State<MainScreen>
     // 2. Инициализация Drift и фоновая синхронизация (не блокирует первичную загрузку чатов)
     unawaited(_initOfflineFirst());
 
-    // 3. Загрузка чатов (фоновый запрос к серверу)
+    // 3. Загрузка чатов и сообществ (фоновый запрос к серверу)
     _loadChats();
+    _loadCommunities();
 
     // 3. WebSocket (параллельно, не блокирует UI)
     _initWebSocket();
@@ -374,6 +486,7 @@ class _MainScreenState extends State<MainScreen>
     // This ensures chats are refreshed when navigating back
     if (_chats.isEmpty && !_isLoadingChats) {
       _loadChats();
+      _loadCommunities();
     }
   }
 
@@ -450,9 +563,12 @@ class _MainScreenState extends State<MainScreen>
     if (event.type == WebSocketEventType.connected) {
       setState(() => _isWsConnected = true);
     }
-    // Note: WebSocket disconnection is handled by the WebSocketService
-    // which sets _isConnected to false internally. We check _wsService.isConnected
-    // periodically or on state changes.
+    final rawType = event.rawType.isNotEmpty
+        ? event.rawType
+        : (event.data['__raw_type'] ?? event.data['type'] ?? '').toString();
+    if (rawType.startsWith('community.') && mounted) {
+      _loadCommunities();
+    }
   }
 
   void _onWsConnected(WebSocketEvent event) {
@@ -460,6 +576,7 @@ class _MainScreenState extends State<MainScreen>
     if (mounted) {
       setState(() => _isWsConnected = true);
       _loadChats();
+      _loadCommunities();
 
       // Delta Sync при переподключении (мульти-девайс)
       try {
@@ -481,7 +598,16 @@ class _MainScreenState extends State<MainScreen>
     }
 
     if (chatData != null) {
+      if (chatData['community_id'] != null ||
+          event.data['community_id'] != null) {
+        if (mounted) _loadCommunities();
+        return;
+      }
       final newChat = Chat.fromJson(chatData);
+      if (newChat.isCommunityChannel) {
+        if (mounted) _loadCommunities();
+        return;
+      }
       // Ignore empty private chats without messages or drafts that are not pinned
       if (newChat.chatType == 'private' &&
           (newChat.lastMessage == null || newChat.lastMessage!.isEmpty) &&
@@ -516,6 +642,17 @@ class _MainScreenState extends State<MainScreen>
     debugPrint('New message received: ${event.data}');
     final chatId = event.data['chat_id']?.toString();
     final messageData = event.data['message'] as Map<String, dynamic>?;
+    final communityId =
+        event.data['community_id']?.toString() ??
+        messageData?['community_id']?.toString();
+
+    if ((communityId != null && communityId.isNotEmpty) ||
+        (chatId != null && CommunityService.isCommunityChannelId(chatId))) {
+      if (mounted) {
+        _loadCommunities();
+      }
+      return;
+    }
 
     if (chatId != null && mounted) {
       final existingTyping = _chatTypingStates.remove(chatId);
@@ -544,11 +681,7 @@ class _MainScreenState extends State<MainScreen>
           final groupedId = messageData?['grouped_id'] as String?;
           final content = messageData?['content'] as String? ?? '';
 
-          final newChat = Chat(
-            id: chat.id,
-            chatType: chat.chatType,
-            name: chat.name,
-            avatarUrl: chat.avatarUrl,
+          final newChat = chat.copyWith(
             lastMessage: content,
             lastMessageTime:
                 messageData?['created_at'] as String? ?? chat.lastMessageTime,
@@ -558,11 +691,6 @@ class _MainScreenState extends State<MainScreen>
             lastMessageGroupedId: groupedId,
             updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
             unreadCount: newUnreadCount,
-            isOnline: chat.isOnline,
-            lastSeen: chat.lastSeen,
-            isPinned: chat.isPinned,
-            otherUserId: chat.otherUserId,
-            draft: chat.draft,
           );
           updatedChat = newChat;
 
@@ -609,6 +737,13 @@ class _MainScreenState extends State<MainScreen>
     debugPrint('Chat update received: ${event.data}');
     final chatData = event.data['chat'] as Map<String, dynamic>?;
     final chatId = event.data['chat_id']?.toString();
+    final communityId = event.data['community_id']?.toString() ??
+        chatData?['community_id']?.toString();
+    if ((communityId != null && communityId.isNotEmpty) ||
+        (chatId != null && CommunityService.isCommunityChannelId(chatId))) {
+      if (mounted) _loadCommunities();
+      return;
+    }
 
     if (chatId != null && mounted) {
       setState(() {
@@ -636,6 +771,22 @@ class _MainScreenState extends State<MainScreen>
     // We only use this to update the isRead status of our sent messages in chat screens.
     debugPrint(
         'Message read event received (sender notification): ${event.data}');
+    final chatId = event.data['chat_id']?.toString();
+    final rawOutboxHwm =
+        event.data['last_read_outbox_message_id'] ?? event.data['max_id'];
+    final outboxHwm = rawOutboxHwm is num
+        ? rawOutboxHwm.toInt()
+        : int.tryParse(rawOutboxHwm?.toString() ?? '');
+    if (chatId != null && outboxHwm != null && outboxHwm > 0) {
+      try {
+        AppDatabase(_currentUserId).markOutboxMessagesReadUpTo(
+          chatId,
+          _currentUserId ?? '',
+          outboxHwm,
+          readAt: event.data['read_at']?.toString(),
+        );
+      } catch (_) {}
+    }
   }
 
   /// Handle unread count updates from the server — the authoritative source for unread counts
@@ -643,13 +794,17 @@ class _MainScreenState extends State<MainScreen>
     debugPrint('Unread count updated: ${event.data}');
     final chatId = event.data['chat_id']?.toString();
     final unreadCount = event.data['unread_count'] as int? ?? 0;
+    final rawInboxHwm = event.data['last_read_inbox_message_id'];
+    final inboxHwm = rawInboxHwm is num
+        ? rawInboxHwm.toInt()
+        : int.tryParse(rawInboxHwm?.toString() ?? '');
 
     if (chatId != null && mounted) {
       try {
         context.read<UnreadCountProvider>().setCount(chatId, unreadCount);
       } catch (_) {}
 
-      _syncChatUnreadCount(chatId, unreadCount);
+      _syncChatUnreadCount(chatId, unreadCount, lastReadInboxMessageId: inboxHwm);
     }
   }
 
@@ -796,19 +951,33 @@ class _MainScreenState extends State<MainScreen>
   }
 
   /// Update a single chat's unread count in _chats and persist
-  void _syncChatUnreadCount(String chatId, int unreadCount) {
+  void _syncChatUnreadCount(
+    String chatId,
+    int unreadCount, {
+    int? lastReadInboxMessageId,
+  }) {
     setState(() {
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
       if (chatIndex != -1) {
-        _chats[chatIndex] =
-            _chats[chatIndex].copyWith(unreadCount: unreadCount);
+        _chats[chatIndex] = _chats[chatIndex].copyWith(
+          unreadCount: unreadCount,
+          lastReadInboxMessageId: lastReadInboxMessageId,
+        );
       }
     });
 
     // Сохранить в Drift
     final db = AppDatabase();
     try {
-      db.updateUnreadCount(chatId, unreadCount);
+      if (lastReadInboxMessageId != null && lastReadInboxMessageId > 0) {
+        db.updateChatReadHwm(
+          chatId,
+          lastReadInboxMessageId: lastReadInboxMessageId,
+          unreadCount: unreadCount,
+        );
+      } else {
+        db.updateUnreadCount(chatId, unreadCount);
+      }
     } catch (_) {}
 
     _localStorage.saveChats(_chats);
@@ -855,7 +1024,9 @@ class _MainScreenState extends State<MainScreen>
 
       if (mounted) {
         if (result['success'] == true && result['chats'] is List<Chat>) {
-          final serverChats = result['chats'] as List<Chat>;
+          final serverChats = (result['chats'] as List<Chat>)
+              .where((c) => !c.isCommunityChannel)
+              .toList();
           DraftService().populateFromChats(serverChats);
 
           for (final chat in serverChats) {
@@ -873,6 +1044,25 @@ class _MainScreenState extends State<MainScreen>
           // реактивного стрима watchChats() провайдер уже имел актуальные значения
           try {
             context.read<UnreadCountProvider>().loadFromChats(serverChats);
+          } catch (_) {}
+
+          // Удалить из локальной БД устаревшие чаты (например, каналы сообществ),
+          // которых больше нет в списке чатов сервера
+          try {
+            final serverIds = serverChats.map((c) => c.id).toSet();
+            final staleIds = _chats
+                .where(
+                  (c) =>
+                      c.chatType != 'saved' &&
+                      !c.id.startsWith('saved_') &&
+                      (c.isCommunityChannel ||
+                          !serverIds.contains(c.id)),
+                )
+                .map((c) => c.id)
+                .toList();
+            if (staleIds.isNotEmpty) {
+              await db.batchDeleteChats(staleIds);
+            }
           } catch (_) {}
 
           // Сохранить в Drift — это автоматически обновит _chats через reactive stream!
@@ -904,25 +1094,34 @@ class _MainScreenState extends State<MainScreen>
     await _ensureSavedChatExists();
   }
 
-  /// Фоновая предзагрузка последних сообщений для наиболее активных чатов,
-  /// чтобы при переходе в чат сообщения открывались мгновенно из Drift SQLite
+  /// Параллельная предзагрузка сообщений для всех чатов пользователя батчами,
+  /// чтобы при открытии любого чата сообщения отображались мгновенно без lazy-задержки.
   void _prefetchRecentMessages(List<Chat> chats) {
     unawaited(() async {
       try {
         final db = AppDatabase(_currentUserId);
-        final topChats = chats.take(20).toList();
-        for (final chat in topChats) {
+        const int batchSize = 8;
+        for (int i = 0; i < chats.length; i += batchSize) {
           if (!mounted) break;
-          try {
-            final res = await ChatService.getMessages(chatId: chat.id, limit: 50);
-            if (res['success'] == true && res['messages'] is List<Message>) {
-              final msgs = res['messages'] as List<Message>;
-              if (msgs.isNotEmpty) {
-                await db.saveMessages(msgs.map((m) => m.toCompanion(fallbackChatId: chat.id)).toList());
-                await db.refreshChatLastMessageFromDb(chat.id);
-              }
-            }
-          } catch (_) {}
+          final end = (i + batchSize < chats.length) ? i + batchSize : chats.length;
+          final batch = chats.sublist(i, end);
+          await Future.wait(
+            batch.map((chat) async {
+              if (!mounted) return;
+              try {
+                final res = await ChatService.getMessages(chatId: chat.id, limit: 50);
+                if (res['success'] == true && res['messages'] is List<Message>) {
+                  final msgs = res['messages'] as List<Message>;
+                  if (msgs.isNotEmpty) {
+                    await db.saveMessages(
+                      msgs.map((m) => m.toCompanion(fallbackChatId: chat.id)).toList(),
+                    );
+                    await db.refreshChatLastMessageFromDb(chat.id);
+                  }
+                }
+              } catch (_) {}
+            }),
+          );
         }
       } catch (e) {
         debugPrint('MainScreen: _prefetchRecentMessages error: $e');
@@ -1009,6 +1208,13 @@ class _MainScreenState extends State<MainScreen>
       isOnline: effectiveIsOnline,
       lastSeen: effectiveLastSeen,
       isPinned: model.isPinned,
+      lastReadInboxMessageId: model.lastReadInboxMessageId,
+      lastReadOutboxMessageId: model.lastReadOutboxMessageId,
+      pinnedMessageId: model.pinnedMessageId,
+      username: model.username,
+      isPublic: model.isPublic,
+      isBot: model.isBot,
+      isVerified: model.isVerified,
     );
   }
 
@@ -1020,7 +1226,7 @@ class _MainScreenState extends State<MainScreen>
     }
     return ChatsCompanion(
       chatId: Value(chat.id),
-      chatType: Value(chat.chatType),
+      chatType: Value(chat.isCommunityChannel ? 'community_channel' : chat.chatType),
       name: Value(chat.name),
       avatarUrl: Value(avatarUrl),
       lastMessage: Value(chat.lastMessage),
@@ -1035,6 +1241,13 @@ class _MainScreenState extends State<MainScreen>
       isOnline: Value(chat.isOnline),
       lastSeen: Value(chat.lastSeen),
       isPinned: Value(chat.isPinned),
+      lastReadInboxMessageId: Value(chat.lastReadInboxMessageId),
+      lastReadOutboxMessageId: Value(chat.lastReadOutboxMessageId),
+      pinnedMessageId: Value(chat.pinnedMessageId),
+      username: Value(chat.username),
+      isPublic: Value(chat.isPublic),
+      isBot: Value(chat.isBot),
+      isVerified: Value(chat.isVerified),
     );
   }
 
@@ -1042,8 +1255,10 @@ class _MainScreenState extends State<MainScreen>
   void dispose() {
     _classicTopMenuAnimation.dispose();
     _classicFolderMenuAnimation.dispose();
+    _classicCreateMenuAnimation.dispose();
     _classicTopMenuController.dispose();
     _classicFolderMenuController.dispose();
+    _classicCreateMenuController.dispose();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     DraftService().draftsNotifier.removeListener(_onDraftsChanged);
@@ -1065,6 +1280,7 @@ class _MainScreenState extends State<MainScreen>
         _onChatTileClosed) {
       TilingLayoutController.instance.onChatTileClosed = null;
     }
+    _searchDebounce?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
@@ -1122,10 +1338,12 @@ class _MainScreenState extends State<MainScreen>
     }
     _chatTypingStates.clear();
     AppDatabase.setActiveUser(newUserId);
+    CommunityService.clearMemoryCache();
 
     setState(() {
       _activeFilter = 0;
       _chats = [];
+      _communities = [];
       _isLoadingChats = true;
     });
     if (_currentIndex != 1) {
@@ -1136,6 +1354,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.disconnect();
     _initWebSocket();
     _loadChats();
+    _loadCommunities();
     try {
       SyncService().syncFromServer();
     } catch (_) {}
@@ -1151,17 +1370,35 @@ class _MainScreenState extends State<MainScreen>
       setState(() {
         _searchQuery = newQuery;
       });
-      _performSearch();
+      _searchDebounce?.cancel();
+      final trimmed = _searchQuery.trim();
+      if (trimmed.isEmpty) {
+        setState(() {
+          _unifiedSearchResult = UnifiedSearchResult.empty;
+          _isLoading = false;
+        });
+        return;
+      }
+      _performLocalMainSearch(trimmed);
+      _searchDebounce =
+          Timer(const Duration(milliseconds: 280), _performSearch);
+    }
+  }
+
+  Future<void> _performLocalMainSearch(String q) async {
+    final localRes = await SearchService.searchLocal(query: q);
+    if (mounted && _searchQuery.trim() == q) {
+      setState(() {
+        _unifiedSearchResult = localRes;
+      });
     }
   }
 
   Future<void> _performSearch() async {
-    if (_searchQuery.isEmpty) {
+    final q = _searchQuery.trim();
+    if (q.isEmpty) {
       setState(() {
-        _users = [];
-        _groups = [];
-        _channels = [];
-        _messages = [];
+        _unifiedSearchResult = UnifiedSearchResult.empty;
         _isLoading = false;
       });
       return;
@@ -1170,17 +1407,11 @@ class _MainScreenState extends State<MainScreen>
     setState(() => _isLoading = true);
 
     try {
-      final users = await SearchService.searchUsers(query: _searchQuery);
-      final groups = await SearchService.searchGroups(query: _searchQuery);
-      final channels = await SearchService.searchChannels(query: _searchQuery);
-      final messages = await SearchService.searchMessages(query: _searchQuery);
+      final result = await SearchService.search(query: q);
 
-      if (mounted) {
+      if (mounted && _searchQuery.trim() == q) {
         setState(() {
-          _users = users;
-          _groups = groups;
-          _channels = channels;
-          _messages = messages;
+          _unifiedSearchResult = _unifiedSearchResult.mergeWithServer(result);
           _isLoading = false;
         });
       }
@@ -1211,6 +1442,9 @@ class _MainScreenState extends State<MainScreen>
     if (_isFolderMenuOpen) {
       _closeFolderMenu();
     }
+    if (_isCreateMenuOpen) {
+      _closeCreateMenu();
+    }
     if (_currentIndex == index) return;
     // Закрываем клавиатуру при уходе с поиска
     if (_currentIndex == 2 && index != 2) {
@@ -1233,69 +1467,69 @@ class _MainScreenState extends State<MainScreen>
     );
   }
 
-  void _showCreateMenu() {
-    final l10n = context.l10n;
+  void _openCreateMenu() {
+    if (_isCreateMenuOpen) return;
+    if (_isTopMenuOpen) {
+      _closeTopMenu();
+    }
+    if (_isFolderMenuOpen) {
+      _closeFolderMenu();
+    }
+    HapticUtils.tap();
+    _classicCreateMenuController.forward();
+    setState(() {
+      _isCreateMenuOpen = true;
+    });
+  }
 
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: iconoir.UserPlus(
-                color: Theme.of(context).colorScheme.primary,
-                width: 24,
-                height: 24,
-              ),
-              title: Text(l10n.translate('chat_new_private')),
-              subtitle: Text(l10n.translate('chat_new_private_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  SwipeBackPageRoute(
-                      builder: (_) => const CreatePrivateChatScreen()),
-                );
-              },
+  void _closeCreateMenu() {
+    if (!_isCreateMenuOpen) return;
+    _classicCreateMenuController.reverse();
+    setState(() {
+      _isCreateMenuOpen = false;
+    });
+  }
+
+  void _toggleCreateMenu() {
+    if (_isCreateMenuOpen) {
+      _closeCreateMenu();
+    } else {
+      _openCreateMenu();
+    }
+  }
+
+  void _handleCreateOptionSelected(CreateChatOptionType type) {
+    _closeCreateMenu();
+    switch (type) {
+      case CreateChatOptionType.privateChat:
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => CreatePrivateChatScreen(
+              onCommunityCreated: _onCommunityCreated,
             ),
-            ListTile(
-              leading: iconoir.Group(
-                color: Theme.of(context).colorScheme.primary,
-                width: 24,
-                height: 24,
-              ),
-              title: Text(l10n.translate('chat_new_group')),
-              subtitle: Text(l10n.translate('chat_new_group_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  SwipeBackPageRoute(builder: (_) => const CreateGroupScreen()),
-                );
-              },
-            ),
-            ListTile(
-              leading: iconoir.Megaphone(
-                color: Theme.of(context).colorScheme.primary,
-                width: 24,
-                height: 24,
-              ),
-              title: Text(l10n.translate('chat_new_channel')),
-              subtitle: Text(l10n.translate('chat_new_channel_desc')),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  SwipeBackPageRoute(
-                      builder: (_) => const CreateChannelScreen()),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+          ),
+        );
+        break;
+      case CreateChatOptionType.groupChat:
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const CreateGroupScreen()),
+        );
+        break;
+      case CreateChatOptionType.channel:
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const CreateChannelScreen()),
+        );
+        break;
+      case CreateChatOptionType.community:
+        _showCreateCommunityDialog(initialJoinMode: false);
+        break;
+      case CreateChatOptionType.joinByCode:
+        _showCreateCommunityDialog(initialJoinMode: true);
+        break;
+    }
   }
 
   // ── Top Glass Bar & Morph Menu Logic ──────────────────────────────
@@ -1304,6 +1538,9 @@ class _MainScreenState extends State<MainScreen>
     if (_isTopMenuOpen) return;
     if (_isFolderMenuOpen) {
       _closeFolderMenu();
+    }
+    if (_isCreateMenuOpen) {
+      _closeCreateMenu();
     }
     _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
@@ -1334,6 +1571,9 @@ class _MainScreenState extends State<MainScreen>
     if (_isFolderMenuOpen) return;
     if (_isTopMenuOpen) {
       _closeTopMenu();
+    }
+    if (_isCreateMenuOpen) {
+      _closeCreateMenu();
     }
     HapticUtils.tap();
     _classicFolderMenuController.forward();
@@ -1478,6 +1718,16 @@ class _MainScreenState extends State<MainScreen>
             iconBuilder: (color, size) => iconoir.Megaphone(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
+            id: 'new_community',
+            label: 'Новое сообщество',
+            iconBuilder: (color, size) => Icon(Icons.hub_outlined, color: color, size: size),
+          ),
+          _MorphMenuItemData(
+            id: 'join_by_code',
+            label: 'Войти по коду',
+            iconBuilder: (color, size) => Icon(Icons.tag_rounded, color: color, size: size),
+          ),
+          _MorphMenuItemData(
             id: 'profile',
             label: l10n.translate('settings_profile'),
             iconBuilder: (color, size) => iconoir.User(color: color, width: size, height: size),
@@ -1504,7 +1754,11 @@ class _MainScreenState extends State<MainScreen>
       case 'new_chat':
         Navigator.push(
           context,
-          SwipeBackPageRoute(builder: (_) => const CreatePrivateChatScreen()),
+          SwipeBackPageRoute(
+            builder: (_) => CreatePrivateChatScreen(
+              onCommunityCreated: _onCommunityCreated,
+            ),
+          ),
         );
         break;
       case 'new_group':
@@ -1518,6 +1772,12 @@ class _MainScreenState extends State<MainScreen>
           context,
           SwipeBackPageRoute(builder: (_) => const CreateChannelScreen()),
         );
+        break;
+      case 'new_community':
+        _showCreateCommunityDialog(initialJoinMode: false);
+        break;
+      case 'join_by_code':
+        _showCreateCommunityDialog(initialJoinMode: true);
         break;
       case 'profile':
         Navigator.push(
@@ -1535,10 +1795,7 @@ class _MainScreenState extends State<MainScreen>
         _searchController.clear();
         setState(() {
           _searchQuery = '';
-          _users = [];
-          _groups = [];
-          _channels = [];
-          _messages = [];
+          _unifiedSearchResult = UnifiedSearchResult.empty;
         });
         break;
     }
@@ -2077,7 +2334,7 @@ class _MainScreenState extends State<MainScreen>
     final folders = _folderService.folders;
     if (filterIndex >= 0 && filterIndex < folders.length) {
       final folder = folders[filterIndex];
-      return _chats
+      return _chatsWithCommunities
           .where((chat) =>
               folder.matchesChat(chat) &&
               (chat.unreadCount > 0 || chat.unreadCount == -1))
@@ -2089,7 +2346,7 @@ class _MainScreenState extends State<MainScreen>
   Widget _buildChatList(BuildContext context, {double topPadding = 8}) {
     final l10n = context.l10n;
 
-    if (_isLoadingChats && _chats.isEmpty) {
+    if (_isLoadingChats && _chats.isEmpty && _communities.isEmpty) {
       // Use topPadding so the indicator is visible below the glass AppBar
       return Padding(
         padding: EdgeInsets.only(top: topPadding),
@@ -2103,13 +2360,64 @@ class _MainScreenState extends State<MainScreen>
         ? folders[_activeFilter]
         : (folders.isNotEmpty ? folders.first : ChatFolder.defaults.first);
 
-    List<Chat> filteredChats = _chats.where((chat) => activeFolder.matchesChat(chat)).toList();
+    final allItems = _chatsWithCommunities;
+    List<Chat> filteredChats =
+        allItems.where((chat) => activeFolder.matchesChat(chat)).toList();
 
     if (filteredChats.isEmpty) {
-      if (_isLoadingChats) {
+      if (_isLoadingChats && activeFolder.id != 'communities') {
         return Padding(
           padding: EdgeInsets.only(top: topPadding),
           child: const Center(child: CircularProgressIndicator()),
+        );
+      }
+      if (activeFolder.id == 'communities') {
+        final primaryColor = Theme.of(context).colorScheme.primary;
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 76,
+                  height: 76,
+                  decoration: BoxDecoration(
+                    color: primaryColor.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Icon(
+                    Icons.hub_rounded,
+                    size: 40,
+                    color: primaryColor,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Сообщества Theaver',
+                  style: TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Категории, текстовые и голосовые комнаты со стримингом экрана до 144 FPS, трибуны и гибкие роли.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: Colors.grey[500],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FilledButton.icon(
+                  onPressed: _showCreateCommunityDialog,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Создать или войти по коду'),
+                ),
+              ],
+            ),
+          ),
         );
       }
       return Center(
@@ -2144,6 +2452,7 @@ class _MainScreenState extends State<MainScreen>
     }
 
     return ListView.builder(
+      cacheExtent: 3000.0,
       physics: const AlwaysScrollableScrollPhysics(
         parent: BouncingScrollPhysics(),
       ),
@@ -2171,6 +2480,9 @@ class _MainScreenState extends State<MainScreen>
       case 'channel':
         iconWidget = const iconoir.Megaphone(color: Colors.white, width: 22, height: 22);
         break;
+      case 'community':
+        iconWidget = const Icon(Icons.hub_rounded, color: Colors.white, size: 22);
+        break;
       case 'saved':
         iconWidget = const iconoir.Bookmark(color: Colors.white, width: 22, height: 22);
         break;
@@ -2183,6 +2495,7 @@ class _MainScreenState extends State<MainScreen>
 
     final hasUnread = chat.unreadCount > 0 || chat.unreadCount == -1;
     final isPrivateChat = chat.chatType == 'private';
+    final isCommunity = chat.chatType == 'community';
     final isSelected = _selectedChatIds.contains(chat.id);
 
     const double avatarRadius = 22.0;
@@ -2198,21 +2511,42 @@ class _MainScreenState extends State<MainScreen>
             radius: avatarRadius,
             isOnline: _isSelectMode ? false : chat.isOnline,
           )
-        : SizedBox(
-            width: avatarRadius * 2,
-            height: avatarRadius * 2,
-            child: CircleAvatar(
-              radius: avatarRadius,
-              backgroundColor: Theme.of(context).colorScheme.primary,
-              backgroundImage:
-                  effectiveAvatarUrl != null && effectiveAvatarUrl.isNotEmpty
-                      ? avatarImageProvider(effectiveAvatarUrl)
+        : isCommunity
+            ? Container(
+                width: avatarRadius * 2,
+                height: avatarRadius * 2,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary,
+                  borderRadius: BorderRadius.circular(14),
+                  image: effectiveAvatarUrl != null &&
+                          effectiveAvatarUrl.isNotEmpty &&
+                          avatarImageProvider(effectiveAvatarUrl) != null
+                      ? DecorationImage(
+                          image: avatarImageProvider(effectiveAvatarUrl)!,
+                          fit: BoxFit.cover,
+                        )
                       : null,
-              child: effectiveAvatarUrl == null || effectiveAvatarUrl.isEmpty
-                  ? iconWidget
-                  : null,
-            ),
-          );
+                ),
+                alignment: Alignment.center,
+                child: effectiveAvatarUrl == null || effectiveAvatarUrl.isEmpty
+                    ? iconWidget
+                    : null,
+              )
+            : SizedBox(
+                width: avatarRadius * 2,
+                height: avatarRadius * 2,
+                child: CircleAvatar(
+                  radius: avatarRadius,
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  backgroundImage:
+                      effectiveAvatarUrl != null && effectiveAvatarUrl.isNotEmpty
+                          ? avatarImageProvider(effectiveAvatarUrl)
+                          : null,
+                  child: effectiveAvatarUrl == null || effectiveAvatarUrl.isEmpty
+                      ? iconWidget
+                      : null,
+                ),
+              );
 
     final Widget leadingWidget = Stack(
       clipBehavior: Clip.none,
@@ -2367,10 +2701,11 @@ class _MainScreenState extends State<MainScreen>
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (chat.chatType == 'system') ...[
-                    const SizedBox(width: 4),
-                    iconoir.CheckCircle(width: 16, height: 16, color: Theme.of(context).colorScheme.primary),
-                  ],
+                  PeerBadgesRow(
+                    isBot: chat.isBot,
+                    isVerified: chat.isVerified || chat.chatType == 'system',
+                    verifiedIconSize: 15,
+                  ),
                 ],
               ),
             ),
@@ -2735,6 +3070,11 @@ class _MainScreenState extends State<MainScreen>
     if (chat.isLastMessageUnsupported) {
       displaySubtitle =
           loc?.translate('message_unsupported_preview') ?? 'Unsupported message';
+    } else if (chat.lastMessageType?.toLowerCase() == 'call') {
+      displaySubtitle = Chat.formatCallPreview(
+        chat.lastMessage,
+        currentUserId: _currentUserId,
+      );
     } else {
       displaySubtitle = chat.lastMessage;
       if (displaySubtitle == null || displaySubtitle.trim().isEmpty) {
@@ -3065,6 +3405,41 @@ class _MainScreenState extends State<MainScreen>
     final effectiveAvatar =
         chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl;
 
+    if (chat.chatType == 'community') {
+      final rawCommId = chat.otherUserId ??
+          (chat.id.startsWith('community_')
+              ? chat.id.substring('community_'.length)
+              : chat.id);
+      final comm = _communities.firstWhere(
+        (c) => c.id == rawCommId,
+        orElse: () =>
+            CommunityService.getCachedCommunity(rawCommId) ??
+            Community(
+              id: rawCommId,
+              name: chat.name,
+              description: chat.lastMessage ?? '',
+              avatarUrl: chat.avatarUrl,
+              createdAt: DateTime.now(),
+            ),
+      );
+      if (comm.isMember) {
+        CommunityService.cacheCommunity(comm);
+      }
+      if (!TilingLayoutController.instance.isWorkspaceMounted) {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => CommunityScreen(
+              community: comm,
+              onCommunityJoined: _onCommunityCreated,
+              onCommunityLeft: _loadCommunities,
+            ),
+          ),
+        ).then((_) => _loadCommunities());
+        return;
+      }
+    }
+
     if (TilingLayoutController.instance.isWorkspaceMounted) {
       if (inAdjacentTile) {
         TilingLayoutController.instance.openChatInAdjacentTile(
@@ -3236,6 +3611,7 @@ class _MainScreenState extends State<MainScreen>
         canPop: _currentIndex == 1 &&
             !_isTopMenuOpen &&
             !_isFolderMenuOpen &&
+            !_isCreateMenuOpen &&
             !_isSelectMode,
         onPopInvokedWithResult: (didPop, _) {
           if (didPop) return;
@@ -3245,6 +3621,10 @@ class _MainScreenState extends State<MainScreen>
           }
           if (_isFolderMenuOpen) {
             _closeFolderMenu();
+            return;
+          }
+          if (_isCreateMenuOpen) {
+            _closeCreateMenu();
             return;
           }
           if (_isSelectMode) {
@@ -3286,6 +3666,9 @@ class _MainScreenState extends State<MainScreen>
                     }
                     if (_isFolderMenuOpen) {
                       _closeFolderMenu();
+                    }
+                    if (_isCreateMenuOpen) {
+                      _closeCreateMenu();
                     }
                     // Закрываем клавиатуру при уходе с поиска
                     if (_currentIndex == 2 && page != 2) {
@@ -3389,10 +3772,8 @@ class _MainScreenState extends State<MainScreen>
                                         _searchController.clear();
                                         setState(() {
                                           _searchQuery = '';
-                                          _users = [];
-                                          _groups = [];
-                                          _channels = [];
-                                          _messages = [];
+                                          _unifiedSearchResult =
+                                              UnifiedSearchResult.empty;
                                         });
                                       },
                                     ),
@@ -3404,6 +3785,7 @@ class _MainScreenState extends State<MainScreen>
                                   ),
                                 ),
                               ),
+                              _buildSearchFilterChips(context),
                               // Результаты поиска
                               Expanded(
                                 child: _buildSearchResults(),
@@ -3455,7 +3837,12 @@ class _MainScreenState extends State<MainScreen>
                 refractionWidth: 24.0,
               );
 
-              final actionStyle = barStyle;
+              final actionStyle = glassProvider.createStyle(
+                context: context,
+                cornerRadius: _isCreateMenuOpen ? 26.0 : (barHeight / 2),
+                refractionIndex: 1.1,
+                refractionWidth: 24.0,
+              );
 
               final double effectiveBottomMargin = keyboardHeight > 0
                   ? (bottomMargin + keyboardHeight - safeBottom)
@@ -3471,12 +3858,13 @@ class _MainScreenState extends State<MainScreen>
                     : _buildTopGlassBar(context, glassProvider),
                 appBarTopMargin: 8.0,
                 lenses: [
-                  if (_isTopMenuOpen || _isFolderMenuOpen)
+                  if (_isTopMenuOpen || _isFolderMenuOpen || _isCreateMenuOpen)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () {
                         if (_isTopMenuOpen) _closeTopMenu();
                         if (_isFolderMenuOpen) _closeFolderMenu();
+                        if (_isCreateMenuOpen) _closeCreateMenu();
                       },
                     ),
                 ],
@@ -3490,7 +3878,13 @@ class _MainScreenState extends State<MainScreen>
                         top: topBarHeight + 4.0,
                         left: 0,
                         right: 0,
-                        child: const MediaNotePlayerHeader(),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            CallDeviceTransferBanner(),
+                            MediaNotePlayerHeader(),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -3594,31 +3988,26 @@ class _MainScreenState extends State<MainScreen>
                     ),
                   ),
                 ),
-                bottomNavigationBarAction: LiquidGlassButton(
-                  width: actionSize,
-                  height: actionSize,
-                  padding: EdgeInsets.zero,
-                  touch: const LiquidGlassTouch(
-                    flex: LiquidGlassFlex(
-                      stretch: 8,
-                      squeeze: 0.65,
-                      lean: 0.35,
-                      grip: 0.55,
-                      holdScale: 0.035,
-                      tapScale: 0.025,
-                    ),
-                  ),
-                  foregroundColor:
-                      isDark ? Colors.white : const Color(0xFF121215),
-                  style: actionStyle,
-                  onPressed: () {
-                    HapticUtils.tap();
-                    _showCreateMenu();
-                  },
-                  child: iconoir.Plus(
-                    color: isDark ? Colors.white : const Color(0xFF121215),
-                    width: 28,
-                    height: 28,
+                bottomNavigationBarAction: SizedBox(
+                  width: CreateChatSelectorPanel.kPanelWidth,
+                  height: CreateChatSelectorPanel.kPanelHeight,
+                  child: LiquidGlassMorph(
+                    key: const ValueKey<String>('main_create_menu_morph'),
+                    alignment: Alignment.bottomRight,
+                    motion: LiquidGlassMorphMotion.fluid,
+                    smoothness: 28,
+                    style: actionStyle,
+                    child: _isCreateMenuOpen
+                        ? CreateChatSelectorPanel(
+                            key: const ValueKey<String>('create_chat_panel'),
+                            onClose: _closeCreateMenu,
+                            onSelectOption: _handleCreateOptionSelected,
+                          )
+                        : _PlusActionGlyph(
+                            key: const ValueKey<String>('plus_action_glyph'),
+                            size: actionSize,
+                            onTap: _toggleCreateMenu,
+                          ),
                   ),
                 ),
               );
@@ -3631,13 +4020,14 @@ class _MainScreenState extends State<MainScreen>
               body: Stack(
                 children: [
                   Positioned.fill(child: pageView),
-                  if (_isTopMenuOpen || _isFolderMenuOpen)
+                  if (_isTopMenuOpen || _isFolderMenuOpen || _isCreateMenuOpen)
                     Positioned.fill(
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTap: () {
                           if (_isTopMenuOpen) _closeTopMenu();
                           if (_isFolderMenuOpen) _closeFolderMenu();
+                          if (_isCreateMenuOpen) _closeCreateMenu();
                         },
                       ),
                     ),
@@ -3645,7 +4035,13 @@ class _MainScreenState extends State<MainScreen>
                     top: topBarHeight + 4.0,
                     left: 0,
                     right: 0,
-                    child: const MediaNotePlayerHeader(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        CallDeviceTransferBanner(),
+                        MediaNotePlayerHeader(),
+                      ],
+                    ),
                   ),
                   Positioned(
                     top: 0,
@@ -3667,10 +4063,15 @@ class _MainScreenState extends State<MainScreen>
                         onTabSelected: (index) {
                           _onTabTapped(index);
                         },
-                        onAddTap: _showCreateMenu,
+                        onAddTap: _toggleCreateMenu,
                         bottomPadding: 12,
                       ),
                     ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: _buildClassicCreateMenuOverlay(context),
                   ),
                 ],
               ),
@@ -3679,6 +4080,118 @@ class _MainScreenState extends State<MainScreen>
         ),
       ), // closes PopScope
     ); // closes AnnotatedRegion
+  }
+
+  Widget _buildClassicCreateMenuOverlay(BuildContext context) {
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final p = themeExt?.palette;
+    final isDark = theme.brightness == Brightness.dark;
+
+    final barBackgroundColor =
+        p?.surface ?? (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+    final borderColor = p?.divider ??
+        (isDark
+            ? Colors.white.withValues(alpha: 0.1)
+            : Colors.black.withValues(alpha: 0.06));
+    final double baseShadowAlpha = isDark ? 0.35 : 0.08;
+
+    const double ctrlSize = 60.0;
+    const double panelWidth = CreateChatSelectorPanel.kPanelWidth;
+    const double panelHeight = CreateChatSelectorPanel.kPanelHeight;
+
+    return AnimatedBuilder(
+      animation: _classicCreateMenuAnimation,
+      builder: (context, _) {
+        final double progress = _classicCreateMenuAnimation.value;
+        if (progress <= 0.001) {
+          return const SizedBox.shrink();
+        }
+
+        final double currentWidth =
+            ctrlSize + (panelWidth - ctrlSize) * progress;
+        final double currentHeight =
+            ctrlSize + (panelHeight - ctrlSize) * progress;
+        final double currentRadius = 30.0 - 4.0 * progress;
+
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 16.0, bottom: 12.0),
+            child: Container(
+              width: currentWidth,
+              height: currentHeight,
+              decoration: BoxDecoration(
+                color: barBackgroundColor,
+                borderRadius: BorderRadius.circular(currentRadius),
+                border: Border.all(color: borderColor, width: 0.6),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(
+                      alpha: (baseShadowAlpha * (0.6 + 0.5 * progress))
+                          .clamp(0.0, 1.0),
+                    ),
+                    blurRadius: 12 + 12 * progress,
+                    offset: Offset(0, 4 + 4 * progress),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  if (progress > 0.01)
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      width: panelWidth,
+                      height: panelHeight,
+                      child: Opacity(
+                        opacity:
+                            ((progress - 0.15) / 0.85).clamp(0.0, 1.0),
+                        child: Transform.translate(
+                          offset: Offset(0, 10.0 * (1.0 - progress)),
+                          child: IgnorePointer(
+                            ignoring: progress < 0.85,
+                            child: CreateChatSelectorPanel(
+                              key: const ValueKey<String>(
+                                'classic_create_chat_panel',
+                              ),
+                              onClose: _closeCreateMenu,
+                              onSelectOption: _handleCreateOptionSelected,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (progress < 0.99)
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      width: ctrlSize,
+                      height: ctrlSize,
+                      child: Opacity(
+                        opacity:
+                            (1.0 - (progress / 0.35)).clamp(0.0, 1.0),
+                        child: Transform.rotate(
+                          angle: progress * math.pi / 4,
+                          child: IgnorePointer(
+                            ignoring: progress > 0.1,
+                            child: _PlusActionGlyph(
+                              size: ctrlSize,
+                              onTap: _toggleCreateMenu,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   LiquidGlassShape _glassShape(double cornerRadius) =>
@@ -3697,17 +4210,146 @@ class _MainScreenState extends State<MainScreen>
 
 
 
+  Widget _buildSearchFilterChips(BuildContext context) {
+    final filters = const <(String, String)>[
+      ('all', 'Все'),
+      ('chats', 'Чаты'),
+      ('users', 'Люди и боты'),
+      ('groups', 'Группы'),
+      ('channels', 'Каналы'),
+      ('communities', 'Сообщества'),
+      ('messages', 'Сообщения'),
+    ];
+    final primary = Theme.of(context).colorScheme.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final (key, label) = filters[index];
+          final selected = _searchFilter == key;
+          return GestureDetector(
+            onTap: () => setState(() => _searchFilter = key),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+              decoration: BoxDecoration(
+                color: selected
+                    ? primary
+                    : (isDark
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : Colors.black.withValues(alpha: 0.06)),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: selected
+                      ? Colors.white
+                      : Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  bool _matchesSearchPeerFilter(SearchPeer peer) {
+    switch (_searchFilter) {
+      case 'all':
+        return true;
+      case 'chats':
+        return peer.isMember;
+      case 'users':
+        return peer.type == 'user';
+      case 'groups':
+        return peer.type == 'group';
+      case 'channels':
+        return peer.type == 'channel';
+      case 'communities':
+        return peer.type == 'community';
+      case 'messages':
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  Future<void> _joinPublicSearchPeer(SearchPeer peer) async {
+    if (_joiningPeerIds.contains(peer.id)) return;
+    setState(() => _joiningPeerIds.add(peer.id));
+    try {
+      if (peer.type == 'community') {
+        final joined = await CommunityService.joinCommunity(peer.id);
+        if (!mounted) return;
+        if (joined != null) {
+          _onCommunityCreated(joined);
+          await _loadChats(silent: true);
+          _onSearchPeerTap(peer.copyWith(isMember: true));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Не удалось вступить в сообщество')),
+          );
+        }
+        return;
+      }
+      final res = await ChatService.joinPublicChat(peer.id);
+      if (!mounted) return;
+      if (res['success'] == true) {
+        await _loadChats(silent: true);
+        _onSearchPeerTap(peer.copyWith(isMember: true));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res['message']?.toString() ?? 'Не удалось вступить')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _joiningPeerIds.remove(peer.id));
+      }
+    }
+  }
+
+  void _onSearchPeerTap(SearchPeer peer) {
+    if (peer.type == 'user') {
+      _onSearchResultTap(peer.toUser(), 'user');
+    } else if (peer.type == 'group') {
+      _onSearchResultTap(peer.toGroup(), 'group');
+    } else if (peer.type == 'channel') {
+      _onSearchResultTap(peer.toChannel(), 'channel');
+    } else if (peer.type == 'community') {
+      _onSearchResultTap(peer.toCommunity(), 'community');
+    }
+  }
+
   Widget _buildSearchResults() {
     final l10n = context.l10n;
 
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    final myPeers =
+        _unifiedSearchResult.myPeers.where(_matchesSearchPeerFilter).toList();
+    final globalPeers = _unifiedSearchResult.globalPeers
+        .where(_matchesSearchPeerFilter)
+        .toList();
+    final showMessages =
+        _searchFilter == 'all' || _searchFilter == 'messages';
+    final messages = showMessages
+        ? _unifiedSearchResult.messages
+        : <SearchResultMessage>[];
 
-    if (_users.isEmpty &&
-        _groups.isEmpty &&
-        _channels.isEmpty &&
-        _messages.isEmpty) {
+    if (myPeers.isEmpty && globalPeers.isEmpty && messages.isEmpty) {
+      if (_isLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -3735,64 +4377,203 @@ class _MainScreenState extends State<MainScreen>
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 100),
+    return Column(
       children: [
-        if (_users.isNotEmpty)
-          _buildSearchSection(
-              l10n.translate('search_users'),
-              _users
-                  .map((u) => ListTile(
-                        leading: CircleAvatar(
-                          child: Text(u.name.isNotEmpty
-                              ? u.name[0].toUpperCase()
-                              : '?'),
-                        ),
-                        title: Text(u.name),
-                        subtitle: Text('@${u.username}'),
-                        onTap: () => _onSearchResultTap(u, 'user'),
-                      ))
-                  .toList()),
-        if (_groups.isNotEmpty)
-          _buildSearchSection(
-              l10n.translate('search_groups'),
-              _groups
-                  .map((g) => ListTile(
-                        leading: const iconoir.Group(width: 40, height: 40),
-                        title: Text(g.name),
-                        subtitle: Text(g.description.isNotEmpty
-                            ? g.description
-                            : l10n.translate('search_no_description')),
-                        onTap: () => _onSearchResultTap(g, 'group'),
-                      ))
-                  .toList()),
-        if (_channels.isNotEmpty)
-          _buildSearchSection(
-              l10n.translate('search_channels'),
-              _channels
-                  .map((c) => ListTile(
-                        leading: const iconoir.Megaphone(width: 40, height: 40),
-                        title: Text(c.name),
-                        subtitle: Text(c.description.isNotEmpty
-                            ? c.description
-                            : l10n.translate('search_no_description')),
-                        onTap: () => _onSearchResultTap(c, 'channel'),
-                      ))
-                  .toList()),
-        if (_messages.isNotEmpty)
-          _buildSearchSection(
-              l10n.translate('search_messages'),
-              _messages
-                  .map((m) => ListTile(
-                        leading: const iconoir.Message(width: 24, height: 24),
-                        title: Text(m.content,
-                            maxLines: 2, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(
-                            '${l10n.translate('search_from_user').replaceAll('{user}', m.userId)} • ${_formatDate(m.createdAt)}'),
-                        onTap: () => _onSearchResultTap(m, 'message'),
-                      ))
-                  .toList()),
+        if (_isLoading) const LinearProgressIndicator(minHeight: 2),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 100),
+            children: [
+              if (myPeers.isNotEmpty)
+                _buildSearchSection(
+                  'МОИ ЧАТЫ',
+                  myPeers
+                      .map((p) =>
+                          _buildSearchPeerTile(context, p, isGlobal: false))
+                      .toList(),
+                ),
+              if (globalPeers.isNotEmpty)
+                _buildSearchSection(
+                  'ГЛОБАЛЬНЫЙ ПОИСК',
+                  globalPeers
+                      .map((p) =>
+                          _buildSearchPeerTile(context, p, isGlobal: true))
+                      .toList(),
+                ),
+              if (messages.isNotEmpty)
+                _buildSearchSection(
+                  l10n.translate('search_messages'),
+                  messages
+                      .map((m) => _buildSearchMessageTile(context, m))
+                      .toList(),
+                ),
+            ],
+          ),
+        ),
       ],
+    );
+  }
+
+  Widget _buildSearchPeerTile(BuildContext context, SearchPeer peer,
+      {required bool isGlobal}) {
+    final validAvatar = getValidAvatarUrl(peer.avatarUrl);
+    final canJoin = isGlobal &&
+        !peer.isMember &&
+        (peer.type == 'group' || peer.type == 'channel' || peer.type == 'community');
+    final isJoining = _joiningPeerIds.contains(peer.id);
+
+    final subtitleParts = <String>[];
+    if (peer.username.isNotEmpty) {
+      subtitleParts.add('@${peer.username}');
+    }
+    if (peer.type == 'user' && peer.isBot) {
+      subtitleParts.add('бот');
+    } else if (peer.type == 'community') {
+      subtitleParts.add(
+        peer.memberCount > 0
+            ? 'Сообщество • ${peer.memberCount} участн.'
+            : 'Сообщество',
+      );
+      if (peer.description.isNotEmpty) {
+        subtitleParts.add(peer.description);
+      }
+    } else if (peer.memberCount > 0) {
+      subtitleParts.add(
+        peer.type == 'channel'
+            ? '${peer.memberCount} подписчиков'
+            : '${peer.memberCount} участников',
+      );
+    } else if (peer.description.isNotEmpty) {
+      subtitleParts.add(peer.description);
+    }
+
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor:
+            Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+        backgroundImage:
+            validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
+        child: validAvatar == null
+            ? (peer.type == 'channel'
+                ? iconoir.Megaphone(
+                    width: 22,
+                    height: 22,
+                    color: Theme.of(context).colorScheme.primary,
+                  )
+                : peer.type == 'community'
+                    ? Icon(
+                        Icons.hub_rounded,
+                        size: 22,
+                        color: Theme.of(context).colorScheme.primary,
+                      )
+                    : peer.type == 'group'
+                        ? iconoir.Group(
+                            width: 22,
+                            height: 22,
+                            color: Theme.of(context).colorScheme.primary,
+                          )
+                        : Text(
+                            peer.title.isNotEmpty
+                                ? peer.title[0].toUpperCase()
+                                : '?',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ))
+            : null,
+      ),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              peer.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          PeerBadgesRow(isBot: peer.isBot, isVerified: peer.isVerified),
+        ],
+      ),
+      subtitle: subtitleParts.isNotEmpty
+          ? Text(
+              subtitleParts.join(' • '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            )
+          : null,
+      trailing: canJoin
+          ? SizedBox(
+              height: 30,
+              child: FilledButton.tonal(
+                onPressed: isJoining ? null : () => _joinPublicSearchPeer(peer),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: isJoining
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(
+                        peer.type == 'channel' ? 'Подписаться' : 'Вступить',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+              ),
+            )
+          : null,
+      onTap: () => _onSearchPeerTap(peer),
+    );
+  }
+
+  Widget _buildSearchMessageTile(
+      BuildContext context, SearchResultMessage m) {
+    final l10n = context.l10n;
+    final header = m.chatName.isNotEmpty
+        ? m.chatName
+        : (m.senderName.isNotEmpty
+            ? m.senderName
+            : l10n
+                .translate('search_from_user')
+                .replaceAll('{user}', m.userId));
+    final senderPrefix = m.senderName.isNotEmpty && m.senderName != m.chatName
+        ? '${m.senderName}: '
+        : '';
+
+    return ListTile(
+      leading: const iconoir.Message(width: 24, height: 24),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              header,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _formatDate(m.createdAt),
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context)
+                  .colorScheme
+                  .onSurface
+                  .withValues(alpha: 0.55),
+            ),
+          ),
+        ],
+      ),
+      subtitle: Text(
+        '$senderPrefix${m.content}',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      onTap: () => _onSearchResultTap(m, 'message'),
     );
   }
 
@@ -3876,6 +4657,7 @@ class _MainScreenState extends State<MainScreen>
               chatId: result.id,
               chatType: 'group',
               chatName: result.name,
+              avatarUrl: result.avatarUrl,
             );
             return;
           }
@@ -3885,7 +4667,7 @@ class _MainScreenState extends State<MainScreen>
               builder: (_) => GroupChatScreen(
                 chatId: result.id,
                 groupName: result.name,
-                groupAvatar: null,
+                groupAvatar: result.avatarUrl,
               ),
             ),
           ).then((_) {
@@ -3900,6 +4682,7 @@ class _MainScreenState extends State<MainScreen>
               chatId: result.id,
               chatType: 'channel',
               chatName: result.name,
+              avatarUrl: result.avatarUrl,
             );
             return;
           }
@@ -3909,7 +4692,7 @@ class _MainScreenState extends State<MainScreen>
               builder: (_) => ChannelScreen(
                 channelId: result.id,
                 channelName: result.name,
-                channelAvatar: null,
+                channelAvatar: result.avatarUrl,
               ),
             ),
           ).then((_) {
@@ -3917,21 +4700,47 @@ class _MainScreenState extends State<MainScreen>
           });
         }
         break;
+      case 'community':
+        if (result is Community) {
+          if (result.isMember) {
+            _onCommunityCreated(result);
+            _openChat(_communityToChat(result));
+          } else {
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(
+                builder: (_) => CommunityScreen(
+                  community: result,
+                  onCommunityJoined: _onCommunityCreated,
+                  onCommunityLeft: _loadCommunities,
+                ),
+              ),
+            ).then((_) => _loadCommunities());
+          }
+        }
+        break;
       case 'message':
         if (result is SearchResultMessage) {
-          final targetChatId = result.channelId.isNotEmpty
-              ? result.channelId
-              : result.groupId;
+          final targetChatId = result.chatId.isNotEmpty
+              ? result.chatId
+              : (result.channelId.isNotEmpty
+                  ? result.channelId
+                  : result.groupId);
           final dbChat = await AppDatabase().getChat(targetChatId);
           final chatType = dbChat?.chatType ??
-              (result.channelId.isNotEmpty ? 'channel' : 'group');
+              (result.chatType.isNotEmpty
+                  ? result.chatType
+                  : (result.channelId.isNotEmpty ? 'channel' : 'group'));
+          final effectiveChatName = dbChat?.name.isNotEmpty == true
+              ? dbChat!.name
+              : result.chatName;
 
           if (!mounted) return;
           if (TilingLayoutController.instance.isWorkspaceMounted) {
             TilingLayoutController.instance.openChatInActiveTile(
               chatId: targetChatId,
               chatType: chatType,
-              chatName: dbChat?.name ?? '',
+              chatName: effectiveChatName,
               avatarUrl: dbChat?.avatarUrl,
               otherUserId: dbChat?.otherUserId,
               otherUserOnline: dbChat?.isOnline ?? false,
@@ -3947,7 +4756,7 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => PrivateChatScreen(
                   chatId: targetChatId,
-                  otherUserName: dbChat?.name ?? '',
+                  otherUserName: effectiveChatName,
                   initialMessageId: result.id,
                 ),
               ),
@@ -3958,7 +4767,7 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => GroupChatScreen(
                   chatId: targetChatId,
-                  groupName: dbChat?.name ?? '',
+                  groupName: effectiveChatName,
                   initialMessageId: result.id,
                 ),
               ),
@@ -3969,7 +4778,7 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => ChannelScreen(
                   channelId: targetChatId,
-                  channelName: dbChat?.name,
+                  channelName: effectiveChatName,
                   channelAvatar: dbChat?.avatarUrl,
                   highlightMessageId: result.id,
                 ),
@@ -4182,67 +4991,69 @@ class _TitlePillContent extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 280),
-              transitionBuilder: (child, animation) {
-                final inAnimation = Tween<Offset>(
-                  begin: const Offset(0.0, -1.0),
-                  end: Offset.zero,
-                ).animate(CurvedAnimation(
-                  parent: animation,
-                  curve: Curves.easeOutCubic,
-                ));
-                final outAnimation = Tween<Offset>(
-                  begin: const Offset(0.0, 1.0),
-                  end: Offset.zero,
-                ).animate(CurvedAnimation(
-                  parent: animation,
-                  curve: Curves.easeInCubic,
-                ));
-                final isIncoming = child.key == ValueKey<String>(titleKey);
-                return ClipRect(
-                  child: SlideTransition(
-                    position: isIncoming ? inAnimation : outAnimation,
-                    child: FadeTransition(
-                      opacity: animation,
-                      child: child,
+            Flexible(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                transitionBuilder: (child, animation) {
+                  final inAnimation = Tween<Offset>(
+                    begin: const Offset(0.0, -1.0),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ));
+                  final outAnimation = Tween<Offset>(
+                    begin: const Offset(0.0, 1.0),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeInCubic,
+                  ));
+                  final isIncoming = child.key == ValueKey<String>(titleKey);
+                  return ClipRect(
+                    child: SlideTransition(
+                      position: isIncoming ? inAnimation : outAnimation,
+                      child: FadeTransition(
+                        opacity: animation,
+                        child: child,
+                      ),
                     ),
-                  ),
-                );
-              },
-              layoutBuilder: (currentChild, previousChildren) {
-                return Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    ...previousChildren.map(
-                      (w) => Positioned.fill(
-                        child: Center(
-                          child: OverflowBox(
-                            minWidth: 0,
-                            maxWidth: double.infinity,
-                            minHeight: 0,
-                            maxHeight: double.infinity,
-                            child: w,
+                  );
+                },
+                layoutBuilder: (currentChild, previousChildren) {
+                  return Stack(
+                    alignment: Alignment.center,
+                    clipBehavior: Clip.none,
+                    children: [
+                      ...previousChildren.map(
+                        (w) => Positioned.fill(
+                          child: Center(
+                            child: OverflowBox(
+                              minWidth: 0,
+                              maxWidth: double.infinity,
+                              minHeight: 0,
+                              maxHeight: double.infinity,
+                              child: w,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    if (currentChild != null) currentChild,
-                  ],
-                );
-              },
-              child: Text(
-                title,
-                key: ValueKey<String>(titleKey),
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: textColor,
-                  letterSpacing: -0.2,
+                      if (currentChild != null) currentChild,
+                    ],
+                  );
+                },
+                child: Text(
+                  title,
+                  key: ValueKey<String>(titleKey),
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                    letterSpacing: -0.2,
+                  ),
                 ),
               ),
             ),
@@ -4279,6 +5090,8 @@ class _FolderMorphMenu extends StatelessWidget {
         return iconoir.Group(color: color, width: size, height: size);
       case 'megaphone':
         return iconoir.Megaphone(color: color, width: size, height: size);
+      case 'community':
+        return Icon(Icons.hub_outlined, color: color, size: size);
       case 'folder':
       default:
         return iconoir.Folder(color: color, width: size, height: size);
@@ -4449,6 +5262,38 @@ class _FolderMenuRow extends StatelessWidget {
     );
   }
 }
+
+class _PlusActionGlyph extends StatelessWidget {
+  final double size;
+  final VoidCallback onTap;
+
+  const _PlusActionGlyph({
+    super.key,
+    required this.size,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Center(
+          child: iconoir.Plus(
+            width: 28.0,
+            height: 28.0,
+            color: isDark ? Colors.white : const Color(0xFF121215),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 
 

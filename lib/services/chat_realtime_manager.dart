@@ -4,7 +4,9 @@ import 'package:drift/drift.dart' as drift;
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/community_models.dart';
 import '../utils/date_time_utils.dart';
+import 'community_service.dart';
 import 'database/app_database.dart';
 import 'sync_service.dart';
 import 'websocket_service.dart';
@@ -24,6 +26,9 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onUserAvatarUpdated;
   final void Function(WebSocketEvent event)? onUserAppearanceUpdated;
   final void Function(WebSocketEvent event)? onUnreadCountUpdated;
+  final void Function(WebSocketEvent event)? onMessagePinned;
+  final void Function(WebSocketEvent event)? onMessageUnpinned;
+  final void Function(WebSocketEvent event)? onCallbackQueryAnswer;
   final VoidCallback? onReconnect;
 
   ChatSubscription({
@@ -40,6 +45,9 @@ class ChatSubscription {
     this.onUserAvatarUpdated,
     this.onUserAppearanceUpdated,
     this.onUnreadCountUpdated,
+    this.onMessagePinned,
+    this.onMessageUnpinned,
+    this.onCallbackQueryAnswer,
     this.onReconnect,
   });
 
@@ -92,6 +100,9 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onUserAvatarUpdated,
     void Function(WebSocketEvent event)? onUserAppearanceUpdated,
     void Function(WebSocketEvent event)? onUnreadCountUpdated,
+    void Function(WebSocketEvent event)? onMessagePinned,
+    void Function(WebSocketEvent event)? onMessageUnpinned,
+    void Function(WebSocketEvent event)? onCallbackQueryAnswer,
     VoidCallback? onReconnect,
   }) {
     if (!_isInitialized) {
@@ -112,6 +123,9 @@ class ChatRealtimeManager {
       onUserAvatarUpdated: onUserAvatarUpdated,
       onUserAppearanceUpdated: onUserAppearanceUpdated,
       onUnreadCountUpdated: onUnreadCountUpdated,
+      onMessagePinned: onMessagePinned,
+      onMessageUnpinned: onMessageUnpinned,
+      onCallbackQueryAnswer: onCallbackQueryAnswer,
       onReconnect: onReconnect,
     );
 
@@ -157,16 +171,30 @@ class ChatRealtimeManager {
         final readChatId = event.data['chat_id']?.toString();
         final readerId = event.data['reader_id']?.toString();
         final readAt = event.data['read_at']?.toString();
+        final rawOutboxHwm =
+            event.data['last_read_outbox_message_id'] ?? event.data['max_id'];
+        final outboxHwm = rawOutboxHwm is num
+            ? rawOutboxHwm.toInt()
+            : int.tryParse(rawOutboxHwm?.toString() ?? '');
         final myUserId = WebSocketService().currentUserId;
         if (readChatId != null &&
             myUserId != null &&
             readerId != myUserId) {
           try {
-            await AppDatabase().markMessagesAsRead(
-              readChatId,
-              myUserId,
-              readAt: readAt,
-            );
+            if (outboxHwm != null && outboxHwm > 0) {
+              await AppDatabase().markOutboxMessagesReadUpTo(
+                readChatId,
+                myUserId,
+                outboxHwm,
+                readAt: readAt,
+              );
+            } else {
+              await AppDatabase().markMessagesAsRead(
+                readChatId,
+                myUserId,
+                readAt: readAt,
+              );
+            }
           } catch (_) {}
         }
         _dispatchForChat(readChatId, (s) => s.onMessageRead?.call(event));
@@ -196,6 +224,9 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.emojiInteraction:
+        if (event.data['action']?.toString() == '__webrtc_call__') {
+          break;
+        }
         _dispatchForChat(event.data['chat_id']?.toString(),
             (s) => s.onEmojiInteraction?.call(event));
         break;
@@ -203,13 +234,74 @@ class ChatRealtimeManager {
       case WebSocketEventType.unreadCountUpdated:
         final unreadChatId = event.data['chat_id']?.toString();
         final unreadCount = event.data['unread_count'] as int? ?? 0;
+        final rawInboxHwm = event.data['last_read_inbox_message_id'];
+        final inboxHwm = rawInboxHwm is num
+            ? rawInboxHwm.toInt()
+            : int.tryParse(rawInboxHwm?.toString() ?? '');
         if (unreadChatId != null) {
-          try {
-            await AppDatabase().updateUnreadCount(unreadChatId, unreadCount);
-          } catch (_) {}
+          if (CommunityService.isCommunityChannelId(unreadChatId)) {
+            CommunityService.incrementChannelUnread(
+              unreadChatId,
+              absoluteUnread: unreadCount,
+            );
+          } else {
+            try {
+              if (inboxHwm != null && inboxHwm > 0) {
+                await AppDatabase().updateChatReadHwm(
+                  unreadChatId,
+                  lastReadInboxMessageId: inboxHwm,
+                  unreadCount: unreadCount,
+                );
+              } else {
+                await AppDatabase()
+                    .updateUnreadCount(unreadChatId, unreadCount);
+              }
+            } catch (_) {}
+          }
         }
         _dispatchForChat(unreadChatId,
             (s) => s.onUnreadCountUpdated?.call(event));
+        break;
+
+      case WebSocketEventType.messagePinned:
+        final pinChatId = event.data['chat_id']?.toString();
+        final rawPinId =
+            event.data['pinned_message_id'] ?? event.data['message_id'];
+        final pinId = rawPinId is num
+            ? rawPinId.toInt()
+            : int.tryParse(rawPinId?.toString() ?? '');
+        if (pinChatId != null) {
+          try {
+            await AppDatabase().updateChatPinnedMessageId(pinChatId, pinId);
+          } catch (_) {}
+        }
+        _dispatchForChat(pinChatId, (s) => s.onMessagePinned?.call(event));
+        break;
+
+      case WebSocketEventType.messageUnpinned:
+        final unpinChatId = event.data['chat_id']?.toString();
+        final rawNextPinId = event.data['pinned_message_id'];
+        final nextPinId = rawNextPinId is num
+            ? rawNextPinId.toInt()
+            : int.tryParse(rawNextPinId?.toString() ?? '');
+        if (unpinChatId != null) {
+          try {
+            await AppDatabase()
+                .updateChatPinnedMessageId(unpinChatId, nextPinId);
+          } catch (_) {}
+        }
+        _dispatchForChat(
+            unpinChatId, (s) => s.onMessageUnpinned?.call(event));
+        break;
+
+      case WebSocketEventType.callbackQueryAnswer:
+        final cbChatId = event.data['chat_id']?.toString();
+        if (cbChatId != null) {
+          _dispatchForChat(
+              cbChatId, (s) => s.onCallbackQueryAnswer?.call(event));
+        } else {
+          _dispatchGlobal((s) => s.onCallbackQueryAnswer?.call(event));
+        }
         break;
 
       case WebSocketEventType.newChat:
@@ -249,6 +341,28 @@ class ChatRealtimeManager {
         break;
 
       default:
+        final rawNorm = (event.rawType.isNotEmpty
+                ? event.rawType
+                : (event.data['__raw_type'] ?? event.data['type'] ?? '')
+                    .toString())
+            .replaceAll('.', '_');
+        final payload = event.data['payload'] is Map<String, dynamic>
+            ? event.data['payload'] as Map<String, dynamic>
+            : event.data;
+        if (rawNorm == 'community_updated') {
+          final commMap = payload['community'] is Map
+              ? Map<String, dynamic>.from(payload['community'] as Map)
+              : null;
+          if (commMap != null) {
+            CommunityService.cacheCommunity(Community.fromJson(commMap));
+          }
+        } else if (rawNorm == 'community_deleted') {
+          final commId =
+              (payload['community_id'] ?? payload['id'] ?? '').toString();
+          if (commId.isNotEmpty) {
+            CommunityService.removeCommunityFromCache(commId);
+          }
+        }
         break;
     }
   }
@@ -300,8 +414,22 @@ class ChatRealtimeManager {
       final fileUrl = messageData['file_url']?.toString();
       final groupedId = messageData['grouped_id']?.toString();
 
+      final isCommunityChannel =
+          event.data['community_id'] != null ||
+          messageData['community_id'] != null ||
+          CommunityService.isCommunityChannelId(chatId);
+
       final existing = await AppDatabase().getChat(chatId);
-      if (existing == null) {
+      if (isCommunityChannel) {
+        if (existing != null) {
+          await AppDatabase().deleteChat(chatId);
+        }
+        final hasActiveSub =
+            (_subscriptions[chatId]?.isNotEmpty ?? false);
+        if (!hasActiveSub) {
+          CommunityService.incrementChannelUnread(chatId);
+        }
+      } else if (existing == null) {
         await AppDatabase().saveChat(ChatsCompanion(
           chatId: drift.Value(chatId),
           chatType: drift.Value(event.data['chat_type']?.toString() ?? 'private'),
@@ -536,6 +664,30 @@ class ChatRealtimeManager {
     final bool isRound =
         msgData['is_round'] == true || msgType == 'round';
 
+    Map<String, dynamic> mediaPayloadMap = {};
+    if (msgData['media_payload'] is Map) {
+      mediaPayloadMap = Map<String, dynamic>.from(msgData['media_payload'] as Map);
+    } else if (msgData['media_payload'] is String &&
+        (msgData['media_payload'] as String).isNotEmpty) {
+      try {
+        final decoded = jsonDecode(msgData['media_payload'] as String);
+        if (decoded is Map) {
+          mediaPayloadMap = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    if (msgData['reply_markup'] != null) {
+      mediaPayloadMap['reply_markup'] = msgData['reply_markup'];
+    }
+    if (msgData['via_bot_id'] != null) {
+      mediaPayloadMap['via_bot_id'] = msgData['via_bot_id'];
+    }
+    if (msgData['via_bot_username'] != null) {
+      mediaPayloadMap['via_bot_username'] = msgData['via_bot_username'];
+    }
+    final String? mediaPayloadStr =
+        mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
+
     await AppDatabase().saveMessage(MessagesCompanion(
       serverId: drift.Value(serverId),
       localId: drift.Value(_uuid.v4()),
@@ -565,8 +717,15 @@ class ChatRealtimeManager {
       senderAvatarUrl: drift.Value(msgData['sender_avatar_url']?.toString()),
       createdAt: drift.Value(msgData['created_at']?.toString() ??
           DateTime.now().toIso8601String()),
+      isForward: drift.Value(msgData['is_forward'] == true ||
+          msgData['forward_from_id'] != null ||
+          (msgData['forward_from_name'] != null &&
+              msgData['forward_from_name'].toString().isNotEmpty)),
+      forwardFromId: drift.Value(msgData['forward_from_id']?.toString()),
+      forwardFromName: drift.Value(msgData['forward_from_name']?.toString()),
       entities: drift.Value(entitiesStr),
       linkPreviewOptions: drift.Value(linkPreviewOptionsStr),
+      mediaPayload: drift.Value(mediaPayloadStr),
       invertMedia: drift.Value(invertMedia),
       isRound: drift.Value(isRound),
       groupedId: drift.Value(groupedId),

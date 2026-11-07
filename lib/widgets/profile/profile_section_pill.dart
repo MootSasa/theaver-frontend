@@ -173,7 +173,8 @@ class ProfileSectionPillState extends State<ProfileSectionPill>
       textDirection: Directionality.of(context),
     )..layout();
 
-    return math.max(130.0, textPainter.size.width + 52.0);
+    final extraWidth = widget.sections.length > 1 ? 64.0 : 44.0;
+    return math.max(130.0, textPainter.size.width + extraWidth);
   }
 
   @override
@@ -402,81 +403,85 @@ class _TitlePillContent extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 280),
-              transitionBuilder: (child, animation) {
-                final inAnimation = Tween<Offset>(
-                  begin: const Offset(0.0, -1.0),
-                  end: Offset.zero,
-                ).animate(CurvedAnimation(
-                  parent: animation,
-                  curve: Curves.easeOutCubic,
-                ));
-                final outAnimation = Tween<Offset>(
-                  begin: const Offset(0.0, 1.0),
-                  end: Offset.zero,
-                ).animate(CurvedAnimation(
-                  parent: animation,
-                  curve: Curves.easeInCubic,
-                ));
-                final isIncoming = child.key == ValueKey<String>(titleKey);
-                return ClipRect(
-                  child: SlideTransition(
-                    position: isIncoming ? inAnimation : outAnimation,
-                    child: FadeTransition(
-                      opacity: animation,
-                      child: child,
+            Flexible(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                transitionBuilder: (child, animation) {
+                  final inAnimation = Tween<Offset>(
+                    begin: const Offset(0.0, -1.0),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ));
+                  final outAnimation = Tween<Offset>(
+                    begin: const Offset(0.0, 1.0),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeInCubic,
+                  ));
+                  final isIncoming = child.key == ValueKey<String>(titleKey);
+                  return ClipRect(
+                    child: SlideTransition(
+                      position: isIncoming ? inAnimation : outAnimation,
+                      child: FadeTransition(
+                        opacity: animation,
+                        child: child,
+                      ),
                     ),
-                  ),
-                );
-              },
-              layoutBuilder: (currentChild, previousChildren) {
-                return Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    ...previousChildren.map(
-                      (w) => Positioned.fill(
-                        child: Center(
-                          child: OverflowBox(
-                            minWidth: 0,
-                            maxWidth: double.infinity,
-                            minHeight: 0,
-                            maxHeight: double.infinity,
-                            child: w,
+                  );
+                },
+                layoutBuilder: (currentChild, previousChildren) {
+                  return Stack(
+                    alignment: Alignment.center,
+                    clipBehavior: Clip.none,
+                    children: [
+                      ...previousChildren.map(
+                        (w) => Positioned.fill(
+                          child: Center(
+                            child: OverflowBox(
+                              minWidth: 0,
+                              maxWidth: double.infinity,
+                              minHeight: 0,
+                              maxHeight: double.infinity,
+                              child: w,
+                            ),
                           ),
                         ),
                       ),
+                      if (currentChild != null) currentChild,
+                    ],
+                  );
+                },
+                child: Row(
+                  key: ValueKey<String>(titleKey),
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 17.0,
+                          fontWeight: FontWeight.w700,
+                          color: textColor,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
                     ),
-                    if (currentChild != null) currentChild,
+                    if (showChevron) ...[
+                      const SizedBox(width: 4.0),
+                      iconoir.NavArrowDown(
+                        width: 16.0,
+                        height: 16.0,
+                        color: textColor.withValues(alpha: 0.75),
+                      ),
+                    ],
                   ],
-                );
-              },
-              child: Row(
-                key: ValueKey<String>(titleKey),
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 17.0,
-                      fontWeight: FontWeight.w700,
-                      color: textColor,
-                      letterSpacing: -0.3,
-                    ),
-                  ),
-                  if (showChevron) ...[
-                    const SizedBox(width: 4.0),
-                    iconoir.NavArrowDown(
-                      width: 16.0,
-                      height: 16.0,
-                      color: textColor.withValues(alpha: 0.75),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
           ],

@@ -227,30 +227,33 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                   color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: SwitchListTile(
-                  title: Text(
-                    _currentTheme.isDark ? l10n.translate('theme_dark') : l10n.translate('theme_light'),
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: SwitchListTile(
+                    title: Text(
+                      _currentTheme.isDark ? l10n.translate('theme_dark') : l10n.translate('theme_light'),
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                    ),
+                    secondary: _currentTheme.isDark
+                        ? iconoir.HalfMoon(color: _currentTheme.palette.primary, width: 22, height: 22)
+                        : iconoir.SunLight(color: _currentTheme.palette.primary, width: 22, height: 22),
+                    value: _currentTheme.isDark,
+                    activeColor: _currentTheme.palette.primary,
+                    onChanged: (val) {
+                      setState(() {
+                        _currentTheme = _currentTheme.copyWith(
+                          isDark: val,
+                          palette: _currentTheme.palette.copyWith(
+                            background: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
+                            surface: val ? const Color(0xFF2C2C2E) : const Color(0xFFF5F5F5),
+                            onSurface: val ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E),
+                            appBarBackground: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
+                            appBarForeground: val ? Colors.white : const Color(0xFF1C1C1E),
+                          ),
+                        );
+                      });
+                    },
                   ),
-                  secondary: _currentTheme.isDark
-                      ? iconoir.HalfMoon(color: _currentTheme.palette.primary, width: 22, height: 22)
-                      : iconoir.SunLight(color: _currentTheme.palette.primary, width: 22, height: 22),
-                  value: _currentTheme.isDark,
-                  activeColor: _currentTheme.palette.primary,
-                  onChanged: (val) {
-                    setState(() {
-                      _currentTheme = _currentTheme.copyWith(
-                        isDark: val,
-                        palette: _currentTheme.palette.copyWith(
-                          background: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
-                          surface: val ? const Color(0xFF2C2C2E) : const Color(0xFFF5F5F5),
-                          onSurface: val ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E),
-                          appBarBackground: val ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
-                          appBarForeground: val ? Colors.white : const Color(0xFF1C1C1E),
-                        ),
-                      );
-                    });
-                  },
                 ),
               ),
             ),
@@ -279,7 +282,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                       ],
                     ),
                     Slider(
-                      value: _currentTheme.bubbleRadius,
+                      value: _currentTheme.bubbleRadius.clamp(0.0, 24.0),
                       min: 0,
                       max: 24,
                       divisions: 24,
@@ -909,85 +912,88 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Column(
-        children: [
-          ListTile(
-            dense: true,
-            title: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-            subtitle: Text(
-              'Непрозрачность: $opacityPercent%',
-              style: TextStyle(
-                fontSize: 11,
-                color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          children: [
+            ListTile(
+              dense: true,
+              title: Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                'Непрозрачность: $opacityPercent%',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+                ),
               ),
-            ),
-            leading: GestureDetector(
+              leading: GestureDetector(
+                onTap: () => _pickColor(context, label, stopColor, (c) {
+                  final newColors = List<Color>.from(allColors);
+                  newColors[index] = c;
+                  onGradientChanged(newColors);
+                }, allowOpacity: true),
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: stopColor,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4),
+                    ],
+                  ),
+                ),
+              ),
+              trailing: allColors.length > 2
+                  ? IconButton(
+                      icon: const iconoir.Xmark(width: 18, height: 18),
+                      onPressed: () {
+                        final newColors = List<Color>.from(allColors);
+                        newColors.removeAt(index);
+                        onGradientChanged(newColors);
+                      },
+                    )
+                  : null,
               onTap: () => _pickColor(context, label, stopColor, (c) {
                 final newColors = List<Color>.from(allColors);
                 newColors[index] = c;
                 onGradientChanged(newColors);
               }, allowOpacity: true),
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: stopColor,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4),
-                  ],
-                ),
-              ),
             ),
-            trailing: allColors.length > 2
-                ? IconButton(
-                    icon: const iconoir.Xmark(width: 18, height: 18),
-                    onPressed: () {
-                      final newColors = List<Color>.from(allColors);
-                      newColors.removeAt(index);
-                      onGradientChanged(newColors);
-                    },
-                  )
-                : null,
-            onTap: () => _pickColor(context, label, stopColor, (c) {
-              final newColors = List<Color>.from(allColors);
-              newColors[index] = c;
-              onGradientChanged(newColors);
-            }, allowOpacity: true),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
-            child: Row(
-              children: [
-                const iconoir.ColorWheel(width: 16, height: 16, color: Colors.grey),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 2,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                    ),
-                    child: Slider(
-                      value: stopColor.a,
-                      min: 0.1,
-                      max: 1.0,
-                      divisions: 18,
-                      onChanged: (val) {
-                        final newColors = List<Color>.from(allColors);
-                        newColors[index] = stopColor.withValues(alpha: val);
-                        onGradientChanged(newColors);
-                      },
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+              child: Row(
+                children: [
+                  const iconoir.ColorWheel(width: 16, height: 16, color: Colors.grey),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 2,
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                      ),
+                      child: Slider(
+                        value: stopColor.a.clamp(0.1, 1.0),
+                        min: 0.1,
+                        max: 1.0,
+                        divisions: 18,
+                        onChanged: (val) {
+                          final newColors = List<Color>.from(allColors);
+                          newColors[index] = stopColor.withValues(alpha: val);
+                          onGradientChanged(newColors);
+                        },
+                      ),
                     ),
                   ),
-                ),
-                Text(
-                  '$opacityPercent%',
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-                ),
-              ],
+                  Text(
+                    '$opacityPercent%',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

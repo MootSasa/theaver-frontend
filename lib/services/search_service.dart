@@ -2,33 +2,277 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'auth_service.dart';
+import 'community_service.dart';
+import 'database/app_database.dart';
 import '../config/app_config.dart';
+import '../models/community_models.dart';
 
-/// SearchResultUser represents a user in search results.
+/// Unified peer item returned by `GET /api/search` in `my_peers` and `global_peers`.
+class SearchPeer {
+  final String peerType; // 'user' | 'group' | 'channel' | 'community'
+  final String id;
+  final String? chatId;
+  final String name;
+  final String username;
+  final String description;
+  final String? avatarUrl;
+  final bool isBot;
+  final bool isVerified;
+  final bool isPublic;
+  final int memberCount;
+  final bool isMember;
+
+  const SearchPeer({
+    required this.peerType,
+    required this.id,
+    this.chatId,
+    required this.name,
+    this.username = '',
+    this.description = '',
+    this.avatarUrl,
+    this.isBot = false,
+    this.isVerified = false,
+    this.isPublic = false,
+    this.memberCount = 0,
+    this.isMember = false,
+  });
+
+  bool get isUser => peerType == 'user';
+  bool get isGroup => peerType == 'group';
+  bool get isChannel => peerType == 'channel';
+  bool get isCommunity => peerType == 'community';
+
+  /// Alias for [peerType] (`'user'`, `'group'`, `'channel'`, `'community'`).
+  String get type => peerType;
+
+  /// Alias for [name].
+  String get title => name;
+
+  SearchPeer copyWith({
+    String? peerType,
+    String? id,
+    String? chatId,
+    String? name,
+    String? username,
+    String? description,
+    String? avatarUrl,
+    bool? isBot,
+    bool? isVerified,
+    bool? isPublic,
+    int? memberCount,
+    bool? isMember,
+  }) {
+    return SearchPeer(
+      peerType: peerType ?? this.peerType,
+      id: id ?? this.id,
+      chatId: chatId ?? this.chatId,
+      name: name ?? this.name,
+      username: username ?? this.username,
+      description: description ?? this.description,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      isBot: isBot ?? this.isBot,
+      isVerified: isVerified ?? this.isVerified,
+      isPublic: isPublic ?? this.isPublic,
+      memberCount: memberCount ?? this.memberCount,
+      isMember: isMember ?? this.isMember,
+    );
+  }
+
+  SearchResultUser toUser({bool isMyPeer = false}) =>
+      SearchResultUser.fromPeer(this, isMyPeer: isMyPeer);
+
+  SearchResultGroup toGroup() => SearchResultGroup.fromPeer(this);
+
+  SearchResultChannel toChannel() => SearchResultChannel.fromPeer(this);
+
+  Community toCommunity() {
+    final cleanId = id.startsWith('community_')
+        ? id.substring('community_'.length)
+        : id;
+    if (isMember) {
+      final cached = CommunityService.getCachedCommunity(cleanId);
+      if (cached != null) return cached;
+    }
+    return Community(
+      id: cleanId,
+      name: name,
+      description: description,
+      avatarUrl: avatarUrl,
+      memberCount: memberCount > 0 ? memberCount : 1,
+      createdAt: DateTime.now(),
+      isMember: isMember,
+      isPublic: isPublic,
+    );
+  }
+
+  factory SearchPeer.fromJson(Map<String, dynamic> json) {
+    final rawAvatar =
+        (json['avatar_url'] ?? json['icon_url'])?.toString().trim();
+    final rawChatId = json['chat_id']?.toString().trim();
+    return SearchPeer(
+      peerType: (json['peer_type'] ?? json['chat_type'] ?? 'user').toString(),
+      id: (json['id'] ?? json['community_id'] ?? '').toString(),
+      chatId: (rawChatId != null && rawChatId.isNotEmpty) ? rawChatId : null,
+      name: (json['name'] ?? json['display_name'] ?? json['username'] ?? '').toString(),
+      username: (json['username'] ?? '').toString(),
+      description: (json['description'] ?? '').toString(),
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      isBot: json['is_bot'] == true,
+      isVerified: json['is_verified'] == true,
+      isPublic: json['is_public'] == true,
+      memberCount: (json['member_count'] as num?)?.toInt() ?? 0,
+      isMember: json['is_member'] == true,
+    );
+  }
+}
+
+/// Unified response from `GET /api/search`.
+class UnifiedSearchResult {
+  static const UnifiedSearchResult empty = UnifiedSearchResult();
+
+  final String query;
+  final String type;
+  final List<SearchPeer> myPeers;
+  final List<SearchPeer> globalPeers;
+  final List<SearchResultMessage> messages;
+
+  const UnifiedSearchResult({
+    this.query = '',
+    this.type = 'all',
+    this.myPeers = const [],
+    this.globalPeers = const [],
+    this.messages = const [],
+  });
+
+  bool get isEmpty =>
+      myPeers.isEmpty && globalPeers.isEmpty && messages.isEmpty;
+
+  factory UnifiedSearchResult.fromJson(Map<String, dynamic> json) {
+    final myRaw = json['my_peers'] as List<dynamic>? ?? const [];
+    final globalRaw = json['global_peers'] as List<dynamic>? ?? const [];
+    final msgRaw = json['messages'] as List<dynamic>? ?? const [];
+
+    return UnifiedSearchResult(
+      query: (json['query'] ?? '').toString(),
+      type: (json['type'] ?? 'all').toString(),
+      myPeers: myRaw
+          .whereType<Map>()
+          .map((e) => SearchPeer.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      globalPeers: globalRaw
+          .whereType<Map>()
+          .map((e) => SearchPeer.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      messages: msgRaw
+          .whereType<Map>()
+          .map((e) => SearchResultMessage.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
+
+  /// Merges instant local results with server search results without duplicates.
+  UnifiedSearchResult mergeWithServer(UnifiedSearchResult server) {
+    final mergedPeers = <SearchPeer>[...server.myPeers];
+    final seenPeerKeys = <String>{
+      for (final p in server.myPeers) (p.chatId ?? p.id),
+      for (final p in server.myPeers) p.id,
+    };
+    for (final lp in myPeers) {
+      final key = lp.chatId ?? lp.id;
+      if (!seenPeerKeys.contains(key) && !seenPeerKeys.contains(lp.id)) {
+        seenPeerKeys.add(key);
+        mergedPeers.add(lp);
+      }
+    }
+
+    final mergedMessages = <SearchResultMessage>[...server.messages];
+    final seenMsgIds = <String>{for (final m in server.messages) m.id};
+    for (final lm in messages) {
+      if (seenMsgIds.add(lm.id)) {
+        mergedMessages.add(lm);
+      }
+    }
+
+    return UnifiedSearchResult(
+      query: server.query.isNotEmpty ? server.query : query,
+      type: server.type,
+      myPeers: mergedPeers,
+      globalPeers: server.globalPeers,
+      messages: mergedMessages,
+    );
+  }
+}
+
+/// SearchResultUser represents a user or bot in search results.
 class SearchResultUser {
   final String id;
   final String name;
   final String email;
   final String username;
+  final String bio;
   final String? avatarUrl;
+  final String? chatId;
+  final bool isBot;
+  final bool isVerified;
+  final bool isMyPeer;
+  final bool isOnline;
 
   SearchResultUser({
     required this.id,
     required this.name,
-    required this.email,
+    this.email = '',
     required this.username,
+    this.bio = '',
     this.avatarUrl,
+    this.chatId,
+    this.isBot = false,
+    this.isVerified = false,
+    this.isMyPeer = false,
+    this.isOnline = false,
   });
 
   factory SearchResultUser.fromJson(Map<String, dynamic> json) {
+    final rawAvatar = json['avatar_url']?.toString().trim();
+    final rawChatId = json['chat_id']?.toString().trim();
     return SearchResultUser(
-      id: json['id'] ?? '',
-      name: json['name'] ?? '',
-      email: json['email'] ?? '',
-      username: json['username'] ?? '',
-      avatarUrl: json['avatar_url']?.toString(),
+      id: (json['id'] ?? '').toString(),
+      name: (json['name'] ?? json['display_name'] ?? '').toString(),
+      email: (json['email'] ?? '').toString(),
+      username: (json['username'] ?? '').toString(),
+      bio: (json['bio'] ?? json['description'] ?? '').toString(),
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      chatId: (rawChatId != null && rawChatId.isNotEmpty) ? rawChatId : null,
+      isBot: json['is_bot'] == true,
+      isVerified: json['is_verified'] == true,
+      isMyPeer: json['is_member'] == true,
+      isOnline: json['is_online'] == true,
     );
   }
+
+  factory SearchResultUser.fromPeer(SearchPeer peer, {bool isMyPeer = false}) {
+    return SearchResultUser(
+      id: peer.id,
+      name: peer.name,
+      email: '',
+      username: peer.username,
+      bio: peer.description,
+      avatarUrl: peer.avatarUrl,
+      chatId: peer.chatId,
+      isBot: peer.isBot,
+      isVerified: peer.isVerified,
+      isMyPeer: isMyPeer || peer.isMember,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SearchResultUser &&
+          runtimeType == other.runtimeType &&
+          id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
 }
 
 /// SearchResultGroup represents a group in search results.
@@ -36,18 +280,47 @@ class SearchResultGroup {
   final String id;
   final String name;
   final String description;
+  final String username;
+  final String? avatarUrl;
+  final bool isPublic;
+  final int memberCount;
+  final bool isMember;
 
   SearchResultGroup({
     required this.id,
     required this.name,
     required this.description,
+    this.username = '',
+    this.avatarUrl,
+    this.isPublic = false,
+    this.memberCount = 0,
+    this.isMember = false,
   });
 
   factory SearchResultGroup.fromJson(Map<String, dynamic> json) {
+    final rawAvatar = json['avatar_url']?.toString().trim();
     return SearchResultGroup(
-      id: json['id'] ?? '',
-      name: json['name'] ?? '',
-      description: json['description'] ?? '',
+      id: (json['id'] ?? json['chat_id'] ?? '').toString(),
+      name: (json['name'] ?? '').toString(),
+      description: (json['description'] ?? '').toString(),
+      username: (json['username'] ?? '').toString(),
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      isPublic: json['is_public'] == true,
+      memberCount: (json['member_count'] as num?)?.toInt() ?? 0,
+      isMember: json['is_member'] == true,
+    );
+  }
+
+  factory SearchResultGroup.fromPeer(SearchPeer peer) {
+    return SearchResultGroup(
+      id: peer.chatId ?? peer.id,
+      name: peer.name,
+      description: peer.description,
+      username: peer.username,
+      avatarUrl: peer.avatarUrl,
+      isPublic: peer.isPublic,
+      memberCount: peer.memberCount,
+      isMember: peer.isMember,
     );
   }
 }
@@ -58,20 +331,56 @@ class SearchResultChannel {
   final String name;
   final String description;
   final String groupId;
+  final String username;
+  final String? avatarUrl;
+  final bool isPublic;
+  final int memberCount;
+  final bool isMember;
+  final String chatType;
 
   SearchResultChannel({
     required this.id,
     required this.name,
     required this.description,
     required this.groupId,
+    this.username = '',
+    this.avatarUrl,
+    this.isPublic = false,
+    this.memberCount = 0,
+    this.isMember = false,
+    this.chatType = 'channel',
   });
 
   factory SearchResultChannel.fromJson(Map<String, dynamic> json) {
+    final rawAvatar = json['avatar_url']?.toString().trim();
+    final resolvedId = (json['id'] ?? json['chat_id'] ?? '').toString();
     return SearchResultChannel(
-      id: json['id'] ?? '',
-      name: json['name'] ?? '',
-      description: json['description'] ?? '',
-      groupId: json['group_id'] ?? '',
+      id: resolvedId,
+      name: (json['name'] ?? '').toString(),
+      description: (json['description'] ?? '').toString(),
+      groupId: (json['group_id'] ?? resolvedId).toString(),
+      username: (json['username'] ?? '').toString(),
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      isPublic: json['is_public'] == true,
+      memberCount: (json['member_count'] as num?)?.toInt() ?? 0,
+      isMember: json['is_member'] == true,
+      chatType: (json['chat_type'] ?? 'channel').toString(),
+    );
+  }
+
+  factory SearchResultChannel.fromPeer(SearchPeer peer) {
+    final resolvedId = peer.chatId ?? peer.id;
+    return SearchResultChannel(
+      id: resolvedId,
+      name: peer.name,
+      description: peer.description,
+      groupId: resolvedId,
+      username: peer.username,
+      avatarUrl: peer.avatarUrl,
+      isPublic: peer.isPublic,
+      memberCount: peer.memberCount,
+      isMember: peer.isMember,
+      chatType: peer.peerType == 'group' ? 'group' : 'channel',
     );
   }
 }
@@ -80,6 +389,13 @@ class SearchResultChannel {
 class SearchResultMessage {
   final String id;
   final String content;
+  final String chatId;
+  final String chatType;
+  final String chatName;
+  final String senderId;
+  final String senderName;
+  final String? senderAvatar;
+  final String messageType;
   final String userId;
   final String channelId;
   final String groupId;
@@ -88,6 +404,13 @@ class SearchResultMessage {
   SearchResultMessage({
     required this.id,
     required this.content,
+    required this.chatId,
+    this.chatType = 'private',
+    this.chatName = '',
+    this.senderId = '',
+    this.senderName = '',
+    this.senderAvatar,
+    this.messageType = 'text',
     required this.userId,
     required this.channelId,
     required this.groupId,
@@ -95,179 +418,321 @@ class SearchResultMessage {
   });
 
   factory SearchResultMessage.fromJson(Map<String, dynamic> json) {
+    final cId = (json['chat_id'] ?? json['channel_id'] ?? json['group_id'] ?? '').toString();
+    final cType = (json['chat_type'] ??
+            (json['channel_id'] != null && json['channel_id'].toString().isNotEmpty
+                ? 'channel'
+                : 'group'))
+        .toString();
+    final sId = (json['sender_id'] ?? json['user_id'] ?? '').toString();
+    final rawAvatar = json['sender_avatar']?.toString().trim();
+
     return SearchResultMessage(
-      id: json['id'] ?? '',
-      content: json['content'] ?? '',
-      userId: json['user_id'] ?? '',
-      channelId: json['channel_id'] ?? '',
-      groupId: json['group_id'] ?? '',
+      id: (json['id'] ?? '').toString(),
+      content: (json['content'] ?? '').toString(),
+      chatId: cId,
+      chatType: cType,
+      chatName: (json['chat_name'] ?? '').toString(),
+      senderId: sId,
+      senderName: (json['sender_name'] ?? '').toString(),
+      senderAvatar: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      messageType: (json['message_type'] ?? 'text').toString(),
+      userId: sId,
+      channelId: cType == 'channel' ? cId : (json['channel_id'] ?? '').toString(),
+      groupId: cType != 'channel' ? cId : (json['group_id'] ?? '').toString(),
       createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'])
+          ? (DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now())
           : DateTime.now(),
     );
   }
 }
 
-/// SearchService provides search functionality for users, groups, channels, and messages.
+/// SearchService provides unified search functionality via `GET /api/search`
+/// and instant offline-first local SQLite search.
 class SearchService {
-  // Base URL is now managed by AppConfig
+  /// Instant local SQLite search across cached chats and messages (0ms network latency).
+  static Future<UnifiedSearchResult> searchLocal({
+    required String query,
+    String type = 'all',
+    String? chatId,
+    int limit = 20,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return const UnifiedSearchResult();
 
-  /// Searches for users matching the query.
-  /// 
-  /// [query] - The search query string.
-  /// [limit] - Maximum number of results to return (default: 20).
-  /// Returns a list of [SearchResultUser] objects.
+    try {
+      final db = AppDatabase();
+      final myPeers = <SearchPeer>[];
+      final messages = <SearchResultMessage>[];
+
+      final allChats = await db.getChats();
+      final chatById = <String, DbChat>{
+        for (final c in allChats) c.chatId: c,
+      };
+
+      if (chatId == null && type != 'messages') {
+        final seenPeerIds = <String>{};
+        final matchedCommunities =
+            await CommunityService.searchCommunitiesLocal(trimmed, limit: limit);
+        for (final comm in matchedCommunities) {
+          final peerChatId = 'community_${comm.id}';
+          seenPeerIds.add(peerChatId);
+          seenPeerIds.add(comm.id);
+          myPeers.add(
+            SearchPeer(
+              peerType: 'community',
+              id: comm.id,
+              chatId: peerChatId,
+              name: comm.name,
+              description: comm.description,
+              avatarUrl: comm.avatarUrl,
+              isPublic: true,
+              memberCount: comm.memberCount,
+              isMember: true,
+            ),
+          );
+        }
+
+        final matchedChats = await db.searchChatsLocal(trimmed, limit: limit);
+        for (final c in matchedChats) {
+          if (seenPeerIds.contains(c.chatId) ||
+              (c.otherUserId != null && seenPeerIds.contains(c.otherUserId!))) {
+            continue;
+          }
+          final peerType = c.chatType == 'private'
+              ? 'user'
+              : (c.chatType == 'channel'
+                  ? 'channel'
+                  : (c.chatType == 'community' ? 'community' : 'group'));
+          myPeers.add(
+            SearchPeer(
+              peerType: peerType,
+              id: (c.otherUserId != null && c.otherUserId!.isNotEmpty)
+                  ? c.otherUserId!
+                  : c.chatId,
+              chatId: c.chatId,
+              name: c.name,
+              username: c.username ?? '',
+              avatarUrl: c.avatarUrl,
+              isBot: c.isBot,
+              isVerified: c.isVerified,
+              isPublic: c.isPublic,
+              isMember: true,
+            ),
+          );
+        }
+      }
+
+      if (type == 'all' || type == 'messages') {
+        final localMsgs = await db.searchMessagesLocal(
+          trimmed,
+          chatId: chatId,
+          limit: limit,
+        );
+        for (final m in localMsgs) {
+          final chat = chatById[m.chatId];
+          final cType = chat?.chatType ?? 'group';
+          messages.add(
+            SearchResultMessage(
+              id: m.serverId ?? m.localId,
+              content: m.content,
+              chatId: m.chatId,
+              chatType: cType,
+              chatName: chat?.name ?? '',
+              senderId: m.senderId,
+              senderName: m.senderName ?? '',
+              senderAvatar: m.senderAvatarUrl,
+              messageType: m.messageType,
+              userId: m.senderId,
+              channelId: cType == 'channel' ? m.chatId : '',
+              groupId: cType != 'channel' ? m.chatId : '',
+              createdAt: DateTime.tryParse(m.createdAt) ?? DateTime.now(),
+            ),
+          );
+        }
+      }
+
+      return UnifiedSearchResult(
+        query: trimmed,
+        type: type,
+        myPeers: myPeers,
+        globalPeers: const [],
+        messages: messages,
+      );
+    } catch (e) {
+      debugPrint('Error in local search: $e');
+      return const UnifiedSearchResult();
+    }
+  }
+
+  /// Executes a unified search across the user's peers, global directory (users/bots/public chats),
+  /// and messages (`GET /api/search`).
+  static Future<UnifiedSearchResult> search({
+    required String query,
+    String type = 'all',
+    String? chatId,
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty && type != 'users') {
+      return const UnifiedSearchResult();
+    }
+
+    try {
+      final token = await AuthService.getToken();
+      final queryParams = <String, String>{
+        'query': trimmed,
+        'type': type,
+        'limit': limit.toString(),
+        if (offset > 0) 'offset': offset.toString(),
+        if (chatId != null && chatId.trim().isNotEmpty) 'chat_id': chatId.trim(),
+      };
+
+      final uri = Uri.parse('${AppConfig.baseUrl}/api/search')
+          .replace(queryParameters: queryParams);
+
+      if (AppConfig.enableDebugLogging) {
+        debugPrint('SearchService: GET $uri');
+      }
+
+      final response = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> &&
+            (data['success'] == true || data['ok'] == true)) {
+          return UnifiedSearchResult.fromJson(data);
+        }
+      }
+      return const UnifiedSearchResult();
+    } catch (e) {
+      debugPrint('Error in unified search: $e');
+      return const UnifiedSearchResult();
+    }
+  }
+
+  /// Searches for users and bots matching the query using `GET /api/search?type=users`.
+  /// When [query] is empty, queries the server for initial users and merges with local private chat peers.
   static Future<List<SearchResultUser>> searchUsers({
     required String query,
     int limit = 20,
   }) async {
-    if (query.isEmpty) {
-      return [];
+    final trimmed = query.trim();
+    final result = await search(query: trimmed, type: 'users', limit: limit);
+    final users = <SearchResultUser>[];
+    final seenIds = <String>{};
+
+    for (final p in result.myPeers) {
+      if (p.isUser && seenIds.add(p.id)) {
+        users.add(SearchResultUser.fromPeer(p, isMyPeer: true));
+      }
+    }
+    for (final p in result.globalPeers) {
+      if (p.isUser && seenIds.add(p.id)) {
+        users.add(SearchResultUser.fromPeer(p, isMyPeer: false));
+      }
     }
 
-    try {
-      final token = await AuthService.getToken();
-      if (AppConfig.enableDebugLogging) {
-        debugPrint('SearchService: Searching for "$query" with token: ${token != null ? "present" : "null"}');
-      }
-      final response = await http.get(
-        Uri.parse('${AppConfig.baseUrl}/api/search/users?query=${Uri.encodeComponent(query)}&limit=$limit'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-      );
-  
-      if (AppConfig.enableDebugLogging) {
-        debugPrint('SearchService: Response ${response.statusCode}: ${response.body}');
-      }
-  
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true && data['users'] != null) {
-          return (data['users'] as List)
-              .map((json) => SearchResultUser.fromJson(json))
-              .toList();
+    if (trimmed.isEmpty) {
+      try {
+        final localChats = await AppDatabase().getChats();
+        for (final c in localChats) {
+          if (c.chatType == 'private' &&
+              c.otherUserId != null &&
+              c.otherUserId!.isNotEmpty &&
+              seenIds.add(c.otherUserId!)) {
+            users.add(
+              SearchResultUser(
+                id: c.otherUserId!,
+                name: c.name,
+                email: '',
+                username: '',
+                avatarUrl: c.avatarUrl,
+                chatId: c.chatId,
+                isMyPeer: true,
+              ),
+            );
+          }
         }
-      }
-      return [];
-    } catch (e) {
-      debugPrint('Error searching users: $e');
-      return [];
+      } catch (_) {}
     }
+    return users;
   }
 
-  /// Searches for groups matching the query.
-  /// 
-  /// [query] - The search query string.
-  /// [limit] - Maximum number of results to return (default: 20).
-  /// Returns a list of [SearchResultGroup] objects.
+  /// Searches for groups matching the query using `GET /api/search?type=groups`.
   static Future<List<SearchResultGroup>> searchGroups({
     required String query,
     int limit = 20,
   }) async {
-    if (query.isEmpty) {
-      return [];
-    }
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
 
-    try {
-      final token = await AuthService.getToken();
-      final response = await http.get(
-        Uri.parse('${AppConfig.baseUrl}/api/search/groups?query=${Uri.encodeComponent(query)}&limit=$limit'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-      );
+    final result = await search(query: trimmed, type: 'groups', limit: limit);
+    final groups = <SearchResultGroup>[];
+    final seenIds = <String>{};
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true && data['groups'] != null) {
-          return (data['groups'] as List)
-              .map((json) => SearchResultGroup.fromJson(json))
-              .toList();
-        }
+    for (final p in result.myPeers) {
+      if (p.isGroup && seenIds.add(p.chatId ?? p.id)) {
+        groups.add(SearchResultGroup.fromPeer(p));
       }
-      return [];
-    } catch (e) {
-      debugPrint('Error searching groups: $e');
-      return [];
     }
+    for (final p in result.globalPeers) {
+      if (p.isGroup && seenIds.add(p.chatId ?? p.id)) {
+        groups.add(SearchResultGroup.fromPeer(p));
+      }
+    }
+    return groups;
   }
 
-  /// Searches for channels matching the query.
-  /// 
-  /// [query] - The search query string.
-  /// [limit] - Maximum number of results to return (default: 20).
-  /// Returns a list of [SearchResultChannel] objects.
+  /// Searches for channels matching the query using `GET /api/search?type=channels`.
   static Future<List<SearchResultChannel>> searchChannels({
     required String query,
     int limit = 20,
   }) async {
-    if (query.isEmpty) {
-      return [];
-    }
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
 
-    try {
-      final token = await AuthService.getToken();
-      final response = await http.get(
-        Uri.parse('${AppConfig.baseUrl}/api/search/channels?query=${Uri.encodeComponent(query)}&limit=$limit'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-      );
+    final result = await search(query: trimmed, type: 'channels', limit: limit);
+    final channels = <SearchResultChannel>[];
+    final seenIds = <String>{};
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true && data['channels'] != null) {
-          return (data['channels'] as List)
-              .map((json) => SearchResultChannel.fromJson(json))
-              .toList();
-        }
+    for (final p in result.myPeers) {
+      if (p.isChannel && seenIds.add(p.chatId ?? p.id)) {
+        channels.add(SearchResultChannel.fromPeer(p));
       }
-      return [];
-    } catch (e) {
-      debugPrint('Error searching channels: $e');
-      return [];
     }
+    for (final p in result.globalPeers) {
+      if (p.isChannel && seenIds.add(p.chatId ?? p.id)) {
+        channels.add(SearchResultChannel.fromPeer(p));
+      }
+    }
+    return channels;
   }
 
-  /// Searches for messages matching the query.
-  /// 
-  /// [query] - The search query string.
-  /// [limit] - Maximum number of results to return (default: 20).
-  /// Returns a list of [SearchResultMessage] objects.
+  /// Searches for messages matching the query using `GET /api/search?type=messages`.
   static Future<List<SearchResultMessage>> searchMessages({
     required String query,
+    String? chatId,
     int limit = 20,
+    int offset = 0,
   }) async {
-    if (query.isEmpty) {
-      return [];
-    }
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
 
-    try {
-      final token = await AuthService.getToken();
-      final response = await http.get(
-        Uri.parse('${AppConfig.baseUrl}/api/search/messages?query=${Uri.encodeComponent(query)}&limit=$limit'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true && data['messages'] != null) {
-          return (data['messages'] as List)
-              .map((json) => SearchResultMessage.fromJson(json))
-              .toList();
-        }
-      }
-      return [];
-    } catch (e) {
-      debugPrint('Error searching messages: $e');
-      return [];
-    }
+    final result = await search(
+      query: trimmed,
+      type: 'messages',
+      chatId: chatId,
+      limit: limit,
+      offset: offset,
+    );
+    return result.messages;
   }
 }

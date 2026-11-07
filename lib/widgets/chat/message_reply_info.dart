@@ -342,6 +342,8 @@ class MessageReplyInfo extends StatelessWidget {
         return iconoir.Emoji(width: size, height: size, color: color);
       case 'poll':
         return iconoir.StatsReport(width: size, height: size, color: color);
+      case 'call':
+        return Icon(Icons.phone_rounded, size: size, color: color);
       default:
         return iconoir.ChatBubble(width: size, height: size, color: color);
     }
@@ -440,6 +442,15 @@ class MessageReplyInfo extends StatelessWidget {
           context.l10n.translate('message_unsupported_preview');
       previewSpan = EmojiUtils.buildEmojiTextSpan(
         unsupportedLabel,
+        style: basePreviewStyle,
+      );
+    } else if (replyInfo != null && replyInfo!.messageType == 'call') {
+      final callPreview = Chat.formatCallPreview(
+        replyInfo!.content,
+        currentUserId: currentUserId,
+      );
+      previewSpan = EmojiUtils.buildEmojiTextSpan(
+        callPreview,
         style: basePreviewStyle,
       );
     } else if (replyInfo != null && replyInfo!.messageType != 'text') {
