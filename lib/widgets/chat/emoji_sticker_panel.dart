@@ -15,6 +15,7 @@ import '../../theme/theav_theme.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
+import 'rich_text_editing_controller.dart';
 import 'sticker_item_widget.dart';
 
 // --- CONSTANTS ---
@@ -109,6 +110,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   Map<String, int> _displayedPackUsageStats = {};
   final Map<String, GlobalKey> _sectionKeys = {};
   final Map<String, GlobalKey> _stickerSectionKeys = {};
+  final Map<String, double> _emojiSectionOffsets = {};
+  final Map<String, double> _stickerSectionOffsets = {};
+  double _lastPanelWidth = 360.0;
   double? _lastHapticPixels;
   double? _lastStickerHapticPixels;
 
@@ -577,6 +581,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             constraints.maxWidth.isFinite && constraints.maxWidth > 0
                 ? constraints.maxWidth
                 : MediaQuery.sizeOf(context).width;
+        _lastPanelWidth = panelWidth;
         final emojiColumns = _computeEmojiColumns(panelWidth);
         final gifColumns = _computeGifColumns(panelWidth);
         final stickerColumns = _computeStickerColumns(panelWidth);
@@ -668,18 +673,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           top: _kEmojiSelectorHeight,
           left: 0,
           right: 0,
-          child: Transform.translate(
-            offset: Offset(0, -collapse * _kEmojiSelectorHeight),
-            child: Transform.scale(
-              scale: 1.0 - (collapse * 0.15),
-              child: _buildSearch(
-                'Поиск эмодзи на русском и английском',
-                _emojiSearchController,
-                _emojiSearchQuery,
-                _onEmojiQueryChanged,
-                _emojiSearchFocusNode,
-                isGrouped: true,
-                opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+          child: IgnorePointer(
+            ignoring: collapse > 0.2,
+            child: Transform.translate(
+              offset: Offset(0, -collapse * _kEmojiSelectorHeight),
+              child: Transform.scale(
+                scale: 1.0 - (collapse * 0.15),
+                child: _buildSearch(
+                  'Поиск эмодзи на русском и английском',
+                  _emojiSearchController,
+                  _emojiSearchQuery,
+                  _onEmojiQueryChanged,
+                  _emojiSearchFocusNode,
+                  isGrouped: true,
+                  opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+                ),
               ),
             ),
           ),
@@ -738,18 +746,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           top: _kEmojiSelectorHeight,
           left: 0,
           right: 0,
-          child: Transform.translate(
-            offset: Offset(0, -collapse * _kEmojiSelectorHeight),
-            child: Transform.scale(
-              scale: 1.0 - (collapse * 0.15),
-              child: _buildSearch(
-                'Поиск стикеров или ссылка t.me/addstickers/...',
-                _stickerSearchController,
-                _stickerSearchQuery,
-                _onStickerQueryChanged,
-                _stickerSearchFocusNode,
-                isGrouped: true,
-                opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+          child: IgnorePointer(
+            ignoring: collapse > 0.2,
+            child: Transform.translate(
+              offset: Offset(0, -collapse * _kEmojiSelectorHeight),
+              child: Transform.scale(
+                scale: 1.0 - (collapse * 0.15),
+                child: _buildSearch(
+                  'Поиск стикеров или ссылка t.me/addstickers/...',
+                  _stickerSearchController,
+                  _stickerSearchQuery,
+                  _onStickerQueryChanged,
+                  _stickerSearchFocusNode,
+                  isGrouped: true,
+                  opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+                ),
               ),
             ),
           ),
@@ -826,6 +837,11 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       widget.onCustomEmojiSelected!(item);
       return;
     }
+    final ctrl = widget.controller;
+    if (ctrl is RichTextEditingController) {
+      ctrl.insertCustomEmoji(item);
+      return;
+    }
     if (StickerService.instance.activeInputTarget != null) {
       StickerService.instance.activeInputTarget!.onInsertCustomEmoji(item);
       return;
@@ -857,6 +873,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildVerticalEmojiList(int emojiColumns) {
+    _ensureStickerSectionKeys();
     List<CategoryEmoji> categories = [...defaultEmojiSet];
 
     if (_displayedRecentEmojis.isNotEmpty) {
@@ -865,6 +882,38 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
 
     final installedEmojiPacks = StickerService.instance.installedEmojiPacks;
     final bool isSearching = _emojiSearchQuery.trim().isNotEmpty;
+
+    if (!isSearching) {
+      _emojiSectionOffsets.clear();
+      double cursorY = _kEmojiHeaderHeight;
+      final double cellSize =
+          ((_lastPanelWidth - 24.0 - (emojiColumns - 1) * 8.0) / emojiColumns)
+              .clamp(24.0, 120.0);
+      double sectionHeight(int count) {
+        if (count <= 0) return 0.0;
+        final rows = (count + emojiColumns - 1) ~/ emojiColumns;
+        return 38.0 + rows * cellSize + (rows - 1) * 8.0;
+      }
+
+      for (final pack in installedEmojiPacks) {
+        if (pack.items.isNotEmpty) {
+          _emojiSectionOffsets['srv_${pack.id}'] = cursorY;
+          cursorY += sectionHeight(pack.items.length);
+        }
+      }
+      for (final pack in _customPacks) {
+        _emojiSectionOffsets[pack.id] = cursorY;
+        cursorY += sectionHeight(pack.emojis.length);
+      }
+      for (final cat in categories) {
+        if (cat.category == Category.RECENT) {
+          _emojiSectionOffsets['recent'] = cursorY;
+        } else if (cat.category == Category.SMILEYS) {
+          _emojiSectionOffsets['standard'] = cursorY;
+        }
+        cursorY += sectionHeight(cat.emoji.length);
+      }
+    }
 
     List<StickerItem> matchingCustomEmojiItems = [];
     if (isSearching) {
@@ -1151,6 +1200,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildEmojiSetSelector({bool isGrouped = false}) {
+    _ensureStickerSectionKeys();
     final theme = Theme.of(context);
     final theavTheme = TheavTheme.of(context);
     final isDark = theme.brightness == Brightness.dark;
@@ -1177,7 +1227,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 height: 20,
                 color: theavTheme.textSecondary,
               ),
-              () => _scrollToSection(_sectionKeys['recent']),
+              () => _scrollToEmojiSectionById('recent'),
             ),
           _buildVectorSelectorButton(
             iconoir.Emoji(
@@ -1185,12 +1235,12 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
               height: 20,
               color: theavTheme.textSecondary,
             ),
-            () => _scrollToSection(_sectionKeys['standard']),
+            () => _scrollToEmojiSectionById('standard'),
           ),
           for (final srvPack in installedEmojiPacks)
             _buildServerPackSelectorIcon(
               srvPack,
-              () => _scrollToSection(_sectionKeys['srv_${srvPack.id}']),
+              () => _scrollToEmojiSectionById('srv_${srvPack.id}'),
             ),
           for (var pack in sortedPacks) _buildSelectorPackIcon(pack),
           _buildVectorSelectorButton(
@@ -1210,6 +1260,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildStickerSetSelector() {
+    _ensureStickerSectionKeys();
     final theme = Theme.of(context);
     final theavTheme = TheavTheme.of(context);
     final isDark = theme.brightness == Brightness.dark;
@@ -1229,7 +1280,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 height: 20,
                 color: theavTheme.textSecondary,
               ),
-              () => _scrollToStickerSection(_stickerSectionKeys['recent']),
+              () => _scrollToStickerSectionById('recent'),
             ),
           if (StickerService.instance.favoriteStickers.isNotEmpty)
             _buildVectorSelectorButton(
@@ -1238,12 +1289,12 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 height: 20,
                 color: theavTheme.textSecondary,
               ),
-              () => _scrollToStickerSection(_stickerSectionKeys['favorites']),
+              () => _scrollToStickerSectionById('favorites'),
             ),
           for (final pack in installedStickerPacks)
             _buildServerPackSelectorIcon(
               pack,
-              () => _scrollToStickerSection(_stickerSectionKeys[pack.id]),
+              () => _scrollToStickerSectionById(pack.id.toString()),
             ),
           _buildVectorSelectorButton(
             iconoir.Plus(
@@ -1364,7 +1415,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     return GestureDetector(
       onTap: () {
         HapticUtils.tap();
-        _scrollToSection(_sectionKeys[pack.id]);
+        _scrollToEmojiSectionById(pack.id);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
@@ -1375,37 +1426,84 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     );
   }
 
-  void _scrollToSection(GlobalKey? key) {
-    const double topOffset = _kEmojiSelectorHeight + _kSearchHeight;
-    if (key == _sectionKeys['recent']) {
-      _gridScrollController.animateTo(
+  Future<void> _scrollToEmojiSectionById(String keyId) async {
+    _ensureStickerSectionKeys();
+    if (!_gridScrollController.hasClients) return;
+    if (_emojiSearchQuery.isNotEmpty) {
+      _emojiSearchController.clear();
+      _onEmojiQueryChanged('');
+      await WidgetsBinding.instance.endOfFrame;
+    }
+
+    final key = _sectionKeys[keyId];
+    final precomputedY = _emojiSectionOffsets[keyId];
+    if (precomputedY != null && precomputedY <= _kEmojiHeaderHeight + 2.0) {
+      await _gridScrollController.animateTo(
         0,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
       return;
     }
-    if (key == null) return;
-    final ctx = key.currentContext;
-    if (ctx != null) {
-      _animateToKey(key, _gridScrollController, topOffset + 8.0);
+
+    const double collapsedTopOffset = _kEmojiSelectorHeight + 4.0;
+    if (key?.currentContext != null) {
+      _animateToKey(key!, _gridScrollController, collapsedTopOffset);
+      return;
+    }
+
+    if (precomputedY != null) {
+      final target = (precomputedY - collapsedTopOffset)
+          .clamp(0.0, _gridScrollController.position.maxScrollExtent);
+      await _gridScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+      if (mounted && key?.currentContext != null) {
+        _animateToKey(key!, _gridScrollController, collapsedTopOffset);
+      }
     }
   }
 
-  void _scrollToStickerSection(GlobalKey? key) {
-    const double topOffset = _kEmojiSelectorHeight + _kSearchHeight;
-    if (key == _stickerSectionKeys['recent']) {
-      _stickerScrollController.animateTo(
+  Future<void> _scrollToStickerSectionById(String keyId) async {
+    _ensureStickerSectionKeys();
+    if (!_stickerScrollController.hasClients) return;
+    if (_stickerSearchQuery.isNotEmpty) {
+      _stickerSearchController.clear();
+      _onStickerQueryChanged('');
+      await WidgetsBinding.instance.endOfFrame;
+    }
+
+    final key = _stickerSectionKeys[keyId];
+    final precomputedY = _stickerSectionOffsets[keyId];
+    if (keyId == 'recent' ||
+        (precomputedY != null && precomputedY <= _kEmojiHeaderHeight + 2.0)) {
+      await _stickerScrollController.animateTo(
         0,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
       return;
     }
-    if (key == null) return;
-    final ctx = key.currentContext;
-    if (ctx != null) {
-      _animateToKey(key, _stickerScrollController, topOffset + 8.0);
+
+    const double collapsedTopOffset = _kEmojiSelectorHeight + 4.0;
+    if (key?.currentContext != null) {
+      _animateToKey(key!, _stickerScrollController, collapsedTopOffset);
+      return;
+    }
+
+    if (precomputedY != null) {
+      final target = (precomputedY - collapsedTopOffset)
+          .clamp(0.0, _stickerScrollController.position.maxScrollExtent);
+      await _stickerScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+      if (mounted && key?.currentContext != null) {
+        _animateToKey(key!, _stickerScrollController, collapsedTopOffset);
+      }
     }
   }
 
@@ -1708,6 +1806,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildStickerGrid(int stickerColumns) {
+    _ensureStickerSectionKeys();
     final theme = TheavTheme.of(context);
     final isSearching = _stickerSearchQuery.trim().isNotEmpty;
     final recentStickers = StickerService.instance.recentStickers;
@@ -1718,6 +1817,35 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             !p.isCustomEmoji &&
             !installedPacks.any((inst) => inst.id == p.id))
         .toList();
+
+    if (!isSearching) {
+      _stickerSectionOffsets.clear();
+      double cursorY = _kEmojiHeaderHeight;
+      final double cellSize =
+          ((_lastPanelWidth - 20.0 - (stickerColumns - 1) * 10.0) /
+                  stickerColumns)
+              .clamp(32.0, 160.0);
+      double sectionHeight(int count) {
+        if (count <= 0) return 0.0;
+        final rows = (count + stickerColumns - 1) ~/ stickerColumns;
+        return 38.0 + rows * cellSize + (rows - 1) * 10.0;
+      }
+
+      if (recentStickers.isNotEmpty) {
+        _stickerSectionOffsets['recent'] = cursorY;
+        cursorY += sectionHeight(recentStickers.length);
+      }
+      if (favoriteStickers.isNotEmpty) {
+        _stickerSectionOffsets['favorites'] = cursorY;
+        cursorY += sectionHeight(favoriteStickers.length);
+      }
+      for (final pack in installedPacks) {
+        if (pack.items.isNotEmpty) {
+          _stickerSectionOffsets[pack.id.toString()] = cursorY;
+          cursorY += sectionHeight(pack.items.length);
+        }
+      }
+    }
 
     List<StickerItem> searchResults = [];
     if (isSearching) {

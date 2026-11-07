@@ -829,31 +829,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
-    final String fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
-    final text = _messageController.text;
-    final selection = _messageController.selection;
-    int start = selection.start;
-    int end = selection.end;
-    if (start < 0 || end < 0 || start > text.length) {
-      start = text.length;
-      end = text.length;
-    }
-    final newText = text.replaceRange(start, end, fallback);
-    _pendingCustomEmojiEntities.add(
-      MessageEntity(
-        type: 'custom_emoji',
-        offset: start,
-        length: fallback.length,
-        customEmojiId: item.id.toString(),
-        documentUrl: item.fileUrl,
-        format: item.format,
-      ),
-    );
-    _messageController.value = TextEditingValue(
-      text: newText,
-      selection: TextSelection.collapsed(offset: start + fallback.length),
-    );
-    _onInputTextChanged(newText);
+    _messageController.insertCustomEmoji(item);
+    _onInputTextChanged(_messageController.text);
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {

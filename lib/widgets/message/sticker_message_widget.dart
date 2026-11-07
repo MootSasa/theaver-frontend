@@ -104,6 +104,9 @@ class _StickerMessageWidgetState extends State<StickerMessageWidget> {
     final size = MediaQuery.sizeOf(context).width >= 640 ? 184.0 : 160.0;
 
     if (effectUrl.isNotEmpty || (emoji != null && emoji.isNotEmpty)) {
+      if (EmojiEffectOverlay.isStickerEffectActive(_layerLink)) {
+        return;
+      }
       HapticFeedback.lightImpact();
       EmojiEffectOverlay.showStickerEffect(
         context: context,

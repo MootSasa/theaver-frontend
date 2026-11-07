@@ -1480,30 +1480,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
-    final String fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
-    final text = _textController.text;
-    final selection = _textController.selection;
-    int start = selection.start;
-    int end = selection.end;
-    if (start < 0 || end < 0 || start > text.length) {
-      start = text.length;
-      end = text.length;
-    }
-    final newText = text.replaceRange(start, end, fallback);
-    _pendingCustomEmojiEntities.add(
-      MessageEntity(
-        type: 'custom_emoji',
-        offset: start,
-        length: fallback.length,
-        customEmojiId: item.id.toString(),
-        documentUrl: item.fileUrl,
-        format: item.format,
-      ),
-    );
-    _textController.value = TextEditingValue(
-      text: newText,
-      selection: TextSelection.collapsed(offset: start + fallback.length),
-    );
+    _textController.insertCustomEmoji(item);
+    _onInputTextChanged(_textController.text);
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {

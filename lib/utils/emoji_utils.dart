@@ -1114,6 +1114,11 @@ class _EmojiSilhouetteShimmerState extends State<_EmojiSilhouetteShimmer>
 
 /// Overlay manager for anchored emoji and sticker effects loaded from server & local cache.
 class EmojiEffectOverlay {
+  static final Set<LayerLink> _activeStickerEffectLinks = <LayerLink>{};
+
+  static bool isStickerEffectActive(LayerLink layerLink) =>
+      _activeStickerEffectLinks.contains(layerLink);
+
   static Future<void> show({
     required BuildContext context,
     required String emoji,
@@ -1131,12 +1136,14 @@ class EmojiEffectOverlay {
       emojiSize: emojiSize,
       isMe: isMe,
       effectSize: _EmojiEffectWidget.defaultEffectSize,
+      enableRandomJitter: true,
     );
   }
 
   /// Displays a full-screen Telegram-compatible effect anchored to a sticker or custom emoji.
   /// Uses [effectUrl] (`.tgs` or `.json` 512x512 composition) if non-empty, otherwise falls back
   /// to the standard emoji effect for [fallbackEmoji] if available.
+  /// Guarantees at most 1 active effect per [layerLink] at any moment and zero random offset.
   static Future<void> showStickerEffect({
     required BuildContext context,
     String? effectUrl,
@@ -1145,17 +1152,35 @@ class EmojiEffectOverlay {
     required double stickerSize,
     required bool isMe,
   }) async {
+    if (_activeStickerEffectLinks.contains(layerLink)) {
+      return;
+    }
+    _activeStickerEffectLinks.add(layerLink);
+
     LottieComposition? composition;
-    if (effectUrl != null && effectUrl.trim().isNotEmpty) {
-      composition = await StickerService.instance.getLottieComposition(effectUrl.trim());
+    try {
+      if (effectUrl != null && effectUrl.trim().isNotEmpty) {
+        composition =
+            await StickerService.instance.getLottieComposition(effectUrl.trim());
+      }
+      if (composition == null &&
+          fallbackEmoji != null &&
+          fallbackEmoji.trim().isNotEmpty) {
+        composition = await EmojiEffectCacheService.instance
+            .getEffectComposition(fallbackEmoji.trim());
+      }
+    } catch (_) {
+      _activeStickerEffectLinks.remove(layerLink);
+      return;
     }
-    if (composition == null && fallbackEmoji != null && fallbackEmoji.trim().isNotEmpty) {
-      composition = await EmojiEffectCacheService.instance.getEffectComposition(fallbackEmoji.trim());
+
+    if (composition == null || !context.mounted) {
+      _activeStickerEffectLinks.remove(layerLink);
+      return;
     }
-    if (composition == null || !context.mounted) return;
 
     final double computedEffectSize = (stickerSize * 2.4).clamp(384.0, 512.0);
-    _insertEffectOverlay(
+    final inserted = _insertEffectOverlay(
       context: context,
       emoji: fallbackEmoji ?? '',
       composition: composition,
@@ -1163,10 +1188,15 @@ class EmojiEffectOverlay {
       emojiSize: stickerSize,
       isMe: isMe,
       effectSize: computedEffectSize,
+      enableRandomJitter: false,
+      onRemoved: () => _activeStickerEffectLinks.remove(layerLink),
     );
+    if (!inserted) {
+      _activeStickerEffectLinks.remove(layerLink);
+    }
   }
 
-  static void _insertEffectOverlay({
+  static bool _insertEffectOverlay({
     required BuildContext context,
     required String emoji,
     required LottieComposition composition,
@@ -1174,26 +1204,33 @@ class EmojiEffectOverlay {
     required double emojiSize,
     required bool isMe,
     required double effectSize,
+    bool enableRandomJitter = true,
+    VoidCallback? onRemoved,
   }) {
     final overlay = Overlay.maybeOf(context);
-    if (overlay == null) return;
+    if (overlay == null) return false;
 
     late OverlayEntry entry;
     bool removed = false;
     void safeRemove() {
       if (!removed) {
         removed = true;
+        onRemoved?.call();
         try {
           entry.remove();
         } catch (_) {}
       }
     }
 
-    // Generate random jitter offset (8px to 16px in any direction)
-    final random = math.Random();
-    final dx = (random.nextDouble() * 8 + 8) * (random.nextBool() ? 1 : -1);
-    final dy = (random.nextDouble() * 8 + 8) * (random.nextBool() ? 1 : -1);
-    final randomOffset = Offset(dx, dy);
+    final Offset jitterOffset;
+    if (enableRandomJitter) {
+      final random = math.Random();
+      final dx = (random.nextDouble() * 8 + 8) * (random.nextBool() ? 1 : -1);
+      final dy = (random.nextDouble() * 8 + 8) * (random.nextBool() ? 1 : -1);
+      jitterOffset = Offset(dx, dy);
+    } else {
+      jitterOffset = Offset.zero;
+    }
 
     entry = OverlayEntry(
       builder: (context) => Positioned(
@@ -1208,13 +1245,14 @@ class EmojiEffectOverlay {
           emojiSize: emojiSize,
           customEffectSize: effectSize,
           isMe: isMe,
-          jitterOffset: randomOffset,
+          jitterOffset: jitterOffset,
           onComplete: safeRemove,
         ),
       ),
     );
 
     overlay.insert(entry);
+    return true;
   }
 }
 
@@ -1280,6 +1318,7 @@ class _EmojiEffectWidgetState extends State<_EmojiEffectWidget> with SingleTicke
   void dispose() {
     _hapticBinding?.dispose();
     _controller.dispose();
+    widget.onComplete();
     super.dispose();
   }
 
