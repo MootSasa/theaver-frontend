@@ -14,6 +14,29 @@ import 'package:path_provider/path_provider.dart';
 import '../config/app_config.dart';
 import '../utils/emoji_utils.dart';
 import 'auth_service.dart';
+import 'websocket_service.dart';
+
+/// Real-time progress snapshot for Telegram sticker/emoji pack import or custom pack upload.
+class StickerImportProgress {
+  final int packId;
+  final String shortName;
+  final String title;
+  final int current;
+  final int total;
+  final String phase;
+
+  const StickerImportProgress({
+    this.packId = 0,
+    this.shortName = '',
+    this.title = '',
+    required this.current,
+    required this.total,
+    this.phase = 'importing',
+  });
+
+  double get fraction => total > 0 ? (current / total).clamp(0.0, 1.0) : 0.0;
+  int get percent => (fraction * 100).round();
+}
 
 /// Represents a single sticker or custom emoji item with semantic metadata.
 class StickerItem {
@@ -396,6 +419,34 @@ class StickerService extends ChangeNotifier {
   final Map<String, ChatStickerInputTarget> _chatTargetsByChatId = {};
   ChatStickerInputTarget? _activeInputTarget;
   bool _initialized = false;
+  StreamSubscription<WebSocketEvent>? _wsProgressSub;
+  final ValueNotifier<StickerImportProgress?> importProgressNotifier =
+      ValueNotifier<StickerImportProgress?>(null);
+
+  void _ensureWsProgressSubscription() {
+    if (_wsProgressSub != null) return;
+    _wsProgressSub = WebSocketService().eventStream.listen((event) {
+      if (event.rawType == 'sticker_import_progress') {
+        final d = event.data;
+        final current = int.tryParse(d['current']?.toString() ?? '') ?? 0;
+        final total = int.tryParse(d['total']?.toString() ?? '') ?? 0;
+        final packId = int.tryParse(d['pack_id']?.toString() ?? '') ?? 0;
+        final shortName = d['short_name']?.toString() ?? '';
+        final title = d['title']?.toString() ?? '';
+        final phase = d['phase']?.toString() ?? 'importing';
+        if (total > 0) {
+          importProgressNotifier.value = StickerImportProgress(
+            packId: packId,
+            shortName: shortName,
+            title: title,
+            current: current,
+            total: total,
+            phase: phase,
+          );
+        }
+      }
+    });
+  }
 
   List<StickerPack> get installedStickerPacks => _installedStickerPacks;
   List<StickerPack> get featuredStickerPacks => _featuredStickerPacks;
@@ -1145,6 +1196,7 @@ class StickerService extends ChangeNotifier {
     Uint8List? effectFileBytes,
     Uint8List? effectBytes,
     String? effectFileName,
+    int? orderIndex,
   }) async {
     final effectiveBytes = fileBytes ?? bytes;
     if (effectiveBytes == null || effectiveBytes.isEmpty) return null;
@@ -1168,6 +1220,9 @@ class StickerService extends ChangeNotifier {
       if (isAdaptiveTextColor) {
         req.fields['is_adaptive_text_color'] = 'true';
       }
+      if (orderIndex != null && orderIndex >= 0) {
+        req.fields['order_index'] = orderIndex.toString();
+      }
       req.files.add(
         http.MultipartFile.fromBytes('file', effectiveBytes, filename: fileName),
       );
@@ -1189,7 +1244,7 @@ class StickerService extends ChangeNotifier {
           final st = StickerItem.fromJson(
             Map<String, dynamic>.from(d['sticker'] as Map),
           );
-          _stickerByIdCache[st.id] = st;
+          _cacheStickerItem(st);
           return st;
         }
       }
@@ -1204,6 +1259,12 @@ class StickerService extends ChangeNotifier {
     String urlOrSlug, {
     String? botToken,
   }) async {
+    _ensureWsProgressSubscription();
+    importProgressNotifier.value = const StickerImportProgress(
+      current: 0,
+      total: 0,
+      phase: 'connecting',
+    );
     try {
       final headers = await _authHeaders();
       final resp = await http.post(
@@ -1223,6 +1284,14 @@ class StickerService extends ChangeNotifier {
         final pack = StickerPack.fromJson(
           Map<String, dynamic>.from(d['pack'] as Map),
         );
+        importProgressNotifier.value = StickerImportProgress(
+          packId: pack.id,
+          shortName: pack.shortName,
+          title: pack.title,
+          current: pack.stickers.length,
+          total: pack.stickers.isNotEmpty ? pack.stickers.length : 1,
+          phase: 'done',
+        );
         _indexPacksInCache([pack]);
         if (pack.isCustomEmoji) {
           await refreshCustomEmojiPacks();
@@ -1233,6 +1302,8 @@ class StickerService extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('StickerService.importTelegramPack error: $e');
+    } finally {
+      importProgressNotifier.value = null;
     }
     return null;
   }

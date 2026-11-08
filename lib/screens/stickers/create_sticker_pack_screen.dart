@@ -89,6 +89,8 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
   bool _checkingSlug = false;
   final List<_DraftStickerItem> _draftItems = [];
   bool _publishing = false;
+  int _publishUploadedCount = 0;
+  int _publishTotalCount = 0;
   String? _publishError;
 
   @override
@@ -229,6 +231,8 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
 
     setState(() {
       _publishing = true;
+      _publishUploadedCount = 0;
+      _publishTotalCount = _draftItems.length;
       _publishError = null;
     });
 
@@ -248,32 +252,51 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
         return;
       }
 
-      for (final draft in _draftItems) {
-        final rawEmojis = draft.emojisController.text.trim();
-        final emojis = EmojiUtils.emojiRegex
-            .allMatches(rawEmojis)
-            .map((m) => m.group(0)!)
-            .toList();
-        if (emojis.isEmpty && rawEmojis.isNotEmpty) {
-          emojis.add(rawEmojis);
-        }
-        final keywords = draft.keywordsController.text
-            .split(RegExp(r'[,;\s]+'))
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .toList();
+      // Upload items with bounded concurrency (3 parallel workers) while preserving orderIndex
+      const int maxConcurrency = 3;
+      int nextIndex = 0;
+      Future<void> worker() async {
+        while (true) {
+          final int idx = nextIndex++;
+          if (idx >= _draftItems.length) break;
+          final draft = _draftItems[idx];
+          final rawEmojis = draft.emojisController.text.trim();
+          final emojis = EmojiUtils.emojiRegex
+              .allMatches(rawEmojis)
+              .map((m) => m.group(0)!)
+              .toList();
+          if (emojis.isEmpty && rawEmojis.isNotEmpty) {
+            emojis.add(rawEmojis);
+          }
+          final keywords = draft.keywordsController.text
+              .split(RegExp(r'[,;\s]+'))
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
 
-        await StickerService.instance.uploadStickerToPack(
-          packId: pack.id,
-          bytes: draft.bytes,
-          fileName: draft.fileName,
-          emojis: emojis.isEmpty ? const ['😀'] : emojis,
-          keywords: keywords,
-          isAdaptiveTextColor: _packType == 'custom_emoji' && _isAdaptiveColor,
-          effectBytes: draft.effectBytes,
-          effectFileName: draft.effectFileName,
-        );
+          await StickerService.instance.uploadStickerToPack(
+            packId: pack.id,
+            bytes: draft.bytes,
+            fileName: draft.fileName,
+            emojis: emojis.isEmpty ? const ['😀'] : emojis,
+            keywords: keywords,
+            isAdaptiveTextColor: _packType == 'custom_emoji' && _isAdaptiveColor,
+            effectBytes: draft.effectBytes,
+            effectFileName: draft.effectFileName,
+            orderIndex: idx,
+          );
+          if (mounted) {
+            setState(() {
+              _publishUploadedCount++;
+            });
+          }
+        }
       }
+
+      final int workersCount = _draftItems.length < maxConcurrency
+          ? _draftItems.length
+          : maxConcurrency;
+      await Future.wait(List.generate(workersCount, (_) => worker()));
 
       await StickerService.instance.loadInstalledPacks(forceRefresh: true);
       final updatedPack = await StickerService.instance.getPackByIdOrSlug(pack.id);
@@ -497,6 +520,78 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
               fontSize: 13,
               color: Color(0xFFFF453A),
             ),
+          ),
+        ],
+        if (_importingTg) ...[
+          const SizedBox(height: 16),
+          ValueListenableBuilder<StickerImportProgress?>(
+            valueListenable: StickerService.instance.importProgressNotifier,
+            builder: (context, progress, _) {
+              final hasTotal = progress != null && progress.total > 0;
+              final titleText = (progress != null && progress.title.isNotEmpty)
+                  ? 'Импорт «${progress.title}»'
+                  : 'Подключение к Telegram и загрузка набора...';
+              final counterText = hasTotal
+                  ? '${progress.current} из ${progress.total} (${progress.percent}%)'
+                  : 'Подготовка...';
+              return Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: theme.inputBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: theme.dividerColor, width: 0.5),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            titleText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: theme.textPrimary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          counterText,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: theme.accent,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: hasTotal ? progress.fraction : null,
+                        minHeight: 6,
+                        backgroundColor: theme.dividerColor.withValues(alpha: 0.35),
+                        valueColor: AlwaysStoppedAnimation<Color>(theme.accent),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Набор сразу готов к использованию — умная индексация для поиска выполнится в фоне',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: theme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ],
         const SizedBox(height: 20),
@@ -902,6 +997,64 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
                   style: const TextStyle(
                     fontSize: 13,
                     color: Color(0xFFFF453A),
+                  ),
+                ),
+              ],
+              if (_publishing && _publishTotalCount > 0) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: theme.inputBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: theme.dividerColor, width: 0.5),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Загрузка стикеров и эмодзи...',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: theme.textPrimary,
+                            ),
+                          ),
+                          Text(
+                            '$_publishUploadedCount из $_publishTotalCount (${((_publishUploadedCount / _publishTotalCount) * 100).round()}%)',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: theme.accent,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: LinearProgressIndicator(
+                          value: (_publishUploadedCount / _publishTotalCount)
+                              .clamp(0.0, 1.0),
+                          minHeight: 6,
+                          backgroundColor:
+                              theme.dividerColor.withValues(alpha: 0.35),
+                          valueColor:
+                              AlwaysStoppedAnimation<Color>(theme.accent),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Умная индексация для поиска выполнится автоматически в фоне',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: theme.textSecondary,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
