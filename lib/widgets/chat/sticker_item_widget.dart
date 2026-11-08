@@ -956,6 +956,279 @@ class _StickerPeekPopOverlayState extends State<StickerPeekPopOverlay>
   }
 }
 
+/// Peek & Pop overlay shown when long-pressing a GIF in `EmojiStickerPanel`.
+class GifPeekPopOverlay extends StatefulWidget {
+  final GifItemModel gif;
+  final VoidCallback onSend;
+  final VoidCallback onClose;
+
+  const GifPeekPopOverlay({
+    super.key,
+    required this.gif,
+    required this.onSend,
+    required this.onClose,
+  });
+
+  static void show({
+    required BuildContext context,
+    required GifItemModel gif,
+    required VoidCallback onSend,
+  }) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+    HapticFeedback.mediumImpact();
+
+    late OverlayEntry entry;
+    bool removed = false;
+    void close() {
+      if (!removed) {
+        removed = true;
+        try {
+          entry.remove();
+        } catch (_) {}
+      }
+    }
+
+    entry = OverlayEntry(
+      builder: (ctx) => GifPeekPopOverlay(
+        gif: gif,
+        onSend: () {
+          close();
+          onSend();
+        },
+        onClose: close,
+      ),
+    );
+    overlay.insert(entry);
+  }
+
+  @override
+  State<GifPeekPopOverlay> createState() => _GifPeekPopOverlayState();
+}
+
+class _GifPeekPopOverlayState extends State<GifPeekPopOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animController;
+  late bool _isSaved;
+
+  @override
+  void initState() {
+    super.initState();
+    _isSaved = StickerService.instance.isGifSaved(
+      widget.gif.id,
+      widget.gif.url,
+    );
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggleSaved() async {
+    if (_isSaved) {
+      await StickerService.instance.removeSavedGif(
+        widget.gif.id,
+        widget.gif.url,
+      );
+    } else {
+      await StickerService.instance.saveGif(widget.gif);
+    }
+    if (mounted) {
+      setState(() => _isSaved = !_isSaved);
+    }
+    widget.onClose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = TheavTheme.of(context);
+    final screenSize = MediaQuery.sizeOf(context);
+    final double maxW = (screenSize.width * 0.78).clamp(220.0, 320.0);
+    final double maxH = (screenSize.height * 0.45).clamp(200.0, 320.0);
+    final double aspect =
+        (widget.gif.width > 0 && widget.gif.height > 0)
+            ? (widget.gif.width / widget.gif.height).clamp(0.45, 2.4)
+            : 1.33;
+
+    double displayW = maxW;
+    double displayH = displayW / aspect;
+    if (displayH > maxH) {
+      displayH = maxH;
+      displayW = displayH * aspect;
+    }
+
+    final fullUrl = StickerService.resolveUrl(
+      widget.gif.url.isNotEmpty ? widget.gif.url : widget.gif.previewUrl,
+    );
+    final previewUrl = StickerService.resolveUrl(
+      widget.gif.previewUrl.isNotEmpty ? widget.gif.previewUrl : widget.gif.url,
+    );
+
+    return Material(
+      color: Colors.transparent,
+      child: FadeTransition(
+        opacity: CurvedAnimation(
+          parent: _animController,
+          curve: Curves.easeOutCubic,
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: widget.onClose,
+                behavior: HitTestBehavior.opaque,
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.45),
+                  ),
+                ),
+              ),
+            ),
+            Center(
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.88, end: 1.0).animate(
+                  CurvedAnimation(
+                    parent: _animController,
+                    curve: Curves.easeOutBack,
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        width: displayW,
+                        height: displayH,
+                        color: theme.inputBg,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            if (previewUrl.isNotEmpty && previewUrl != fullUrl)
+                              ControlledAnimatedNetworkImage(
+                                url: previewUrl,
+                                width: displayW,
+                                height: displayH,
+                                isAnimatedWebpOrGif: true,
+                                fit: BoxFit.cover,
+                                filterQuality: FilterQuality.low,
+                                animate: true,
+                              ),
+                            ControlledAnimatedNetworkImage(
+                              url: fullUrl,
+                              width: displayW,
+                              height: displayH,
+                              isAnimatedWebpOrGif: true,
+                              fit: BoxFit.cover,
+                              filterQuality: FilterQuality.low,
+                              animate: true,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Container(
+                      width: 245,
+                      decoration: BoxDecoration(
+                        color: theme.secondaryBg.withValues(alpha: 0.94),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: theme.dividerColor,
+                          width: 0.5,
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildActionRow(
+                            theme: theme,
+                            icon: iconoir.SendDiagonal(
+                              width: 18,
+                              height: 18,
+                              color: theme.textPrimary,
+                            ),
+                            label: 'Отправить',
+                            onTap: widget.onSend,
+                          ),
+                          Divider(
+                            height: 0.5,
+                            thickness: 0.5,
+                            color: theme.dividerColor,
+                          ),
+                          _buildActionRow(
+                            theme: theme,
+                            icon: _isSaved
+                                ? iconoir.BookmarkSolid(
+                                    width: 18,
+                                    height: 18,
+                                    color: theme.accent,
+                                  )
+                                : iconoir.Bookmark(
+                                    width: 18,
+                                    height: 18,
+                                    color: theme.textPrimary,
+                                  ),
+                            label: _isSaved
+                                ? 'Удалить из сохранённых GIF'
+                                : 'Сохранить GIF',
+                            onTap: _toggleSaved,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionRow({
+    required TheavThemeData theme,
+    required Widget icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        height: 44,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            children: [
+              icon,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w400,
+                    color: theme.textPrimary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 8x8px transparency checkerboard painter used exclusively in the Sticker Upload Studio
 /// to help creators verify alpha channel transparency.
 class CheckerboardPainter extends CustomPainter {

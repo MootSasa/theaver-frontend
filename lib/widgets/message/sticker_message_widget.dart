@@ -245,18 +245,32 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final double maxW = MediaQuery.sizeOf(context).width >= 640 ? 280.0 : 240.0;
+    final bool isWide = MediaQuery.sizeOf(context).width >= 640;
+    final double maxW = isWide ? 280.0 : 240.0;
+    final double maxH = isWide ? 320.0 : 280.0;
     final double aspect =
         (widget.width != null && widget.height != null && widget.height! > 0)
-            ? (widget.width! / widget.height!).clamp(0.6, 2.0)
+            ? (widget.width! / widget.height!).clamp(0.48, 2.2)
             : 1.33;
-    final double displayW = maxW;
-    final double displayH = (displayW / aspect).clamp(130.0, 300.0);
-    final String effectiveUrl =
+
+    double displayW = maxW;
+    double displayH = displayW / aspect;
+    if (displayH > maxH) {
+      displayH = maxH;
+      displayW = (displayH * aspect).clamp(120.0, maxW);
+    } else if (displayH < 110.0) {
+      displayH = 110.0;
+    }
+
+    final String fullUrl = StickerService.resolveUrl(
+      widget.gifUrl.trim().isNotEmpty
+          ? widget.gifUrl.trim()
+          : (widget.previewUrl ?? '').trim(),
+    );
+    final String previewUrl =
         (widget.previewUrl != null && widget.previewUrl!.trim().isNotEmpty)
-            ? widget.previewUrl!.trim()
-            : widget.gifUrl;
-    final resolvedUrl = StickerService.resolveUrl(effectiveUrl);
+            ? StickerService.resolveUrl(widget.previewUrl!.trim())
+            : '';
 
     return VisibilityDetector(
       key: _visibilityKey,
@@ -275,27 +289,41 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
             child: Stack(
               fit: StackFit.expand,
               children: [
+                if (previewUrl.isNotEmpty && previewUrl != fullUrl)
+                  RepaintBoundary(
+                    child: ControlledAnimatedNetworkImage(
+                      url: previewUrl,
+                      width: displayW,
+                      height: displayH,
+                      isAnimatedWebpOrGif: true,
+                      fit: BoxFit.cover,
+                      filterQuality: FilterQuality.low,
+                      animate: _isVisible,
+                    ),
+                  ),
                 RepaintBoundary(
                   child: ControlledAnimatedNetworkImage(
-                    url: resolvedUrl,
+                    url: fullUrl,
                     width: displayW,
                     height: displayH,
                     isAnimatedWebpOrGif: true,
                     fit: BoxFit.cover,
                     filterQuality: FilterQuality.low,
                     animate: _isVisible,
-                    errorBuilder: (_) => Container(
-                      color: Colors.black26,
-                      alignment: Alignment.center,
-                      child: const Text(
-                        'GIF',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white70,
-                        ),
-                      ),
-                    ),
+                    errorBuilder: (_) => previewUrl.isNotEmpty
+                        ? const SizedBox.shrink()
+                        : Container(
+                            color: Colors.black26,
+                            alignment: Alignment.center,
+                            child: const Text(
+                              'GIF',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ),
                   ),
                 ),
                 Positioned(

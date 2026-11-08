@@ -374,6 +374,17 @@ class GifItemModel {
       };
 }
 
+/// Paginated response for GIF search or trending queries.
+class GifPageResult {
+  final List<GifItemModel> items;
+  final String nextPos;
+
+  const GifPageResult({
+    required this.items,
+    required this.nextPos,
+  });
+}
+
 /// Active chat input binding for multi-window tiling sidecar routing.
 class ChatStickerInputTarget {
   final String chatId;
@@ -431,6 +442,8 @@ class StickerService extends ChangeNotifier {
   List<StickerItem> _recentStickers = [];
   List<GifItemModel> _savedGifs = [];
   List<GifItemModel> _trendingGifs = [];
+  String _trendingNextPos = '';
+  bool _isLoadingMoreTrending = false;
 
   final Map<int, StickerItem> _stickerByIdCache = {};
   final Map<String, StickerItem> _stickerByFileUrlCache = {};
@@ -486,6 +499,8 @@ class StickerService extends ChangeNotifier {
   List<StickerItem> get recentStickers => _recentStickers;
   List<GifItemModel> get savedGifs => _savedGifs;
   List<GifItemModel> get trendingGifs => _trendingGifs;
+  bool get hasMoreTrendingGifs => _trendingNextPos.isNotEmpty;
+  bool get isLoadingMoreTrendingGifs => _isLoadingMoreTrending;
   ChatStickerInputTarget? get activeInputTarget => _activeInputTarget;
 
   void registerChatTarget(ChatStickerInputTarget target) {
@@ -540,13 +555,16 @@ class StickerService extends ChangeNotifier {
   }
 
   bool isGifSaved(String gifIdOrUrl, [String? fallbackUrl]) {
+    final trimmed = gifIdOrUrl.trim();
+    final fb = fallbackUrl?.trim() ?? '';
     return _savedGifs.any(
       (g) =>
-          g.id == gifIdOrUrl ||
-          g.url == gifIdOrUrl ||
-          (fallbackUrl != null &&
-              fallbackUrl.isNotEmpty &&
-              (g.id == fallbackUrl || g.url == fallbackUrl)),
+          (trimmed.isNotEmpty &&
+              (g.id == trimmed ||
+                  g.url == trimmed ||
+                  g.previewUrl == trimmed)) ||
+          (fb.isNotEmpty &&
+              (g.id == fb || g.url == fb || g.previewUrl == fb)),
     );
   }
 
@@ -789,6 +807,7 @@ class StickerService extends ChangeNotifier {
               .whereType<Map>()
               .map((m) => GifItemModel.fromJson(Map<String, dynamic>.from(m)))
               .toList();
+          _trendingNextPos = d['next_pos']?.toString().trim() ?? '';
         }
       }
       if (notify) notifyListeners();
@@ -797,7 +816,52 @@ class StickerService extends ChangeNotifier {
     }
   }
 
-  Future<List<GifItemModel>> searchGifs(String query, {String pos = ''}) async {
+  Future<void> loadMoreTrendingGifs() async {
+    if (_isLoadingMoreTrending || _trendingNextPos.isEmpty) return;
+    _isLoadingMoreTrending = true;
+    notifyListeners();
+    try {
+      final headers = await _authHeaders();
+      final uri = Uri.parse('${AppConfig.baseUrl}/api/gifs/trending').replace(
+        queryParameters: {
+          'limit': '30',
+          'pos': _trendingNextPos,
+        },
+      );
+      final resp = await http.get(uri, headers: headers);
+      if (resp.statusCode == 200) {
+        final d = jsonDecode(resp.body);
+        if (d is Map && d['items'] is List) {
+          final nextItems = (d['items'] as List)
+              .whereType<Map>()
+              .map((m) => GifItemModel.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+          final existingIds = _trendingGifs.map((g) => g.id).toSet();
+          final existingUrls = _trendingGifs.map((g) => g.url).toSet();
+          for (final g in nextItems) {
+            if (!existingIds.contains(g.id) && !existingUrls.contains(g.url)) {
+              _trendingGifs.add(g);
+              existingIds.add(g.id);
+              existingUrls.add(g.url);
+            }
+          }
+          final newPos = d['next_pos']?.toString().trim() ?? '';
+          _trendingNextPos =
+              (newPos == _trendingNextPos || nextItems.isEmpty) ? '' : newPos;
+        }
+      }
+    } catch (e) {
+      debugPrint('StickerService.loadMoreTrendingGifs error: $e');
+    } finally {
+      _isLoadingMoreTrending = false;
+      notifyListeners();
+    }
+  }
+
+  Future<GifPageResult> searchGifsPage(
+    String query, {
+    String pos = '',
+  }) async {
     try {
       final headers = await _authHeaders();
       final uri = Uri.parse('${AppConfig.baseUrl}/api/gifs/search').replace(
@@ -811,16 +875,23 @@ class StickerService extends ChangeNotifier {
       if (resp.statusCode == 200) {
         final d = jsonDecode(resp.body);
         if (d is Map && d['items'] is List) {
-          return (d['items'] as List)
+          final items = (d['items'] as List)
               .whereType<Map>()
               .map((m) => GifItemModel.fromJson(Map<String, dynamic>.from(m)))
               .toList();
+          final nextPos = d['next_pos']?.toString().trim() ?? '';
+          return GifPageResult(items: items, nextPos: nextPos);
         }
       }
     } catch (e) {
-      debugPrint('StickerService.searchGifs error: $e');
+      debugPrint('StickerService.searchGifsPage error: $e');
     }
-    return [];
+    return const GifPageResult(items: [], nextPos: '');
+  }
+
+  Future<List<GifItemModel>> searchGifs(String query, {String pos = ''}) async {
+    final page = await searchGifsPage(query, pos: pos);
+    return page.items;
   }
 
   Future<List<StickerItem>> searchStickers(
@@ -1138,21 +1209,48 @@ class StickerService extends ChangeNotifier {
   }
 
   Future<void> removeSavedGif(String gifId, [String? fallbackUrl]) async {
+    final trimmedId = gifId.trim();
+    final trimmedUrl = fallbackUrl?.trim() ?? '';
+    GifItemModel? matched;
+    for (final g in _savedGifs) {
+      if ((trimmedId.isNotEmpty &&
+              (g.id == trimmedId ||
+                  g.url == trimmedId ||
+                  g.previewUrl == trimmedId)) ||
+          (trimmedUrl.isNotEmpty &&
+              (g.id == trimmedUrl ||
+                  g.url == trimmedUrl ||
+                  g.previewUrl == trimmedUrl))) {
+        matched = g;
+        break;
+      }
+    }
+    final effectiveId =
+        (matched != null && matched.id.isNotEmpty) ? matched.id : trimmedId;
+    final effectiveUrl =
+        (matched != null && matched.url.isNotEmpty) ? matched.url : trimmedUrl;
+
     _savedGifs.removeWhere(
       (g) =>
-          g.id == gifId ||
-          g.url == gifId ||
-          (fallbackUrl != null &&
-              fallbackUrl.isNotEmpty &&
-              (g.id == fallbackUrl || g.url == fallbackUrl)),
+          (trimmedId.isNotEmpty &&
+              (g.id == trimmedId ||
+                  g.url == trimmedId ||
+                  g.previewUrl == trimmedId)) ||
+          (trimmedUrl.isNotEmpty &&
+              (g.id == trimmedUrl ||
+                  g.url == trimmedUrl ||
+                  g.previewUrl == trimmedUrl)),
     );
     notifyListeners();
     try {
       final headers = await _authHeaders();
-      await http.delete(
-        Uri.parse('${AppConfig.baseUrl}/api/gifs/saved/${Uri.encodeComponent(gifId)}'),
-        headers: headers,
+      final idSegment = effectiveId.isNotEmpty ? effectiveId : 'by-url';
+      final uri = Uri.parse(
+        '${AppConfig.baseUrl}/api/gifs/saved/${Uri.encodeComponent(idSegment)}',
+      ).replace(
+        queryParameters: effectiveUrl.isNotEmpty ? {'url': effectiveUrl} : null,
       );
+      await http.delete(uri, headers: headers);
     } catch (_) {}
   }
 

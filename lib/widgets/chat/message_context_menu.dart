@@ -1782,47 +1782,62 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               (widget.message!.messageType == 'gif' ||
                                   widget.message!.messageType == 'animation') &&
                               widget.message!.fileUrl != null)
-                            _buildActionItem(
-                              (c) => StickerService.instance.isGifSaved(
-                                widget.message!.id,
-                                widget.message!.fileUrl!,
-                              )
-                                  ? iconoir.BookmarkSolid(
-                                      color: c,
-                                      width: 20,
-                                      height: 20,
-                                    )
-                                  : iconoir.Bookmark(
-                                      color: c,
-                                      width: 20,
-                                      height: 20,
-                                    ),
-                              StickerService.instance.isGifSaved(
-                                widget.message!.id,
-                                widget.message!.fileUrl!,
-                              )
-                                  ? 'Удалить из сохранённых GIF'
-                                  : 'Сохранить GIF',
-                              () {
+                            Builder(
+                              builder: (context) {
                                 final msg = widget.message!;
                                 final url = msg.fileUrl!;
-                                if (StickerService.instance.isGifSaved(
-                                  msg.id,
-                                  url,
-                                )) {
-                                  StickerService.instance.removeSavedGif(msg.id);
-                                } else {
-                                  StickerService.instance.saveGif(
-                                    GifItemModel(
-                                      id: msg.id,
-                                      url: url,
-                                      previewUrl: url,
-                                    ),
-                                  );
-                                }
+                                final meta =
+                                    msg.mediaPayload ?? const <String, dynamic>{};
+                                final rawGifId =
+                                    meta['gif_id']?.toString().trim() ?? '';
+                                final gifId =
+                                    rawGifId.isNotEmpty ? rawGifId : url;
+                                final previewUrl =
+                                    meta['preview_url']?.toString().trim() ?? '';
+                                final isSaved = StickerService.instance
+                                    .isGifSaved(gifId, url);
+                                return _buildActionItem(
+                                  (c) => isSaved
+                                      ? iconoir.BookmarkSolid(
+                                          color: c,
+                                          width: 20,
+                                          height: 20,
+                                        )
+                                      : iconoir.Bookmark(
+                                          color: c,
+                                          width: 20,
+                                          height: 20,
+                                        ),
+                                  isSaved
+                                      ? 'Удалить из сохранённых GIF'
+                                      : 'Сохранить GIF',
+                                  () {
+                                    if (StickerService.instance.isGifSaved(
+                                      gifId,
+                                      url,
+                                    )) {
+                                      StickerService.instance.removeSavedGif(
+                                        gifId,
+                                        url,
+                                      );
+                                    } else {
+                                      StickerService.instance.saveGif(
+                                        GifItemModel(
+                                          id: gifId,
+                                          url: url,
+                                          previewUrl: previewUrl.isNotEmpty
+                                              ? previewUrl
+                                              : url,
+                                          width: msg.mediaWidth ?? 320,
+                                          height: msg.mediaHeight ?? 240,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  theme,
+                                  enabled: !isSending,
+                                );
                               },
-                              theme,
-                              enabled: !isSending,
                             ),
                           if (widget.message != null &&
                               widget.message!.messageType == 'sticker') ...[

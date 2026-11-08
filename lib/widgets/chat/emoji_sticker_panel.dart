@@ -37,6 +37,18 @@ class CustomEmojiPack {
   });
 }
 
+class _GifJustifiedRow {
+  final List<GifItemModel> items;
+  final List<double> widths;
+  final double height;
+
+  const _GifJustifiedRow({
+    required this.items,
+    required this.widths,
+    required this.height,
+  });
+}
+
 enum PanelTab { emoji, gif, sticker }
 
 class EmojiStickerPanel extends StatefulWidget {
@@ -103,7 +115,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   List<StickerItem> _remoteSearchedCustomEmojis = [];
   List<StickerItem> _remoteSearchedStickers = [];
   List<GifItemModel> _remoteSearchedGifs = [];
+  String _gifSearchNextPos = '';
   bool _isSearchingGifs = false;
+  bool _isLoadingMoreSearchGifs = false;
   bool _isSearchingStickers = false;
 
   List<Emoji> _recentEmojis = [];
@@ -125,9 +139,130 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     return ((available + 8.0) / (36.0 + 8.0)).floor().clamp(5, 24);
   }
 
-  static int _computeGifColumns(double panelWidth) {
-    final available = math.max(160.0, panelWidth - 16.0);
-    return ((available + 8.0) / (140.0 + 8.0)).floor().clamp(2, 8);
+  static double _gifAspectRatio(GifItemModel gif) {
+    if (gif.width > 0 && gif.height > 0) {
+      return (gif.width / gif.height).clamp(0.55, 2.2);
+    }
+    return 1.33;
+  }
+
+  static _GifJustifiedRow _finalizeGifRow(
+    List<GifItemModel> rowItems,
+    double availableWidth,
+    double gap, {
+    double? maxRowHeight,
+  }) {
+    if (rowItems.length == 1 && maxRowHeight != null) {
+      final ar = _gifAspectRatio(rowItems.first);
+      final h = maxRowHeight;
+      final w = (h * ar).clamp(96.0, availableWidth);
+      return _GifJustifiedRow(items: rowItems, widths: [w], height: h);
+    }
+    double arSum = 0.0;
+    for (final g in rowItems) {
+      arSum += _gifAspectRatio(g);
+    }
+    if (arSum <= 0) arSum = rowItems.length.toDouble();
+    final totalGaps = math.max(0, rowItems.length - 1) * gap;
+    final usableWidth = math.max(80.0, availableWidth - totalGaps);
+    final rawHeight = usableWidth / arSum;
+    final rowHeight = maxRowHeight != null
+        ? math.min(rawHeight, maxRowHeight)
+        : rawHeight.clamp(76.0, 172.0);
+
+    final widths = <double>[];
+    double usedWidth = 0.0;
+    for (int i = 0; i < rowItems.length; i++) {
+      if (i == rowItems.length - 1) {
+        widths.add(math.max(36.0, usableWidth - usedWidth));
+      } else {
+        final w = (usableWidth * (_gifAspectRatio(rowItems[i]) / arSum))
+            .clamp(36.0, usableWidth);
+        widths.add(w);
+        usedWidth += w;
+      }
+    }
+    return _GifJustifiedRow(
+      items: List<GifItemModel>.unmodifiable(rowItems),
+      widths: widths,
+      height: rowHeight,
+    );
+  }
+
+  static List<_GifJustifiedRow> _computeJustifiedGifRows(
+    List<GifItemModel> items,
+    double availableWidth,
+    double gap,
+  ) {
+    if (items.isEmpty) return const [];
+    final double targetRowHeight = availableWidth >= 460.0 ? 126.0 : 108.0;
+    final int maxItemsPerRow = (availableWidth / 82.0).floor().clamp(2, 6);
+
+    final rawRows = <List<GifItemModel>>[];
+    var current = <GifItemModel>[];
+    double currentArSum = 0.0;
+
+    for (final gif in items) {
+      final ar = _gifAspectRatio(gif);
+      final nextCount = current.length + 1;
+      final nextArSum = currentArSum + ar;
+      final nextUsable = availableWidth - (nextCount - 1) * gap;
+      final nextHeight = nextUsable / nextArSum;
+
+      if (current.length >= 2 && nextHeight < targetRowHeight) {
+        final prevUsable = availableWidth - (current.length - 1) * gap;
+        final prevHeight = prevUsable / currentArSum;
+        final prevDiff = (prevHeight - targetRowHeight).abs();
+        final nextDiff = (nextHeight - targetRowHeight).abs();
+
+        if (prevDiff <= nextDiff && prevHeight <= targetRowHeight * 1.45) {
+          rawRows.add(current);
+          current = <GifItemModel>[gif];
+          currentArSum = ar;
+          continue;
+        }
+      }
+
+      current.add(gif);
+      currentArSum = nextArSum;
+
+      if (nextHeight <= targetRowHeight || current.length >= maxItemsPerRow) {
+        rawRows.add(current);
+        current = <GifItemModel>[];
+        currentArSum = 0.0;
+      }
+    }
+
+    if (current.isNotEmpty) {
+      if (current.length == 1 && rawRows.isNotEmpty) {
+        final prev = rawRows.removeLast();
+        final combined = <GifItemModel>[...prev, ...current];
+        if (combined.length <= maxItemsPerRow) {
+          rawRows.add(combined);
+        } else {
+          final split = (combined.length / 2).ceil();
+          rawRows.add(combined.sublist(0, split));
+          rawRows.add(combined.sublist(split));
+        }
+      } else {
+        rawRows.add(current);
+      }
+    }
+
+    final result = <_GifJustifiedRow>[];
+    for (int i = 0; i < rawRows.length; i++) {
+      final rowItems = rawRows[i];
+      final isSingleTotal = rawRows.length == 1 && rowItems.length == 1;
+      result.add(
+        _finalizeGifRow(
+          rowItems,
+          availableWidth,
+          gap,
+          maxRowHeight: isSingleTotal ? 132.0 : null,
+        ),
+      );
+    }
+    return result;
   }
 
   static int _computeStickerColumns(double panelWidth) {
@@ -147,6 +282,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       duration: const Duration(milliseconds: 200),
     );
     _gridScrollController.addListener(_onScroll);
+    _gifScrollController.addListener(_onGifScroll);
     _stickerScrollController.addListener(_onStickerScroll);
     _initMockPacks();
     _loadRecentEmojis();
@@ -259,6 +395,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     _stickerSearchDebounce?.cancel();
 
     _gridScrollController.removeListener(_onScroll);
+    _gifScrollController.removeListener(_onGifScroll);
     _stickerScrollController.removeListener(_onStickerScroll);
     _gridScrollController.dispose();
     _gifScrollController.dispose();
@@ -296,6 +433,48 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     });
   }
 
+  void _onGifScroll() {
+    if (_currentTab != PanelTab.gif || !_gifScrollController.hasClients) return;
+    final pos = _gifScrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 320.0) {
+      if (_gifSearchQuery.trim().isNotEmpty) {
+        _loadMoreSearchedGifs();
+      } else {
+        StickerService.instance.loadMoreTrendingGifs();
+      }
+    }
+  }
+
+  Future<void> _loadMoreSearchedGifs() async {
+    final q = _gifSearchQuery.trim();
+    if (q.isEmpty || _isSearchingGifs || _isLoadingMoreSearchGifs || _gifSearchNextPos.isEmpty) {
+      return;
+    }
+    setState(() => _isLoadingMoreSearchGifs = true);
+    final currentPos = _gifSearchNextPos;
+    try {
+      final page = await StickerService.instance.searchGifsPage(q, pos: currentPos);
+      if (!mounted || _gifSearchQuery.trim() != q) return;
+      final existingIds = _remoteSearchedGifs.map((g) => g.id).toSet();
+      final existingUrls = _remoteSearchedGifs.map((g) => g.url).toSet();
+      setState(() {
+        for (final g in page.items) {
+          if (!existingIds.contains(g.id) && !existingUrls.contains(g.url)) {
+            _remoteSearchedGifs.add(g);
+            existingIds.add(g.id);
+            existingUrls.add(g.url);
+          }
+        }
+        _gifSearchNextPos =
+            (page.nextPos == currentPos || page.items.isEmpty) ? '' : page.nextPos;
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingMoreSearchGifs = false);
+      }
+    }
+  }
+
   void _onGifQueryChanged(String value) {
     setState(() => _gifSearchQuery = value);
     _gifSearchDebounce?.cancel();
@@ -303,16 +482,23 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     if (q.isEmpty) {
       setState(() {
         _remoteSearchedGifs = [];
+        _gifSearchNextPos = '';
         _isSearchingGifs = false;
+        _isLoadingMoreSearchGifs = false;
       });
       return;
     }
-    setState(() => _isSearchingGifs = true);
+    setState(() {
+      _isSearchingGifs = true;
+      _gifSearchNextPos = '';
+      _isLoadingMoreSearchGifs = false;
+    });
     _gifSearchDebounce = Timer(const Duration(milliseconds: 220), () async {
-      final results = await StickerService.instance.searchGifs(q);
+      final page = await StickerService.instance.searchGifsPage(q);
       if (mounted && _gifSearchQuery.trim() == q) {
         setState(() {
-          _remoteSearchedGifs = results;
+          _remoteSearchedGifs = page.items;
+          _gifSearchNextPos = page.nextPos;
           _isSearchingGifs = false;
         });
       }
@@ -551,7 +737,6 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 : MediaQuery.sizeOf(context).width;
         _lastPanelWidth = panelWidth;
         final emojiColumns = _computeEmojiColumns(panelWidth);
-        final gifColumns = _computeGifColumns(panelWidth);
         final stickerColumns = _computeStickerColumns(panelWidth);
 
         return PageView(
@@ -585,7 +770,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
               children: [
                 Positioned.fill(
                   child: RepaintBoundary(
-                    child: _buildGifGrid(gifColumns),
+                    child: _buildGifGrid(panelWidth),
                   ),
                 ),
                 RepaintBoundary(
@@ -1580,24 +1765,31 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     }
   }
 
-  Widget _buildGifGrid(int gifColumns) {
+  Widget _buildGifGrid(double panelWidth) {
     final theme = TheavTheme.of(context);
     final isSearching = _gifSearchQuery.trim().isNotEmpty;
     final savedGifs = StickerService.instance.savedGifs;
     final trendingGifs = isSearching
         ? _remoteSearchedGifs
         : StickerService.instance.trendingGifs;
+    final isLoadingMore = isSearching
+        ? _isLoadingMoreSearchGifs
+        : StickerService.instance.isLoadingMoreTrendingGifs;
+
+    const double outerPad = 2.0;
+    const double gap = 2.0;
+    final double availableWidth = math.max(160.0, panelWidth - outerPad * 2);
 
     return CustomScrollView(
       controller: _gifScrollController,
       physics: const ClampingScrollPhysics(),
-      cacheExtent: 180,
+      cacheExtent: 260,
       slivers: [
-        const SliverToBoxAdapter(child: SizedBox(height: _kSearchHeight + 8)),
+        const SliverToBoxAdapter(child: SizedBox(height: _kSearchHeight + 6)),
         if (!isSearching && savedGifs.isNotEmpty) ...[
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
               child: Text(
                 'СОХРАНЁННЫЕ GIF',
                 style: TextStyle(
@@ -1610,10 +1802,11 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             ),
           ),
           SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            sliver: _buildGifSliverGrid(
+            padding: const EdgeInsets.symmetric(horizontal: outerPad),
+            sliver: _buildGifJustifiedSliver(
               items: savedGifs,
-              columns: gifColumns,
+              availableWidth: availableWidth,
+              gap: gap,
               theme: theme,
               isSavedSection: true,
             ),
@@ -1621,7 +1814,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
         ],
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
             child: Text(
               isSearching ? 'РЕЗУЛЬТАТЫ ПОИСКА' : 'ПОПУЛЯРНЫЕ',
               style: TextStyle(
@@ -1668,12 +1861,29 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           )
         else
           SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            sliver: _buildGifSliverGrid(
+            padding: const EdgeInsets.symmetric(horizontal: outerPad),
+            sliver: _buildGifJustifiedSliver(
               items: trendingGifs,
-              columns: gifColumns,
+              availableWidth: availableWidth,
+              gap: gap,
               theme: theme,
               isSavedSection: false,
+            ),
+          ),
+        if (isLoadingMore)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: theme.accent,
+                  ),
+                ),
+              ),
             ),
           ),
         const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
@@ -1681,85 +1891,122 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     );
   }
 
-  Widget _buildGifSliverGrid({
+  Widget _buildGifJustifiedSliver({
     required List<GifItemModel> items,
-    required int columns,
+    required double availableWidth,
+    required double gap,
     required TheavThemeData theme,
     required bool isSavedSection,
   }) {
-    return SliverGrid(
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: columns,
-        childAspectRatio: 1.45,
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-      ),
+    final rows = _computeJustifiedGifRows(items, availableWidth, gap);
+    final bool shouldAnimate = _currentTab == PanelTab.gif && widget.isVisible;
+
+    return SliverList(
       delegate: SliverChildBuilderDelegate(
-        (context, index) {
-          final gif = items[index];
-          final preview = gif.previewUrl.isNotEmpty ? gif.previewUrl : gif.url;
-          final resolvedUrl = StickerService.resolveUrl(preview);
-          return GestureDetector(
-            onTap: () => _onGifItemTapped(gif),
-            onLongPress: () {
-              HapticUtils.selection();
-              if (isSavedSection) {
-                StickerService.instance.removeSavedGif(gif.id);
-              } else {
-                StickerService.instance.saveGif(gif);
-              }
-            },
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                color: theme.inputBg,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    RepaintBoundary(
-                      child: ControlledAnimatedNetworkImage(
-                        url: resolvedUrl,
-                        isAnimatedWebpOrGif: true,
-                        fit: BoxFit.cover,
-                        filterQuality: FilterQuality.low,
-                        animate: _currentTab == PanelTab.gif && widget.isVisible,
-                        errorBuilder: (_) => Center(
-                          child: Text(
-                            'GIF',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: theme.textSecondary,
-                            ),
-                          ),
-                        ),
+        (context, rowIndex) {
+          final row = rows[rowIndex];
+          final isLastRow = rowIndex == rows.length - 1;
+          return Padding(
+            padding: EdgeInsets.only(bottom: isLastRow ? 0 : gap),
+            child: SizedBox(
+              height: row.height,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (int i = 0; i < row.items.length; i++) ...[
+                    if (i > 0) SizedBox(width: gap),
+                    SizedBox(
+                      width: row.widths[i],
+                      height: row.height,
+                      child: _buildGifCell(
+                        gif: row.items[i],
+                        width: row.widths[i],
+                        height: row.height,
+                        theme: theme,
+                        isSavedSection: isSavedSection,
+                        shouldAnimate: shouldAnimate,
                       ),
                     ),
-                    if (isSavedSection)
-                      Positioned(
-                        top: 6,
-                        right: 6,
-                        child: Container(
-                          padding: const EdgeInsets.all(3),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.45),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const iconoir.BookmarkSolid(
-                            width: 12,
-                            height: 12,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
                   ],
-                ),
+                ],
               ),
             ),
           );
         },
-        childCount: items.length,
+        childCount: rows.length,
         addAutomaticKeepAlives: false,
+      ),
+    );
+  }
+
+  Widget _buildGifCell({
+    required GifItemModel gif,
+    required double width,
+    required double height,
+    required TheavThemeData theme,
+    required bool isSavedSection,
+    required bool shouldAnimate,
+  }) {
+    final preview = gif.previewUrl.isNotEmpty ? gif.previewUrl : gif.url;
+    final resolvedUrl = StickerService.resolveUrl(preview);
+
+    return GestureDetector(
+      onTap: () => _onGifItemTapped(gif),
+      onLongPress: () {
+        GifPeekPopOverlay.show(
+          context: context,
+          gif: gif,
+          onSend: () => _onGifItemTapped(gif),
+        );
+      },
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          color: theme.inputBg,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              RepaintBoundary(
+                child: ControlledAnimatedNetworkImage(
+                  url: resolvedUrl,
+                  width: width,
+                  height: height,
+                  isAnimatedWebpOrGif: true,
+                  fit: BoxFit.cover,
+                  filterQuality: FilterQuality.low,
+                  animate: shouldAnimate,
+                  errorBuilder: (_) => Center(
+                    child: Text(
+                      'GIF',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: theme.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (isSavedSection)
+                Positioned(
+                  top: 5,
+                  right: 5,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: const iconoir.BookmarkSolid(
+                      width: 11,
+                      height: 11,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
