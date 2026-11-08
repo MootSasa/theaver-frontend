@@ -922,6 +922,32 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (message.messageType == 'system') {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      return Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 24),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: isDark
+                ? Colors.black.withValues(alpha: 0.42)
+                : Colors.black.withValues(alpha: 0.28),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            message.content,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w500,
+              color: Colors.white,
+              decoration: TextDecoration.none,
+            ),
+          ),
+        ),
+      );
+    }
+
     final bool isUnsupported = message.isUnsupported;
     final String? resolvedFileUrl = AppConfig.resolveMediaUrl(message.fileUrl);
     final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;

@@ -1483,7 +1483,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onNewMessage(WebSocketEvent event) {
-    final messageData = event.data['message'] as Map<String, dynamic>?;
+    final messageData = (event.data['message'] as Map<String, dynamic>?) ??
+        (event.data.containsKey('content') && event.data.containsKey('id')
+            ? event.data
+            : null);
     if (messageData == null) return;
 
     final message = Message.fromJson(messageData);

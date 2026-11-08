@@ -426,10 +426,26 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           );
                         },
                       ),
+                      AdaptiveSwitchListTile(
+                        secondary: const Icon(Icons.notifications_paused_outlined, color: Color(0xFF0088CC)),
+                        title: const Text('Отключить встроенные уведомления'),
+                        subtitle: const Text(
+                          'Отправлять все уведомления через стандартный сервис уведомлений устройства',
+                        ),
+                        value: s.disableInAppNotifications,
+                        onChanged: (val) {
+                          HapticUtils.selection();
+                          provider.updateGlobalSettings(disableInAppNotifications: val);
+                        },
+                      ),
                       ListTile(
                         leading: const Icon(Icons.phone_android, color: Color(0xFF0088CC)),
                         title: const Text('Уведомления в приложении'),
-                        subtitle: const Text('Звуки, вибрация, предпросмотр'),
+                        subtitle: Text(
+                          s.disableInAppNotifications
+                              ? 'Отключены (используются системные уведомления)'
+                              : 'Звуки, вибрация, предпросмотр',
+                        ),
                         trailing: const Icon(Icons.chevron_right, color: Colors.grey),
                         onTap: () {
                           HapticUtils.tap();

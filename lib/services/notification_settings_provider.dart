@@ -168,6 +168,7 @@ class NotificationSettingsProvider extends ChangeNotifier {
     bool? inAppVibrate,
     bool? inAppPreview,
     bool? inAppChatSounds,
+    bool? disableInAppNotifications,
     int? repeatNotifications,
   }) async {
     final updated = _globalSettings.copyWith(
@@ -203,6 +204,7 @@ class NotificationSettingsProvider extends ChangeNotifier {
       inAppVibrate: inAppVibrate,
       inAppPreview: inAppPreview,
       inAppChatSounds: inAppChatSounds,
+      disableInAppNotifications: disableInAppNotifications,
       repeatNotifications: repeatNotifications,
     );
     await saveGlobalSettings(updated);

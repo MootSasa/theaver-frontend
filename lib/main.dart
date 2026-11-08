@@ -263,14 +263,9 @@ class TheaverApp extends StatelessWidget {
             builder: (context, child) {
               return Stack(
                 children: [
-                  child ?? const SizedBox.shrink(),
-                  Positioned(
-                    top: MediaQuery.of(context).padding.top,
-                    left: 0,
-                    right: 0,
-                    child: ActiveCallTopBanner(
-                      onRestoreCall: () => _restoreActiveCall(context),
-                    ),
+                  ActiveCallTopBanner(
+                    onRestoreCall: () => _restoreActiveCall(context),
+                    child: child ?? const SizedBox.shrink(),
                   ),
                   CallPipOverlay(
                     onRestoreCall: () => _restoreActiveCall(context),

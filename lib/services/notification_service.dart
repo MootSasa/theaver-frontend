@@ -834,7 +834,9 @@ class NotificationService {
               ? (isGroup && senderName.isNotEmpty ? '$senderName: $messageText' : messageText)
               : 'Новое сообщение';
 
-          if (!WebNotificationHelper.isTabFocused || currentActiveChatId != chatId) {
+          if (isInAppNotificationsDisabled ||
+              !WebNotificationHelper.isTabFocused ||
+              currentActiveChatId != chatId) {
             WebNotificationHelper.showBrowserNotification(
               title: displayTitle,
               body: displayBody,
@@ -852,14 +854,16 @@ class NotificationService {
               },
             );
           }
-          showInAppBanner(
-            chatId: chatId,
-            chatName: chatName,
-            senderName: senderName,
-            messageText: messageText,
-            avatarUrl: avatarUrl,
-            isGroup: isGroup,
-          );
+          if (!isInAppNotificationsDisabled) {
+            showInAppBanner(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: avatarUrl,
+              isGroup: isGroup,
+            );
+          }
         } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
           bool isFocused = false;
           try {
@@ -867,8 +871,10 @@ class NotificationService {
           } catch (_) {}
 
           final isCurrentChatActive = currentActiveChatId != null && currentActiveChatId == chatId;
-          // Показываем системный тост, если окно не в фокусе, свернуто или открыт другой чат
-          if (!isFocused || !isCurrentChatActive) {
+          // Показываем системный тост, если окно не в фокусе, свернуто, открыт другой чат или отключены встроенные уведомления
+          if ((isInAppNotificationsDisabled && !isCurrentChatActive) ||
+              !isFocused ||
+              !isCurrentChatActive) {
             await showMessageNotification(
               chatId: chatId,
               chatName: chatName,
@@ -880,7 +886,7 @@ class NotificationService {
               messageId: messageId,
             );
           }
-          if (isFocused) {
+          if (isFocused && !isInAppNotificationsDisabled) {
             showInAppBanner(
               chatId: chatId,
               chatName: chatName,
@@ -892,7 +898,7 @@ class NotificationService {
           }
         } else {
           // Мобильные платформы (Android / iOS):
-          if (_isAppInForeground) {
+          if (_isAppInForeground && !isInAppNotificationsDisabled) {
             showInAppBanner(
               chatId: chatId,
               chatName: chatName,
@@ -902,7 +908,7 @@ class NotificationService {
               isGroup: isGroup,
             );
           } else {
-            // В фоне показываем локальное уведомление в системной шторке
+            // В фоне (или при отключённых встроенных уведомлениях) показываем локальное уведомление в системной шторке
             await showMessageNotification(
               chatId: chatId,
               chatName: chatName,
@@ -1268,7 +1274,7 @@ class NotificationService {
           final messageId = data['id']?.toString() ?? data['message_id']?.toString();
 
           if (shouldShowNotification(chatId) && !_isDuplicateNotification(chatId, messageText, messageId: messageId)) {
-            if (_isAppInForeground) {
+            if (_isAppInForeground && !isInAppNotificationsDisabled) {
               showInAppBanner(
                 chatId: chatId,
                 chatName: chatName,
@@ -1329,7 +1335,7 @@ class NotificationService {
     final callerName = (data['caller_name']?.toString().isNotEmpty == true)
         ? data['caller_name']!.toString()
         : (data['chat_name']?.toString().isNotEmpty == true ? data['chat_name']!.toString() : 'Входящий звонок');
-    if (!_isAppInForeground) {
+    if (!_isAppInForeground || isInAppNotificationsDisabled) {
       showCallNotification(
         callId: data['call_id']?.toString() ?? '',
         chatId: data['chat_id']?.toString() ?? '',
@@ -2317,6 +2323,9 @@ class NotificationService {
 
   // ============ Logic ============
 
+  bool get isInAppNotificationsDisabled =>
+      _settingsProvider?.globalSettings.disableInAppNotifications ?? false;
+
   bool shouldShowNotification(String chatId, {bool isMention = false}) {
     if (isChatActive(chatId)) {
       return false;
@@ -2333,6 +2342,10 @@ class NotificationService {
     String? avatarUrl,
     bool isGroup = false,
   }) {
+    if (isInAppNotificationsDisabled) return;
+    if (_settingsProvider != null && !_settingsProvider!.globalSettings.inAppPreview) {
+      return;
+    }
     if (!shouldShowNotification(chatId)) return;
     final data = InAppNotificationData(
       chatId: chatId,

@@ -6,20 +6,26 @@ import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../services/notification_settings_provider.dart';
 
-/// Floating top banner shown across the app whenever:
+/// Top banner shown across the app whenever:
 /// 1) An incoming call is ringing (`callProvider.hasIncomingCall`), or
 /// 2) An active call or voice channel is minimized (`callProvider.hasActiveCall && callProvider.isMinimized`).
+///
+/// When [child] is provided, the banner smoothly pushes [child] down instead of
+/// overlapping the screen's [AppBar] / header controls.
 ///
 /// Obeys the Liquid Glass animation contract:
 /// - Outer shape animates strictly via [ClipRect] + [Align] (`heightFactor`) + [SlideTransition].
 /// - No [FadeTransition] or [Opacity] is ever applied to [LiquidGlassLens].
 class ActiveCallTopBanner extends StatefulWidget {
   final VoidCallback onRestoreCall;
+  final Widget? child;
 
   const ActiveCallTopBanner({
     super.key,
     required this.onRestoreCall,
+    this.child,
   });
 
   @override
@@ -68,7 +74,11 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
   @override
   Widget build(BuildContext context) {
     final callProvider = context.watch<CallStateProvider>();
-    final isIncoming = callProvider.hasIncomingCall;
+    final disableInApp = context
+        .select<NotificationSettingsProvider?, bool>(
+          (p) => p?.globalSettings.disableInAppNotifications ?? false,
+        );
+    final isIncoming = callProvider.hasIncomingCall && !disableInApp;
     final isMinimizedActive =
         callProvider.hasActiveCall && callProvider.isMinimized;
     final shouldShow = isIncoming || isMinimizedActive;
@@ -86,13 +96,11 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
     return AnimatedBuilder(
       animation: _visibilityCtrl,
       builder: (context, _) {
-        if (_visibilityCtrl.isDismissed && !shouldShow) {
-          return const SizedBox.shrink();
-        }
-        final incoming = callProvider.incomingCall;
+        final incoming = disableInApp ? null : callProvider.incomingCall;
         final active = callProvider.activeCall;
-        if (incoming == null && active == null) {
-          return const SizedBox.shrink();
+        if ((_visibilityCtrl.isDismissed && !shouldShow) ||
+            (incoming == null && active == null)) {
+          return widget.child ?? const SizedBox.shrink();
         }
 
         final p = context.theav;
@@ -100,9 +108,12 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
         final glassProvider = context.watch<LiquidGlassProvider>();
         final useGlass = glassProvider.enabled;
         final isFullGlass = glassProvider.isFull;
+        final mq = MediaQuery.of(context);
+        final topInset = widget.child != null ? mq.padding.top : 0.0;
 
+        Widget bannerSection;
         if (incoming != null && active == null) {
-          return _buildIncomingBanner(
+          bannerSection = _buildIncomingBanner(
             context: context,
             callProvider: callProvider,
             p: p,
@@ -110,228 +121,276 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
             glassProvider: glassProvider,
             useGlass: useGlass,
             isFullGlass: isFullGlass,
+            topInset: topInset,
           );
-        }
+        } else {
+          final call = active!;
+          final stream = callProvider.focusedStream;
 
-        final call = active!;
-        final stream = callProvider.focusedStream;
-
-        final innerContent = Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            children: [
-              // Pulsing active voice dot
-              AnimatedBuilder(
-                animation: _pulseCtrl,
-                builder: (context, _) => Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF00E676)
-                        .withValues(alpha: 0.5 + 0.5 * _pulseCtrl.value),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF00E676).withValues(alpha: 0.45),
-                        blurRadius: 6,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    HapticFeedback.lightImpact();
-                    widget.onRestoreCall();
-                  },
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          call.title.isNotEmpty ? call.title : 'Активный звонок',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                            color: isDark ? Colors.white : p.textPrimary,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        callProvider.formattedDuration,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                          color: isDark
-                              ? const Color(0xFF69F0AE)
-                              : const Color(0xFF00897B),
-                        ),
-                      ),
-                      if (stream != null) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFF6D00)
-                                .withValues(alpha: 0.22),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(
-                              color: const Color(0xFFFF9100),
-                              width: 0.8,
-                            ),
-                          ),
-                          child: Text(
-                            stream.qualityBadge,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFFFFAB40),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              if (callProvider.isScreenSharing) ...[
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                  padding: EdgeInsets.zero,
-                  tooltip: 'Остановить демонстрацию экрана',
-                  icon: const Icon(
-                    Icons.stop_screen_share_rounded,
-                    size: 19,
-                    color: Colors.redAccent,
-                  ),
-                  onPressed: () {
-                    HapticFeedback.mediumImpact();
-                    callProvider.stopScreenShare();
-                  },
-                ),
-                const SizedBox(width: 2),
-              ],
-              // Quick Mute button
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                padding: EdgeInsets.zero,
-                tooltip: callProvider.isMuted
-                    ? 'Включить микрофон'
-                    : 'Выключить микрофон',
-                icon: Icon(
-                  callProvider.isMuted
-                      ? Icons.mic_off_rounded
-                      : Icons.mic_rounded,
-                  size: 19,
-                  color: callProvider.isMuted
-                      ? Colors.redAccent
-                      : (isDark ? Colors.white : p.textPrimary),
-                ),
-                onPressed: () {
-                  HapticFeedback.selectionClick();
-                  callProvider.toggleMute();
-                },
-              ),
-              const SizedBox(width: 4),
-              // Quick Hangup button
-              GestureDetector(
-                onTap: () {
-                  HapticFeedback.mediumImpact();
-                  callProvider.leaveCall();
-                },
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: const BoxDecoration(
-                    color: Colors.redAccent,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.call_end_rounded,
-                    size: 16,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-
-        return ClipRect(
-          child: Align(
-            alignment: Alignment.topCenter,
-            heightFactor: _heightFactor.value,
-            child: SlideTransition(
-              position: _slideOffset,
+          final innerContent = Material(
+            type: MaterialType.transparency,
+            child: DefaultTextStyle.merge(
+              style: const TextStyle(decoration: TextDecoration.none),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-                child: SizedBox(
-                  height: 44,
-                  width: double.infinity,
-                  child: useGlass
-                      ? GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: widget.onRestoreCall,
-                          child: LiquidGlassLens(
-                            style: glassProvider.createStyle(
-                              context: context,
-                              cornerRadius: 22,
-                              color: const Color(0xFF00C853)
-                                  .withValues(alpha: isDark ? 0.16 : 0.22),
-                              refractionIndex: isFullGlass ? 1.12 : 1.05,
-                              refractionWidth: 24.0,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Row(
+                  children: [
+                    // Pulsing active voice dot
+                    AnimatedBuilder(
+                      animation: _pulseCtrl,
+                      builder: (context, _) => Container(
+                        width: 9,
+                        height: 9,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00E676)
+                              .withValues(alpha: 0.5 + 0.5 * _pulseCtrl.value),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF00E676)
+                                  .withValues(alpha: 0.45),
+                              blurRadius: 6,
                             ),
-                            touch: const LiquidGlassTouch.flexing(
-                              LiquidGlassFlex(
-                                stretch: 4,
-                                squeeze: 0.75,
-                                lean: 0.2,
-                                grip: 0.5,
-                              ),
-                            ),
-                            child: innerContent,
-                          ),
-                        )
-                      : ClipRRect(
-                          borderRadius: BorderRadius.circular(22),
-                          child: BackdropFilter.grouped(
-                            filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                            child: Material(
-                              color: isDark
-                                  ? const Color(0xFF132A21)
-                                      .withValues(alpha: 0.90)
-                                  : const Color(0xFFE8F5E9)
-                                      .withValues(alpha: 0.94),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(22),
-                                side: BorderSide(
-                                  color: const Color(0xFF00C853)
-                                      .withValues(alpha: 0.38),
-                                  width: 0.8,
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          widget.onRestoreCall();
+                        },
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                call.title.isNotEmpty
+                                    ? call.title
+                                    : 'Активный звонок',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  decoration: TextDecoration.none,
+                                  color: isDark ? Colors.white : p.textPrimary,
                                 ),
                               ),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(22),
-                                onTap: widget.onRestoreCall,
-                                child: innerContent,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              callProvider.formattedDuration,
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                decoration: TextDecoration.none,
+                                color: isDark
+                                    ? const Color(0xFF69F0AE)
+                                    : const Color(0xFF00897B),
                               ),
                             ),
-                          ),
+                            if (stream != null) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFF6D00)
+                                      .withValues(alpha: 0.22),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: const Color(0xFFFF9100),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Text(
+                                  stream.qualityBadge,
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    decoration: TextDecoration.none,
+                                    color: Color(0xFFFFAB40),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
+                      ),
+                    ),
+                    if (callProvider.isScreenSharing) ...[
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        constraints:
+                            const BoxConstraints(minWidth: 34, minHeight: 34),
+                        padding: EdgeInsets.zero,
+                        tooltip: 'Остановить демонстрацию экрана',
+                        icon: const Icon(
+                          Icons.stop_screen_share_rounded,
+                          size: 19,
+                          color: Colors.redAccent,
+                        ),
+                        onPressed: () {
+                          HapticFeedback.mediumImpact();
+                          callProvider.stopScreenShare();
+                        },
+                      ),
+                      const SizedBox(width: 2),
+                    ],
+                    // Quick Mute button
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints(minWidth: 34, minHeight: 34),
+                      padding: EdgeInsets.zero,
+                      tooltip: callProvider.isMuted
+                          ? 'Включить микрофон'
+                          : 'Выключить микрофон',
+                      icon: Icon(
+                        callProvider.isMuted
+                            ? Icons.mic_off_rounded
+                            : Icons.mic_rounded,
+                        size: 19,
+                        color: callProvider.isMuted
+                            ? Colors.redAccent
+                            : (isDark ? Colors.white : p.textPrimary),
+                      ),
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        callProvider.toggleMute();
+                      },
+                    ),
+                    const SizedBox(width: 4),
+                    // Quick Hangup button
+                    GestureDetector(
+                      onTap: () {
+                        HapticFeedback.mediumImpact();
+                        callProvider.leaveCall();
+                      },
+                      child: Container(
+                        width: 30,
+                        height: 30,
+                        decoration: const BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.call_end_rounded,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
+          );
+
+          bannerSection = ClipRect(
+            child: Align(
+              alignment: Alignment.topCenter,
+              heightFactor: _heightFactor.value,
+              child: SlideTransition(
+                position: _slideOffset,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(12, topInset + 4, 12, 6),
+                  child: SizedBox(
+                    height: 44,
+                    width: double.infinity,
+                    child: useGlass
+                        ? GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: widget.onRestoreCall,
+                            child: LiquidGlassLens(
+                              style: glassProvider.createStyle(
+                                context: context,
+                                cornerRadius: 22,
+                                color: const Color(0xFF00C853)
+                                    .withValues(alpha: isDark ? 0.16 : 0.22),
+                                refractionIndex: isFullGlass ? 1.12 : 1.05,
+                                refractionWidth: 24.0,
+                              ),
+                              touch: const LiquidGlassTouch.flexing(
+                                LiquidGlassFlex(
+                                  stretch: 4,
+                                  squeeze: 0.75,
+                                  lean: 0.2,
+                                  grip: 0.5,
+                                ),
+                              ),
+                              child: innerContent,
+                            ),
+                          )
+                        : ClipRRect(
+                            borderRadius: BorderRadius.circular(22),
+                            child: BackdropFilter.grouped(
+                              filter:
+                                  ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                              child: Material(
+                                color: isDark
+                                    ? const Color(0xFF132A21)
+                                        .withValues(alpha: 0.90)
+                                    : const Color(0xFFE8F5E9)
+                                        .withValues(alpha: 0.94),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(22),
+                                  side: BorderSide(
+                                    color: const Color(0xFF00C853)
+                                        .withValues(alpha: 0.38),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(22),
+                                  onTap: widget.onRestoreCall,
+                                  child: innerContent,
+                                ),
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        final wrappedBanner = Material(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: DefaultTextStyle.merge(
+            style: const TextStyle(decoration: TextDecoration.none),
+            child: bannerSection,
           ),
+        );
+
+        if (widget.child == null) {
+          return wrappedBanner;
+        }
+
+        final factor = (1.0 - _heightFactor.value).clamp(0.0, 1.0);
+        return Column(
+          children: [
+            wrappedBanner,
+            Expanded(
+              child: MediaQuery(
+                data: mq.copyWith(
+                  padding: mq.padding.copyWith(
+                    top: mq.padding.top * factor,
+                  ),
+                  viewPadding: mq.viewPadding.copyWith(
+                    top: mq.viewPadding.top * factor,
+                  ),
+                ),
+                child: widget.child!,
+              ),
+            ),
+          ],
         );
       },
     );
@@ -345,6 +404,7 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
     required LiquidGlassProvider glassProvider,
     required bool useGlass,
     required bool isFullGlass,
+    required double topInset,
   }) {
     final incoming = callProvider.incomingCall!;
     final callerTitle =
@@ -355,105 +415,115 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
             ? 'Входящий видеозвонок...'
             : 'Входящий аудиозвонок...');
 
-    final innerContent = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      child: Row(
-        children: [
-          AnimatedBuilder(
-            animation: _pulseCtrl,
-            builder: (context, _) => Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: const Color(0xFF00E676)
-                    .withValues(alpha: 0.18 + 0.16 * _pulseCtrl.value),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                incoming.isVideo
-                    ? Icons.videocam_rounded
-                    : Icons.phone_in_talk_rounded,
-                size: 20,
-                color: const Color(0xFF00E676),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  callerTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? Colors.white : p.textPrimary,
+    final innerContent = Material(
+      type: MaterialType.transparency,
+      child: DefaultTextStyle.merge(
+        style: const TextStyle(decoration: TextDecoration.none),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            children: [
+              AnimatedBuilder(
+                animation: _pulseCtrl,
+                builder: (context, _) => Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00E676)
+                        .withValues(alpha: 0.18 + 0.16 * _pulseCtrl.value),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    incoming.isVideo
+                        ? Icons.videocam_rounded
+                        : Icons.phone_in_talk_rounded,
+                    size: 20,
+                    color: const Color(0xFF00E676),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: isDark
-                        ? const Color(0xFF69F0AE)
-                        : const Color(0xFF00897B),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      callerTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        decoration: TextDecoration.none,
+                        color: isDark ? Colors.white : p.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        decoration: TextDecoration.none,
+                        color: isDark
+                            ? const Color(0xFF69F0AE)
+                            : const Color(0xFF00897B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Decline Button
+              GestureDetector(
+                onTap: () {
+                  HapticFeedback.mediumImpact();
+                  callProvider.declineIncomingCall();
+                },
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: const BoxDecoration(
+                    color: Colors.redAccent,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.call_end_rounded,
+                    size: 19,
+                    color: Colors.white,
                   ),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              // Accept Button
+              GestureDetector(
+                onTap: () async {
+                  HapticFeedback.mediumImpact();
+                  await callProvider.acceptIncomingCall();
+                  widget.onRestoreCall();
+                },
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF00C853),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    incoming.isVideo
+                        ? Icons.videocam_rounded
+                        : Icons.call_rounded,
+                    size: 19,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          // Decline Button
-          GestureDetector(
-            onTap: () {
-              HapticFeedback.mediumImpact();
-              callProvider.declineIncomingCall();
-            },
-            child: Container(
-              width: 38,
-              height: 38,
-              decoration: const BoxDecoration(
-                color: Colors.redAccent,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.call_end_rounded,
-                size: 19,
-                color: Colors.white,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          // Accept Button
-          GestureDetector(
-            onTap: () async {
-              HapticFeedback.mediumImpact();
-              await callProvider.acceptIncomingCall();
-              widget.onRestoreCall();
-            },
-            child: Container(
-              width: 38,
-              height: 38,
-              decoration: const BoxDecoration(
-                color: Color(0xFF00C853),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                incoming.isVideo ? Icons.videocam_rounded : Icons.call_rounded,
-                size: 19,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
 
@@ -464,7 +534,7 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
         child: SlideTransition(
           position: _slideOffset,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+            padding: EdgeInsets.fromLTRB(12, topInset + 6, 12, 8),
             child: SizedBox(
               height: 62,
               width: double.infinity,

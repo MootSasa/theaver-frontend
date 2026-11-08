@@ -27,6 +27,23 @@ class InAppNotificationsScreen extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
                 SettingsGroup(
+                  title: 'Режим доставки',
+                  children: [
+                    AdaptiveSwitchListTile(
+                      secondary: const Icon(Icons.notifications_paused_outlined, color: Color(0xFF0088CC)),
+                      title: const Text('Отключить встроенные уведомления'),
+                      subtitle: const Text(
+                        'Отключает кастомные плашки уведомлений при открытом приложении и отправляет все уведомления через стандартный сервис устройства',
+                      ),
+                      value: s.disableInAppNotifications,
+                      onChanged: (val) {
+                        HapticUtils.selection();
+                        provider.updateGlobalSettings(disableInAppNotifications: val);
+                      },
+                    ),
+                  ],
+                ),
+                SettingsGroup(
                   title: 'В приложении',
                   children: [
                     AdaptiveSwitchListTile(

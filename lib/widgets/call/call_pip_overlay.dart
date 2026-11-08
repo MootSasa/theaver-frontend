@@ -181,19 +181,23 @@ class _CallPipOverlayState extends State<CallPipOverlay>
             ),
             child: ScaleTransition(
               scale: _scaleAnim,
-              child: GestureDetector(
-                onTap: () {
-                  HapticFeedback.lightImpact();
-                  widget.onRestoreCall();
-                },
-                onPanUpdate: (details) {
-                  setState(() {
-                    _position = pos + details.delta;
-                  });
-                },
-                onPanEnd: (_) =>
-                    _snapToNearestCorner(screenSize, mq.padding, pipSize),
-                child: AnimatedContainer(
+              child: Material(
+                type: MaterialType.transparency,
+                child: DefaultTextStyle.merge(
+                  style: const TextStyle(decoration: TextDecoration.none),
+                  child: GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      widget.onRestoreCall();
+                    },
+                    onPanUpdate: (details) {
+                      setState(() {
+                        _position = pos + details.delta;
+                      });
+                    },
+                    onPanEnd: (_) =>
+                        _snapToNearestCorner(screenSize, mq.padding, pipSize),
+                    child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   curve: Curves.easeOutCubic,
                   width: pipWidth,
@@ -367,8 +371,10 @@ class _CallPipOverlayState extends State<CallPipOverlay>
                 ),
               ),
             ),
-          );
-        }
+          ),
+        ),
+      );
+    }
 
         if (activeRenderer != null) {
           return ValueListenableBuilder<RTCVideoValue>(

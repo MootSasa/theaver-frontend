@@ -3113,13 +3113,17 @@ class CallStateProvider extends ChangeNotifier {
             .where((p) => p.userId == callerId)
             .firstOrNull
             ?.avatarUrl;
+    final forceSystemNotification =
+        NotificationService().isInAppNotificationsDisabled;
 
     if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
       bool isFocused = true;
       try {
         isFocused = await windowManager.isFocused();
       } catch (_) {}
-      if (!isFocused || !NotificationService().isAppInForeground) {
+      if (forceSystemNotification ||
+          !isFocused ||
+          !NotificationService().isAppInForeground) {
         await NotificationService().showCallNotification(
           callId: session.id,
           chatId: session.chatId,
@@ -3134,7 +3138,7 @@ class CallStateProvider extends ChangeNotifier {
       return;
     }
 
-    if (!NotificationService().isAppInForeground) {
+    if (forceSystemNotification || !NotificationService().isAppInForeground) {
       await NotificationService().showCallNotification(
         callId: session.id,
         chatId: session.chatId,
