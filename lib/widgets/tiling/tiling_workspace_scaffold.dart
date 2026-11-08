@@ -727,6 +727,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       builder: (context, constraints) {
         final areaW = constraints.maxWidth;
         final areaH = constraints.maxHeight;
+        final double statusBarTop = MediaQuery.of(context).padding.top;
+        final double floatingTopInset = statusBarTop + 8.0;
         final tiles = _controller.chatTiles;
         final drag = _controller.activeDrag;
         final dropSlot = _controller.hoveredDropSlot;
@@ -797,9 +799,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   duration: const Duration(milliseconds: 220),
                   curve: Curves.easeOutCubic,
                   left: math.max(8.0, areaW - overlayW - 8.0),
-                  top: 8.0,
+                  top: floatingTopInset,
                   width: overlayW,
-                  height: math.max(240.0, areaH - 16.0),
+                  height: math.max(240.0, areaH - floatingTopInset - 8.0),
                   child: _buildEmojiStickerSidecar(isFloating: true),
                 ),
               if (drag != null && dropSlot == TilingDropSlot.replace)
@@ -880,9 +882,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   duration: const Duration(milliseconds: 220),
                   curve: Curves.easeOutCubic,
                   left: overlayLeft,
-                  top: 8.0,
+                  top: floatingTopInset,
                   width: overlayW,
-                  height: math.max(240.0, areaH - 16.0),
+                  height: math.max(240.0, areaH - floatingTopInset - 8.0),
                   child: _buildEmojiStickerSidecar(isFloating: true),
                 ),
               if (showFullReplaceOverlay)
@@ -911,10 +913,12 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           // В вертикальном сплите Flyout Overlay располагается поверх НЕАКТИВНОГО тайла
           // (над нижним чатом, если фокус в верхнем, и над верхним, если фокус в нижнем).
           final double overlayTop =
-              isFirstActive ? (firstH + seamThickness + 8.0) : 8.0;
+              isFirstActive ? (firstH + seamThickness + 8.0) : floatingTopInset;
           final double overlayHeight = math.max(
             200.0,
-            (isFirstActive ? secondH : firstH) - 16.0,
+            isFirstActive
+                ? (secondH - 16.0)
+                : (firstH - floatingTopInset - 8.0),
           );
 
           return Stack(
@@ -990,6 +994,8 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   Widget _buildEmojiStickerSidecar({required bool isFloating}) {
     final theme = TheavTheme.of(context);
     final activeTile = _controller.focusedChatTile;
+    final double statusBarTop =
+        isFloating ? 0.0 : MediaQuery.of(context).padding.top;
 
     return Container(
       decoration: BoxDecoration(
@@ -1014,8 +1020,12 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       child: Column(
         children: [
           Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            height: 40 + statusBarTop,
+            padding: EdgeInsets.only(
+              left: 12,
+              right: 12,
+              top: statusBarTop,
+            ),
             decoration: BoxDecoration(
               color: theme.secondaryBg,
               border: Border(
