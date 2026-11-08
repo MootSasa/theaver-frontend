@@ -1063,6 +1063,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 behavior: HitTestBehavior.opaque,
                 child: Center(
                   child: StickerMediaView(
+                    key: ValueKey('ce_${item.id}'),
                     fileUrl: item.fileUrl,
                     thumbnailUrl: item.thumbnailUrl,
                     stickerId: item.id,

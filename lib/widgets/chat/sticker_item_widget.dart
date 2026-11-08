@@ -51,10 +51,7 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
 
 class _ControlledAnimatedNetworkImageState
     extends State<ControlledAnimatedNetworkImage> {
-  static const int _kMaxConcurrentRasterAnimators = 4;
-  static const int _kMinFrameIntervalMs = 55;
-  static final List<_ControlledAnimatedNetworkImageState> _activeAnimators =
-      <_ControlledAnimatedNetworkImageState>[];
+  static const int _kMinFrameIntervalMs = 30;
 
   ImageStream? _imageStream;
   ImageStreamListener? _listener;
@@ -63,48 +60,9 @@ class _ControlledAnimatedNetworkImageState
   bool _hasError = false;
   int _lastFramePaintMs = 0;
   int _resolveToken = 0;
+  String _resolvedUrl = '';
 
-  bool get _wantsAnimation => widget.animate && widget.isAnimatedWebpOrGif;
-
-  bool get _isAllowedToAnimate {
-    if (!_wantsAnimation) return false;
-    final idx = _activeAnimators.indexOf(this);
-    if (idx == -1) return false;
-    return idx >= _activeAnimators.length - _kMaxConcurrentRasterAnimators;
-  }
-
-  void _syncAnimatorSlot() {
-    if (_wantsAnimation) {
-      if (!_activeAnimators.contains(this)) {
-        _activeAnimators.add(this);
-        // If adding this pushed an older animator out of the top N, pause that older one
-        if (_activeAnimators.length > _kMaxConcurrentRasterAnimators) {
-          final evictedIdx =
-              _activeAnimators.length - _kMaxConcurrentRasterAnimators - 1;
-          if (evictedIdx >= 0 && evictedIdx < _activeAnimators.length) {
-            _activeAnimators[evictedIdx]._onAnimatorSlotChanged();
-          }
-        }
-      }
-    } else {
-      _releaseAnimatorSlot();
-    }
-  }
-
-  void _releaseAnimatorSlot() {
-    final wasPresent = _activeAnimators.remove(this);
-    if (wasPresent && _activeAnimators.isNotEmpty) {
-      for (final st in _activeAnimators.reversed
-          .take(_kMaxConcurrentRasterAnimators)) {
-        st._onAnimatorSlotChanged();
-      }
-    }
-  }
-
-  void _onAnimatorSlotChanged() {
-    if (!mounted) return;
-    _updateSubscription();
-  }
+  bool get _isAllowedToAnimate => widget.animate;
 
   @override
   void initState() {
@@ -113,7 +71,6 @@ class _ControlledAnimatedNetworkImageState
       _handleFrame,
       onError: _handleError,
     );
-    _syncAnimatorSlot();
   }
 
   @override
@@ -125,7 +82,6 @@ class _ControlledAnimatedNetworkImageState
   @override
   void didUpdateWidget(covariant ControlledAnimatedNetworkImage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _syncAnimatorSlot();
     if (oldWidget.url != widget.url ||
         oldWidget.isAnimatedWebpOrGif != widget.isAnimatedWebpOrGif ||
         (!widget.isAnimatedWebpOrGif &&
@@ -138,9 +94,17 @@ class _ControlledAnimatedNetworkImageState
 
   void _prepareAndResolve() {
     if (widget.url.isEmpty) {
+      _resolvedUrl = '';
       _stopListening();
+      _imageStream = null;
       _disposeImageInfo();
       return;
+    }
+    if (_resolvedUrl != widget.url) {
+      _resolvedUrl = widget.url;
+      _stopListening();
+      _imageStream = null;
+      _disposeImageInfo();
     }
     _hasError = false;
     final token = ++_resolveToken;
@@ -273,7 +237,6 @@ class _ControlledAnimatedNetworkImageState
   @override
   void dispose() {
     _resolveToken++;
-    _releaseAnimatorSlot();
     _stopListening();
     _disposeImageInfo();
     super.dispose();
@@ -355,7 +318,7 @@ class StickerMediaView extends StatefulWidget {
 class _StickerMediaViewState extends State<StickerMediaView> {
   LottieComposition? _composition;
   ui.Image? _bakedFirstFrame;
-  bool _loading = false;
+  int _loadToken = 0;
 
   @override
   void initState() {
@@ -369,47 +332,47 @@ class _StickerMediaViewState extends State<StickerMediaView> {
     if (oldWidget.fileUrl != widget.fileUrl ||
         oldWidget.format != widget.format ||
         oldWidget.animate != widget.animate) {
+      if (oldWidget.fileUrl != widget.fileUrl) {
+        _composition = null;
+        _bakedFirstFrame = null;
+      }
       _loadIfNeeded();
     }
   }
 
   Future<void> _loadIfNeeded() async {
     if (!widget.isLottie || widget.fileUrl.isEmpty) return;
-    final cached = StickerService.instance.getCachedComposition(widget.fileUrl);
+    final int token = ++_loadToken;
+    final String targetUrl = widget.fileUrl;
+    final cached = StickerService.instance.getCachedComposition(targetUrl);
     if (cached != null) {
-      if (mounted && _composition != cached) {
+      if (mounted && token == _loadToken && _composition != cached) {
         setState(() => _composition = cached);
       }
       if (!widget.animate && _bakedFirstFrame == null) {
         final frame = await StickerService.instance.getBakedFirstFrame(
-          widget.fileUrl,
+          targetUrl,
           size: (widget.width * 2).round().clamp(64, 256),
         );
-        if (mounted && frame != null) {
+        if (mounted && token == _loadToken && frame != null) {
           setState(() => _bakedFirstFrame = frame);
         }
       }
       return;
     }
 
-    if (_loading) return;
-    _loading = true;
-    try {
-      if (!widget.animate) {
-        final frame = await StickerService.instance.getBakedFirstFrame(
-          widget.fileUrl,
-          size: (widget.width * 2).round().clamp(64, 256),
-        );
-        if (mounted && frame != null) {
-          setState(() => _bakedFirstFrame = frame);
-        }
+    if (!widget.animate) {
+      final frame = await StickerService.instance.getBakedFirstFrame(
+        targetUrl,
+        size: (widget.width * 2).round().clamp(64, 256),
+      );
+      if (mounted && token == _loadToken && frame != null) {
+        setState(() => _bakedFirstFrame = frame);
       }
-      final comp = await StickerService.instance.getLottieComposition(widget.fileUrl);
-      if (mounted && comp != null) {
-        setState(() => _composition = comp);
-      }
-    } finally {
-      _loading = false;
+    }
+    final comp = await StickerService.instance.getLottieComposition(targetUrl);
+    if (mounted && token == _loadToken && comp != null) {
+      setState(() => _composition = comp);
     }
   }
 

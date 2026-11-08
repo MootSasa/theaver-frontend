@@ -1332,7 +1332,7 @@ class StickerService extends ChangeNotifier {
   Future<Directory?>? _lottieCacheDirFuture;
   int _activeLottieLoads = 0;
   final List<Completer<void>> _lottieLoadWaiters = [];
-  static const int _kMaxConcurrentLottieLoads = 6;
+  static const int _kMaxConcurrentLottieLoads = 12;
 
   static Uint8List _decompressGzipBytesIsolate(Uint8List raw) {
     final decompressed = GZipDecoder().decodeBytes(raw);
@@ -1408,7 +1408,7 @@ class StickerService extends ChangeNotifier {
     } finally {
       _activeLottieLoads--;
       if (_lottieLoadWaiters.isNotEmpty) {
-        _lottieLoadWaiters.removeAt(0).complete();
+        _lottieLoadWaiters.removeLast().complete();
       }
     }
   }
@@ -1443,7 +1443,7 @@ class StickerService extends ChangeNotifier {
   Future<Directory?>? _rasterCacheDirFuture;
   int _activeRasterDownloads = 0;
   final List<Completer<void>> _rasterDownloadWaiters = [];
-  static const int _kMaxConcurrentRasterDownloads = 6;
+  static const int _kMaxConcurrentRasterDownloads = 12;
 
   Future<Directory?> _getRasterCacheDir() {
     if (kIsWeb) return Future.value(null);
@@ -1519,7 +1519,7 @@ class StickerService extends ChangeNotifier {
       } finally {
         _activeRasterDownloads--;
         if (_rasterDownloadWaiters.isNotEmpty) {
-          _rasterDownloadWaiters.removeAt(0).complete();
+          _rasterDownloadWaiters.removeLast().complete();
         }
       }
     } catch (_) {}
