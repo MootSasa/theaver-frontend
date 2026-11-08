@@ -388,6 +388,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _inputFocusNode.addListener(_onFocusChanged);
     _stickerInputTarget = ChatStickerInputTarget(
       chatId: widget.chatId,
+      chatTitle: widget.groupName,
+      avatarUrl: widget.groupAvatar,
       controller: _messageController,
       onBackspace: _handleBackspace,
       onInsertEmoji: _insertEmojiText,

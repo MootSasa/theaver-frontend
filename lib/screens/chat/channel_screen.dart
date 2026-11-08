@@ -108,6 +108,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   Timer? _transitionTimer;
   late AnimationController _emojiPanelController;
   late Animation<double> _emojiPanelAnimation;
+  late final ChatStickerInputTarget _stickerInputTarget;
   String? _lastActiveTileId;
 
   bool get _isDesktopPlatform =>
@@ -222,6 +223,18 @@ class _ChannelScreenState extends State<ChannelScreen>
     _loadCachedKeyboardHeight();
     _initWebSocket();
     _inputFocusNode.addListener(_onFocusChanged);
+    _stickerInputTarget = ChatStickerInputTarget(
+      chatId: widget.channelId,
+      chatTitle: widget.channelName,
+      avatarUrl: widget.channelAvatar,
+      controller: _messageController,
+      onBackspace: _handleBackspace,
+      onInsertEmoji: _insertEmojiText,
+      onInsertCustomEmoji: _insertCustomEmojiItem,
+      onSendSticker: _sendStickerMessage,
+      onSendGif: _sendGifMessage,
+    );
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
@@ -443,6 +456,9 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _onFocusChanged() {
+    if (_inputFocusNode.hasFocus) {
+      StickerService.instance.registerInputTarget(_stickerInputTarget);
+    }
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
     } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
@@ -509,6 +525,16 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _onEmojiToggle() {
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    if (TilingLayoutController.instance.isWorkspaceMounted &&
+        !TilingLayoutController.instance.isSinglePane) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.setFocusedTile(_registeredTileId!);
+      }
+      TilingLayoutController.instance.toggleEmojiSidecar();
+      return;
+    }
+
     _transitionTimer?.cancel();
     final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
 
@@ -601,6 +627,22 @@ class _ChannelScreenState extends State<ChannelScreen>
     _messageController.value = TextEditingValue(
       text: newText,
       selection: TextSelection.collapsed(offset: newBefore.length),
+    );
+  }
+
+  void _insertEmojiText(String emoji) {
+    final text = _messageController.text;
+    final selection = _messageController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0 || start > text.length) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, emoji);
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
     );
   }
 
@@ -2031,6 +2073,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _syncDebounceTimer?.cancel();
 
     DraftService().flushDraft(widget.channelId);
+    StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _messageController.removeListener(_onInputTextChanged);
     _emojiPanelController.dispose();
     _inputFocusNode.removeListener(_onFocusChanged);

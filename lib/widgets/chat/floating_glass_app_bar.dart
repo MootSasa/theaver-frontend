@@ -157,6 +157,14 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final tileId = TileViewportScope.maybeTileIdOf(context);
+    if (tileId != null) {
+      TilingLayoutController.instance.syncTileMetadata(
+        tileId,
+        chatName: widget.name,
+        avatarUrl: widget.avatarUrl,
+        isOnline: widget.isOnline,
+      );
+    }
     if (_registeredTileId != tileId) {
       if (_registeredTileId != null) {
         TilingLayoutController.instance.unregisterTileBackHandler(
@@ -187,6 +195,17 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
   @override
   void didUpdateWidget(covariant FloatingGlassAppBar oldWidget) {
+    if (_registeredTileId != null &&
+        (oldWidget.name != widget.name ||
+            oldWidget.avatarUrl != widget.avatarUrl ||
+            oldWidget.isOnline != widget.isOnline)) {
+      TilingLayoutController.instance.syncTileMetadata(
+        _registeredTileId!,
+        chatName: widget.name,
+        avatarUrl: widget.avatarUrl,
+        isOnline: widget.isOnline,
+      );
+    }
     super.didUpdateWidget(oldWidget);
     if (widget.isSelectionMode && _isMenuOpen) {
       _isMenuOpen = false;

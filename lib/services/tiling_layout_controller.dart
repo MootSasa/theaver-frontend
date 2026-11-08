@@ -603,6 +603,39 @@ class TilingLayoutController extends ChangeNotifier {
 
   bool isChatOpen(String chatId) => isChatOpenInAnyTile(chatId);
 
+  /// Синхронизирует живые метаданные открытого тайла (имя чата, аватарка, онлайн-статус),
+  /// когда экран чата подгружает их асинхронно.
+  void syncTileMetadata(
+    String tileId, {
+    String? chatName,
+    String? avatarUrl,
+    bool? isOnline,
+  }) {
+    final idx = _chatTiles.indexWhere((t) => t.tileId == tileId);
+    if (idx == -1) return;
+    final tile = _chatTiles[idx];
+    bool changed = false;
+    if (chatName != null && chatName.isNotEmpty && tile.chatName != chatName) {
+      tile.chatName = chatName;
+      changed = true;
+    }
+    if (avatarUrl != null &&
+        avatarUrl.isNotEmpty &&
+        tile.avatarUrl != avatarUrl) {
+      tile.avatarUrl = avatarUrl;
+      changed = true;
+    }
+    if (isOnline != null && tile.isOnline != isOnline) {
+      tile.isOnline = isOnline;
+      changed = true;
+    }
+    if (changed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        notifyListeners();
+      });
+    }
+  }
+
   /// Открывает чат в активном тайле (при обычном клике в списке чатов или поиске).
   /// Если этот чат уже открыт в одном из тайлов — просто переводит фокус на него.
   void openChatInActiveTile({
@@ -625,6 +658,15 @@ class TilingLayoutController extends ChangeNotifier {
     // 1. Проверяем, не открыт ли уже этот чат в каком-либо тайле
     for (final existing in _chatTiles) {
       if (existing.chatId == chatId) {
+        if (effectiveChatName.isNotEmpty &&
+            existing.chatName != effectiveChatName) {
+          existing.chatName = effectiveChatName;
+        }
+        if (avatarUrl != null &&
+            avatarUrl.isNotEmpty &&
+            existing.avatarUrl != avatarUrl) {
+          existing.avatarUrl = avatarUrl;
+        }
         if (initialMessageId != null && existing.initialMessageId != initialMessageId) {
           existing.initialMessageId = initialMessageId;
           existing.revision++;

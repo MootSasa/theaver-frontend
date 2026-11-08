@@ -24,6 +24,7 @@ import '../../theme/theav_theme.dart';
 import '../../utils/swipe_back_route.dart';
 import '../chat/chat_scaffold.dart';
 import '../chat/emoji_sticker_panel.dart';
+import '../user/avatar_with_status.dart';
 import 'static_tile_cache_boundary.dart';
 import 'tile_drag_preview_overlay.dart';
 import 'tile_resize_divider.dart';
@@ -989,10 +990,6 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   Widget _buildEmojiStickerSidecar({required bool isFloating}) {
     final theme = TheavTheme.of(context);
     final activeTile = _controller.focusedChatTile;
-    final targetName = activeTile?.chatName.isNotEmpty == true
-        ? activeTile!.chatName
-        : 'Активный чат';
-    final initial = targetName.isNotEmpty ? targetName[0].toUpperCase() : '#';
 
     return Container(
       decoration: BoxDecoration(
@@ -1025,52 +1022,56 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                 bottom: BorderSide(color: theme.dividerColor, width: 0.5),
               ),
             ),
-            child: Row(
-              children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: theme.inputBg,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: theme.dividerColor, width: 0.5),
-                  ),
-                  child: Text(
-                    initial,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: theme.textPrimary,
+            child: ListenableBuilder(
+              listenable: StickerService.instance,
+              builder: (context, _) {
+                final activeInput = StickerService.instance.activeInputTarget;
+                final targetName = activeTile?.chatName.isNotEmpty == true
+                    ? activeTile!.chatName
+                    : (activeInput?.chatName.isNotEmpty == true
+                        ? activeInput!.chatName
+                        : 'Активный чат');
+                final targetAvatarUrl =
+                    (activeTile?.avatarUrl?.isNotEmpty == true)
+                        ? activeTile!.avatarUrl
+                        : activeInput?.chatAvatarUrl;
+
+                return Row(
+                  children: [
+                    AvatarWithStatus(
+                      avatarUrl: targetAvatarUrl,
+                      name: targetName,
+                      radius: 12,
+                      isOnline: false,
                     ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    targetName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: theme.textPrimary,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        targetName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: theme.textPrimary,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: _controller.closeEmojiSidecar,
-                  behavior: HitTestBehavior.opaque,
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: iconoir.Xmark(
-                      width: 18,
-                      height: 18,
-                      color: theme.textSecondary,
+                    GestureDetector(
+                      onTap: _controller.closeEmojiSidecar,
+                      behavior: HitTestBehavior.opaque,
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: iconoir.Xmark(
+                          width: 18,
+                          height: 18,
+                          color: theme.textSecondary,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-              ],
+                  ],
+                );
+              },
             ),
           ),
           Expanded(
