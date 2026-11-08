@@ -9,6 +9,7 @@ import '../chat/sticker_item_widget.dart';
 
 class StickerMessageWidget extends StatefulWidget {
   final String imageUrl;
+  final String? thumbnailUrl;
   final String format;
   final String? stickerId;
   final String? packId;
@@ -22,6 +23,7 @@ class StickerMessageWidget extends StatefulWidget {
   const StickerMessageWidget({
     super.key,
     required this.imageUrl,
+    this.thumbnailUrl,
     this.format = 'webp',
     this.stickerId,
     this.packId,
@@ -52,9 +54,11 @@ class _StickerMessageWidgetState extends State<StickerMessageWidget> {
     final sid = widget.stickerId;
     if (sid != null && sid.isNotEmpty) {
       _resolvedSticker = StickerService.instance.getStickerByIdSync(sid);
-      if (_resolvedSticker == null) {
-        _resolveMetadata();
-      }
+    }
+    _resolvedSticker ??=
+        StickerService.instance.getStickerByUrlSync(widget.imageUrl);
+    if (_resolvedSticker == null && sid != null && sid.isNotEmpty) {
+      _resolveMetadata();
     }
     if (widget.autoPlayEffect) {
       final keyId = widget.messageKeyId ?? widget.imageUrl;
@@ -167,6 +171,9 @@ class _StickerMessageWidgetState extends State<StickerMessageWidget> {
                 link: _layerLink,
                 child: StickerMediaView(
                   fileUrl: widget.imageUrl,
+                  thumbnailUrl:
+                      widget.thumbnailUrl ?? _resolvedSticker?.thumbnailUrl,
+                  stickerId: _resolvedSticker?.id ?? widget.stickerId,
                   format: _resolvedSticker?.format.isNotEmpty == true
                       ? _resolvedSticker!.format
                       : widget.format,
@@ -247,7 +254,6 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
             ? widget.previewUrl!.trim()
             : widget.gifUrl;
     final resolvedUrl = StickerService.resolveUrl(effectiveUrl);
-    final int targetCacheWidth = (displayW * 1.4).round().clamp(160, 320);
 
     return VisibilityDetector(
       key: _visibilityKey,
@@ -271,7 +277,7 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
                     url: resolvedUrl,
                     width: displayW,
                     height: displayH,
-                    cacheWidth: targetCacheWidth,
+                    isAnimatedWebpOrGif: true,
                     fit: BoxFit.cover,
                     filterQuality: FilterQuality.low,
                     animate: _isVisible,

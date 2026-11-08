@@ -508,8 +508,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
       }
 
-      _updateFloatingDateOnScroll();
-      _scheduleStickyDateUpdate();
+      if ((offset - _lastStickyDateEvalOffset).abs() >= 48.0) {
+        _lastStickyDateEvalOffset = offset;
+        _scheduleStickyDateUpdate();
+      }
     });
 
     // Notify provider that this chat is open (so unread count is not incremented)
@@ -840,6 +842,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
     final payload = <String, dynamic>{
       'url': item.fileUrl,
+      if (item.thumbnailUrl.isNotEmpty) 'thumbnail_url': item.thumbnailUrl,
       'width': item.width,
       'height': item.height,
       'format': item.format,
@@ -3535,6 +3538,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
+  double _lastStickyDateEvalOffset = -1000.0;
+
   void _scheduleStickyDateUpdate() {
     if (_stickyDatePostFrameScheduled) return;
     _stickyDatePostFrameScheduled = true;
@@ -3574,12 +3579,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     int? minActiveIdx;
     int? maxActiveIdx;
-    for (int i = 0; i < _feedItems.length; i++) {
-      final key = _messageKeys[_feedItems[i].id];
-      final box = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (isChatRenderBoxActivelyLaidOut(box)) {
-        minActiveIdx ??= i;
-        maxActiveIdx = i;
+    bool activeRangeComputed = false;
+    void ensureActiveRange() {
+      if (activeRangeComputed) return;
+      activeRangeComputed = true;
+      for (int i = 0; i < _feedItems.length; i++) {
+        final key = _messageKeys[_feedItems[i].id];
+        final box = key?.currentContext?.findRenderObject() as RenderBox?;
+        if (isChatRenderBoxActivelyLaidOut(box)) {
+          minActiveIdx ??= i;
+          maxActiveIdx = i;
+        }
       }
     }
 
@@ -3600,25 +3610,28 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (isChatRenderBoxActivelyLaidOut(oldestItemBox)) {
           final itemTopY = oldestItemBox!.localToGlobal(Offset.zero).dy;
           isAtOrAboveSticky = itemTopY <= stickyTopY + 0.5;
-        } else if (maxActiveIdx != null && minActiveIdx != null) {
-          if (span.oldestIdx > maxActiveIdx) {
-            isAtOrAboveSticky = true;
-          } else if (span.oldestIdx < minActiveIdx) {
-            isAtOrAboveSticky = false;
-          } else {
-            isAtOrAboveSticky = false;
-            for (int i = span.oldestIdx; i >= minActiveIdx; i--) {
-              final k = _messageKeys[_feedItems[i].id];
-              final b = k?.currentContext?.findRenderObject() as RenderBox?;
-              if (isChatRenderBoxActivelyLaidOut(b)) {
-                isAtOrAboveSticky =
-                    b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
-                break;
+        } else {
+          ensureActiveRange();
+          if (maxActiveIdx != null && minActiveIdx != null) {
+            if (span.oldestIdx > maxActiveIdx!) {
+              isAtOrAboveSticky = true;
+            } else if (span.oldestIdx < minActiveIdx!) {
+              isAtOrAboveSticky = false;
+            } else {
+              isAtOrAboveSticky = false;
+              for (int i = span.oldestIdx; i >= minActiveIdx!; i--) {
+                final k = _messageKeys[_feedItems[i].id];
+                final b = k?.currentContext?.findRenderObject() as RenderBox?;
+                if (isChatRenderBoxActivelyLaidOut(b)) {
+                  isAtOrAboveSticky =
+                      b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
+                  break;
+                }
               }
             }
+          } else {
+            isAtOrAboveSticky = false;
           }
-        } else {
-          isAtOrAboveSticky = false;
         }
       }
 
@@ -4673,17 +4686,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );
@@ -4828,17 +4843,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );

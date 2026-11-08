@@ -1494,6 +1494,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
     final payload = <String, dynamic>{
       'url': item.fileUrl,
+      if (item.thumbnailUrl.isNotEmpty) 'thumbnail_url': item.thumbnailUrl,
       'width': item.width,
       'height': item.height,
       'format': item.format,
@@ -2543,9 +2544,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
     }
 
-    _updateFloatingDateOnScroll();
-    _scheduleStickyDateUpdate();
+    if ((offset - _lastStickyDateEvalOffset).abs() >= 48.0) {
+      _lastStickyDateEvalOffset = offset;
+      _scheduleStickyDateUpdate();
+    }
   }
+
+  double _lastStickyDateEvalOffset = -1000.0;
+  bool _hasOpenedEmojiPanelOnce = false;
 
   void _scheduleStickyDateUpdate() {
     if (_stickyDatePostFrameScheduled) return;
@@ -2586,12 +2592,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     int? minActiveIdx;
     int? maxActiveIdx;
-    for (int i = 0; i < _feedItems.length; i++) {
-      final key = _messageKeys[_feedItems[i].id];
-      final box = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (isChatRenderBoxActivelyLaidOut(box)) {
-        minActiveIdx ??= i;
-        maxActiveIdx = i;
+    bool activeRangeComputed = false;
+    void ensureActiveRange() {
+      if (activeRangeComputed) return;
+      activeRangeComputed = true;
+      for (int i = 0; i < _feedItems.length; i++) {
+        final key = _messageKeys[_feedItems[i].id];
+        final box = key?.currentContext?.findRenderObject() as RenderBox?;
+        if (isChatRenderBoxActivelyLaidOut(box)) {
+          minActiveIdx ??= i;
+          maxActiveIdx = i;
+        }
       }
     }
 
@@ -2612,25 +2623,28 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         if (isChatRenderBoxActivelyLaidOut(oldestItemBox)) {
           final itemTopY = oldestItemBox!.localToGlobal(Offset.zero).dy;
           isAtOrAboveSticky = itemTopY <= stickyTopY + 0.5;
-        } else if (maxActiveIdx != null && minActiveIdx != null) {
-          if (span.oldestIdx > maxActiveIdx) {
-            isAtOrAboveSticky = true;
-          } else if (span.oldestIdx < minActiveIdx) {
-            isAtOrAboveSticky = false;
-          } else {
-            isAtOrAboveSticky = false;
-            for (int i = span.oldestIdx; i >= minActiveIdx; i--) {
-              final k = _messageKeys[_feedItems[i].id];
-              final b = k?.currentContext?.findRenderObject() as RenderBox?;
-              if (isChatRenderBoxActivelyLaidOut(b)) {
-                isAtOrAboveSticky =
-                    b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
-                break;
+        } else {
+          ensureActiveRange();
+          if (maxActiveIdx != null && minActiveIdx != null) {
+            if (span.oldestIdx > maxActiveIdx!) {
+              isAtOrAboveSticky = true;
+            } else if (span.oldestIdx < minActiveIdx!) {
+              isAtOrAboveSticky = false;
+            } else {
+              isAtOrAboveSticky = false;
+              for (int i = span.oldestIdx; i >= minActiveIdx!; i--) {
+                final k = _messageKeys[_feedItems[i].id];
+                final b = k?.currentContext?.findRenderObject() as RenderBox?;
+                if (isChatRenderBoxActivelyLaidOut(b)) {
+                  isAtOrAboveSticky =
+                      b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
+                  break;
+                }
               }
             }
+          } else {
+            isAtOrAboveSticky = false;
           }
-        } else {
-          isAtOrAboveSticky = false;
         }
       }
 
@@ -4222,6 +4236,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 final bool isPanelRendered = shouldShowPanel ||
                     _emojiPanelController.isAnimating ||
                     panelProgress > 0.0;
+                if (isPanelRendered) {
+                  _hasOpenedEmojiPanelOnce = true;
+                }
 
                 // Total synchronized offset for message list, FAB, and input field.
                 final double bottomOffset =
@@ -4342,34 +4359,45 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                       ),
                     ),
                     // Панель эмодзи/стикеров ВНУТРИ Stack (выезжает через Transform.translate с фиксированной высотой)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: isSearchingInPanel ? bottomInset : 0,
-                      child: IgnorePointer(
-                        ignoring: !shouldShowPanel,
-                        child: ClipRect(
-                          child: Transform.translate(
-                            offset: Offset(0, (1.0 - panelProgress) * targetPanelHeight),
-                            child: RepaintBoundary(
-                              child: SizedBox(
-                                height: isPanelRendered ? targetPanelHeight : 0,
-                                child: EmojiStickerPanel(
-                                  controller: _textController,
-                                  onBackspace: _handleBackspace,
-                                  onClose: _closeEmojiPanel,
-                                  height: targetPanelHeight,
-                                  isVisible: isPanelRendered,
-                                  onCustomEmojiSelected: _insertCustomEmojiItem,
-                                  onStickerSelected: _sendStickerMessage,
-                                  onGifSelected: _sendGifMessage,
+                    if (_hasOpenedEmojiPanelOnce || isPanelRendered)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: isSearchingInPanel ? bottomInset : 0,
+                        child: IgnorePointer(
+                          ignoring: !shouldShowPanel,
+                          child: ClipRect(
+                            child: Transform.translate(
+                              offset: Offset(
+                                0,
+                                (1.0 - panelProgress) * targetPanelHeight,
+                              ),
+                              child: RepaintBoundary(
+                                child: TickerMode(
+                                  enabled: isPanelRendered,
+                                  child: Offstage(
+                                    offstage: !isPanelRendered,
+                                    child: SizedBox(
+                                      height: targetPanelHeight,
+                                      child: EmojiStickerPanel(
+                                        controller: _textController,
+                                        onBackspace: _handleBackspace,
+                                        onClose: _closeEmojiPanel,
+                                        height: targetPanelHeight,
+                                        isVisible: isPanelRendered,
+                                        onCustomEmojiSelected:
+                                            _insertCustomEmojiItem,
+                                        onStickerSelected: _sendStickerMessage,
+                                        onGifSelected: _sendGifMessage,
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
                     // Полноэкранный Telegram-оверлей записи видеосообщения («кружочка»)
                     if (_isVideoRecording)
                       Positioned.fill(
@@ -4563,17 +4591,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );
@@ -4723,17 +4753,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );

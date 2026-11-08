@@ -1,4 +1,5 @@
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -9,11 +10,16 @@ import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/emoji_utils.dart';
 
-/// Network image widget that supports pausing multi-frame animations (`animated_webp`, `.gif`).
-/// Standard [Image.network] keeps an active [ImageStreamListener] forever, forcing
-/// [MultiFrameImageStreamCompleter] to decode frames at 30-60 FPS even when `animate == false`
-/// or when scrolled off-screen. By detaching the listener as soon as the first frame arrives
-/// when [animate] is `false`, [MultiFrameImageStreamCompleter] cancels its decode timer (0% CPU/GPU).
+/// Network/disk image widget that supports pausing multi-frame animations (`animated_webp`, `.gif`),
+/// disk caching via [StickerService], concurrent animation capping, and frame-rate throttling.
+///
+/// Key performance guarantees:
+/// 1. NEVER wraps `animated_webp` or `.gif` in [ResizeImage], avoiding Flutter's C++ `SkWebpCodec`
+///    `O(N²)` software frame re-decoding bug when `targetWidth != nativeWidth`.
+/// 2. Resolves from local disk (`FileImage`) via [StickerService] so scrolling never re-downloads over HTTP.
+/// 3. Caps simultaneous active multi-frame raster animations at `_kMaxConcurrentRasterAnimators` (4)
+///    and throttles UI `setState` frame rebuilds to `_kMinFrameIntervalMs` (55ms ≈ 18 FPS),
+///    skipping frame rebuilds while the user is fast-flinging a scrollable list.
 class ControlledAnimatedNetworkImage extends StatefulWidget {
   final String url;
   final double? width;
@@ -22,6 +28,7 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
   final BoxFit fit;
   final FilterQuality filterQuality;
   final bool animate;
+  final bool isAnimatedWebpOrGif;
   final WidgetBuilder? errorBuilder;
 
   const ControlledAnimatedNetworkImage({
@@ -33,6 +40,7 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
     this.fit = BoxFit.contain,
     this.filterQuality = FilterQuality.low,
     this.animate = true,
+    this.isAnimatedWebpOrGif = false,
     this.errorBuilder,
   });
 
@@ -43,11 +51,60 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
 
 class _ControlledAnimatedNetworkImageState
     extends State<ControlledAnimatedNetworkImage> {
+  static const int _kMaxConcurrentRasterAnimators = 4;
+  static const int _kMinFrameIntervalMs = 55;
+  static final List<_ControlledAnimatedNetworkImageState> _activeAnimators =
+      <_ControlledAnimatedNetworkImageState>[];
+
   ImageStream? _imageStream;
   ImageStreamListener? _listener;
   ImageInfo? _imageInfo;
   bool _isListening = false;
   bool _hasError = false;
+  int _lastFramePaintMs = 0;
+  int _resolveToken = 0;
+
+  bool get _wantsAnimation => widget.animate && widget.isAnimatedWebpOrGif;
+
+  bool get _isAllowedToAnimate {
+    if (!_wantsAnimation) return false;
+    final idx = _activeAnimators.indexOf(this);
+    if (idx == -1) return false;
+    return idx >= _activeAnimators.length - _kMaxConcurrentRasterAnimators;
+  }
+
+  void _syncAnimatorSlot() {
+    if (_wantsAnimation) {
+      if (!_activeAnimators.contains(this)) {
+        _activeAnimators.add(this);
+        // If adding this pushed an older animator out of the top N, pause that older one
+        if (_activeAnimators.length > _kMaxConcurrentRasterAnimators) {
+          final evictedIdx =
+              _activeAnimators.length - _kMaxConcurrentRasterAnimators - 1;
+          if (evictedIdx >= 0 && evictedIdx < _activeAnimators.length) {
+            _activeAnimators[evictedIdx]._onAnimatorSlotChanged();
+          }
+        }
+      }
+    } else {
+      _releaseAnimatorSlot();
+    }
+  }
+
+  void _releaseAnimatorSlot() {
+    final wasPresent = _activeAnimators.remove(this);
+    if (wasPresent && _activeAnimators.isNotEmpty) {
+      for (final st in _activeAnimators.reversed
+          .take(_kMaxConcurrentRasterAnimators)) {
+        st._onAnimatorSlotChanged();
+      }
+    }
+  }
+
+  void _onAnimatorSlotChanged() {
+    if (!mounted) return;
+    _updateSubscription();
+  }
 
   @override
   void initState() {
@@ -56,38 +113,70 @@ class _ControlledAnimatedNetworkImageState
       _handleFrame,
       onError: _handleError,
     );
+    _syncAnimatorSlot();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _resolveImage();
+    _prepareAndResolve();
   }
 
   @override
   void didUpdateWidget(covariant ControlledAnimatedNetworkImage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _syncAnimatorSlot();
     if (oldWidget.url != widget.url ||
-        oldWidget.cacheWidth != widget.cacheWidth) {
-      _resolveImage();
+        oldWidget.isAnimatedWebpOrGif != widget.isAnimatedWebpOrGif ||
+        (!widget.isAnimatedWebpOrGif &&
+            oldWidget.cacheWidth != widget.cacheWidth)) {
+      _prepareAndResolve();
     } else if (oldWidget.animate != widget.animate) {
       _updateSubscription();
     }
   }
 
-  void _resolveImage() {
+  void _prepareAndResolve() {
     if (widget.url.isEmpty) {
       _stopListening();
       _disposeImageInfo();
       return;
     }
     _hasError = false;
-    final ImageProvider baseProvider = NetworkImage(widget.url);
-    final ImageProvider provider = ResizeImage.resizeIfNeeded(
-      widget.cacheWidth,
-      null,
-      baseProvider,
-    );
+    final token = ++_resolveToken;
+
+    if (!kIsWeb) {
+      final syncFile =
+          StickerService.instance.getCachedRasterFileSync(widget.url);
+      if (syncFile != null) {
+        _resolveProvider(FileImage(syncFile));
+        return;
+      }
+      StickerService.instance.getOrDownloadRasterFile(widget.url).then((file) {
+        if (!mounted || token != _resolveToken) return;
+        if (file != null) {
+          _resolveProvider(FileImage(file));
+        } else {
+          _resolveProvider(NetworkImage(widget.url));
+        }
+      });
+      return;
+    }
+
+    _resolveProvider(NetworkImage(widget.url));
+  }
+
+  void _resolveProvider(ImageProvider baseProvider) {
+    if (!mounted) return;
+    // CRITICAL: Never wrap multi-frame animated WebP or GIF in ResizeImage!
+    // ResizeImage forces SkWebpCodec to re-decode all prior frames 0..N on every tick (O(N²)).
+    final ImageProvider provider = widget.isAnimatedWebpOrGif
+        ? baseProvider
+        : ResizeImage.resizeIfNeeded(
+            widget.cacheWidth,
+            null,
+            baseProvider,
+          );
     final ImageStream newStream =
         provider.resolve(createLocalImageConfiguration(context));
     if (newStream.key != _imageStream?.key) {
@@ -112,7 +201,7 @@ class _ControlledAnimatedNetworkImageState
   }
 
   void _updateSubscription() {
-    if (widget.animate) {
+    if (_isAllowedToAnimate) {
       _startListening();
     } else if (_imageInfo != null) {
       // We already have a frame to display statically; detach listener so
@@ -128,6 +217,24 @@ class _ControlledAnimatedNetworkImageState
     if (!mounted) {
       return;
     }
+    final bool isFirstFrame = _imageInfo == null;
+    if (!isFirstFrame) {
+      if (!_isAllowedToAnimate) {
+        _stopListening();
+        return;
+      }
+      final int nowMs = DateTime.now().millisecondsSinceEpoch;
+      if (nowMs - _lastFramePaintMs < _kMinFrameIntervalMs) {
+        return;
+      }
+      if (Scrollable.recommendDeferredLoadingForContext(context)) {
+        return;
+      }
+      _lastFramePaintMs = nowMs;
+    } else {
+      _lastFramePaintMs = DateTime.now().millisecondsSinceEpoch;
+    }
+
     final ImageInfo? oldInfo = _imageInfo;
     _imageInfo = info.clone();
     if (oldInfo != null) {
@@ -135,7 +242,7 @@ class _ControlledAnimatedNetworkImageState
         oldInfo.dispose();
       });
     }
-    if (!widget.animate) {
+    if (!_isAllowedToAnimate) {
       // Detach immediately after capturing the first frame so animation timer stops.
       _stopListening();
     }
@@ -165,6 +272,8 @@ class _ControlledAnimatedNetworkImageState
 
   @override
   void dispose() {
+    _resolveToken++;
+    _releaseAnimatorSlot();
     _stopListening();
     _disposeImageInfo();
     super.dispose();
@@ -194,6 +303,8 @@ class _ControlledAnimatedNetworkImageState
 /// on a strictly transparent background (`Colors.transparent`).
 class StickerMediaView extends StatefulWidget {
   final String fileUrl;
+  final String? thumbnailUrl;
+  final Object? stickerId;
   final String format;
   final double width;
   final double height;
@@ -205,6 +316,8 @@ class StickerMediaView extends StatefulWidget {
   const StickerMediaView({
     super.key,
     required this.fileUrl,
+    this.thumbnailUrl,
+    this.stickerId,
     this.format = 'webp',
     required this.width,
     required this.height,
@@ -222,6 +335,17 @@ class StickerMediaView extends StatefulWidget {
         fmt == 'json' ||
         lowerUrl.endsWith('.tgs') ||
         lowerUrl.endsWith('.json');
+  }
+
+  bool get isAnimatedRaster {
+    final fmt = format.toLowerCase();
+    final lowerUrl = fileUrl.toLowerCase();
+    if (fmt == 'animated_webp' || fmt == 'gif' || lowerUrl.endsWith('.gif')) {
+      return true;
+    }
+    final item = StickerService.instance.getStickerByIdSync(stickerId) ??
+        StickerService.instance.getStickerByUrlSync(fileUrl);
+    return item != null && item.format.toLowerCase() == 'animated_webp';
   }
 
   @override
@@ -326,17 +450,33 @@ class _StickerMediaViewState extends State<StickerMediaView> {
         content = SizedBox(width: widget.width, height: widget.height);
       }
     } else {
-      final resolvedUrl = StickerService.resolveUrl(widget.fileUrl);
-      final int? targetCacheWidth = widget.width.isFinite
+      final bool isAnimRaster = widget.isAnimatedRaster;
+      final String? staticThumbUrl = !widget.animate
+          ? StickerService.instance.resolveStaticThumbnailUrl(
+              widget.fileUrl,
+              explicitThumbnailUrl: widget.thumbnailUrl,
+              stickerId: widget.stickerId,
+            )
+          : null;
+
+      final bool useStaticThumb = !widget.animate && staticThumbUrl != null;
+      final String effectiveUrl = useStaticThumb
+          ? staticThumbUrl
+          : StickerService.resolveUrl(widget.fileUrl);
+      final bool effectiveIsAnimated = isAnimRaster && !useStaticThumb;
+
+      final int? targetCacheWidth = (!effectiveIsAnimated && widget.width.isFinite)
           ? (widget.width * 1.8).round().clamp(48, 320)
           : null;
+
       content = ControlledAnimatedNetworkImage(
-        url: resolvedUrl,
+        url: effectiveUrl,
         width: widget.width,
         height: widget.height,
         cacheWidth: targetCacheWidth,
         fit: widget.fit,
-        animate: widget.animate,
+        animate: widget.animate && effectiveIsAnimated,
+        isAnimatedWebpOrGif: effectiveIsAnimated,
         filterQuality: FilterQuality.low,
         errorBuilder: (_) => SizedBox(
           width: widget.width,
@@ -478,6 +618,8 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
 
     Widget media = StickerMediaView(
       fileUrl: fileUrl,
+      thumbnailUrl: _sticker?.thumbnailUrl,
+      stickerId: _sticker?.id ?? widget.customEmojiId,
       format: format,
       width: widget.size,
       height: widget.size,
@@ -684,6 +826,8 @@ class _StickerPeekPopOverlayState extends State<StickerPeekPopOverlay>
                         link: _stickerLayerLink,
                         child: StickerMediaView(
                           fileUrl: widget.sticker.fileUrl,
+                          thumbnailUrl: widget.sticker.thumbnailUrl,
+                          stickerId: widget.sticker.id,
                           format: widget.sticker.format,
                           width: 220,
                           height: 220,

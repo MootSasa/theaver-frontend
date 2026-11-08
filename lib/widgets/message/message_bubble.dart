@@ -1728,6 +1728,7 @@ class MessageBubble extends StatelessWidget {
       final stickerId = meta['sticker_id']?.toString();
       final packId = meta['pack_id']?.toString();
       final format = meta['format']?.toString() ?? 'webp';
+      final thumbUrl = meta['thumbnail_url']?.toString();
       final effectUrl = meta['effect_animation_url']?.toString();
       final String stableKey = message.localId ?? message.id;
       final bool shouldAutoPlay = message.sendStatus == 0 ||
@@ -1738,6 +1739,7 @@ class MessageBubble extends StatelessWidget {
       return StickerMessageWidget(
         key: ValueKey('sticker_$stableKey'),
         imageUrl: resolvedUrl,
+        thumbnailUrl: thumbUrl,
         format: format,
         stickerId: stickerId,
         packId: packId,

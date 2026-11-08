@@ -282,8 +282,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     if (_controller.isDragging) return false;
     final double w =
         _lastReportedWindowSize?.width ?? _controller.windowSize.width;
-    return w >= TilingLayoutController.kTwoColumnBreakpoint ||
-        _controller.chatTiles.length >= 2;
+    return w >= TilingLayoutController.kTwoColumnBreakpoint;
   }
 
   Widget _buildLeftMainTile() {

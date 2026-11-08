@@ -615,6 +615,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
     final payload = <String, dynamic>{
       'url': item.fileUrl,
+      if (item.thumbnailUrl.isNotEmpty) 'thumbnail_url': item.thumbnailUrl,
       'width': item.width,
       'height': item.height,
       'format': item.format,

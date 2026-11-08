@@ -384,11 +384,14 @@ class StickerService extends ChangeNotifier {
   List<GifItemModel> _trendingGifs = [];
 
   final Map<int, StickerItem> _stickerByIdCache = {};
+  final Map<String, StickerItem> _stickerByFileUrlCache = {};
   final Map<int, Future<StickerItem?>> _inFlightStickerById = {};
 
   final Map<String, LottieComposition> _lottieCompositionCache = {};
   final Map<String, Future<LottieComposition?>> _inFlightLottieLoads = {};
   final Map<String, ui.Image> _bakedFrameCache = {};
+  final Map<String, File> _rasterFileCache = {};
+  final Map<String, Future<File?>> _inFlightRasterDownloads = {};
 
   final Map<String, ChatStickerInputTarget> _chatTargetsByChatId = {};
   ChatStickerInputTarget? _activeInputTarget;
@@ -478,6 +481,51 @@ class StickerService extends ChangeNotifier {
     return _stickerByIdCache[parsed];
   }
 
+  StickerItem? getStickerByUrlSync(String? rawUrl) {
+    if (rawUrl == null || rawUrl.trim().isEmpty) return null;
+    final full = resolveUrl(rawUrl);
+    return _stickerByFileUrlCache[full];
+  }
+
+  /// Resolves a distinct static single-frame `.webp` thumbnail URL for [rawFileUrl]
+  /// if available (either from [explicitThumbnailUrl] or from the cached [StickerItem]),
+  /// so paused/off-screen `animated_webp` stickers never instantiate multi-frame codecs.
+  String? resolveStaticThumbnailUrl(
+    String rawFileUrl, {
+    String? explicitThumbnailUrl,
+    Object? stickerId,
+  }) {
+    final fullFile = resolveUrl(rawFileUrl);
+    if (fullFile.isEmpty) return null;
+    if (explicitThumbnailUrl != null && explicitThumbnailUrl.trim().isNotEmpty) {
+      final fullThumb = resolveUrl(explicitThumbnailUrl);
+      if (fullThumb.isNotEmpty &&
+          fullThumb != fullFile &&
+          !fullThumb.toLowerCase().endsWith('.tgs')) {
+        return fullThumb;
+      }
+    }
+    final item = getStickerByIdSync(stickerId) ?? getStickerByUrlSync(fullFile);
+    if (item != null && item.thumbnailUrl.trim().isNotEmpty) {
+      final fullThumb = resolveUrl(item.thumbnailUrl);
+      if (fullThumb.isNotEmpty &&
+          fullThumb != fullFile &&
+          !fullThumb.toLowerCase().endsWith('.tgs')) {
+        return fullThumb;
+      }
+    }
+    return null;
+  }
+
+  void _cacheStickerItem(StickerItem st) {
+    if (st.id > 0) {
+      _stickerByIdCache[st.id] = st;
+    }
+    if (st.fileUrl.isNotEmpty) {
+      _stickerByFileUrlCache[resolveUrl(st.fileUrl)] = st;
+    }
+  }
+
   LottieComposition? getCachedComposition(String rawUrl) {
     final fullUrl = resolveUrl(rawUrl);
     if (fullUrl.isEmpty) return null;
@@ -495,9 +543,7 @@ class StickerService extends ChangeNotifier {
   void _indexPacksInCache(List<StickerPack> packs) {
     for (final pack in packs) {
       for (final st in pack.stickers) {
-        if (st.id > 0) {
-          _stickerByIdCache[st.id] = st;
-        }
+        _cacheStickerItem(st);
       }
     }
   }
@@ -615,7 +661,7 @@ class StickerService extends ChangeNotifier {
               .map((m) => StickerItem.fromJson(Map<String, dynamic>.from(m)))
               .toList();
           for (final s in _favoriteStickers) {
-            _stickerByIdCache[s.id] = s;
+            _cacheStickerItem(s);
           }
         }
       }
@@ -627,7 +673,7 @@ class StickerService extends ChangeNotifier {
               .map((m) => StickerItem.fromJson(Map<String, dynamic>.from(m)))
               .toList();
           for (final s in _recentStickers) {
-            _stickerByIdCache[s.id] = s;
+            _cacheStickerItem(s);
           }
         }
       }
@@ -1321,5 +1367,91 @@ class StickerService extends ChangeNotifier {
       _bakedFrameCache[key] = img;
     }
     return img;
+  }
+
+  Future<Directory?>? _rasterCacheDirFuture;
+  int _activeRasterDownloads = 0;
+  final List<Completer<void>> _rasterDownloadWaiters = [];
+  static const int _kMaxConcurrentRasterDownloads = 6;
+
+  Future<Directory?> _getRasterCacheDir() {
+    if (kIsWeb) return Future.value(null);
+    return _rasterCacheDirFuture ??= () async {
+      try {
+        final dir = await getApplicationSupportDirectory();
+        final cacheDir = Directory(p.join(dir.path, 'sticker_raster_cache_v2'));
+        if (!await cacheDir.exists()) {
+          await cacheDir.create(recursive: true);
+        }
+        return cacheDir;
+      } catch (_) {
+        return null;
+      }
+    }();
+  }
+
+  /// Synchronous lookup of a locally cached raster sticker/GIF file (`FileImage`).
+  File? getCachedRasterFileSync(String rawUrl) {
+    if (kIsWeb) return null;
+    final fullUrl = resolveUrl(rawUrl);
+    if (fullUrl.isEmpty) return null;
+    return _rasterFileCache[fullUrl];
+  }
+
+  /// Downloads and caches a raster sticker or GIF file on disk so scrolling never re-fetches over HTTP.
+  Future<File?> getOrDownloadRasterFile(String rawUrl) async {
+    if (kIsWeb) return null;
+    final fullUrl = resolveUrl(rawUrl);
+    if (fullUrl.isEmpty) return null;
+
+    final memCached = _rasterFileCache[fullUrl];
+    if (memCached != null) return memCached;
+
+    final inFlight = _inFlightRasterDownloads[fullUrl];
+    if (inFlight != null) return inFlight;
+
+    final future = _downloadRasterFileInternal(fullUrl);
+    _inFlightRasterDownloads[fullUrl] = future;
+    try {
+      return await future;
+    } finally {
+      _inFlightRasterDownloads.remove(fullUrl);
+    }
+  }
+
+  Future<File?> _downloadRasterFileInternal(String fullUrl) async {
+    try {
+      final cacheDir = await _getRasterCacheDir();
+      if (cacheDir == null) return null;
+
+      final safeKey = base64Url.encode(utf8.encode(fullUrl)).replaceAll('=', '');
+      final ext = fullUrl.toLowerCase().contains('.gif') ? '.gif' : '.webp';
+      final file = File(p.join(cacheDir.path, '$safeKey$ext'));
+      if (await file.exists() && await file.length() > 16) {
+        _rasterFileCache[fullUrl] = file;
+        return file;
+      }
+
+      if (_activeRasterDownloads >= _kMaxConcurrentRasterDownloads) {
+        final waiter = Completer<void>();
+        _rasterDownloadWaiters.add(waiter);
+        await waiter.future;
+      }
+      _activeRasterDownloads++;
+      try {
+        final resp = await http.get(Uri.parse(fullUrl));
+        if (resp.statusCode == 200 && resp.bodyBytes.length > 16) {
+          await file.writeAsBytes(resp.bodyBytes, flush: false);
+          _rasterFileCache[fullUrl] = file;
+          return file;
+        }
+      } finally {
+        _activeRasterDownloads--;
+        if (_rasterDownloadWaiters.isNotEmpty) {
+          _rasterDownloadWaiters.removeAt(0).complete();
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 }

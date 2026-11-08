@@ -168,6 +168,10 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
                           fileUrl: pack.coverUrl.isNotEmpty
                               ? pack.coverUrl
                               : items.first.fileUrl,
+                          thumbnailUrl: items.isNotEmpty
+                              ? items.first.thumbnailUrl
+                              : pack.thumbnailUrl,
+                          stickerId: items.isNotEmpty ? items.first.id : null,
                           format: items.isNotEmpty ? items.first.format : 'webp',
                           width: 44,
                           height: 44,
@@ -274,6 +278,8 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
                                   children: [
                                     StickerMediaView(
                                       fileUrl: item.fileUrl,
+                                      thumbnailUrl: item.thumbnailUrl,
+                                      stickerId: item.id,
                                       format: item.format,
                                       width: isEmojiPack ? 36 : 64,
                                       height: isEmojiPack ? 36 : 64,

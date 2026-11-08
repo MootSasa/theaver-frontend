@@ -1064,6 +1064,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 child: Center(
                   child: StickerMediaView(
                     fileUrl: item.fileUrl,
+                    thumbnailUrl: item.thumbnailUrl,
+                    stickerId: item.id,
                     format: item.format,
                     width: 30,
                     height: 30,
@@ -1371,10 +1373,14 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildServerPackSelectorIcon(StickerPack pack, VoidCallback onTap) {
+    final firstItem = pack.items.isNotEmpty ? pack.items.first : null;
     final coverUrl = pack.coverUrl.isNotEmpty
         ? pack.coverUrl
-        : (pack.items.isNotEmpty ? pack.items.first.fileUrl : '');
-    final format = pack.items.isNotEmpty ? pack.items.first.format : 'webp';
+        : (firstItem?.fileUrl ?? '');
+    final thumbUrl = firstItem?.thumbnailUrl.isNotEmpty == true
+        ? firstItem!.thumbnailUrl
+        : pack.thumbnailUrl;
+    final format = firstItem?.format ?? 'webp';
     return GestureDetector(
       onTap: () {
         HapticUtils.tap();
@@ -1388,6 +1394,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           child: coverUrl.isNotEmpty
               ? StickerMediaView(
                   fileUrl: coverUrl,
+                  thumbnailUrl: thumbUrl,
+                  stickerId: firstItem?.id,
                   format: format,
                   width: 24,
                   height: 24,
@@ -1720,7 +1728,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                     RepaintBoundary(
                       child: ControlledAnimatedNetworkImage(
                         url: resolvedUrl,
-                        cacheWidth: 220,
+                        isAnimatedWebpOrGif: true,
                         fit: BoxFit.cover,
                         filterQuality: FilterQuality.low,
                         animate: _currentTab == PanelTab.gif && widget.isVisible,
@@ -2122,6 +2130,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   children: [
                     StickerMediaView(
                       fileUrl: item.fileUrl,
+                      thumbnailUrl: item.thumbnailUrl,
+                      stickerId: item.id,
                       format: item.format,
                       width: 68,
                       height: 68,
@@ -2150,10 +2160,14 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildFeaturedPackCard(StickerPack pack, TheavThemeData theme) {
+    final firstItem = pack.items.isNotEmpty ? pack.items.first : null;
     final cover = pack.coverUrl.isNotEmpty
         ? pack.coverUrl
-        : (pack.items.isNotEmpty ? pack.items.first.fileUrl : '');
-    final format = pack.items.isNotEmpty ? pack.items.first.format : 'webp';
+        : (firstItem?.fileUrl ?? '');
+    final thumbUrl = firstItem?.thumbnailUrl.isNotEmpty == true
+        ? firstItem!.thumbnailUrl
+        : pack.thumbnailUrl;
+    final format = firstItem?.format ?? 'webp';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -2178,6 +2192,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   padding: const EdgeInsets.only(right: 12),
                   child: StickerMediaView(
                     fileUrl: cover,
+                    thumbnailUrl: thumbUrl,
+                    stickerId: firstItem?.id,
                     format: format,
                     width: 40,
                     height: 40,
