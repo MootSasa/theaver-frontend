@@ -451,20 +451,23 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                 windowWidth < TilingLayoutController.kTwoColumnBreakpoint &&
                 _controller.chatTiles.length < 2;
 
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                if (isSinglePaneMode)
-                  _buildSinglePaneLayout(currentSize)
-                else
-                  _buildMultiPaneLayout(windowWidth, windowHeight),
+            return Material(
+              type: MaterialType.transparency,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (isSinglePaneMode)
+                    _buildSinglePaneLayout(currentSize)
+                  else
+                    _buildMultiPaneLayout(windowWidth, windowHeight),
 
-                // Слой плавающего заблюренного мини-окна при перетаскивании
-                if (_controller.activeDrag != null)
-                  TileDragPreviewOverlay(
-                    payload: _controller.activeDrag!,
-                  ),
-              ],
+                  // Слой плавающего заблюренного мини-окна при перетаскивании
+                  if (_controller.activeDrag != null)
+                    TileDragPreviewOverlay(
+                      payload: _controller.activeDrag!,
+                    ),
+                ],
+              ),
             );
           },
         ),
