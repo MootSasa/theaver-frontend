@@ -63,7 +63,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:share_plus/share_plus.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../utils/entity_parser.dart';
 import 'private_chat_screen.dart';
 import 'channel_screen.dart';
 import '../../utils/date_time_utils.dart';
@@ -408,12 +407,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     // Restore draft if exists
     final draft = DraftService().getDraft(widget.chatId);
     if (draft != null && draft.isNotEmpty) {
-      _messageController.text = draft.text;
+      _messageController.loadMessage(draft.text, draft.entities);
       if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
         _isQuote = draft.isQuote;
         _quoteText = draft.quoteText;
       }
     }
+    _messageController.addListener(_onControllerDraftSync);
 
     // Connect continuous media playback with coordinator
     MediaPlaybackCoordinator.instance.registerChat(
@@ -1644,11 +1644,25 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Timer? _typingKeepAliveTimer;
   bool _amITyping = false;
 
+  void _onControllerDraftSync() {
+    if (!_isEditing) {
+      DraftService().saveDraft(
+        widget.chatId,
+        text: _messageController.cleanText,
+        entities: _messageController.entities,
+        replyToMessageId: _replyToMessage?.id,
+        quoteText: _quoteText,
+        isQuote: _isQuote,
+      );
+    }
+  }
+
   void _onInputTextChanged(String text) {
     if (!_isEditing) {
       DraftService().saveDraft(
         widget.chatId,
-        text: text,
+        text: _messageController.cleanText,
+        entities: _messageController.entities,
         replyToMessageId: _replyToMessage?.id,
         quoteText: _quoteText,
         isQuote: _isQuote,
@@ -2210,18 +2224,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     LinkPreviewOptions? linkPreviewOptions,
     bool invertMedia = false,
   }) async {
-    final String rawText = _messageController.text.trim();
-    final String text = cleanText?.trim() ?? rawText;
-    if ((text.isEmpty && _attachedFiles.isEmpty) || _isSending) return;
+    final String controllerCleanText = _messageController.cleanText.trimRight();
+    final List<MessageEntity> controllerEntities = _messageController.entities;
+    final String text = (cleanText ?? controllerCleanText).trimRight();
+    final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
+    if ((text.trim().isEmpty && _attachedFiles.isEmpty) || _isSending) return;
 
     if (_isEditing && _editingMessageId != null) {
       final messageId = _editingMessageId!;
       _cancelEditing();
       try {
-        final parsed = cleanText != null ? null : EntityParser.parseMarkdown(rawText);
-        final String effectiveText = cleanText ?? parsed!.cleanText;
+        final String effectiveText = text;
         final List<MessageEntity>? effectiveEntities =
-            entities ?? (parsed?.entities.isNotEmpty == true ? parsed!.entities : null);
+            resolvedEntities.isNotEmpty ? resolvedEntities : null;
 
         final res = await ChatService.editMessage(
           chatId: widget.chatId,
@@ -2299,10 +2314,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _scrollToBottom();
 
     try {
-      final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
-      final String effectiveContentText = cleanText ?? parsed!.cleanText;
+      final String effectiveContentText = text;
       final List<MessageEntity> mergedEntities = [
-        ...(entities ?? (parsed?.entities ?? const <MessageEntity>[])),
+        ...resolvedEntities,
         ..._pendingCustomEmojiEntities.where(
           (ce) =>
               ce.offset >= 0 &&
@@ -3799,7 +3813,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     });
     DraftService().saveDraft(
       widget.chatId,
-      text: _messageController.text,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
       replyToMessageId: message.id,
       isQuote: false,
     );
@@ -3821,7 +3836,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     });
     DraftService().saveDraft(
       widget.chatId,
-      text: _messageController.text,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
       replyToMessageId: message.id,
       quoteText: selectedText,
       isQuote: true,
@@ -3842,7 +3858,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     });
     DraftService().saveDraft(
       widget.chatId,
-      text: _messageController.text,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
     );
   }
 

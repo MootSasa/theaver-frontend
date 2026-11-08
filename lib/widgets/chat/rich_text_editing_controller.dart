@@ -16,6 +16,7 @@ class RichSpan {
   final String? customEmojiId;
   final String? documentUrl;
   final String? format;
+  final String? fallbackEmoji;
 
   RichSpan({
     required this.start,
@@ -26,9 +27,10 @@ class RichSpan {
     this.customEmojiId,
     this.documentUrl,
     this.format,
+    this.fallbackEmoji,
   });
 
-  RichSpan copyWith({int? start, int? end}) => RichSpan(
+  RichSpan copyWith({int? start, int? end, String? fallbackEmoji}) => RichSpan(
         start: start ?? this.start,
         end: end ?? this.end,
         type: type,
@@ -37,6 +39,7 @@ class RichSpan {
         customEmojiId: customEmojiId,
         documentUrl: documentUrl,
         format: format,
+        fallbackEmoji: fallbackEmoji ?? this.fallbackEmoji,
       );
 
   MessageEntity toMessageEntity() => MessageEntity(
@@ -45,11 +48,11 @@ class RichSpan {
             : (type == 'link' ? 'text_link' : type),
         offset: start,
         length: end - start,
-        url: url,
+        url: url ?? documentUrl,
         language: language,
         collapsed: type == 'collapse' ? true : (type == 'blockquote' || type == 'quote' ? false : null),
         customEmojiId: customEmojiId,
-        documentUrl: documentUrl,
+        documentUrl: documentUrl ?? url,
         format: format,
       );
 }
@@ -62,9 +65,22 @@ class RichSpan {
 /// - Dynamic cursor appearance based on [activeFormat].
 /// - Exporting clean text and entities for sending.
 class RichTextEditingController extends TextEditingController {
+  static const int _puaBase = 0xE000;
+  static const int _puaRange = 0x1000; // U+E000..U+EFFF (1-code-unit placeholders)
+
   final List<RichSpan> _spans = [];
   final Set<String> _activeFormats = <String>{};
   String _lastText = '';
+  int _nextPuaIndex = 0;
+
+  String _allocateCustomEmojiPlaceholder() {
+    final int codeUnit = _puaBase + (_nextPuaIndex % _puaRange);
+    _nextPuaIndex = (_nextPuaIndex + 1) % _puaRange;
+    return String.fromCharCode(codeUnit);
+  }
+
+  static bool isCustomEmojiPlaceholderCodeUnit(int codeUnit) =>
+      codeUnit >= _puaBase && codeUnit < (_puaBase + _puaRange);
 
   /// Returns unmodifiable list of rich text spans.
   List<RichSpan> get spans => List.unmodifiable(_spans);
@@ -73,21 +89,12 @@ class RichTextEditingController extends TextEditingController {
   Set<String> get activeFormats => Set.unmodifiable(_activeFormats);
 
   RichTextEditingController({String? text, List<MessageEntity>? initialEntities})
-      : super(text: text ?? '') {
-    _lastText = this.text;
-    if (initialEntities != null && initialEntities.isNotEmpty) {
-      for (final e in initialEntities) {
-        _spans.add(RichSpan(
-          start: e.offset,
-          end: e.offset + e.length,
-          type: e.type == 'blockquote' && e.collapsed == true ? 'collapse' : e.type,
-          url: e.url,
-          language: e.language,
-          customEmojiId: e.customEmojiId,
-          documentUrl: e.documentUrl,
-          format: e.format,
-        ));
-      }
+      : super(text: '') {
+    if ((text != null && text.isNotEmpty) ||
+        (initialEntities != null && initialEntities.isNotEmpty)) {
+      loadMessage(text ?? '', initialEntities);
+    } else {
+      _lastText = this.text;
     }
   }
 
@@ -108,18 +115,85 @@ class RichTextEditingController extends TextEditingController {
   }
 
   /// Loads message content and its entities for editing in-place without markdown delimiters.
+  /// Custom emoji entities are represented internally as 1-code-unit PUA placeholders so that
+  /// `WidgetSpan` (1 code unit in Flutter's `RenderParagraph`) matches `TextEditingValue.text` 1:1.
   void loadMessage(String content, [List<MessageEntity>? initialEntities]) {
     _spans.clear();
     _activeFormats.clear();
 
     if (initialEntities != null && initialEntities.isNotEmpty) {
-      value = TextEditingValue(
-        text: content,
-        selection: TextSelection.collapsed(offset: content.length),
-      );
+      final customEntities = initialEntities
+          .where((e) =>
+              e.type == 'custom_emoji' &&
+              e.customEmojiId != null &&
+              e.customEmojiId!.isNotEmpty &&
+              e.offset >= 0 &&
+              e.length > 0 &&
+              e.offset + e.length <= content.length)
+          .toList()
+        ..sort((a, b) => a.offset.compareTo(b.offset));
+
+      final nonOverlappingCustom = <MessageEntity>[];
+      int lastCustomEnd = 0;
+      for (final ce in customEntities) {
+        if (ce.offset >= lastCustomEnd) {
+          nonOverlappingCustom.add(ce);
+          lastCustomEnd = ce.offset + ce.length;
+        }
+      }
+
+      final extToInt = List<int>.filled(content.length + 1, 0);
+      final internalSb = StringBuffer();
+      int cursor = 0;
+      int ceIdx = 0;
+      final customInternalPositions = <MessageEntity, (int, String)>{};
+
+      while (cursor < content.length) {
+        if (ceIdx < nonOverlappingCustom.length &&
+            nonOverlappingCustom[ceIdx].offset == cursor) {
+          final ce = nonOverlappingCustom[ceIdx];
+          final int ceEnd = ce.offset + ce.length;
+          final String fallback = content.substring(ce.offset, ceEnd);
+          final int intPos = internalSb.length;
+          for (int k = ce.offset; k < ceEnd; k++) {
+            extToInt[k] = intPos;
+          }
+          internalSb.write(_allocateCustomEmojiPlaceholder());
+          extToInt[ceEnd] = internalSb.length;
+          customInternalPositions[ce] = (intPos, fallback);
+          cursor = ceEnd;
+          ceIdx++;
+        } else {
+          extToInt[cursor] = internalSb.length;
+          internalSb.writeCharCode(content.codeUnitAt(cursor));
+          cursor++;
+        }
+      }
+      extToInt[content.length] = internalSb.length;
+      final String internalText = internalSb.toString();
+
       for (final e in initialEntities) {
-        final start = e.offset.clamp(0, content.length);
-        final end = (e.offset + e.length).clamp(start, content.length);
+        if (e.type == 'custom_emoji') {
+          final mapped = customInternalPositions[e];
+          if (mapped != null) {
+            final (intPos, fallback) = mapped;
+            _spans.add(RichSpan(
+              start: intPos,
+              end: intPos + 1,
+              type: 'custom_emoji',
+              customEmojiId: e.customEmojiId,
+              documentUrl: e.documentUrl ?? e.url,
+              url: e.url ?? e.documentUrl,
+              format: e.format,
+              fallbackEmoji: fallback.isNotEmpty ? fallback : '😀',
+            ));
+          }
+          continue;
+        }
+        final origStart = e.offset.clamp(0, content.length);
+        final origEnd = (e.offset + e.length).clamp(origStart, content.length);
+        final start = extToInt[origStart];
+        final end = extToInt[origEnd];
         if (start < end) {
           _spans.add(RichSpan(
             start: start,
@@ -129,17 +203,22 @@ class RichTextEditingController extends TextEditingController {
                 : (e.type == 'link' ? 'text_link' : e.type),
             url: e.url,
             language: e.language,
-            customEmojiId: e.customEmojiId,
             documentUrl: e.documentUrl,
             format: e.format,
           ));
         }
       }
       _mergeSpans();
+      _lastText = internalText;
+      super.value = TextEditingValue(
+        text: internalText,
+        selection: TextSelection.collapsed(offset: internalText.length),
+      );
     } else {
       final parsed = EntityParser.parseMarkdown(content);
       if (parsed.entities.isNotEmpty) {
-        value = TextEditingValue(
+        _lastText = parsed.cleanText;
+        super.value = TextEditingValue(
           text: parsed.cleanText,
           selection: TextSelection.collapsed(offset: parsed.cleanText.length),
         );
@@ -160,7 +239,8 @@ class RichTextEditingController extends TextEditingController {
         }
         _mergeSpans();
       } else {
-        value = TextEditingValue(
+        _lastText = content;
+        super.value = TextEditingValue(
           text: content,
           selection: TextSelection.collapsed(offset: content.length),
         );
@@ -287,12 +367,13 @@ class RichTextEditingController extends TextEditingController {
   }
 
   /// Inserts a custom emoji at the current selection (or end of text),
-  /// preserving existing spans and adding a `custom_emoji` [RichSpan].
+  /// preserving existing spans and adding a 1-code-unit `custom_emoji` [RichSpan].
   void insertCustomEmoji(StickerItem item) {
     final String fallback =
         (item.emojis.isNotEmpty && item.emojis.first.isNotEmpty)
             ? item.emojis.first
             : '😀';
+    final String placeholder = _allocateCustomEmojiPlaceholder();
     final oldText = text;
     int selStart = selection.isValid
         ? math.min(selection.start, selection.end)
@@ -303,9 +384,9 @@ class RichTextEditingController extends TextEditingController {
     if (selStart < 0 || selStart > oldText.length) selStart = oldText.length;
     if (selEnd < selStart || selEnd > oldText.length) selEnd = selStart;
 
-    final newText = oldText.replaceRange(selStart, selEnd, fallback);
+    final newText = oldText.replaceRange(selStart, selEnd, placeholder);
     final int deletedCount = selEnd - selStart;
-    final int insertedCount = fallback.length;
+    const int insertedCount = 1;
     final int delta = insertedCount - deletedCount;
 
     for (int i = _spans.length - 1; i >= 0; i--) {
@@ -356,7 +437,9 @@ class RichTextEditingController extends TextEditingController {
       type: 'custom_emoji',
       customEmojiId: item.id.toString(),
       documentUrl: item.fileUrl,
+      url: item.fileUrl,
       format: item.format,
+      fallbackEmoji: fallback,
     ));
 
     _mergeSpans();
@@ -530,32 +613,90 @@ class RichTextEditingController extends TextEditingController {
     notifyListeners();
   }
 
-  /// Returns clean plain text without any markdown delimiters.
-  String get cleanText {
+  ({String text, List<MessageEntity> entities}) _computeExpandedPayload() {
+    final String raw = text;
     if (_spans.isEmpty) {
-      return EntityParser.parseMarkdown(text).cleanText;
+      final cleanedSb = StringBuffer();
+      for (int i = 0; i < raw.length; i++) {
+        final int cu = raw.codeUnitAt(i);
+        if (!isCustomEmojiPlaceholderCodeUnit(cu)) {
+          cleanedSb.writeCharCode(cu);
+        }
+      }
+      final parsed = EntityParser.parseMarkdown(cleanedSb.toString());
+      final effectiveText = parsed.cleanText;
+      final result = List<MessageEntity>.from(parsed.entities);
+      for (final match in EntityParser.urlRegex.allMatches(effectiveText)) {
+        final url = match.group(0)!;
+        final start = match.start;
+        final len = url.length;
+        final bool covered = result.any((e) =>
+            (e.type == 'text_link' ||
+                e.type == 'link' ||
+                e.type == 'url' ||
+                e.type == 'code' ||
+                e.type == 'pre') &&
+            e.offset <= start &&
+            (e.offset + e.length) >= (start + len));
+        if (!covered) {
+          result.add(MessageEntity(
+            type: 'url',
+            offset: start,
+            length: len,
+            url: url,
+          ));
+        }
+      }
+      result.sort((a, b) => a.offset.compareTo(b.offset));
+      return (text: effectiveText, entities: result);
     }
-    return text;
-  }
 
-  /// Converts the current text and formatting entities into a markdown formatted string.
-  String toMarkdown() => EntityParser.toMarkdown(cleanText, entities);
+    final customByIndex = <int, RichSpan>{};
+    for (final s in _spans) {
+      if (s.type == 'custom_emoji' &&
+          s.customEmojiId != null &&
+          s.customEmojiId!.isNotEmpty &&
+          s.start >= 0 &&
+          s.end == s.start + 1 &&
+          s.end <= raw.length) {
+        customByIndex[s.start] = s;
+      }
+    }
 
-  /// Returns computed message entities matching the styled spans, plus any raw URLs.
-  List<MessageEntity> get entities {
-    List<MessageEntity> result = [];
-    final effectiveText = cleanText;
-    if (_spans.isEmpty) {
-      // If user typed markdown tokens manually, fallback to parseMarkdown
-      final parsed = EntityParser.parseMarkdown(text);
-      result = List.from(parsed.entities);
-    } else {
-      result = _spans
-          .where((s) => s.start < s.end && s.start < text.length)
-          .map((s) => s
-              .copyWith(end: math.min(s.end, text.length))
-              .toMessageEntity())
-          .toList();
+    final intToExt = List<int>.filled(raw.length + 1, 0);
+    final sb = StringBuffer();
+    for (int i = 0; i < raw.length; i++) {
+      intToExt[i] = sb.length;
+      final ce = customByIndex[i];
+      if (ce != null) {
+        final String fb =
+            (ce.fallbackEmoji != null && ce.fallbackEmoji!.isNotEmpty)
+                ? ce.fallbackEmoji!
+                : '😀';
+        sb.write(fb);
+      } else {
+        final int cu = raw.codeUnitAt(i);
+        if (!isCustomEmojiPlaceholderCodeUnit(cu)) {
+          sb.writeCharCode(cu);
+        }
+      }
+    }
+    intToExt[raw.length] = sb.length;
+    final String effectiveText = sb.toString();
+
+    final List<MessageEntity> result = [];
+    for (final s in _spans) {
+      final int clampedStart = s.start.clamp(0, raw.length);
+      final int clampedEnd = s.end.clamp(clampedStart, raw.length);
+      if (clampedStart >= clampedEnd) continue;
+      if (s.type == 'custom_emoji' && !customByIndex.containsKey(clampedStart)) {
+        continue;
+      }
+      final int extStart = intToExt[clampedStart];
+      final int extEnd = intToExt[clampedEnd];
+      if (extEnd > extStart) {
+        result.add(s.copyWith(start: extStart, end: extEnd).toMessageEntity());
+      }
     }
 
     // Also detect any raw URLs in text not covered by existing link/code entities
@@ -582,8 +723,18 @@ class RichTextEditingController extends TextEditingController {
     }
 
     result.sort((a, b) => a.offset.compareTo(b.offset));
-    return result;
+    return (text: effectiveText, entities: result);
   }
+
+  /// Returns clean plain text without any markdown delimiters, with custom emoji placeholders
+  /// expanded back to their fallback Unicode emojis.
+  String get cleanText => _computeExpandedPayload().text;
+
+  /// Converts the current text and formatting entities into a markdown formatted string.
+  String toMarkdown() => EntityParser.toMarkdown(cleanText, entities);
+
+  /// Returns computed message entities matching the styled spans (relative to [cleanText]), plus any raw URLs.
+  List<MessageEntity> get entities => _computeExpandedPayload().entities;
 
   @override
   set value(TextEditingValue newValue) {
@@ -884,7 +1035,7 @@ class RichTextEditingController extends TextEditingController {
         segStyle = segStyle.copyWith(fontFamily: 'monospace');
       }
 
-      // 6. Custom emoji inline rendering
+      // 6. Custom emoji inline rendering (1-code-unit PUA placeholder <-> 1-code-unit WidgetSpan)
       final customEmojiSpan = activeSpans.cast<RichSpan?>().firstWhere(
         (s) =>
             s != null &&
@@ -893,49 +1044,27 @@ class RichTextEditingController extends TextEditingController {
             s.end == segEnd,
         orElse: () => null,
       );
-      if (customEmojiSpan != null) {
-        final cached = StickerService.instance
-            .getStickerByIdSync(customEmojiSpan.customEmojiId);
-        final resolvedUrl = (customEmojiSpan.documentUrl != null &&
-                customEmojiSpan.documentUrl!.isNotEmpty)
-            ? customEmojiSpan.documentUrl!
-            : (cached?.fileUrl ?? '');
-        final resolvedFormat = (customEmojiSpan.format != null &&
-                customEmojiSpan.format!.isNotEmpty)
-            ? customEmojiSpan.format!
-            : (cached?.format ?? 'webp');
-        if (resolvedUrl.isNotEmpty) {
-          final double emojiSize = (segStyle.fontSize ?? 16.0) + 4.0;
-          children.add(
-            WidgetSpan(
-              alignment: PlaceholderAlignment.middle,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 1.0),
-                child: StickerMediaView(
-                  fileUrl: resolvedUrl,
-                  format: resolvedFormat,
-                  width: emojiSize,
-                  height: emojiSize,
-                  animate: true,
-                ),
+      if (customEmojiSpan != null &&
+          customEmojiSpan.customEmojiId != null &&
+          customEmojiSpan.customEmojiId!.isNotEmpty) {
+        final double emojiSize = (segStyle.fontSize ?? 16.0) + 4.0;
+        children.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1.0),
+              child: InlineCustomEmojiWidget(
+                customEmojiId: customEmojiSpan.customEmojiId!,
+                directUrl: customEmojiSpan.documentUrl ?? customEmojiSpan.url,
+                directFormat: customEmojiSpan.format,
+                fallbackEmoji: customEmojiSpan.fallbackEmoji ?? '😀',
+                size: emojiSize,
+                adaptiveTextColor: segStyle.color,
               ),
             ),
-          );
-          if (segText.length > 1) {
-            children.add(
-              TextSpan(
-                text: '\u200B' * (segText.length - 1),
-                style: const TextStyle(
-                  fontSize: 0.0,
-                  letterSpacing: 0.0,
-                  height: 1.0,
-                  color: Colors.transparent,
-                ),
-              ),
-            );
-          }
-          continue;
-        }
+          ),
+        );
+        continue;
       }
 
       // Check for emojis

@@ -574,9 +574,15 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
 
     if (fileUrl.isEmpty) {
       if (widget.fallbackEmoji != null && widget.fallbackEmoji!.isNotEmpty) {
-        return Text(
-          widget.fallbackEmoji!,
-          style: EmojiUtils.emojiTextStyle(fontSize: widget.size * 0.85),
+        return SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: Center(
+            child: Text(
+              widget.fallbackEmoji!,
+              style: EmojiUtils.emojiTextStyle(fontSize: widget.size * 0.8),
+            ),
+          ),
         );
       }
       return SizedBox(width: widget.size, height: widget.size);

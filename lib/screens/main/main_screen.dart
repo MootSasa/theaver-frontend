@@ -120,6 +120,7 @@ class _MainScreenState extends State<MainScreen>
   final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
   final Map<String, ({String action, String? userName, Timer timer})>
       _chatTypingStates = {};
+  final Map<String, List<MessageEntity>> _chatLastMessageEntities = {};
 
   Future<void> _loadCommunities() async {
     final list = await CommunityService.getCommunities();
@@ -216,6 +217,16 @@ class _MainScreenState extends State<MainScreen>
             CommunityService.isCommunityChannelId(dbChat.chatId)) {
           continue;
         }
+        try {
+          final lastMsg = await db.getLastMessageForChat(dbChat.chatId);
+          if (lastMsg != null && lastMsg.content == dbChat.lastMessage) {
+            final dbEntities = Message.fromDbMessage(lastMsg).entities;
+            if (dbEntities.isNotEmpty ||
+                lastMsg.createdAt == dbChat.lastMessageTime) {
+              _chatLastMessageEntities[dbChat.chatId] = dbEntities;
+            }
+          }
+        } catch (_) {}
         final chat = _dbChatToChat(dbChat);
         // Only keep one saved chat
         if (chat.chatType == 'saved') {
@@ -682,6 +693,13 @@ class _MainScreenState extends State<MainScreen>
           final fileUrl = messageData?['file_url'] as String?;
           final groupedId = messageData?['grouped_id'] as String?;
           final content = messageData?['content'] as String? ?? '';
+          List<MessageEntity> msgEntities = const [];
+          if (messageData != null) {
+            try {
+              msgEntities = Message.fromJson(messageData).entities;
+            } catch (_) {}
+          }
+          _chatLastMessageEntities[chatId] = msgEntities;
 
           final newChat = chat.copyWith(
             lastMessage: content,
@@ -691,6 +709,7 @@ class _MainScreenState extends State<MainScreen>
             lastMessageIsRound: isRound,
             lastMessageFileUrl: fileUrl,
             lastMessageGroupedId: groupedId,
+            lastMessageEntities: msgEntities,
             updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
             unreadCount: newUnreadCount,
           );
@@ -925,6 +944,12 @@ class _MainScreenState extends State<MainScreen>
   Future<void> _refreshChatLastMessage(String chatId, {bool allowClear = false}) async {
     try {
       final db = AppDatabase();
+      final lastMsg = await db.getLastMessageForChat(chatId);
+      if (lastMsg != null) {
+        _chatLastMessageEntities[chatId] = Message.fromDbMessage(lastMsg).entities;
+      } else if (allowClear) {
+        _chatLastMessageEntities.remove(chatId);
+      }
       await db.refreshChatLastMessageFromDb(chatId, allowClear: allowClear);
     } catch (e) {
       debugPrint('Error refreshing last message for chat $chatId: $e');
@@ -1032,6 +1057,7 @@ class _MainScreenState extends State<MainScreen>
           DraftService().populateFromChats(serverChats);
 
           for (final chat in serverChats) {
+            _chatLastMessageEntities[chat.id] = chat.lastMessageEntities;
             if (chat.chatType == 'private' &&
                 chat.otherUserId != null &&
                 chat.otherUserId!.isNotEmpty) {
@@ -1146,6 +1172,7 @@ class _MainScreenState extends State<MainScreen>
 
       if (result['success'] == true && result['chat'] != null) {
         final savedChat = result['chat'] as Chat;
+        _chatLastMessageEntities[savedChat.id] = savedChat.lastMessageEntities;
         if (userId != null) {
           await db.migrateSavedChatId('saved_$userId', savedChat.id);
         }
@@ -1204,6 +1231,8 @@ class _MainScreenState extends State<MainScreen>
       lastMessageIsRound: model.lastMessageIsRound,
       lastMessageFileUrl: model.lastMessageFileUrl,
       lastMessageGroupedId: model.lastMessageGroupedId,
+      lastMessageEntities:
+          _chatLastMessageEntities[model.chatId] ?? const [],
       otherUserId: model.otherUserId,
       updatedAt: model.updatedAt,
       unreadCount: effectiveUnreadCount,
@@ -3005,7 +3034,12 @@ class _MainScreenState extends State<MainScreen>
     final draft = DraftService().getPublishedDraft(chat.id);
     if (draft != null && draft.isNotEmpty) {
       final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft') ?? 'Черновик';
-      final draftText = draft.text.trim().isNotEmpty ? draft.text : '...';
+      final bool hasDraftText = draft.text.trim().isNotEmpty;
+      final draftText = hasDraftText ? draft.text : '...';
+      final draftStyle = TextStyle(
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+        fontSize: 14,
+      );
       return RichText(
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -3019,22 +3053,12 @@ class _MainScreenState extends State<MainScreen>
                 fontSize: 14,
               ),
             ),
-            ...EmojiUtils.buildEmojiTextSpan(
+            EmojiUtils.buildPreviewWithCustomEmojis(
               draftText,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
-                fontSize: 14,
-              ),
-            ).children ??
-                [
-                  TextSpan(
-                    text: draftText,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
+              style: draftStyle,
+              entities: hasDraftText ? draft.entities : const [],
+              emojiSize: 16.0,
+            ),
           ],
         ),
       );
@@ -3111,13 +3135,25 @@ class _MainScreenState extends State<MainScreen>
         : (themeExt?.palette.chatSubtitle ??
             Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6));
 
-    return Text(
-      displaySubtitle,
+    final subtitleStyle = TextStyle(
+      color: subtitleColor,
+      fontWeight: hasUnread ? FontWeight.w500 : FontWeight.normal,
+      fontSize: 14,
+    );
+    final effectiveEntities = (displaySubtitle == chat.lastMessage)
+        ? (chat.lastMessageEntities.isNotEmpty
+            ? chat.lastMessageEntities
+            : (_chatLastMessageEntities[chat.id] ?? const <MessageEntity>[]))
+        : const <MessageEntity>[];
+
+    return RichText(
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        color: subtitleColor,
-        fontWeight: hasUnread ? FontWeight.w500 : FontWeight.normal,
+      text: EmojiUtils.buildPreviewWithCustomEmojis(
+        displaySubtitle,
+        style: subtitleStyle,
+        entities: effectiveEntities,
+        emojiSize: 16.0,
       ),
     );
   }

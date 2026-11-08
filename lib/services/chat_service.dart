@@ -30,6 +30,7 @@ class Chat {
   final bool isPinned; // Whether chat is pinned
   final String? otherUserId;
   final String? lastMessageGroupedId;
+  final List<MessageEntity> lastMessageEntities;
   final ChatDraft? draft;
   final int lastReadInboxMessageId;
   final int lastReadOutboxMessageId;
@@ -58,6 +59,7 @@ class Chat {
     this.isPinned = false,
     this.otherUserId,
     this.lastMessageGroupedId,
+    this.lastMessageEntities = const [],
     this.draft,
     this.lastReadInboxMessageId = 0,
     this.lastReadOutboxMessageId = 0,
@@ -187,6 +189,20 @@ class Chat {
       } catch (_) {}
     }
 
+    final rawLastEntities = json['last_message_entities'];
+    final parsedLastEntities = <MessageEntity>[];
+    if (rawLastEntities is List) {
+      for (final item in rawLastEntities) {
+        if (item is Map<String, dynamic>) {
+          parsedLastEntities.add(MessageEntity.fromJson(item));
+        } else if (item is Map) {
+          parsedLastEntities.add(
+            MessageEntity.fromJson(Map<String, dynamic>.from(item)),
+          );
+        }
+      }
+    }
+
     return Chat(
       id: json['id']?.toString() ?? json['chat_id']?.toString() ?? '',
       chatType: json['chat_type']?.toString() ?? 'private',
@@ -205,6 +221,7 @@ class Chat {
       isPinned: json['is_pinned'] ?? false,
       otherUserId: json['other_user_id']?.toString() ?? json['otherUserId']?.toString(),
       lastMessageGroupedId: json['last_message_grouped_id']?.toString(),
+      lastMessageEntities: parsedLastEntities,
       draft: json['draft'] != null && json['draft'] is Map<String, dynamic>
           ? ChatDraft.fromJson(json['draft'] as Map<String, dynamic>)
           : null,
@@ -244,6 +261,7 @@ class Chat {
     bool? isPinned,
     String? otherUserId,
     String? lastMessageGroupedId,
+    List<MessageEntity>? lastMessageEntities,
     ChatDraft? draft,
     int? lastReadInboxMessageId,
     int? lastReadOutboxMessageId,
@@ -272,6 +290,7 @@ class Chat {
       isPinned: isPinned ?? this.isPinned,
       otherUserId: otherUserId ?? this.otherUserId,
       lastMessageGroupedId: lastMessageGroupedId ?? this.lastMessageGroupedId,
+      lastMessageEntities: lastMessageEntities ?? this.lastMessageEntities,
       draft: draft ?? this.draft,
       lastReadInboxMessageId:
           lastReadInboxMessageId ?? this.lastReadInboxMessageId,
@@ -2154,6 +2173,7 @@ class ChatService {
   static Future<Map<String, dynamic>> saveDraft({
     required String chatId,
     required String text,
+    List<MessageEntity> entities = const [],
     String? replyToMessageId,
     String? quoteText,
     bool isQuote = false,
@@ -2172,6 +2192,8 @@ class ChatService {
         },
         body: jsonEncode({
           'text': text,
+          if (entities.isNotEmpty)
+            'entities': entities.map((e) => e.toJson()).toList(),
           'reply_to_message_id': replyToMessageId,
           'quote_text': quoteText,
           'is_quote': isQuote,

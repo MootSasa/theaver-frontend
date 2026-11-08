@@ -57,7 +57,6 @@ import '../../widgets/message/message_bubble.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/media_album.dart';
 import '../../widgets/message/media_album_widget.dart';
-import '../../utils/entity_parser.dart';
 import 'group_chat_screen.dart';
 import 'channel_screen.dart';
 import '../../utils/date_time_utils.dart';
@@ -401,12 +400,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     // Restore draft if exists
     final draft = DraftService().getDraft(widget.chatId);
     if (draft != null && draft.isNotEmpty) {
-      _textController.text = draft.text;
+      _textController.loadMessage(draft.text, draft.entities);
       if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
         _isQuote = draft.isQuote;
         _quoteText = draft.quoteText;
       }
     }
+    _textController.addListener(_onControllerDraftSync);
 
     // Connect continuous media playback (voice + video notes) with coordinator
     MediaPlaybackCoordinator.instance.registerChat(
@@ -1458,12 +1458,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           offset: selection.start - charBefore.length,
         ),
       );
+      _onInputTextChanged(newText);
     } else {
       final newText = text.replaceRange(selection.start, selection.end, '');
       _textController.value = TextEditingValue(
         text: newText,
         selection: TextSelection.collapsed(offset: selection.start),
       );
+      _onInputTextChanged(newText);
     }
   }
 
@@ -1481,6 +1483,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       text: newText,
       selection: TextSelection.collapsed(offset: start + emoji.length),
     );
+    _onInputTextChanged(newText);
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
@@ -1699,11 +1702,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Timer? _typingKeepAliveTimer;
   bool _amITyping = false;
 
+  void _onControllerDraftSync() {
+    if (!_isEditing) {
+      DraftService().saveDraft(
+        widget.chatId,
+        text: _textController.cleanText,
+        entities: _textController.entities,
+        replyToMessageId: _replyToMessage?.id,
+        quoteText: _quoteText,
+        isQuote: _isQuote,
+      );
+    }
+  }
+
   void _onInputTextChanged(String text) {
     if (!_isEditing) {
       DraftService().saveDraft(
         widget.chatId,
-        text: text,
+        text: _textController.cleanText,
+        entities: _textController.entities,
         replyToMessageId: _replyToMessage?.id,
         quoteText: _quoteText,
         isQuote: _isQuote,
@@ -1946,7 +1963,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     });
     DraftService().saveDraft(
       widget.chatId,
-      text: _textController.text,
+      text: _textController.cleanText,
+      entities: _textController.entities,
       replyToMessageId: message.id,
       isQuote: false,
     );
@@ -1969,7 +1987,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     });
     DraftService().saveDraft(
       widget.chatId,
-      text: _textController.text,
+      text: _textController.cleanText,
+      entities: _textController.entities,
       replyToMessageId: message.id,
       quoteText: selectedText,
       isQuote: true,
@@ -1988,7 +2007,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     });
     DraftService().saveDraft(
       widget.chatId,
-      text: _textController.text,
+      text: _textController.cleanText,
+      entities: _textController.entities,
     );
   }
 
@@ -3281,18 +3301,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     LinkPreviewOptions? linkPreviewOptions,
     bool invertMedia = false,
   }) async {
-    final String rawText = _textController.text.trim();
-    final String text = cleanText?.trim() ?? rawText;
-    if ((text.isEmpty && _attachedFiles.isEmpty) || _isSending) return;
+    final String controllerCleanText = _textController.cleanText.trimRight();
+    final List<MessageEntity> controllerEntities = _textController.entities;
+    final String text = (cleanText ?? controllerCleanText).trimRight();
+    final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
+    if ((text.trim().isEmpty && _attachedFiles.isEmpty) || _isSending) return;
 
     if (_isEditing && _editingMessageId != null) {
       final messageId = _editingMessageId!;
       _cancelEditing();
       try {
-        final parsed = cleanText != null ? null : EntityParser.parseMarkdown(rawText);
-        final String effectiveText = cleanText ?? parsed!.cleanText;
+        final String effectiveText = text;
         final List<MessageEntity>? effectiveEntities =
-            entities ?? (parsed?.entities.isNotEmpty == true ? parsed!.entities : null);
+            resolvedEntities.isNotEmpty ? resolvedEntities : null;
 
         final res = await ChatService.editMessage(
           chatId: widget.chatId,
@@ -3376,10 +3397,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _scrollToBottom();
 
     try {
-      final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
-      final String effectiveContentText = cleanText ?? parsed!.cleanText;
+      final String effectiveContentText = text;
       final List<MessageEntity> mergedEntities = [
-        ...(entities ?? (parsed?.entities ?? const <MessageEntity>[])),
+        ...resolvedEntities,
         ..._pendingCustomEmojiEntities.where(
           (ce) =>
               ce.offset >= 0 &&
