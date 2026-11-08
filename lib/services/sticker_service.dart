@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import '../config/app_config.dart';
 import '../utils/emoji_utils.dart';
 import 'auth_service.dart';
+import 'emoji_effect_cache_service.dart';
 import 'websocket_service.dart';
 
 /// Real-time progress snapshot for Telegram sticker/emoji pack import or custom pack upload.
@@ -97,8 +98,27 @@ class StickerItem {
 
   bool get hasPremiumEffect => effectAnimationUrl.trim().isNotEmpty;
 
+  /// Returns the emoji that has a verified full-screen Lottie effect in
+  /// [EmojiEffectCacheService] (from `/api/emoji-effects`), or `''` if the
+  /// emoji is only a regular/animated emoji without a full-screen effect.
+  String get resolvedEffectEmoji {
+    final explicit = effectEmoji.trim();
+    if (explicit.isNotEmpty &&
+        EmojiEffectCacheService.instance.hasEffect(explicit)) {
+      return explicit;
+    }
+    for (final e in emojiList) {
+      final trimmed = e.trim();
+      if (trimmed.isNotEmpty &&
+          EmojiEffectCacheService.instance.hasEffect(trimmed)) {
+        return trimmed;
+      }
+    }
+    return '';
+  }
+
   bool get hasAnyFullScreenEffect =>
-      hasPremiumEffect || effectEmoji.trim().isNotEmpty;
+      hasPremiumEffect || resolvedEffectEmoji.isNotEmpty;
 
   bool get hasFullscreenEffect => hasAnyFullScreenEffect;
 
@@ -134,6 +154,12 @@ class StickerItem {
     final fileUrl = json['file_url']?.toString() ?? '';
     final thumbUrl = json['thumbnail_url']?.toString() ?? '';
 
+    final rawEffectEmoji = json['effect_emoji']?.toString().trim() ?? '';
+    final verifiedEffectEmoji = rawEffectEmoji.isNotEmpty &&
+            EmojiEffectCacheService.instance.hasEffect(rawEffectEmoji)
+        ? rawEffectEmoji
+        : '';
+
     return StickerItem(
       id: (json['id'] as num?)?.toInt() ??
           int.tryParse(json['id']?.toString() ?? '') ??
@@ -146,7 +172,7 @@ class StickerItem {
       fileUrl: fileUrl,
       thumbnailUrl: thumbUrl.isNotEmpty ? thumbUrl : fileUrl,
       emojiList: parsedEmojis,
-      effectEmoji: json['effect_emoji']?.toString() ?? parsedEmojis.first,
+      effectEmoji: verifiedEffectEmoji,
       effectAnimationUrl: json['effect_animation_url']?.toString() ?? '',
       format: json['format']?.toString() ?? 'webp',
       width: (json['width'] as num?)?.toInt() ?? 512,

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../screens/stickers/sticker_pack_detail_sheet.dart';
+import '../../services/emoji_effect_cache_service.dart';
 import '../../services/sticker_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../chat/sticker_item_widget.dart';
@@ -105,12 +106,14 @@ class _StickerMessageWidgetState extends State<StickerMessageWidget> {
   }
 
   String? get _effectiveEmoji {
-    if (widget.fallbackEmoji != null &&
-        widget.fallbackEmoji!.trim().isNotEmpty) {
-      return widget.fallbackEmoji!.trim();
+    if (_resolvedSticker != null &&
+        _resolvedSticker!.resolvedEffectEmoji.isNotEmpty) {
+      return _resolvedSticker!.resolvedEffectEmoji;
     }
-    if (_resolvedSticker != null && _resolvedSticker!.emojis.isNotEmpty) {
-      return _resolvedSticker!.emojis.first;
+    if (widget.fallbackEmoji != null &&
+        widget.fallbackEmoji!.trim().isNotEmpty &&
+        EmojiEffectCacheService.instance.hasEffect(widget.fallbackEmoji!.trim())) {
+      return widget.fallbackEmoji!.trim();
     }
     return null;
   }

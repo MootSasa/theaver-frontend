@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:lottie/lottie.dart';
 import 'package:visibility_detector/visibility_detector.dart';
+import '../../services/emoji_effect_cache_service.dart';
 import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/emoji_utils.dart';
@@ -541,15 +542,21 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
 
   void _handleTap() {
     if (!widget.enableTapEffect) return;
+    final effectUrl = _sticker?.effectAnimationUrl.trim() ?? '';
+    final resolvedEmoji = _sticker?.resolvedEffectEmoji ?? '';
+    final fallback = resolvedEmoji.isNotEmpty
+        ? resolvedEmoji
+        : (widget.fallbackEmoji != null &&
+                EmojiEffectCacheService.instance.hasEffect(widget.fallbackEmoji!)
+            ? widget.fallbackEmoji!.trim()
+            : '');
+    if (effectUrl.isEmpty && fallback.isEmpty) return;
+
     HapticFeedback.lightImpact();
-    final effectUrl = _sticker?.effectAnimationUrl;
-    final emoji = (_sticker?.emojis.isNotEmpty ?? false)
-        ? _sticker!.emojis.first
-        : widget.fallbackEmoji;
     EmojiEffectOverlay.showStickerEffect(
       context: context,
-      effectUrl: effectUrl,
-      fallbackEmoji: emoji,
+      effectUrl: effectUrl.isNotEmpty ? effectUrl : null,
+      fallbackEmoji: fallback.isNotEmpty ? fallback : null,
       layerLink: _layerLink,
       stickerSize: widget.size,
       isMe: widget.isMe,
@@ -702,12 +709,11 @@ class _StickerPeekPopOverlayState extends State<StickerPeekPopOverlay>
   }
 
   void _playEffect() {
+    final resolvedEmoji = widget.sticker.resolvedEffectEmoji;
     EmojiEffectOverlay.showStickerEffect(
       context: context,
       effectUrl: widget.sticker.effectAnimationUrl,
-      fallbackEmoji: widget.sticker.emojis.isNotEmpty
-          ? widget.sticker.emojis.first
-          : null,
+      fallbackEmoji: resolvedEmoji.isNotEmpty ? resolvedEmoji : null,
       layerLink: _stickerLayerLink,
       stickerSize: 220,
       isMe: true,
