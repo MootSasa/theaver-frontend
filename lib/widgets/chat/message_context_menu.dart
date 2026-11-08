@@ -202,6 +202,22 @@ class MessageContextMenuState extends State<MessageContextMenu>
     return msg.isRound || (msg.messageType == 'video' && msg.isRound);
   }
 
+  List<String> get _customEmojiIds {
+    final msg = widget.message;
+    if (msg == null || msg.entities.isEmpty) return const [];
+    final ids = <String>[];
+    final seen = <String>{};
+    for (final e in msg.entities) {
+      if (e.type == 'custom_emoji') {
+        final id = e.customEmojiId?.trim() ?? '';
+        if (id.isNotEmpty && seen.add(id)) {
+          ids.add(id);
+        }
+      }
+    }
+    return ids;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -211,6 +227,16 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
     if (_shouldShowReadStatus) {
       _loadMessageReaders();
+    }
+
+    for (final id in _customEmojiIds) {
+      if (StickerService.instance.getStickerByIdSync(id) == null) {
+        StickerService.instance.getStickerById(id).then((item) {
+          if (mounted && !_isDismissing && item != null) {
+            setState(() {});
+          }
+        });
+      }
     }
 
     _controller = AnimationController(
@@ -832,6 +858,16 @@ class MessageContextMenuState extends State<MessageContextMenu>
           if (widget.onStopPoll != null) actionItemCount++;
           if (widget.isMe && widget.onEdit != null) actionItemCount++;
           if (widget.onSelect != null) actionItemCount++;
+          if (widget.message != null &&
+              (widget.message!.messageType == 'gif' ||
+                  (widget.message!.messageType == 'sticker' &&
+                      widget.message!.mediaPayload?['pack_id'] != null &&
+                      widget.message!.mediaPayload!['pack_id']
+                          .toString()
+                          .isNotEmpty) ||
+                  _customEmojiIds.isNotEmpty)) {
+            actionItemCount++;
+          }
 
           double readReceiptHeight = 0.0;
           if (_shouldShowReadStatus) {
@@ -1656,6 +1692,9 @@ class MessageContextMenuState extends State<MessageContextMenu>
     bool showAbove = false,
   }) {
     final bool isSending = widget.sendStatus == 0;
+    final BuildContext navContext = widget.messageKey?.currentContext ??
+        Navigator.maybeOf(context)?.context ??
+        context;
     return AnimatedSize(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
@@ -1857,15 +1896,60 @@ class MessageContextMenuState extends State<MessageContextMenu>
                                   final packId = widget
                                       .message!.mediaPayload!['pack_id']
                                       .toString();
-                                  StickerPackDetailSheet.show(
-                                    context,
-                                    packIdOrSlug: packId,
-                                  );
+                                  if (navContext.mounted) {
+                                    StickerPackDetailSheet.show(
+                                      navContext,
+                                      packIdOrSlug: packId,
+                                    );
+                                  }
                                 },
                                 theme,
                                 enabled: !isSending,
                               ),
                           ],
+                          if (_customEmojiIds.isNotEmpty)
+                            _buildActionItem(
+                              (c) => iconoir.Folder(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Открыть набор',
+                              () async {
+                                final ids = _customEmojiIds;
+                                if (ids.isEmpty) return;
+                                int? packId;
+                                for (final id in ids) {
+                                  final cached = StickerService.instance
+                                      .getStickerByIdSync(id);
+                                  if (cached != null && cached.packId > 0) {
+                                    packId = cached.packId;
+                                    break;
+                                  }
+                                }
+                                if (packId == null) {
+                                  for (final id in ids) {
+                                    final fetched = await StickerService
+                                        .instance
+                                        .getStickerById(id);
+                                    if (fetched != null && fetched.packId > 0) {
+                                      packId = fetched.packId;
+                                      break;
+                                    }
+                                  }
+                                }
+                                if (packId != null &&
+                                    packId > 0 &&
+                                    navContext.mounted) {
+                                  StickerPackDetailSheet.show(
+                                    navContext,
+                                    packIdOrSlug: packId,
+                                  );
+                                }
+                              },
+                              theme,
+                              enabled: !isSending,
+                            ),
                           const Divider(height: 1),
                           _buildActionItem(
                             (c) => iconoir.Trash(color: c, width: 20, height: 20),
