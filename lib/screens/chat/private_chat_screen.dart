@@ -32,6 +32,7 @@ import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/emoji_effect_cache_service.dart';
 import '../../services/emoji_interaction_manager.dart';
+import '../../services/sticker_service.dart';
 import '../../services/database/app_database.dart';
 import '../../l10n/app_localizations.dart';
 import 'package:drift/drift.dart' show Value;
@@ -143,6 +144,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Timer? _transitionTimer;
   late final AnimationController _emojiPanelController;
   late final Animation<double> _emojiPanelAnimation;
+  late final ChatStickerInputTarget _stickerInputTarget;
+  final List<MessageEntity> _pendingCustomEmojiEntities = [];
   final Map<String, Map<String, int>> _messageReactions = {}; // msgId → {emoji → count}
   final Map<String, Set<String>> _myReactions = {}; // msgId → Set<emoji>
   final ValueNotifier<bool> _showScrollDownFabNotifier = ValueNotifier<bool>(false);
@@ -432,6 +435,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onRaiseToListenFirstUnplayed: _onRaiseToListenFirstUnplayed,
     );
     NotificationService().addActiveChat(widget.chatId);
+    _stickerInputTarget = ChatStickerInputTarget(
+      chatId: widget.chatId,
+      chatTitle: widget.otherUserName,
+      avatarUrl: widget.otherUserAvatar,
+      onInsertEmoji: _insertEmojiText,
+      onBackspace: _handleBackspace,
+      onInsertCustomEmoji: _insertCustomEmojiItem,
+      onSendSticker: _sendStickerMessage,
+      onSendGif: _sendGifMessage,
+    );
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
 
     // Notify provider that this chat is open (so unread count is not incremented)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -488,6 +502,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           activeId == _registeredTileId &&
           !Platform.isAndroid &&
           !Platform.isIOS) {
+        StickerService.instance.registerInputTarget(_stickerInputTarget);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted &&
               !_isSelectionMode &&
@@ -578,6 +593,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   bool _handleTileBack() {
     if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (MessageContextMenuService().isShowing) {
       MessageContextMenuService().dismiss();
       return true;
@@ -796,6 +812,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onFocusChanged() {
+    if (_inputFocusNode.hasFocus) {
+      StickerService.instance.registerInputTarget(_stickerInputTarget);
+    }
     if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
       DraftService().flushDraft(widget.chatId);
     }
@@ -1117,7 +1136,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onNewMessage(WebSocketEvent event) {
-    final messageData = event.data['message'] as Map<String, dynamic>?;
+    final messageData = (event.data['message'] as Map<String, dynamic>?) ??
+        (event.data.containsKey('content') && event.data.containsKey('id')
+            ? event.data
+            : null);
     if (messageData == null) return;
 
     final message = Message.fromJson(messageData);
@@ -1346,6 +1368,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _onEmojiToggle() {
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    if (TilingLayoutController.instance.isWorkspaceMounted &&
+        !TilingLayoutController.instance.isSinglePane) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.setFocusedTile(_registeredTileId!);
+      }
+      TilingLayoutController.instance.toggleEmojiSidecar();
+      return;
+    }
+
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     _transitionTimer?.cancel();
 
@@ -1432,6 +1464,201 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         text: newText,
         selection: TextSelection.collapsed(offset: selection.start),
       );
+    }
+  }
+
+  void _insertEmojiText(String emoji) {
+    final text = _textController.text;
+    final selection = _textController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, emoji);
+    _textController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+  }
+
+  void _insertCustomEmojiItem(StickerItem item) {
+    _textController.insertCustomEmoji(item);
+    _onInputTextChanged(_textController.text);
+  }
+
+  Future<void> _sendStickerMessage(StickerItem item) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': item.fileUrl,
+      if (item.thumbnailUrl.isNotEmpty) 'thumbnail_url': item.thumbnailUrl,
+      'width': item.width,
+      'height': item.height,
+      'format': item.format,
+      'sticker_id': item.id,
+      'pack_id': item.packId,
+      if (item.effectAnimationUrl.isNotEmpty)
+        'effect_animation_url': item.effectAnimationUrl,
+    };
+    final optimistic = Message(
+      id: localId,
+      localId: localId,
+      chatId: widget.chatId,
+      senderId: _currentUserId ?? '',
+      content: fallback,
+      messageType: 'sticker',
+      fileUrl: item.fileUrl,
+      fileName: 'sticker.${item.format}',
+      mediaPayload: payload,
+      replyToMessageId: replyTo?.id,
+      isEdited: false,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      senderName: 'You',
+      sendStatus: 0,
+    );
+    if (mounted) {
+      setState(() {
+        _messages.insert(0, optimistic);
+        _updateFeedItems();
+      });
+      _scrollToBottom();
+    }
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: fallback,
+        messageType: 'sticker',
+        fileUrl: item.fileUrl,
+        fileName: 'sticker.${item.format}',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            final idx = _messages.indexWhere(
+              (m) => m.localId == localId || m.id == localId || m.id == sent.id,
+            );
+            if (idx != -1) {
+              _messages[idx] = sent.copyWith(localId: localId, sendStatus: 1);
+            } else {
+              _messages.insert(0, sent);
+            }
+            _updateFeedItems();
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+            _updateFeedItems();
+          });
+          if (res['message'] != null) {
+            GlassToastService().show(context, res['message'].toString());
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error sending sticker: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+          _updateFeedItems();
+        });
+      }
+    }
+  }
+
+  Future<void> _sendGifMessage(GifItemModel gif) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final localId = 'local_gif_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': gif.url,
+      'preview_url': gif.previewUrl,
+      'width': gif.width,
+      'height': gif.height,
+      'gif_id': gif.id,
+    };
+    final optimistic = Message(
+      id: localId,
+      localId: localId,
+      chatId: widget.chatId,
+      senderId: _currentUserId ?? '',
+      content: 'GIF',
+      messageType: 'gif',
+      fileUrl: gif.url,
+      fileName: 'animation.gif',
+      mediaPayload: payload,
+      replyToMessageId: replyTo?.id,
+      isEdited: false,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      senderName: 'You',
+      sendStatus: 0,
+    );
+    if (mounted) {
+      setState(() {
+        _messages.insert(0, optimistic);
+        _updateFeedItems();
+      });
+      _scrollToBottom();
+    }
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: 'GIF',
+        messageType: 'gif',
+        fileUrl: gif.url,
+        fileName: 'animation.gif',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            final idx = _messages.indexWhere(
+              (m) => m.localId == localId || m.id == localId || m.id == sent.id,
+            );
+            if (idx != -1) {
+              _messages[idx] = sent.copyWith(localId: localId, sendStatus: 1);
+            } else {
+              _messages.insert(0, sent);
+            }
+            _updateFeedItems();
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+            _updateFeedItems();
+          });
+          GlassToastService().show(
+            context,
+            res['message']?.toString() ?? 'Не удалось отправить GIF',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error sending gif: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+          _updateFeedItems();
+        });
+      }
     }
   }
 
@@ -2318,9 +2545,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
     }
 
-    _updateFloatingDateOnScroll();
-    _scheduleStickyDateUpdate();
+    if ((offset - _lastStickyDateEvalOffset).abs() >= 48.0) {
+      _lastStickyDateEvalOffset = offset;
+      _scheduleStickyDateUpdate();
+    }
   }
+
+  double _lastStickyDateEvalOffset = -1000.0;
+  bool _hasOpenedEmojiPanelOnce = false;
 
   void _scheduleStickyDateUpdate() {
     if (_stickyDatePostFrameScheduled) return;
@@ -2361,12 +2593,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     int? minActiveIdx;
     int? maxActiveIdx;
-    for (int i = 0; i < _feedItems.length; i++) {
-      final key = _messageKeys[_feedItems[i].id];
-      final box = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (isChatRenderBoxActivelyLaidOut(box)) {
-        minActiveIdx ??= i;
-        maxActiveIdx = i;
+    bool activeRangeComputed = false;
+    void ensureActiveRange() {
+      if (activeRangeComputed) return;
+      activeRangeComputed = true;
+      for (int i = 0; i < _feedItems.length; i++) {
+        final key = _messageKeys[_feedItems[i].id];
+        final box = key?.currentContext?.findRenderObject() as RenderBox?;
+        if (isChatRenderBoxActivelyLaidOut(box)) {
+          minActiveIdx ??= i;
+          maxActiveIdx = i;
+        }
       }
     }
 
@@ -2387,25 +2624,28 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         if (isChatRenderBoxActivelyLaidOut(oldestItemBox)) {
           final itemTopY = oldestItemBox!.localToGlobal(Offset.zero).dy;
           isAtOrAboveSticky = itemTopY <= stickyTopY + 0.5;
-        } else if (maxActiveIdx != null && minActiveIdx != null) {
-          if (span.oldestIdx > maxActiveIdx) {
-            isAtOrAboveSticky = true;
-          } else if (span.oldestIdx < minActiveIdx) {
-            isAtOrAboveSticky = false;
-          } else {
-            isAtOrAboveSticky = false;
-            for (int i = span.oldestIdx; i >= minActiveIdx; i--) {
-              final k = _messageKeys[_feedItems[i].id];
-              final b = k?.currentContext?.findRenderObject() as RenderBox?;
-              if (isChatRenderBoxActivelyLaidOut(b)) {
-                isAtOrAboveSticky =
-                    b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
-                break;
+        } else {
+          ensureActiveRange();
+          if (maxActiveIdx != null && minActiveIdx != null) {
+            if (span.oldestIdx > maxActiveIdx!) {
+              isAtOrAboveSticky = true;
+            } else if (span.oldestIdx < minActiveIdx!) {
+              isAtOrAboveSticky = false;
+            } else {
+              isAtOrAboveSticky = false;
+              for (int i = span.oldestIdx; i >= minActiveIdx!; i--) {
+                final k = _messageKeys[_feedItems[i].id];
+                final b = k?.currentContext?.findRenderObject() as RenderBox?;
+                if (isChatRenderBoxActivelyLaidOut(b)) {
+                  isAtOrAboveSticky =
+                      b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
+                  break;
+                }
               }
             }
+          } else {
+            isAtOrAboveSticky = false;
           }
-        } else {
-          isAtOrAboveSticky = false;
         }
       }
 
@@ -3138,8 +3378,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     try {
       final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
       final String effectiveContentText = cleanText ?? parsed!.cleanText;
+      final List<MessageEntity> mergedEntities = [
+        ...(entities ?? (parsed?.entities ?? const <MessageEntity>[])),
+        ..._pendingCustomEmojiEntities.where(
+          (ce) =>
+              ce.offset >= 0 &&
+              ce.offset + ce.length <= effectiveContentText.length,
+        ),
+      ];
+      _pendingCustomEmojiEntities.clear();
       final List<MessageEntity>? effectiveEntities =
-          entities ?? (parsed?.entities.isNotEmpty == true ? parsed!.entities : null);
+          mergedEntities.isNotEmpty ? mergedEntities : null;
 
       // CASE 1: MULTIPLE VISUAL ATTACHMENTS (ALBUM: chunked into batches of up to 10 items)
       if (_attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
@@ -3647,6 +3896,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Get message type from mime type
   String _getMessageTypeFromMimeType(String mimeType) {
+    if (mimeType == 'image/gif') return 'gif';
     if (mimeType.startsWith('image/')) return 'image';
     if (mimeType.startsWith('video/')) return 'video';
     if (mimeType.startsWith('audio/')) return 'audio';
@@ -3698,16 +3948,27 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       builder: (context, glassProvider, _) {
         final glassEnabled = glassProvider.enabled;
 
+        final bool isKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+
         return ChatScaffold(
-          canPop: !_isSelectionMode && !_showEmojiPanel && MediaQuery.of(context).viewInsets.bottom == 0,
+          canPop: !_isSelectionMode &&
+              !_showEmojiPanel &&
+              !isKeyboardVisible &&
+              !_isVoiceRecording &&
+              !_isVideoRecording,
           onPopInvoked: (didPop, _) {
             if (!didPop) {
               if (_isSelectionMode) {
                 _clearSelection();
               } else if (_showEmojiPanel) {
-                setState(() => _showEmojiPanel = false);
-              } else if (MediaQuery.of(context).viewInsets.bottom > 0) {
+                _closeEmojiPanel();
+              } else if (isKeyboardVisible) {
                 FocusScope.of(context).unfocus();
+              } else if (_isVideoRecording) {
+                _onVideoRecordingCancelled();
+              } else if (_isVoiceRecording) {
+                _voiceRecorderService.cancelRecording();
+                setState(() => _isVoiceRecording = false);
               }
             }
           },
@@ -3920,7 +4181,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           key: const ValueKey('private_chat_messages_list'),
           controller: _scrollController,
           reverse: true,
-          cacheExtent: 1500.0,
+          cacheExtent: 500.0,
           addRepaintBoundaries: false,
           // В glass-режиме добавляем верхний отступ,
           // чтобы сообщения не прятались за glass AppBar
@@ -3954,39 +4215,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final messageInput = _buildMessageInput();
 
-    final bool isKeyboardVisible = bottomInset > 0;
-
-    // Use PopScope to handle back button for closing emoji panel or cancelling active recordings
-    return PopScope(
-      canPop: !_isSelectionMode && !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
-      onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) {
-          if (_isSelectionMode) {
-            _clearSelection();
-          } else if (_showEmojiPanel) {
-            _closeEmojiPanel();
-          } else if (isKeyboardVisible) {
-            FocusScope.of(context).unfocus();
-          } else if (_isVideoRecording) {
-            _onVideoRecordingCancelled();
-          } else if (_isVoiceRecording) {
-            _voiceRecorderService.cancelRecording();
-            setState(() => _isVoiceRecording = false);
-          }
-        }
-      },
-      child: Column(
-        children: [
-          Expanded(
-            child: AnimatedBuilder(
-              animation: _emojiPanelAnimation,
-              builder: (context, _) {
-                final double panelProgress = shouldShowPanel && !_emojiPanelController.isAnimating
-                    ? 1.0
-                    : _emojiPanelAnimation.value;
+    return Column(
+      children: [
+        Expanded(
+          child: AnimatedBuilder(
+            animation: _emojiPanelAnimation,
+            builder: (context, _) {
+              final double panelProgress = shouldShowPanel && !_emojiPanelController.isAnimating
+                  ? 1.0
+                  : _emojiPanelAnimation.value;
                 final bool isPanelRendered = shouldShowPanel ||
                     _emojiPanelController.isAnimating ||
                     panelProgress > 0.0;
+                if (isPanelRendered) {
+                  _hasOpenedEmojiPanelOnce = true;
+                }
 
                 // Total synchronized offset for message list, FAB, and input field.
                 final double bottomOffset =
@@ -4107,31 +4350,45 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                       ),
                     ),
                     // Панель эмодзи/стикеров ВНУТРИ Stack (выезжает через Transform.translate с фиксированной высотой)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: isSearchingInPanel ? bottomInset : 0,
-                      child: IgnorePointer(
-                        ignoring: !shouldShowPanel,
-                        child: ClipRect(
-                          child: Transform.translate(
-                            offset: Offset(0, (1.0 - panelProgress) * targetPanelHeight),
-                            child: RepaintBoundary(
-                              child: SizedBox(
-                                height: isPanelRendered ? targetPanelHeight : 0,
-                                child: EmojiStickerPanel(
-                                  controller: _textController,
-                                  onBackspace: _handleBackspace,
-                                  onClose: _closeEmojiPanel,
-                                  height: targetPanelHeight,
-                                  isVisible: isPanelRendered,
+                    if (_hasOpenedEmojiPanelOnce || isPanelRendered)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: isSearchingInPanel ? bottomInset : 0,
+                        child: IgnorePointer(
+                          ignoring: !shouldShowPanel,
+                          child: ClipRect(
+                            child: Transform.translate(
+                              offset: Offset(
+                                0,
+                                (1.0 - panelProgress) * targetPanelHeight,
+                              ),
+                              child: RepaintBoundary(
+                                child: TickerMode(
+                                  enabled: isPanelRendered,
+                                  child: Offstage(
+                                    offstage: !isPanelRendered,
+                                    child: SizedBox(
+                                      height: targetPanelHeight,
+                                      child: EmojiStickerPanel(
+                                        controller: _textController,
+                                        onBackspace: _handleBackspace,
+                                        onClose: _closeEmojiPanel,
+                                        height: targetPanelHeight,
+                                        isVisible: isPanelRendered,
+                                        onCustomEmojiSelected:
+                                            _insertCustomEmojiItem,
+                                        onStickerSelected: _sendStickerMessage,
+                                        onGifSelected: _sendGifMessage,
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
                     // Полноэкранный Telegram-оверлей записи видеосообщения («кружочка»)
                     if (_isVideoRecording)
                       Positioned.fill(
@@ -4187,8 +4444,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   Widget _buildFeedItem(int index) {
@@ -4325,17 +4581,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );
@@ -4485,17 +4743,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );
@@ -5890,6 +6150,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _handleTileBack,
       );
     }
+    StickerService.instance.unregisterInputTarget(_stickerInputTarget);
 
     // Clear the open chat indicator in the provider
     try {

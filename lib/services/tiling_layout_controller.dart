@@ -133,6 +133,13 @@ class TilingLayoutController extends ChangeNotifier {
   /// Брейкпоинт для 3 колонок: [MainScreen (320) | Chat 1 (320) | Chat 2 (320)] = 960px
   static const double kThreeColumnBreakpoint = kMinTileWidth * 3;
 
+  /// Брейкпоинт для 4 колонок: [MainScreen (320) | Chat 1 (320) | Chat 2 (320) | EmojiSidecar (320)] = 1280px
+  static const double kFourColumnBreakpoint = kMinTileWidth * 4;
+
+  static const double kDefaultSidecarWidth = 340.0;
+  static const double kMinSidecarWidth = 320.0;
+  static const double kMaxSidecarWidth = 420.0;
+
   /// Минимальная высота окна для вертикального сплита двух чатов: 2 * 280 = 560px
   static const double kVerticalSplitHeightBreakpoint = kMinVerticalSplitTileHeight * 2;
 
@@ -174,6 +181,62 @@ class TilingLayoutController extends ChangeNotifier {
   /// Пропорция деления правой области между 1-м и 2-м тайлом чата (0.0 .. 1.0).
   double _chatSplitRatio = 0.5;
   double get chatSplitRatio => _chatSplitRatio;
+
+  // === Боковая панель стикеров, GIF и эмодзи (EmojiStickerSidecar) ===
+  bool _isEmojiSidecarOpen = false;
+  bool get isEmojiSidecarOpen => _isEmojiSidecarOpen && _chatTiles.isNotEmpty;
+
+  double _sidecarWidth = kDefaultSidecarWidth;
+  double get sidecarWidth => _sidecarWidth;
+
+  /// Определяет, достаточно ли ширины окна для стыковки [EmojiStickerSidecar]
+  /// отдельной колонкой справа (`Docked Push`), не нарушая минимум 320px на тайл.
+  /// Если возвращает `false`, панель открывается в режиме `Flyout Overlay`
+  /// поверх НЕАКТИВНОГО тайла чата (или справа в 1-чатном режиме < 960px).
+  bool canDockEmojiSidecar([double? totalWidth]) {
+    if (_chatTiles.isEmpty) return false;
+    final w = totalWidth ?? _windowSize.width;
+    if (_chatTiles.length == 1) {
+      return w >= kThreeColumnBreakpoint;
+    }
+    if (_effectiveSplitAxis == Axis.horizontal) {
+      return w >= kFourColumnBreakpoint;
+    }
+    return w >= kThreeColumnBreakpoint;
+  }
+
+  void openEmojiSidecar() {
+    if (_chatTiles.isEmpty) return;
+    if (!_isEmojiSidecarOpen) {
+      _isEmojiSidecarOpen = true;
+      _clampLeftTileWidthForWindow(_windowSize.width);
+      notifyListeners();
+    }
+  }
+
+  void closeEmojiSidecar() {
+    if (_isEmojiSidecarOpen) {
+      _isEmojiSidecarOpen = false;
+      _clampLeftTileWidthForWindow(_windowSize.width);
+      notifyListeners();
+    }
+  }
+
+  void toggleEmojiSidecar() {
+    if (_isEmojiSidecarOpen) {
+      closeEmojiSidecar();
+    } else {
+      openEmojiSidecar();
+    }
+  }
+
+  void updateSidecarWidth(double deltaDx) {
+    final nextWidth = (_sidecarWidth - deltaDx).clamp(kMinSidecarWidth, kMaxSidecarWidth);
+    if ((nextWidth - _sidecarWidth).abs() > 0.1) {
+      _sidecarWidth = nextWidth;
+      notifyListeners();
+    }
+  }
 
   Size _windowSize = const Size(1100, 750);
   Size get windowSize => _windowSize;
@@ -226,6 +289,67 @@ class TilingLayoutController extends ChangeNotifier {
 
   /// Колбэк для плавной анимации закрытия чата в однооконном режиме перед удалением тайла.
   Future<void> Function(String tileId)? onRequestAnimatedSinglePaneClose;
+
+  /// Корневой маршрут левого тайла (`MainScreen`) для проверки `secondaryAnimation`.
+  PageRoute<dynamic>? leftRootRoute;
+
+  bool _isHandlingBack = false;
+  bool get isHandlingBack => _isHandlingBack;
+
+  bool _isClosingSinglePaneChat = false;
+  bool get isClosingSinglePaneChat => _isClosingSinglePaneChat;
+
+  DateTime? _lastBackActionTime;
+  final Set<Route<dynamic>> _activePoppingRoutes = <Route<dynamic>>{};
+
+  /// Фиксирует начало/завершение перехода «Назад» для защиты от двойного срабатывания
+  /// системного жеста «Назад» и гонки анимаций закрытия экранов.
+  void recordBackTransition() {
+    _lastBackActionTime = DateTime.now();
+  }
+
+  /// Фиксирует `pop` маршрута в любом `Navigator` (корневом или тайловом) и отслеживает
+  /// его анимацию закрытия до полного завершения (`AnimationStatus.dismissed`).
+  void recordRoutePop(Route<dynamic> route) {
+    _lastBackActionTime = DateTime.now();
+    if (route is TransitionRoute<dynamic>) {
+      final anim = route.animation;
+      if (anim != null && anim.status != AnimationStatus.dismissed) {
+        _activePoppingRoutes.add(route);
+        void listener(AnimationStatus status) {
+          if (status == AnimationStatus.dismissed ||
+              status == AnimationStatus.completed) {
+            anim.removeStatusListener(listener);
+            _activePoppingRoutes.remove(route);
+          }
+        }
+        anim.addStatusListener(listener);
+      }
+    }
+  }
+
+  /// Возвращает `true`, если прямо сейчас выполняется обработка действия «Назад»,
+  /// идёт анимация закрытия какого-либо маршрута/тайла, либо с момента предыдущего
+  /// действия «Назад» прошло менее `220ms`.
+  bool get isPopTransitionActive {
+    if (_isHandlingBack || _isClosingSinglePaneChat) return true;
+    _activePoppingRoutes.removeWhere((r) {
+      if (r is TransitionRoute<dynamic>) {
+        final anim = r.animation;
+        return anim == null ||
+            anim.status == AnimationStatus.dismissed ||
+            anim.status == AnimationStatus.completed;
+      }
+      return true;
+    });
+    if (_activePoppingRoutes.isNotEmpty) return true;
+    final last = _lastBackActionTime;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(milliseconds: 220)) {
+      return true;
+    }
+    return false;
+  }
 
   void attachWorkspace({
     required Object owner,
@@ -479,6 +603,39 @@ class TilingLayoutController extends ChangeNotifier {
 
   bool isChatOpen(String chatId) => isChatOpenInAnyTile(chatId);
 
+  /// Синхронизирует живые метаданные открытого тайла (имя чата, аватарка, онлайн-статус),
+  /// когда экран чата подгружает их асинхронно.
+  void syncTileMetadata(
+    String tileId, {
+    String? chatName,
+    String? avatarUrl,
+    bool? isOnline,
+  }) {
+    final idx = _chatTiles.indexWhere((t) => t.tileId == tileId);
+    if (idx == -1) return;
+    final tile = _chatTiles[idx];
+    bool changed = false;
+    if (chatName != null && chatName.isNotEmpty && tile.chatName != chatName) {
+      tile.chatName = chatName;
+      changed = true;
+    }
+    if (avatarUrl != null &&
+        avatarUrl.isNotEmpty &&
+        tile.avatarUrl != avatarUrl) {
+      tile.avatarUrl = avatarUrl;
+      changed = true;
+    }
+    if (isOnline != null && tile.isOnline != isOnline) {
+      tile.isOnline = isOnline;
+      changed = true;
+    }
+    if (changed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        notifyListeners();
+      });
+    }
+  }
+
   /// Открывает чат в активном тайле (при обычном клике в списке чатов или поиске).
   /// Если этот чат уже открыт в одном из тайлов — просто переводит фокус на него.
   void openChatInActiveTile({
@@ -501,6 +658,15 @@ class TilingLayoutController extends ChangeNotifier {
     // 1. Проверяем, не открыт ли уже этот чат в каком-либо тайле
     for (final existing in _chatTiles) {
       if (existing.chatId == chatId) {
+        if (effectiveChatName.isNotEmpty &&
+            existing.chatName != effectiveChatName) {
+          existing.chatName = effectiveChatName;
+        }
+        if (avatarUrl != null &&
+            avatarUrl.isNotEmpty &&
+            existing.avatarUrl != avatarUrl) {
+          existing.avatarUrl = avatarUrl;
+        }
         if (initialMessageId != null && existing.initialMessageId != initialMessageId) {
           existing.initialMessageId = initialMessageId;
           existing.revision++;
@@ -734,6 +900,7 @@ class TilingLayoutController extends ChangeNotifier {
       _activeTileId = kLeftTileId;
       _lastFocusedChatTileId = null;
       _singlePaneShowingChat = false;
+      _isEmojiSidecarOpen = false;
     }
 
     _recalculateSplitAndWindowLocks();
@@ -745,17 +912,25 @@ class TilingLayoutController extends ChangeNotifier {
     String tileId, {
     bool animateSinglePane = true,
   }) async {
+    if (_isClosingSinglePaneChat) return;
     final idx = _chatTiles.indexWhere((t) => t.tileId == tileId);
     if (idx == -1) return;
 
+    recordBackTransition();
     final bool shouldAnimate = animateSinglePane &&
         singlePaneShowingChat &&
         _chatTiles.length < 2 &&
         onRequestAnimatedSinglePaneClose != null;
     if (shouldAnimate) {
-      await onRequestAnimatedSinglePaneClose!(tileId);
+      _isClosingSinglePaneChat = true;
+      try {
+        await onRequestAnimatedSinglePaneClose!(tileId);
+      } finally {
+        _isClosingSinglePaneChat = false;
+      }
     }
     closeChatTile(tileId);
+    recordBackTransition();
   }
 
   /// Универсальный выход из экрана чата или вложенного под-экрана (по кнопке «Назад» в AppBar и т.д.).
@@ -792,6 +967,7 @@ class TilingLayoutController extends ChangeNotifier {
     _activeTileId = kLeftTileId;
     _lastFocusedChatTileId = null;
     _singlePaneShowingChat = false;
+    _isEmojiSidecarOpen = false;
     _activeDrag = null;
     _hoveredDropSlot = null;
     _hoveredTargetTileId = null;
@@ -1277,12 +1453,35 @@ class TilingLayoutController extends ChangeNotifier {
 
   // === Приоритетная обработка действия «Назад» (Esc / Trackpad 2-Finger Swipe / Back Button) ===
 
-  /// Выполняет действие «Назад» для указанного [targetTileId] (или текущего активного тайла)
+  /// Выполняет действие «Назад» для указанного [forTileId] (или текущего активного тайла)
   /// по строгой цепочке приоритетов:
   /// 1. Внутренние меню / панель эмодзи / запись / выделение в этом тайле.
   /// 2. Вложенный [Navigator] этого тайла (профиль, настройки, вложения и т.д.).
   /// 3. Закрытие самого тайла чата (или возврат на вкладку Чатов в левом тайле).
   Future<bool> handleBackAction({String? forTileId, NavigatorState? rootNavigator}) async {
+    if (isPopTransitionActive) {
+      return true;
+    }
+
+    _isHandlingBack = true;
+    try {
+      final handled = await _handleBackActionInternal(
+        forTileId: forTileId,
+        rootNavigator: rootNavigator,
+      );
+      if (handled) {
+        recordBackTransition();
+      }
+      return handled;
+    } finally {
+      _isHandlingBack = false;
+    }
+  }
+
+  Future<bool> _handleBackActionInternal({
+    String? forTileId,
+    NavigatorState? rootNavigator,
+  }) async {
     // 0. Если в процессе перетаскивания тайла нажали Esc — отменяем перетаскивание
     if (_activeDrag != null) {
       cancelDraggingChat();
@@ -1300,12 +1499,18 @@ class TilingLayoutController extends ChangeNotifier {
     final String effectiveTileId;
     if (forTileId != null) {
       effectiveTileId = forTileId;
-    } else if (_windowSize.width < kTwoColumnBreakpoint && singlePaneShowingChat) {
-      effectiveTileId = focusedChatTile?.tileId ?? _activeTileId;
-    } else if (_activeTileId != kLeftTileId &&
-        _chatTiles.any((t) => t.tileId == _activeTileId)) {
+    } else if (isSinglePane) {
+      if (singlePaneShowingChat) {
+        effectiveTileId = (focusedChatTile ?? _chatTiles.first).tileId;
+      } else {
+        effectiveTileId = kLeftTileId;
+      }
+    } else if (_activeTileId == kLeftTileId) {
+      effectiveTileId = kLeftTileId;
+    } else if (_chatTiles.any((t) => t.tileId == _activeTileId)) {
       effectiveTileId = _activeTileId;
-    } else if ( _chatTiles.isNotEmpty && _lastFocusedChatTileId != null &&
+    } else if (_chatTiles.isNotEmpty &&
+        _lastFocusedChatTileId != null &&
         _chatTiles.any((t) => t.tileId == _lastFocusedChatTileId)) {
       effectiveTileId = _lastFocusedChatTileId!;
     } else {
@@ -1322,6 +1527,12 @@ class TilingLayoutController extends ChangeNotifier {
       }
     }
 
+    // 2.5. Если открыта боковая панель эмодзи/стикеров/GIF в многооконном режиме — закрываем её первой
+    if (_isEmojiSidecarOpen && _chatTiles.isNotEmpty) {
+      closeEmojiSidecar();
+      return true;
+    }
+
     // 3. Проверяем вложенный Navigator целевого тайла
     if (effectiveTileId == kLeftTileId) {
       final leftNav = leftTileNavigatorKey.currentState;
@@ -1329,14 +1540,21 @@ class TilingLayoutController extends ChangeNotifier {
         final popped = await leftNav.maybePop();
         if (popped) return true;
       }
+      final leftSecAnim = leftRootRoute?.secondaryAnimation;
+      if (leftRootRoute != null &&
+          (!leftRootRoute!.isCurrent ||
+              (leftSecAnim != null &&
+                  leftSecAnim.status != AnimationStatus.dismissed))) {
+        return true;
+      }
       // Если на корневом экране MainScreen открыта вкладка Настроек или Поиска — возвращаем на Чаты
       if (onMainScreenHandleBack != null && onMainScreenHandleBack!()) {
         return true;
       }
-      // Если в левом тайле нечего закрывать, но справа есть открытый чат — закрываем последний активный чат
-      if (_chatTiles.isNotEmpty) {
+      // Если в многооконном режиме в левом тайле нечего закрывать, но справа есть открытый чат — закрываем его
+      if (!isSinglePane && _chatTiles.isNotEmpty) {
         final chatTile = focusedChatTile ?? _chatTiles.last;
-        return handleBackAction(forTileId: chatTile.tileId);
+        return _handleBackActionInternal(forTileId: chatTile.tileId);
       }
       return false;
     } else {
@@ -1350,6 +1568,13 @@ class TilingLayoutController extends ChangeNotifier {
           final popped = await tileNav.maybePop();
           if (popped) return true;
         }
+        final chatSecAnim = tile.rootRoute?.secondaryAnimation;
+        if (tile.rootRoute != null &&
+            (!tile.rootRoute!.isCurrent ||
+                (chatSecAnim != null &&
+                    chatSecAnim.status != AnimationStatus.dismissed))) {
+          return true;
+        }
         // Находимся на корневом экране чата внутри тайла -> закрываем сам тайл чата!
         await requestCloseChatTile(tile.tileId);
         return true;
@@ -1357,5 +1582,18 @@ class TilingLayoutController extends ChangeNotifier {
     }
 
     return false;
+  }
+}
+
+/// Наблюдатель маршрутов для корневого и вложенных `Navigator`, фиксирующий момент
+/// закрытия любого под-экрана/диалога/шторки, чтобы системный жест «Назад»
+/// никогда не перескакивал через несколько экранов за один жест.
+class TilingBackGuardNavigatorObserver extends NavigatorObserver {
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPop(route, previousRoute);
+    if (previousRoute != null) {
+      TilingLayoutController.instance.recordRoutePop(route);
+    }
   }
 }

@@ -1,6 +1,7 @@
 import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../services/call_state_provider.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -65,28 +66,47 @@ class InAppNotificationBanner extends StatefulWidget {
     overlayEntry = OverlayEntry(
       builder: (context) {
         final mediaQuery = MediaQuery.of(context);
+        CallStateProvider? callProvider;
+        try {
+          callProvider = Provider.of<CallStateProvider>(context, listen: false);
+        } catch (_) {}
+        final hasTopCallBar = callProvider != null &&
+            (callProvider.hasIncomingCall ||
+                (callProvider.hasActiveCall && callProvider.isMinimized));
+        final topOffset = mediaQuery.padding.top +
+            kToolbarHeight +
+            (hasTopCallBar ? 62.0 : 8.0);
         return Positioned(
-          top: 10 + mediaQuery.padding.top,
-          left: 16,
-          right: 16,
-          child: Material(
-            color: Colors.transparent,
-            child: InAppNotificationBanner(
-              data: data,
-              onTap: () {
-                overlayEntry.remove();
-                if (_activeTopBannerOverlay == overlayEntry) {
-                  _activeTopBannerOverlay = null;
-                }
-                onTap?.call();
-              },
-              onDismiss: () {
-                overlayEntry.remove();
-                if (_activeTopBannerOverlay == overlayEntry) {
-                  _activeTopBannerOverlay = null;
-                }
-                onDismiss?.call();
-              },
+          top: topOffset,
+          left: 12,
+          right: 12,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Material(
+                type: MaterialType.transparency,
+                child: DefaultTextStyle.merge(
+                  style: const TextStyle(decoration: TextDecoration.none),
+                  child: InAppNotificationBanner(
+                    data: data,
+                    onTap: () {
+                      overlayEntry.remove();
+                      if (_activeTopBannerOverlay == overlayEntry) {
+                        _activeTopBannerOverlay = null;
+                      }
+                      onTap?.call();
+                    },
+                    onDismiss: () {
+                      overlayEntry.remove();
+                      if (_activeTopBannerOverlay == overlayEntry) {
+                        _activeTopBannerOverlay = null;
+                      }
+                      onDismiss?.call();
+                    },
+                  ),
+                ),
+              ),
             ),
           ),
         );
@@ -262,9 +282,15 @@ class _InAppNotificationBannerState extends State<InAppNotificationBanner>
 
     return LiquidGlassLens(
       style: style,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: _buildBannerContent(context),
+      child: Material(
+        type: MaterialType.transparency,
+        child: DefaultTextStyle.merge(
+          style: const TextStyle(decoration: TextDecoration.none),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: _buildBannerContent(context),
+          ),
+        ),
       ),
     );
   }

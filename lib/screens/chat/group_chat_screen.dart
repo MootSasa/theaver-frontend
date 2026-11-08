@@ -78,6 +78,7 @@ import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/proximity_audio_service.dart';
+import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../call/group_call_screen.dart';
 
@@ -118,6 +119,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Timer? _transitionTimer;
   late AnimationController _emojiPanelController;
   late Animation<double> _emojiPanelAnimation;
+  late final ChatStickerInputTarget _stickerInputTarget;
+  final List<MessageEntity> _pendingCustomEmojiEntities = [];
   String? _lastActiveTileId;
 
   bool get _isDesktopPlatform =>
@@ -383,6 +386,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _loadCachedKeyboardHeight();
     _initWebSocket();
     _inputFocusNode.addListener(_onFocusChanged);
+    _stickerInputTarget = ChatStickerInputTarget(
+      chatId: widget.chatId,
+      chatTitle: widget.groupName,
+      avatarUrl: widget.groupAvatar,
+      controller: _messageController,
+      onBackspace: _handleBackspace,
+      onInsertEmoji: _insertEmojiText,
+      onInsertCustomEmoji: _insertCustomEmojiItem,
+      onSendSticker: _sendStickerMessage,
+      onSendGif: _sendGifMessage,
+    );
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    StickerService.instance.loadMyPacks();
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
@@ -494,8 +510,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
       }
 
-      _updateFloatingDateOnScroll();
-      _scheduleStickyDateUpdate();
+      if ((offset - _lastStickyDateEvalOffset).abs() >= 48.0) {
+        _lastStickyDateEvalOffset = offset;
+        _scheduleStickyDateUpdate();
+      }
     });
 
     // Notify provider that this chat is open (so unread count is not incremented)
@@ -526,6 +544,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _lastActiveTileId = currentActive;
       final myTileId = _registeredTileId ?? TileViewportScope.maybeTileIdOf(context);
       if (myTileId != null && currentActive == myTileId) {
+        StickerService.instance.registerInputTarget(_stickerInputTarget);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_isSelectionMode && _tabController.index == 0) {
             _inputFocusNode.requestFocus();
@@ -621,6 +640,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onFocusChanged() {
+    if (_inputFocusNode.hasFocus) {
+      StickerService.instance.registerInputTarget(_stickerInputTarget);
+    }
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
     } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
@@ -686,6 +708,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onEmojiToggle() {
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    if (TilingLayoutController.instance.isWorkspaceMounted &&
+        !TilingLayoutController.instance.isSinglePane) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.setFocusedTile(_registeredTileId!);
+      }
+      TilingLayoutController.instance.toggleEmojiSidecar();
+      return;
+    }
+
     _transitionTimer?.cancel();
     final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
 
@@ -783,6 +815,202 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _onInputTextChanged(newText);
   }
 
+  void _insertEmojiText(String emoji) {
+    final text = _messageController.text;
+    final selection = _messageController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0 || start > text.length) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, emoji);
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+    _onInputTextChanged(newText);
+  }
+
+  void _insertCustomEmojiItem(StickerItem item) {
+    _messageController.insertCustomEmoji(item);
+    _onInputTextChanged(_messageController.text);
+  }
+
+  Future<void> _sendStickerMessage(StickerItem item) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': item.fileUrl,
+      if (item.thumbnailUrl.isNotEmpty) 'thumbnail_url': item.thumbnailUrl,
+      'width': item.width,
+      'height': item.height,
+      'format': item.format,
+      'sticker_id': item.id,
+      'pack_id': item.packId,
+      if (item.effectAnimationUrl.isNotEmpty)
+        'effect_animation_url': item.effectAnimationUrl,
+    };
+    final optimistic = Message(
+      id: localId,
+      localId: localId,
+      chatId: widget.chatId,
+      senderId: _currentUserId ?? '',
+      content: fallback,
+      messageType: 'sticker',
+      fileUrl: item.fileUrl,
+      fileName: 'sticker.${item.format}',
+      mediaPayload: payload,
+      replyToMessageId: replyTo?.id,
+      isEdited: false,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      senderName: 'You',
+      sendStatus: 0,
+    );
+    if (mounted) {
+      setState(() {
+        _messages.insert(0, optimistic);
+        _updateFeedItems();
+      });
+      _scrollToBottom();
+    }
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: fallback,
+        messageType: 'sticker',
+        fileUrl: item.fileUrl,
+        fileName: 'sticker.${item.format}',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            final idx = _messages.indexWhere(
+              (m) => m.localId == localId || m.id == localId || m.id == sent.id,
+            );
+            if (idx != -1) {
+              _messages[idx] = sent.copyWith(localId: localId, sendStatus: 1);
+            } else {
+              _messages.insert(0, sent);
+            }
+            _updateFeedItems();
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+            _updateFeedItems();
+          });
+          if (res['message'] != null) {
+            GlassToastService().show(context, res['message'].toString());
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error sending sticker in group: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+          _updateFeedItems();
+        });
+      }
+    }
+  }
+
+  Future<void> _sendGifMessage(GifItemModel gif) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final localId = 'local_gif_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': gif.url,
+      'preview_url': gif.previewUrl,
+      'width': gif.width,
+      'height': gif.height,
+      'gif_id': gif.id,
+    };
+    final optimistic = Message(
+      id: localId,
+      localId: localId,
+      chatId: widget.chatId,
+      senderId: _currentUserId ?? '',
+      content: 'GIF',
+      messageType: 'gif',
+      fileUrl: gif.url,
+      fileName: 'animation.gif',
+      mediaPayload: payload,
+      replyToMessageId: replyTo?.id,
+      isEdited: false,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+      senderName: 'You',
+      sendStatus: 0,
+    );
+    if (mounted) {
+      setState(() {
+        _messages.insert(0, optimistic);
+        _updateFeedItems();
+      });
+      _scrollToBottom();
+    }
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: 'GIF',
+        messageType: 'gif',
+        fileUrl: gif.url,
+        fileName: 'animation.gif',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            final idx = _messages.indexWhere(
+              (m) => m.localId == localId || m.id == localId || m.id == sent.id,
+            );
+            if (idx != -1) {
+              _messages[idx] = sent.copyWith(localId: localId, sendStatus: 1);
+            } else {
+              _messages.insert(0, sent);
+            }
+            _updateFeedItems();
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else {
+        if (mounted) {
+          setState(() {
+            _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+            _updateFeedItems();
+          });
+          GlassToastService().show(
+            context,
+            res['message']?.toString() ?? 'Не удалось отправить GIF',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error sending gif in group: $e');
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((m) => m.localId == localId || m.id == localId);
+          _updateFeedItems();
+        });
+      }
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -834,6 +1062,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   bool _handleTileBack() {
     if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (MessageContextMenuService().isShowing) {
       MessageContextMenuService().dismiss();
       return true;
@@ -1260,7 +1489,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onNewMessage(WebSocketEvent event) {
-    final messageData = event.data['message'] as Map<String, dynamic>?;
+    final messageData = (event.data['message'] as Map<String, dynamic>?) ??
+        (event.data.containsKey('content') && event.data.containsKey('id')
+            ? event.data
+            : null);
     if (messageData == null) return;
 
     final message = Message.fromJson(messageData);
@@ -2069,8 +2301,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     try {
       final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
       final String effectiveContentText = cleanText ?? parsed!.cleanText;
+      final List<MessageEntity> mergedEntities = [
+        ...(entities ?? (parsed?.entities ?? const <MessageEntity>[])),
+        ..._pendingCustomEmojiEntities.where(
+          (ce) =>
+              ce.offset >= 0 &&
+              ce.offset + ce.length <= effectiveContentText.length,
+        ),
+      ];
+      _pendingCustomEmojiEntities.clear();
       final List<MessageEntity>? effectiveEntities =
-          entities ?? (parsed?.entities.isNotEmpty == true ? parsed!.entities : null);
+          mergedEntities.isNotEmpty ? mergedEntities : null;
 
       // CASE 1: MULTIPLE VISUAL ATTACHMENTS (ALBUM: chunked into batches of up to 10 items)
       if (_attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
@@ -3300,6 +3541,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
+  double _lastStickyDateEvalOffset = -1000.0;
+
   void _scheduleStickyDateUpdate() {
     if (_stickyDatePostFrameScheduled) return;
     _stickyDatePostFrameScheduled = true;
@@ -3339,12 +3582,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     int? minActiveIdx;
     int? maxActiveIdx;
-    for (int i = 0; i < _feedItems.length; i++) {
-      final key = _messageKeys[_feedItems[i].id];
-      final box = key?.currentContext?.findRenderObject() as RenderBox?;
-      if (isChatRenderBoxActivelyLaidOut(box)) {
-        minActiveIdx ??= i;
-        maxActiveIdx = i;
+    bool activeRangeComputed = false;
+    void ensureActiveRange() {
+      if (activeRangeComputed) return;
+      activeRangeComputed = true;
+      for (int i = 0; i < _feedItems.length; i++) {
+        final key = _messageKeys[_feedItems[i].id];
+        final box = key?.currentContext?.findRenderObject() as RenderBox?;
+        if (isChatRenderBoxActivelyLaidOut(box)) {
+          minActiveIdx ??= i;
+          maxActiveIdx = i;
+        }
       }
     }
 
@@ -3365,25 +3613,28 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (isChatRenderBoxActivelyLaidOut(oldestItemBox)) {
           final itemTopY = oldestItemBox!.localToGlobal(Offset.zero).dy;
           isAtOrAboveSticky = itemTopY <= stickyTopY + 0.5;
-        } else if (maxActiveIdx != null && minActiveIdx != null) {
-          if (span.oldestIdx > maxActiveIdx) {
-            isAtOrAboveSticky = true;
-          } else if (span.oldestIdx < minActiveIdx) {
-            isAtOrAboveSticky = false;
-          } else {
-            isAtOrAboveSticky = false;
-            for (int i = span.oldestIdx; i >= minActiveIdx; i--) {
-              final k = _messageKeys[_feedItems[i].id];
-              final b = k?.currentContext?.findRenderObject() as RenderBox?;
-              if (isChatRenderBoxActivelyLaidOut(b)) {
-                isAtOrAboveSticky =
-                    b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
-                break;
+        } else {
+          ensureActiveRange();
+          if (maxActiveIdx != null && minActiveIdx != null) {
+            if (span.oldestIdx > maxActiveIdx!) {
+              isAtOrAboveSticky = true;
+            } else if (span.oldestIdx < minActiveIdx!) {
+              isAtOrAboveSticky = false;
+            } else {
+              isAtOrAboveSticky = false;
+              for (int i = span.oldestIdx; i >= minActiveIdx!; i--) {
+                final k = _messageKeys[_feedItems[i].id];
+                final b = k?.currentContext?.findRenderObject() as RenderBox?;
+                if (isChatRenderBoxActivelyLaidOut(b)) {
+                  isAtOrAboveSticky =
+                      b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
+                  break;
+                }
               }
             }
+          } else {
+            isAtOrAboveSticky = false;
           }
-        } else {
-          isAtOrAboveSticky = false;
         }
       }
 
@@ -3606,6 +3857,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _transitionTimer?.cancel();
     _stickyDateStateNotifier.dispose();
     _emojiPanelController.dispose();
+    StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _inputFocusNode.removeListener(_onFocusChanged);
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
@@ -4150,6 +4402,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                       controller: _messageController,
                       onBackspace: _handleBackspace,
                       onClose: _closeEmojiPanel,
+                      onCustomEmojiSelected: _insertCustomEmojiItem,
+                      onStickerSelected: _sendStickerMessage,
+                      onGifSelected: _sendGifMessage,
                       height: _keyboardHeight + safeBottom,
                       isVisible: _showEmojiPanel,
                     ),
@@ -4434,17 +4689,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );
@@ -4589,17 +4846,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (currentDate != prevDate) {
       final sepKey = _dateSeparatorKeyFor(currentDate, message);
       items.add(
-        InlineChatDateHeader(
-          key: sepKey,
-          day: currentDate,
-          scrollListenable: _scrollController,
-          stickySlotKey: _stickyDateSlotKey,
-          stickyStateListenable: _stickyDateStateNotifier,
-          onNeedsSync: _scheduleStickyDateUpdate,
-          child: DateSeparator(
-            key: ValueKey<DateTime>(currentDate),
-            dateLabel: _formatDateLabel(currentDt),
-            onTap: () => _openCalendarForDate(currentDt),
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
           ),
         ),
       );

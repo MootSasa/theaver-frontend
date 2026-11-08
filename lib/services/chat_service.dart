@@ -107,6 +107,10 @@ class Chat {
       'file',
       'dice',
       'call',
+      'system',
+      'sticker',
+      'gif',
+      'animation',
     };
     return !supportedTypes.contains(lastMessageType!.toLowerCase());
   }
@@ -325,6 +329,10 @@ class ReplyInfo {
       'file',
       'dice',
       'call',
+      'system',
+      'sticker',
+      'gif',
+      'animation',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
@@ -403,14 +411,17 @@ class ReplyInfo {
   }
 }
 
-/// MessageEntity represents a formatted range in text (Bold, Italic, Spoiler, Code, Link, etc.).
+/// MessageEntity represents a formatted range in text (Bold, Italic, Spoiler, Code, Link, Custom Emoji, etc.).
 class MessageEntity {
-  final String type; // 'bold', 'italic', 'code', 'pre', 'spoiler', 'strikethrough', 'underline', 'link', 'text_link', 'mention', 'blockquote', 'expandable_blockquote'
+  final String type; // 'bold', 'italic', 'code', 'pre', 'spoiler', 'strikethrough', 'underline', 'link', 'text_link', 'mention', 'blockquote', 'expandable_blockquote', 'custom_emoji'
   final int offset;
   final int length;
   final String? url;
   final String? language; // For 'pre' code blocks
   final bool? collapsed; // For expandable/collapsible blockquotes
+  final String? customEmojiId; // For 'custom_emoji' entities
+  final String? documentUrl; // Resolved file URL for 'custom_emoji'
+  final String? format; // 'webp', 'animated_webp', 'tgs', 'lottie'
 
   const MessageEntity({
     required this.type,
@@ -419,6 +430,9 @@ class MessageEntity {
     this.url,
     this.language,
     this.collapsed,
+    this.customEmojiId,
+    this.documentUrl,
+    this.format,
   });
 
   factory MessageEntity.fromJson(Map<String, dynamic> json) {
@@ -429,6 +443,9 @@ class MessageEntity {
       url: json['url']?.toString(),
       language: json['language']?.toString(),
       collapsed: json['collapsed'] as bool?,
+      customEmojiId: json['custom_emoji_id']?.toString() ?? json['customEmojiId']?.toString(),
+      documentUrl: json['document_url']?.toString() ?? json['documentUrl']?.toString() ?? json['file_url']?.toString(),
+      format: json['format']?.toString(),
     );
   }
 
@@ -439,6 +456,9 @@ class MessageEntity {
         if (url != null) 'url': url,
         if (language != null) 'language': language,
         if (collapsed != null) 'collapsed': collapsed,
+        if (customEmojiId != null) 'custom_emoji_id': customEmojiId,
+        if (documentUrl != null) 'document_url': documentUrl,
+        if (format != null) 'format': format,
       };
 
   MessageEntity copyWith({
@@ -448,6 +468,9 @@ class MessageEntity {
     String? url,
     String? language,
     bool? collapsed,
+    String? customEmojiId,
+    String? documentUrl,
+    String? format,
   }) {
     return MessageEntity(
       type: type ?? this.type,
@@ -456,6 +479,9 @@ class MessageEntity {
       url: url ?? this.url,
       language: language ?? this.language,
       collapsed: collapsed ?? this.collapsed,
+      customEmojiId: customEmojiId ?? this.customEmojiId,
+      documentUrl: documentUrl ?? this.documentUrl,
+      format: format ?? this.format,
     );
   }
 }
@@ -639,6 +665,10 @@ class Message {
       'file',
       'dice',
       'call',
+      'system',
+      'sticker',
+      'gif',
+      'animation',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
@@ -826,7 +856,12 @@ class Message {
       senderAvatarUrl: json['sender_avatar_url']?.toString(),
       fileUrl: () {
         final raw = json['file_url']?.toString().trim();
-        return (raw != null && raw.isNotEmpty) ? raw : null;
+        if (raw != null && raw.isNotEmpty) return raw;
+        final payloadUrl = (parsedMediaPayload?['url'] ??
+                parsedMediaPayload?['file_url'])
+            ?.toString()
+            .trim();
+        return (payloadUrl != null && payloadUrl.isNotEmpty) ? payloadUrl : null;
       }(),
       fileName: () {
         final raw = json['file_name']?.toString().trim();
@@ -1028,7 +1063,15 @@ class Message {
       senderAvatarUrl: model.senderAvatarUrl,
       fileUrl: (model.fileUrl != null && model.fileUrl!.trim().isNotEmpty)
           ? model.fileUrl!.trim()
-          : null,
+          : () {
+              final payloadUrl = (dbMediaPayload?['url'] ??
+                      dbMediaPayload?['file_url'])
+                  ?.toString()
+                  .trim();
+              return (payloadUrl != null && payloadUrl.isNotEmpty)
+                  ? payloadUrl
+                  : null;
+            }(),
       fileName: (model.fileName != null && model.fileName!.trim().isNotEmpty)
           ? model.fileName!.trim()
           : null,

@@ -342,6 +342,7 @@ class _MainScreenState extends State<MainScreen>
   }
 
   bool _handleLeftTileBack() {
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return false;
     if (_isTopMenuOpen) {
       _closeTopMenu();
       return true;
@@ -362,6 +363,7 @@ class _MainScreenState extends State<MainScreen>
   }
 
   bool _handleMainScreenRootBack() {
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return false;
     if (_handleLeftTileBack()) return true;
     if (_currentIndex != 1) {
       _onTabTapped(1);

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../models/theav_theme.dart';
 import '../../utils/emoji_utils.dart';
+import 'sticker_item_widget.dart';
 
 /// Панель реакций — появляется при длинном нажатии на сообщение.
 class ReactionsPanel extends StatelessWidget {
@@ -38,10 +40,11 @@ class ReactionsPanel extends StatelessWidget {
 
 /// Отображение реакций под сообщением с плавной анимацией добавления и удаления
 class MessageReactionsRow extends StatefulWidget {
-  final Map<String, int> reactions; // emoji → count
+  final Map<String, int> reactions; // emoji (or 'custom:<id>') → count
   final Set<String>? myReactions; // emoji, выбранные текущим пользователем
   final String? myReaction; // обратная совместимость для одиночной реакции
   final Function(String emoji)? onTap;
+  final Map<String, List<Map<String, dynamic>>>? reactionUsers;
 
   const MessageReactionsRow({
     Key? key,
@@ -49,6 +52,7 @@ class MessageReactionsRow extends StatefulWidget {
     this.myReactions,
     this.myReaction,
     this.onTap,
+    this.reactionUsers,
   }) : super(key: key);
 
   @override
@@ -218,8 +222,13 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
     final activeText = p?.reactionActiveText ?? colorScheme.primary;
     final inactiveText = p?.subtext ?? (theme.brightness == Brightness.dark ? Colors.white60 : Colors.grey[600]!);
 
+    final isCustom = item.emoji.startsWith('custom:');
+    final customStickerId =
+        isCustom ? item.emoji.substring('custom:'.length).trim() : '';
+
     return InkWell(
       onTap: () => widget.onTap?.call(item.emoji),
+      onLongPress: () => _showReactionUsersSheet(context, item),
       borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -234,7 +243,13 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            EmojiUtils.appleEmoji(item.emoji, size: 14),
+            isCustom
+                ? InlineCustomEmojiWidget(
+                    customEmojiId: customStickerId,
+                    size: 16,
+                    adaptiveTextColor: isMine ? activeText : inactiveText,
+                  )
+                : EmojiUtils.appleEmoji(item.emoji, size: 14),
             if (item.count > 1) ...[
               const SizedBox(width: 3),
               AnimatedSwitcher(
@@ -255,6 +270,94 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
           ],
         ),
       ),
+    );
+  }
+
+  void _showReactionUsersSheet(BuildContext context, _ReactionItemEntry item) {
+    HapticFeedback.selectionClick();
+    final theme = Theme.of(context);
+    final users = widget.reactionUsers?[item.emoji] ?? const [];
+    final isCustom = item.emoji.startsWith('custom:');
+    final customId = isCustom ? item.emoji.substring('custom:'.length) : '';
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: theme.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    isCustom
+                        ? InlineCustomEmojiWidget(
+                            customEmojiId: customId,
+                            size: 22,
+                          )
+                        : EmojiUtils.appleEmoji(item.emoji, size: 22),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Реакции: ${item.count}',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+                if (users.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  const Divider(height: 1),
+                  const SizedBox(height: 6),
+                  ...users.take(15).map((u) {
+                    final name =
+                        (u['display_name'] ?? u['username'] ?? 'Пользователь')
+                            .toString();
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 12,
+                            backgroundColor:
+                                theme.colorScheme.primary.withValues(alpha: 0.2),
+                            child: Text(
+                              name.isNotEmpty ? name[0].toUpperCase() : '?',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

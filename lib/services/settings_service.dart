@@ -775,6 +775,7 @@ class GlobalNotificationSettings {
   final bool inAppVibrate;
   final bool inAppPreview;
   final bool inAppChatSounds;
+  final bool disableInAppNotifications;
 
   // Повтор уведомлений (в минутах, 0 = выкл)
   final int repeatNotifications;
@@ -812,6 +813,7 @@ class GlobalNotificationSettings {
     this.inAppVibrate = true,
     this.inAppPreview = true,
     this.inAppChatSounds = true,
+    this.disableInAppNotifications = false,
     this.repeatNotifications = 0,
   });
 
@@ -850,6 +852,7 @@ class GlobalNotificationSettings {
     'inAppVibrate': inAppVibrate,
     'inAppPreview': inAppPreview,
     'inAppChatSounds': inAppChatSounds,
+    'disableInAppNotifications': disableInAppNotifications,
     'repeatNotifications': repeatNotifications,
   };
 
@@ -886,6 +889,7 @@ class GlobalNotificationSettings {
     'in_app_vibrate': inAppVibrate,
     'in_app_preview': inAppPreview,
     'in_app_chat_sounds': inAppChatSounds,
+    'disable_in_app_notifications': disableInAppNotifications,
     'repeat_notifications': repeatNotifications,
   };
 
@@ -923,6 +927,7 @@ class GlobalNotificationSettings {
       inAppVibrate: json['inAppVibrate'] ?? json['in_app_vibrate'] ?? true,
       inAppPreview: json['inAppPreview'] ?? json['in_app_preview'] ?? true,
       inAppChatSounds: json['inAppChatSounds'] ?? json['in_app_chat_sounds'] ?? true,
+      disableInAppNotifications: json['disableInAppNotifications'] ?? json['disable_in_app_notifications'] ?? false,
       repeatNotifications: json['repeatNotifications'] ?? json['repeat_notifications'] ?? 0,
     );
   }
@@ -1005,6 +1010,7 @@ class GlobalNotificationSettings {
     bool? inAppVibrate,
     bool? inAppPreview,
     bool? inAppChatSounds,
+    bool? disableInAppNotifications,
     int? repeatNotifications,
   }) {
     return GlobalNotificationSettings(
@@ -1040,6 +1046,7 @@ class GlobalNotificationSettings {
       inAppVibrate: inAppVibrate ?? this.inAppVibrate,
       inAppPreview: inAppPreview ?? this.inAppPreview,
       inAppChatSounds: inAppChatSounds ?? this.inAppChatSounds,
+      disableInAppNotifications: disableInAppNotifications ?? this.disableInAppNotifications,
       repeatNotifications: repeatNotifications ?? this.repeatNotifications,
     );
   }

@@ -773,10 +773,9 @@ class _LiquidGlassAnimatedNavBarState extends State<LiquidGlassAnimatedNavBar>
   }
 
   // ── Gesture geometry ─────────────────────────────────────────────
-  double _xToTabFrac(double globalDx) {
-    final cell0Center = _barLeft + _layout.padding + _layout.cellWidth / 2;
+  double _xToTabFrac(double localDx) {
     final cellW = _layout.cellWidth;
-    final raw = (globalDx - cell0Center) / cellW;
+    final raw = (localDx - cellW / 2) / cellW;
     return raw.clamp(0.0, (_layout.itemCount - 1).toDouble());
   }
 
@@ -795,7 +794,7 @@ class _LiquidGlassAnimatedNavBarState extends State<LiquidGlassAnimatedNavBar>
     // The hand takes the deformation back off the travel.
     _travelSign = 0;
     _startCapture();
-    final frac = _xToTabFrac(d.globalPosition.dx);
+    final frac = _xToTabFrac(d.localPosition.dx);
     // Start the smoothed follow at the pill's current resting position so
     // a hold away from the pill EASES over to the finger.
     _dragFollow = _travelPos;
@@ -808,7 +807,7 @@ class _LiquidGlassAnimatedNavBarState extends State<LiquidGlassAnimatedNavBar>
 
   void _onTabPillLongPressMoveUpdate(LongPressMoveUpdateDetails d) {
     if (!_tabDragging) return;
-    final frac = _xToTabFrac(d.globalPosition.dx);
+    final frac = _xToTabFrac(d.localPosition.dx);
     if ((frac - _pressFrac).abs() > 0.2) _draggedRealMove = true;
     setState(() => _tabPillFracIndex = frac);
   }

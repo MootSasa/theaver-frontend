@@ -1,16 +1,21 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../services/chat_service.dart';
+import '../../services/sticker_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import 'sticker_item_widget.dart';
 
 /// Span representing rich text formatting without markdown delimiters.
 class RichSpan {
   int start;
   int end;
-  final String type; // bold, italic, strikethrough, underline, code, spoiler, blockquote, collapse, text_link
+  final String type; // bold, italic, strikethrough, underline, code, spoiler, blockquote, collapse, text_link, custom_emoji
   final String? url;
   final String? language;
+  final String? customEmojiId;
+  final String? documentUrl;
+  final String? format;
 
   RichSpan({
     required this.start,
@@ -18,6 +23,9 @@ class RichSpan {
     required this.type,
     this.url,
     this.language,
+    this.customEmojiId,
+    this.documentUrl,
+    this.format,
   });
 
   RichSpan copyWith({int? start, int? end}) => RichSpan(
@@ -26,6 +34,9 @@ class RichSpan {
         type: type,
         url: url,
         language: language,
+        customEmojiId: customEmojiId,
+        documentUrl: documentUrl,
+        format: format,
       );
 
   MessageEntity toMessageEntity() => MessageEntity(
@@ -37,6 +48,9 @@ class RichSpan {
         url: url,
         language: language,
         collapsed: type == 'collapse' ? true : (type == 'blockquote' || type == 'quote' ? false : null),
+        customEmojiId: customEmojiId,
+        documentUrl: documentUrl,
+        format: format,
       );
 }
 
@@ -69,6 +83,9 @@ class RichTextEditingController extends TextEditingController {
           type: e.type == 'blockquote' && e.collapsed == true ? 'collapse' : e.type,
           url: e.url,
           language: e.language,
+          customEmojiId: e.customEmojiId,
+          documentUrl: e.documentUrl,
+          format: e.format,
         ));
       }
     }
@@ -112,6 +129,9 @@ class RichTextEditingController extends TextEditingController {
                 : (e.type == 'link' ? 'text_link' : e.type),
             url: e.url,
             language: e.language,
+            customEmojiId: e.customEmojiId,
+            documentUrl: e.documentUrl,
+            format: e.format,
           ));
         }
       }
@@ -251,6 +271,7 @@ class RichTextEditingController extends TextEditingController {
     final end = math.max(sel.start, sel.end);
     for (int i = _spans.length - 1; i >= 0; i--) {
       final s = _spans[i];
+      if (s.type == 'custom_emoji') continue;
       if (s.start < end && s.end > start) {
         _spans.removeAt(i);
         if (s.start < start) {
@@ -263,6 +284,87 @@ class RichTextEditingController extends TextEditingController {
     }
     _mergeSpans();
     notifyListeners();
+  }
+
+  /// Inserts a custom emoji at the current selection (or end of text),
+  /// preserving existing spans and adding a `custom_emoji` [RichSpan].
+  void insertCustomEmoji(StickerItem item) {
+    final String fallback =
+        (item.emojis.isNotEmpty && item.emojis.first.isNotEmpty)
+            ? item.emojis.first
+            : '😀';
+    final oldText = text;
+    int selStart = selection.isValid
+        ? math.min(selection.start, selection.end)
+        : oldText.length;
+    int selEnd = selection.isValid
+        ? math.max(selection.start, selection.end)
+        : oldText.length;
+    if (selStart < 0 || selStart > oldText.length) selStart = oldText.length;
+    if (selEnd < selStart || selEnd > oldText.length) selEnd = selStart;
+
+    final newText = oldText.replaceRange(selStart, selEnd, fallback);
+    final int deletedCount = selEnd - selStart;
+    final int insertedCount = fallback.length;
+    final int delta = insertedCount - deletedCount;
+
+    for (int i = _spans.length - 1; i >= 0; i--) {
+      final span = _spans[i];
+      if (span.end <= selStart) {
+        continue;
+      } else if (span.start >= selEnd) {
+        span.start += delta;
+        span.end += delta;
+      } else if (span.type == 'custom_emoji') {
+        _spans.removeAt(i);
+        continue;
+      } else {
+        if (deletedCount > 0) {
+          final delInSpan =
+              (math.min(span.end, selEnd) - math.max(span.start, selStart))
+                  .toInt();
+          if (selStart < span.start) {
+            span.start = selStart;
+          }
+          span.end -= delInSpan;
+        }
+        if (span.start < selStart && selStart < span.end) {
+          span.end += insertedCount;
+        } else if (span.start >= selStart) {
+          span.start += insertedCount;
+          span.end += insertedCount;
+        }
+      }
+      if (span.start >= span.end || span.start >= newText.length) {
+        _spans.removeAt(i);
+      }
+    }
+
+    if (_activeFormats.isNotEmpty) {
+      for (final fmt in _activeFormats) {
+        _spans.add(RichSpan(
+          start: selStart,
+          end: selStart + insertedCount,
+          type: _normalizeType(fmt),
+        ));
+      }
+    }
+
+    _spans.add(RichSpan(
+      start: selStart,
+      end: selStart + insertedCount,
+      type: 'custom_emoji',
+      customEmojiId: item.id.toString(),
+      documentUrl: item.fileUrl,
+      format: item.format,
+    ));
+
+    _mergeSpans();
+    _lastText = newText;
+    super.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: selStart + insertedCount),
+    );
   }
 
   /// Currently active format mode for newly typed characters (returns most recently activated format, if any).
@@ -487,24 +589,65 @@ class RichTextEditingController extends TextEditingController {
   set value(TextEditingValue newValue) {
     final oldText = _lastText;
     final newText = newValue.text;
+    final prevSel = selection;
 
     if (oldText != newText) {
-      _updateSpansForTextChange(oldText, newText);
+      final int? cursorAfter =
+          (newValue.selection.isValid && newValue.selection.isCollapsed)
+              ? newValue.selection.baseOffset
+              : null;
+      _updateSpansForTextChange(oldText, newText, cursorAfter: cursorAfter);
       _lastText = newText;
     }
 
-    super.value = newValue;
+    TextEditingValue adjustedValue = newValue;
+    if (newValue.selection.isValid && newValue.selection.isCollapsed) {
+      final int offset = newValue.selection.baseOffset;
+      for (final s in _spans) {
+        if (s.type == 'custom_emoji' && s.start < offset && offset < s.end) {
+          final bool movingLeft = prevSel.isValid &&
+              prevSel.isCollapsed &&
+              prevSel.baseOffset >= s.end;
+          adjustedValue = newValue.copyWith(
+            selection: TextSelection.collapsed(
+              offset: movingLeft ? s.start : s.end,
+            ),
+          );
+          break;
+        }
+      }
+    }
+
+    super.value = adjustedValue;
   }
 
-  void _updateSpansForTextChange(String oldText, String newText) {
+  void _updateSpansForTextChange(
+    String oldText,
+    String newText, {
+    int? cursorAfter,
+  }) {
+    int maxStart = math.min(oldText.length, newText.length);
+    if (cursorAfter != null && cursorAfter >= 0) {
+      if (newText.length <= oldText.length) {
+        maxStart = math.min(maxStart, cursorAfter);
+      } else {
+        final int netInserted = newText.length - oldText.length;
+        if (cursorAfter >= netInserted) {
+          maxStart = math.min(maxStart, cursorAfter - netInserted);
+        }
+      }
+    }
+
     int start = 0;
-    while (start < oldText.length && start < newText.length && oldText[start] == newText[start]) {
+    while (start < maxStart && oldText[start] == newText[start]) {
       start++;
     }
 
     int oldEnd = oldText.length;
     int newEnd = newText.length;
-    while (oldEnd > start && newEnd > start && oldText[oldEnd - 1] == newText[newEnd - 1]) {
+    while (oldEnd > start &&
+        newEnd > start &&
+        oldText[oldEnd - 1] == newText[newEnd - 1]) {
       oldEnd--;
       newEnd--;
     }
@@ -525,6 +668,10 @@ class RichTextEditingController extends TextEditingController {
         // Change occurred before span: shift
         span.start += delta;
         span.end += delta;
+      } else if (span.type == 'custom_emoji') {
+        // Any deletion or interior modification of a custom_emoji removes the atomic custom_emoji span
+        _spans.removeAt(i);
+        continue;
       } else {
         // Change overlaps with span interior
         if (deletedCount > 0) {
@@ -615,6 +762,9 @@ class RichTextEditingController extends TextEditingController {
     for (int i = 0; i < _spans.length - 1; i++) {
       final cur = _spans[i];
       final next = _spans[i + 1];
+      if (cur.type == 'custom_emoji' || next.type == 'custom_emoji') {
+        continue;
+      }
       if (_normalizeType(cur.type) == _normalizeType(next.type) &&
           cur.url == next.url &&
           cur.end >= next.start) {
@@ -732,6 +882,60 @@ class RichTextEditingController extends TextEditingController {
       // 5. Monospace
       if (activeSpans.any((s) => s.type == 'code' || s.type == 'pre')) {
         segStyle = segStyle.copyWith(fontFamily: 'monospace');
+      }
+
+      // 6. Custom emoji inline rendering
+      final customEmojiSpan = activeSpans.cast<RichSpan?>().firstWhere(
+        (s) =>
+            s != null &&
+            s.type == 'custom_emoji' &&
+            s.start == segStart &&
+            s.end == segEnd,
+        orElse: () => null,
+      );
+      if (customEmojiSpan != null) {
+        final cached = StickerService.instance
+            .getStickerByIdSync(customEmojiSpan.customEmojiId);
+        final resolvedUrl = (customEmojiSpan.documentUrl != null &&
+                customEmojiSpan.documentUrl!.isNotEmpty)
+            ? customEmojiSpan.documentUrl!
+            : (cached?.fileUrl ?? '');
+        final resolvedFormat = (customEmojiSpan.format != null &&
+                customEmojiSpan.format!.isNotEmpty)
+            ? customEmojiSpan.format!
+            : (cached?.format ?? 'webp');
+        if (resolvedUrl.isNotEmpty) {
+          final double emojiSize = (segStyle.fontSize ?? 16.0) + 4.0;
+          children.add(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 1.0),
+                child: StickerMediaView(
+                  fileUrl: resolvedUrl,
+                  format: resolvedFormat,
+                  width: emojiSize,
+                  height: emojiSize,
+                  animate: true,
+                ),
+              ),
+            ),
+          );
+          if (segText.length > 1) {
+            children.add(
+              TextSpan(
+                text: '\u200B' * (segText.length - 1),
+                style: const TextStyle(
+                  fontSize: 0.0,
+                  letterSpacing: 0.0,
+                  height: 1.0,
+                  color: Colors.transparent,
+                ),
+              ),
+            );
+          }
+          continue;
+        }
       }
 
       // Check for emojis

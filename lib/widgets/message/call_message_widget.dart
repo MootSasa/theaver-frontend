@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../../services/call_state_provider.dart';
+import '../../screens/call/group_call_screen.dart';
 import '../../services/chat_service.dart';
 
 class CallMessageWidget extends StatelessWidget {
@@ -210,11 +209,35 @@ class CallMessageWidget extends StatelessWidget {
 
   void _handleCallback(BuildContext context, {required bool isVideo}) {
     if (message.chatId.isEmpty) return;
-    final callProvider = context.read<CallStateProvider>();
-    callProvider.startOrJoinCall(
-      chatId: message.chatId,
-      chatTitle: message.senderName.isNotEmpty ? message.senderName : 'Звонок',
-      isVideo: isVideo,
+    final data = _parsePayload();
+    final callTypeRaw = (data['call_type'] ?? '').toString().toLowerCase();
+    final isGroupCall = callTypeRaw == 'group' || callTypeRaw == 'stage';
+    final title = message.senderName.isNotEmpty ? message.senderName : 'Звонок';
+    final nav = Navigator.maybeOf(context);
+    if (nav == null) return;
+
+    if (isGroupCall) {
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => GroupCallScreen(
+            callId: message.chatId,
+            chatId: message.chatId,
+            userId: 'local',
+            title: title,
+            isStage: callTypeRaw == 'stage',
+          ),
+        ),
+      );
+      return;
+    }
+
+    nav.pushNamed(
+      isVideo ? '/video-call' : '/voice-call',
+      arguments: {
+        'chatId': message.chatId,
+        'peerName': title,
+        'avatarUrl': message.senderAvatarUrl,
+      },
     );
   }
 }

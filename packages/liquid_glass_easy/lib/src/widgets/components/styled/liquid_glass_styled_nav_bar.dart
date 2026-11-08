@@ -247,10 +247,9 @@ class _LiquidGlassStyledNavBarState extends State<LiquidGlassStyledNavBar>
   }
 
   // ── Gesture geometry ──
-  double _xToTabFrac(double globalDx) {
-    final cell0Center = _barLeft + _layout.padding + _layout.cellWidth / 2;
+  double _xToTabFrac(double localDx) {
     final cellW = _layout.cellWidth;
-    final raw = (globalDx - cell0Center) / cellW;
+    final raw = (localDx - cellW / 2) / cellW;
     return raw.clamp(0.0, (_layout.itemCount - 1).toDouble());
   }
 
@@ -266,7 +265,7 @@ class _LiquidGlassStyledNavBarState extends State<LiquidGlassStyledNavBar>
     _tabDragging = true;
     _pillGlassActive = true;
     _startCapture();
-    final frac = _xToTabFrac(d.globalPosition.dx);
+    final frac = _xToTabFrac(d.localPosition.dx);
     _tabPillJellyLastFrac = frac;
     _tabPillJellyLastTs = DateTime.now();
     _tabPillStretch = 0;
@@ -281,7 +280,7 @@ class _LiquidGlassStyledNavBarState extends State<LiquidGlassStyledNavBar>
 
   void _onTabPillDragUpdate(DragUpdateDetails d) {
     if (!_tabDragging) return;
-    final frac = _xToTabFrac(d.globalPosition.dx);
+    final frac = _xToTabFrac(d.localPosition.dx);
     _pumpTabPillJelly(frac);
     setState(() => _tabPillFracIndex = frac);
   }

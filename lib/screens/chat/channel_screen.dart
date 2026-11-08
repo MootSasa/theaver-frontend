@@ -69,6 +69,7 @@ import '../../widgets/chat/pinned_message_banner.dart';
 import '../../widgets/message/inline_keyboard_widget.dart';
 import '../settings/profile_screen.dart';
 import '../../services/tiling_layout_controller.dart';
+import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 
 
@@ -107,6 +108,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   Timer? _transitionTimer;
   late AnimationController _emojiPanelController;
   late Animation<double> _emojiPanelAnimation;
+  late final ChatStickerInputTarget _stickerInputTarget;
   String? _lastActiveTileId;
 
   bool get _isDesktopPlatform =>
@@ -221,6 +223,18 @@ class _ChannelScreenState extends State<ChannelScreen>
     _loadCachedKeyboardHeight();
     _initWebSocket();
     _inputFocusNode.addListener(_onFocusChanged);
+    _stickerInputTarget = ChatStickerInputTarget(
+      chatId: widget.channelId,
+      chatTitle: widget.channelName,
+      avatarUrl: widget.channelAvatar,
+      controller: _messageController,
+      onBackspace: _handleBackspace,
+      onInsertEmoji: _insertEmojiText,
+      onInsertCustomEmoji: _insertCustomEmojiItem,
+      onSendSticker: _sendStickerMessage,
+      onSendGif: _sendGifMessage,
+    );
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
@@ -442,6 +456,9 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _onFocusChanged() {
+    if (_inputFocusNode.hasFocus) {
+      StickerService.instance.registerInputTarget(_stickerInputTarget);
+    }
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
     } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
@@ -508,6 +525,16 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _onEmojiToggle() {
+    StickerService.instance.registerInputTarget(_stickerInputTarget);
+    if (TilingLayoutController.instance.isWorkspaceMounted &&
+        !TilingLayoutController.instance.isSinglePane) {
+      if (_registeredTileId != null) {
+        TilingLayoutController.instance.setFocusedTile(_registeredTileId!);
+      }
+      TilingLayoutController.instance.toggleEmojiSidecar();
+      return;
+    }
+
     _transitionTimer?.cancel();
     final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
 
@@ -603,6 +630,113 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
+  void _insertEmojiText(String emoji) {
+    final text = _messageController.text;
+    final selection = _messageController.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0 || start > text.length) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, emoji);
+    _messageController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+  }
+
+  void _insertCustomEmojiItem(StickerItem item) {
+    _messageController.insertCustomEmoji(item);
+  }
+
+  Future<void> _sendStickerMessage(StickerItem item) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final localId = 'local_sticker_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': item.fileUrl,
+      if (item.thumbnailUrl.isNotEmpty) 'thumbnail_url': item.thumbnailUrl,
+      'width': item.width,
+      'height': item.height,
+      'format': item.format,
+      'sticker_id': item.id,
+      'pack_id': item.packId,
+      if (item.effectAnimationUrl.isNotEmpty)
+        'effect_animation_url': item.effectAnimationUrl,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.channelId,
+        content: fallback,
+        messageType: 'sticker',
+        fileUrl: item.fileUrl,
+        fileName: 'sticker.${item.format}',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else if (res['message'] != null && mounted) {
+        GlassToastService().show(context, res['message'].toString());
+      }
+    } catch (e) {
+      debugPrint('Error sending sticker in channel: $e');
+    }
+  }
+
+  Future<void> _sendGifMessage(GifItemModel gif) async {
+    final replyTo = _replyToMessage;
+    _cancelReply();
+    final localId = 'local_gif_${DateTime.now().microsecondsSinceEpoch}';
+    final payload = <String, dynamic>{
+      'url': gif.url,
+      'preview_url': gif.previewUrl,
+      'width': gif.width,
+      'height': gif.height,
+      'gif_id': gif.id,
+    };
+    try {
+      final res = await ChatService.sendMessage(
+        chatId: widget.channelId,
+        content: 'GIF',
+        messageType: 'gif',
+        fileUrl: gif.url,
+        fileName: 'animation.gif',
+        mediaPayload: payload,
+        replyToMessageId: replyTo?.id,
+        localId: localId,
+      );
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == sent.id)) {
+              _messages.insert(0, sent);
+            }
+          });
+          _scrollToBottom();
+        }
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+      } else if (res['message'] != null && mounted) {
+        GlassToastService().show(context, res['message'].toString());
+      }
+    } catch (e) {
+      debugPrint('Error sending gif in channel: $e');
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -629,6 +763,7 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   bool _handleTileBack() {
     if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (MessageContextMenuService().isShowing) {
       MessageContextMenuService().dismiss();
       return true;
@@ -1938,6 +2073,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _syncDebounceTimer?.cancel();
 
     DraftService().flushDraft(widget.channelId);
+    StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _messageController.removeListener(_onInputTextChanged);
     _emojiPanelController.dispose();
     _inputFocusNode.removeListener(_onFocusChanged);
@@ -2321,6 +2457,9 @@ class _ChannelScreenState extends State<ChannelScreen>
                         controller: _messageController,
                         onBackspace: _handleBackspace,
                         onClose: _closeEmojiPanel,
+                        onCustomEmojiSelected: _insertCustomEmojiItem,
+                        onStickerSelected: _sendStickerMessage,
+                        onGifSelected: _sendGifMessage,
                         height: _keyboardHeight,
                         isVisible: _showEmojiPanel,
                       ),

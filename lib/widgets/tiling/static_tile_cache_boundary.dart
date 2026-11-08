@@ -73,42 +73,21 @@ class StaticTileCacheBoundary extends StatefulWidget {
 }
 
 class _StaticTileCacheBoundaryState extends State<StaticTileCacheBoundary> {
-  int _activePointers = 0;
-
-  void _onPointerDown(PointerDownEvent _) {
-    _activePointers++;
-    if (_activePointers == 1) {
-      setState(() {});
-    }
-  }
-
-  void _onPointerUpOrCancel(PointerEvent _) {
-    if (_activePointers > 0) {
-      _activePointers--;
-      if (_activePointers == 0 && mounted) {
-        setState(() {});
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final double dpr = View.maybeOf(context)?.devicePixelRatio ??
         MediaQuery.maybeDevicePixelRatioOf(context) ??
         1.0;
-    final bool canCache = widget.enabled && _activePointers == 0;
 
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: _onPointerDown,
-      onPointerUp: _onPointerUpOrCancel,
-      onPointerCancel: _onPointerUpOrCancel,
-      child: _StaticTileCacheRenderObjectWidget(
-        cacheEnabled: canCache,
-        devicePixelRatio: dpr,
-        idleThreshold: widget.idleThreshold,
-        child: widget.child,
-      ),
+    // Never attach a pointer-up setState listener or trigger synchronous
+    // scene.toImageSync() freezes when lifting a finger off the screen.
+    // The boundary remains a pure RepaintBoundary + LiquidGlassSubpassBoundary
+    // for tile-local backdrop isolation (e.g. MessageContextMenu / RoundVideo).
+    return _StaticTileCacheRenderObjectWidget(
+      cacheEnabled: false,
+      devicePixelRatio: dpr,
+      idleThreshold: widget.idleThreshold,
+      child: widget.child,
     );
   }
 }

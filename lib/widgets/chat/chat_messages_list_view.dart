@@ -90,7 +90,7 @@ class ChatMessagesListView extends StatelessWidget {
         key: const ValueKey('chat_messages_list'),
         controller: scrollController,
         reverse: reverse,
-        cacheExtent: 1500.0,
+        cacheExtent: 500.0,
         addRepaintBoundaries: false,
         padding: EdgeInsets.only(
           top: topPadding,

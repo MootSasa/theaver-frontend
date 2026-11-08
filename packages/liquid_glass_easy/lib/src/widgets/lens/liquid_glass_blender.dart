@@ -325,9 +325,15 @@ class _LiquidGlassBlenderState extends State<LiquidGlassBlender>
   void _ensureShader(bool impeller) {
     if (_shaderImpeller == impeller && _shader != null) return;
     _shaderImpeller = impeller;
+    final ui.FragmentShader? syncShader =
+        LiquidGlassShaders.tryCreateBlenderShader(impeller);
+    if (syncShader != null) {
+      _shader = syncShader;
+      return;
+    }
     LiquidGlassShaders.ensureBlenderLoaded(impeller).then((program) {
       // Ignore a stale load if the backend flipped while we were loading.
-      if (mounted && _shaderImpeller == impeller) {
+      if (mounted && _shaderImpeller == impeller && _shader == null) {
         setState(() => _shader = program.fragmentShader());
       }
     }).catchError((Object _) {
@@ -352,10 +358,10 @@ class _LiquidGlassBlenderState extends State<LiquidGlassBlender>
     // pass at all, so members paint solo, each its own lite surface.
     final bool lite =
         LiquidGlassEngine.liteGlass || widget.style.liteGlass;
-    final bool canBlend = (useImpeller || lensScope != null) && !lite;
-    if (!canBlend && !lite) _warnSoloOnce();
-
     _ensureShader(useImpeller);
+    final bool canBlend =
+        (useImpeller || lensScope != null) && !lite && _shader != null;
+    if (!canBlend && !lite && _shader != null) _warnSoloOnce();
 
     // Adaptivity precedence: the group style's own config, else the
     // enclosing area's — and `LiquidGlassAdaptivity.none` opts out of
