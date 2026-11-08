@@ -892,32 +892,11 @@ class MessageBubble extends StatelessWidget {
         EmojiUtils.isDiceEmoji(message.content);
   }
 
-  List<MessageEntity> get _customEmojiOnlyEntities {
-    if (_hasMedia || message.messageType != 'text' || message.entities.isEmpty) {
-      return const [];
-    }
-    final customEntities =
-        message.entities.where((e) => e.type == 'custom_emoji').toList();
-    if (customEntities.isEmpty ||
-        customEntities.length > 3 ||
-        customEntities.length != message.entities.length) {
-      return const [];
-    }
-    final totalEntityLen =
-        customEntities.fold<int>(0, (sum, e) => sum + e.length);
-    final nonSpaceLen =
-        message.content.replaceAll(RegExp(r'\s+'), '').length;
-    if (totalEntityLen >= nonSpaceLen && nonSpaceLen > 0) {
-      return customEntities;
-    }
-    return const [];
-  }
-
   int get _emojiOnlyCount {
-    if (_hasMedia || message.messageType != 'text' || message.entities.isNotEmpty) {
+    if (_hasMedia || message.messageType != 'text') {
       return 0;
     }
-    return EmojiUtils.countEmojiOnly(message.content);
+    return EmojiUtils.countTotalEmojiOnly(message.content, message.entities);
   }
 
   @override
@@ -953,15 +932,9 @@ class MessageBubble extends StatelessWidget {
     final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
     final bool hasCaption = !isUnsupported && _hasCaption;
     final bool isDice = _isDice;
-    final List<MessageEntity> customEmojiOnly =
-        (!isUnsupported && !hasMedia && !isDice)
-            ? _customEmojiOnlyEntities
-            : const [];
-    final int emojiCount = (!isUnsupported && !hasMedia && !isDice && customEmojiOnly.isEmpty)
-        ? _emojiOnlyCount
-        : 0;
-    final bool isBigEmoji =
-        (emojiCount > 0) || customEmojiOnly.isNotEmpty || isDice;
+    final int emojiCount =
+        (!isUnsupported && !hasMedia && !isDice) ? _emojiOnlyCount : 0;
+    final bool isBigEmoji = (emojiCount > 0) || isDice;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
@@ -1282,8 +1255,11 @@ class MessageBubble extends StatelessWidget {
         ),
       );
     } else if (isBigEmoji) {
-      if (customEmojiOnly.isNotEmpty) {
-        final double itemSize = customEmojiOnly.length == 1 ? 115.2 : 64.0;
+      final customEntities =
+          message.entities.where((e) => e.type == 'custom_emoji').toList();
+      if (emojiCount == 1 && customEntities.isNotEmpty) {
+        final ent = customEntities.first;
+        final double singleSize = EmojiUtils.emojiTierSize(1);
         textBodyWidget = Padding(
           padding: const EdgeInsets.only(
             top: 4.0,
@@ -1291,22 +1267,14 @@ class MessageBubble extends StatelessWidget {
             left: 4.0,
             right: 4.0,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: customEmojiOnly.map((ent) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2.0),
-                child: InlineCustomEmojiWidget(
-                  customEmojiId: ent.customEmojiId ?? '',
-                  directUrl: ent.documentUrl,
-                  directFormat: ent.format,
-                  fallbackEmoji: message.content,
-                  size: itemSize,
-                  isMe: isMe,
-                  enableTapEffect: true,
-                ),
-              );
-            }).toList(),
+          child: InlineCustomEmojiWidget(
+            customEmojiId: ent.customEmojiId ?? '',
+            directUrl: ent.documentUrl,
+            directFormat: ent.format,
+            fallbackEmoji: message.content,
+            size: singleSize,
+            isMe: isMe,
+            enableTapEffect: true,
           ),
         );
       } else if (emojiCount == 1) {
@@ -1338,12 +1306,14 @@ class MessageBubble extends StatelessWidget {
           ),
         );
       } else {
-        final double multiEmojiFontSize = emojiCount <= 3 ? 44.0 : 32.0;
+        final double multiEmojiFontSize = EmojiUtils.emojiTierSize(emojiCount);
         textBodyWidget = Padding(
           padding: const EdgeInsets.only(top: 4.0, bottom: 22.0, left: 4.0, right: 4.0),
-          child: EmojiUtils.emojiOnlyText(
+          child: EmojiUtils.buildEmojiOnlyMessageWidget(
             message.content,
             fontSize: multiEmojiFontSize,
+            entities: message.entities,
+            isMe: isMe,
             fallbackStyle: textStyle,
             textAlign: isMe ? TextAlign.end : TextAlign.start,
           ),

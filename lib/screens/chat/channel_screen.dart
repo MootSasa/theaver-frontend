@@ -42,7 +42,6 @@ import '../../widgets/chat/unread_separator.dart';
 import '../../utils/swipe_back_route.dart';
 import 'private_chat_screen.dart';
 import 'group_chat_screen.dart';
-import '../../utils/entity_parser.dart';
 import '../../l10n/app_localizations.dart';
 import '../../utils/date_time_utils.dart';
 import '../../config/app_config.dart';
@@ -244,7 +243,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     // Restore draft if exists
     final draft = DraftService().getDraft(widget.channelId);
     if (draft != null && draft.isNotEmpty) {
-      _messageController.text = draft.text;
+      _messageController.loadMessage(draft.text, draft.entities);
       if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
         _isQuote = draft.isQuote;
         _quoteText = draft.quoteText;
@@ -1709,14 +1708,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     LinkPreviewOptions? linkPreviewOptions,
     bool invertMedia = false,
   }) async {
-    final String rawText = _messageController.text.trim();
-    final String text = cleanText?.trim() ?? rawText;
-    if (text.isEmpty || _isSending) return;
+    final String controllerCleanText = _messageController.cleanText.trimRight();
+    final List<MessageEntity> controllerEntities = _messageController.entities;
+    final String text = (cleanText ?? controllerCleanText).trimRight();
+    final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
+    if (text.trim().isEmpty || _isSending) return;
 
-    final parsed = cleanText != null ? null : EntityParser.parseMarkdown(text);
-    final String effectiveContent = cleanText ?? parsed!.cleanText;
+    final String effectiveContent = text;
     final List<MessageEntity>? effectiveEntities =
-        entities ?? (parsed?.entities.isNotEmpty == true ? parsed!.entities : null);
+        resolvedEntities.isNotEmpty ? resolvedEntities : null;
 
     if (_isEditing && _editingMessageId != null) {
       final editingId = _editingMessageId!;
@@ -1985,7 +1985,8 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _onInputTextChanged() {
     DraftService().saveDraft(
       widget.channelId,
-      text: _messageController.text,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
       replyToMessageId: _replyToMessage?.id,
       quoteText: _quoteText,
       isQuote: _isQuote,
@@ -2007,7 +2008,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
     DraftService().saveDraft(
       widget.channelId,
-      text: _messageController.text,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
       replyToMessageId: message.id,
       isQuote: false,
     );
@@ -2029,7 +2031,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
     DraftService().saveDraft(
       widget.channelId,
-      text: _messageController.text,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
       replyToMessageId: message.id,
       quoteText: selectedText,
       isQuote: true,
@@ -2050,7 +2053,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
     DraftService().saveDraft(
       widget.channelId,
-      text: _messageController.text,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
     );
   }
 

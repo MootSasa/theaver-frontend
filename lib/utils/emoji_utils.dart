@@ -5,10 +5,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
+import '../services/chat_service.dart';
 import '../services/emoji_effect_cache_service.dart';
 import '../services/emoji_haptic_service.dart';
 import '../services/emoji_interaction_manager.dart';
 import '../services/sticker_service.dart';
+import '../widgets/chat/sticker_item_widget.dart';
 
 class EmojiUtils {
   static const String _fontFamily = 'AppleEmoji';
@@ -165,13 +167,43 @@ class EmojiUtils {
     return countEmojiOnly(text) == 1;
   }
 
+  /// Returns the rendered size for an emoji-only message across 7 size tiers (1 to 7+ emojis):
+  /// - 1 emoji: 115.2px (64.0 * 1.8)
+  /// - 2 emojis: 56.0px
+  /// - 3 emojis: 46.0px
+  /// - 4 emojis: 38.0px
+  /// - 5 emojis: 32.0px
+  /// - 6 emojis: 26.0px
+  /// - 7+ emojis: 20.0px (small standard size)
+  static double emojiTierSize(int totalCount) {
+    switch (totalCount) {
+      case 1:
+        return 115.2;
+      case 2:
+        return 56.0;
+      case 3:
+        return 46.0;
+      case 4:
+        return 38.0;
+      case 5:
+        return 32.0;
+      case 6:
+        return 26.0;
+      default:
+        return 20.0;
+    }
+  }
+
   /// If [text] consists ONLY of emojis (and optional whitespace/newlines),
   /// returns the total number of emoji grapheme clusters (> 0).
   /// Returns 0 if [text] is empty or contains any non-emoji character.
   static int countEmojiOnly(String text) {
-    if (text.isEmpty || text.length > 160) return 0;
-    final cached = _emojiOnlyCountCache[text];
-    if (cached != null) return cached;
+    if (text.isEmpty) return 0;
+    final bool canCache = text.length <= 256;
+    if (canCache) {
+      final cached = _emojiOnlyCountCache[text];
+      if (cached != null) return cached;
+    }
 
     final trimmed = text.trim();
     if (trimmed.isEmpty) return 0;
@@ -196,11 +228,71 @@ class EmojiUtils {
       count++;
     }
 
-    if (_emojiOnlyCountCache.length >= _kMaxEmojiCountCacheSize) {
-      _emojiOnlyCountCache.remove(_emojiOnlyCountCache.keys.first);
+    if (canCache) {
+      if (_emojiOnlyCountCache.length >= _kMaxEmojiCountCacheSize) {
+        _emojiOnlyCountCache.remove(_emojiOnlyCountCache.keys.first);
+      }
+      _emojiOnlyCountCache[text] = count;
     }
-    _emojiOnlyCountCache[text] = count;
     return count;
+  }
+
+  /// Returns the total emoji count (Unicode + custom_emoji) if [text] and [entities]
+  /// consist strictly of emojis (and optional whitespace/newlines).
+  /// Returns 0 if empty, if any non-custom_emoji entity is present, or if any non-emoji text exists.
+  static int countTotalEmojiOnly(String text, List<MessageEntity> entities) {
+    if (text.trim().isEmpty) return 0;
+    if (entities.isEmpty) {
+      return countEmojiOnly(text);
+    }
+
+    for (final e in entities) {
+      if (e.type != 'custom_emoji') {
+        return 0;
+      }
+    }
+
+    final sorted = List<MessageEntity>.from(entities)
+      ..sort((a, b) => a.offset.compareTo(b.offset));
+
+    int totalCount = 0;
+    int pos = 0;
+    final int len = text.length;
+
+    for (final ent in sorted) {
+      final int start = ent.offset.clamp(0, len);
+      final int end = (ent.offset + ent.length).clamp(start, len);
+      if (start < pos) continue;
+
+      if (start > pos) {
+        final segment = text.substring(pos, start);
+        for (final cluster in segment.characters) {
+          if (cluster.trim().isEmpty) continue;
+          if (!isEmojiGrapheme(cluster)) {
+            return 0;
+          }
+          totalCount++;
+        }
+      }
+
+      if (end > start) {
+        totalCount++;
+        pos = end;
+      }
+    }
+
+    if (pos < len) {
+      final tail = text.substring(pos);
+      for (final cluster in tail.characters) {
+        if (cluster.trim().isEmpty) continue;
+        if (!isEmojiGrapheme(cluster)) {
+          return 0;
+        }
+        totalCount++;
+      }
+    }
+
+    return totalCount;
   }
 
   /// Returns true if [text] contains at least one emoji and no non-emoji text.
@@ -779,6 +871,202 @@ class EmojiUtils {
       TextSpan(children: spans),
       textAlign: textAlign,
     );
+  }
+
+  /// Renders a frameless emoji-only message (2+ emojis, or mixed Unicode + custom emojis)
+  /// at the given [fontSize] tier, supporting wrapping, whitespace, high-res Unicode emojis,
+  /// and interactive custom emojis.
+  static Widget buildEmojiOnlyMessageWidget(
+    String text, {
+    required double fontSize,
+    List<MessageEntity> entities = const [],
+    bool isMe = true,
+    TextStyle? fallbackStyle,
+    TextAlign textAlign = TextAlign.start,
+  }) {
+    final customEntities = entities
+        .where((e) =>
+            e.type == 'custom_emoji' &&
+            e.customEmojiId != null &&
+            e.customEmojiId!.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.offset.compareTo(b.offset));
+
+    if (customEntities.isEmpty) {
+      return emojiOnlyText(
+        text,
+        fontSize: fontSize,
+        fallbackStyle: fallbackStyle,
+        textAlign: textAlign,
+      );
+    }
+
+    final List<InlineSpan> spans = [];
+    final int len = text.length;
+    int pos = 0;
+
+    void appendUnicodeSegment(String segment) {
+      for (final cluster in segment.characters) {
+        if (cluster.trim().isEmpty) {
+          spans.add(
+            TextSpan(
+              text: cluster,
+              style: (fallbackStyle ?? const TextStyle()).copyWith(
+                fontSize: fontSize * 0.45,
+                height: 1.25,
+              ),
+            ),
+          );
+        } else if (kIsWeb || isApplePlatform || !isEmojiGrapheme(cluster)) {
+          spans.add(
+            TextSpan(
+              text: cluster,
+              style: (fallbackStyle ?? const TextStyle()).copyWith(
+                fontSize: fontSize,
+                height: 1.25,
+                fontFamily: effectiveFontFamily,
+              ),
+            ),
+          );
+        } else {
+          spans.add(
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 1.5, vertical: 2.0),
+                child: HighResStaticEmoji(
+                  emoji: cluster,
+                  size: fontSize,
+                  fallbackStyle: fallbackStyle,
+                ),
+              ),
+            ),
+          );
+        }
+      }
+    }
+
+    for (final ent in customEntities) {
+      final int start = ent.offset.clamp(0, len);
+      final int end = (ent.offset + ent.length).clamp(start, len);
+      if (start < pos) continue;
+
+      if (start > pos) {
+        appendUnicodeSegment(text.substring(pos, start));
+      }
+
+      if (end > start) {
+        final fallback = text.substring(start, end);
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1.5, vertical: 2.0),
+              child: InlineCustomEmojiWidget(
+                customEmojiId: ent.customEmojiId!,
+                directUrl: ent.documentUrl,
+                directFormat: ent.format,
+                fallbackEmoji: fallback,
+                size: fontSize,
+                isMe: isMe,
+                enableTapEffect: true,
+              ),
+            ),
+          ),
+        );
+        pos = end;
+      }
+    }
+
+    if (pos < len) {
+      appendUnicodeSegment(text.substring(pos));
+    }
+
+    return Text.rich(
+      TextSpan(children: spans),
+      textAlign: textAlign,
+    );
+  }
+
+  /// Builds an [InlineSpan] for single-line chat list previews (drafts and last messages)
+  /// that renders both Apple Unicode emojis and inline custom emojis (`InlineCustomEmojiWidget`).
+  static InlineSpan buildPreviewWithCustomEmojis(
+    String text, {
+    required TextStyle style,
+    List<MessageEntity> entities = const [],
+    double emojiSize = 16.0,
+  }) {
+    if (text.isEmpty) {
+      return TextSpan(text: '', style: style);
+    }
+
+    // Replace CR/LF 1-for-1 with spaces so single-line previews don't break
+    // and UTF-16 entity offsets remain 100% aligned.
+    final String singleLine =
+        text.replaceAll('\r', ' ').replaceAll('\n', ' ');
+
+    final customEntities = entities
+        .where((e) =>
+            e.type == 'custom_emoji' &&
+            e.customEmojiId != null &&
+            e.customEmojiId!.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.offset.compareTo(b.offset));
+
+    if (customEntities.isEmpty) {
+      return buildEmojiTextSpan(singleLine, style: style);
+    }
+
+    final List<InlineSpan> children = [];
+    final int len = singleLine.length;
+    int pos = 0;
+
+    for (final ent in customEntities) {
+      final int start = ent.offset.clamp(0, len);
+      final int end = (ent.offset + ent.length).clamp(start, len);
+      if (start < pos) continue;
+
+      if (start > pos) {
+        children.add(
+          buildEmojiTextSpan(
+            singleLine.substring(pos, start),
+            style: style,
+          ),
+        );
+      }
+
+      if (end > start) {
+        final fallback = singleLine.substring(start, end);
+        children.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1.0),
+              child: InlineCustomEmojiWidget(
+                customEmojiId: ent.customEmojiId!,
+                directUrl: ent.documentUrl,
+                directFormat: ent.format,
+                fallbackEmoji: fallback,
+                size: emojiSize,
+                enableTapEffect: false,
+              ),
+            ),
+          ),
+        );
+        pos = end;
+      }
+    }
+
+    if (pos < len) {
+      children.add(
+        buildEmojiTextSpan(
+          singleLine.substring(pos),
+          style: style,
+        ),
+      );
+    }
+
+    return TextSpan(style: style, children: children);
   }
 
   /// Builds a [TextSpan] where inline emojis use the local/compact Apple Emoji font.

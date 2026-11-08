@@ -95,10 +95,29 @@ class DraftService {
     return _publishedDrafts[chatId];
   }
 
+  static bool _sameEntities(List<MessageEntity> a, List<MessageEntity> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      final ea = a[i];
+      final eb = b[i];
+      if (ea.type != eb.type ||
+          ea.offset != eb.offset ||
+          ea.length != eb.length ||
+          ea.url != eb.url ||
+          ea.customEmojiId != eb.customEmojiId ||
+          ea.collapsed != eb.collapsed) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /// Save draft locally immediately, and debounce publication to chat list & server sync
   void saveDraft(
     String chatId, {
     required String text,
+    List<MessageEntity> entities = const [],
     String? replyToMessageId,
     String? quoteText,
     bool isQuote = false,
@@ -106,12 +125,26 @@ class DraftService {
   }) {
     final trimmed = text.trim();
     if (trimmed.isEmpty && (replyToMessageId == null || replyToMessageId.isEmpty)) {
-      deleteDraft(chatId);
+      if (_drafts.containsKey(chatId) || _publishedDrafts.containsKey(chatId)) {
+        deleteDraft(chatId);
+      }
+      return;
+    }
+
+    final existing = _drafts[chatId];
+    if (!immediate &&
+        existing != null &&
+        existing.text == text &&
+        existing.replyToMessageId == replyToMessageId &&
+        existing.quoteText == quoteText &&
+        existing.isQuote == isQuote &&
+        _sameEntities(existing.entities, entities)) {
       return;
     }
 
     final draft = ChatDraft(
       text: text,
+      entities: entities,
       replyToMessageId: replyToMessageId,
       quoteText: quoteText,
       isQuote: isQuote,
@@ -205,6 +238,7 @@ class DraftService {
       await ChatService.saveDraft(
         chatId: chatId,
         text: draft.text,
+        entities: draft.entities,
         replyToMessageId: draft.replyToMessageId,
         quoteText: draft.quoteText,
         isQuote: draft.isQuote,
