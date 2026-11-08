@@ -133,6 +133,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   double _lastPanelWidth = 360.0;
   double? _lastHapticPixels;
   double? _lastStickerHapticPixels;
+  bool _isAnimatingTabFromBar = false;
 
   static int _computeEmojiColumns(double panelWidth) {
     final available = math.max(160.0, panelWidth - 24.0);
@@ -574,7 +575,46 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     );
   }
 
+  void _onTabSelectedFromBar(int index) {
+    if (index < 0 || index >= PanelTab.values.length) return;
+    final tab = PanelTab.values[index];
+    if (_currentTab == tab) return;
+    HapticUtils.selection();
+    setState(() {
+      _currentTab = tab;
+      _lastSelectedTab = tab;
+      if (_currentTab == PanelTab.emoji) {
+        _onScroll();
+      } else if (_currentTab == PanelTab.sticker) {
+        _onStickerScroll();
+      }
+    });
+    if (_pageController.hasClients) {
+      _isAnimatingTabFromBar = true;
+      _pageController
+          .animateToPage(
+            tab.index,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+          )
+          .whenComplete(() {
+        _isAnimatingTabFromBar = false;
+      });
+    }
+  }
+
   Widget _buildPanelContent(bool isSearching) {
+    final glassProvider = context.watch<LiquidGlassProvider>();
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    final bodyColumn = Column(
+      children: [
+        _buildHeader(),
+        Expanded(child: _buildMainGrid()),
+      ],
+    );
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onVerticalDragEnd: widget.expandToAvailableHeight
@@ -584,17 +624,116 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 widget.onClose();
               }
             },
-      child: Stack(
-        children: [
-          Column(
-            children: [
-              _buildHeader(),
-              Expanded(child: _buildMainGrid()),
-            ],
-          ),
-          if (!isSearching) _buildFloatingNav(),
-        ],
-      ),
+      child: (glassProvider.enabled && !isSearching)
+          ? LayoutBuilder(
+              builder: (context, constraints) {
+                final double panelW =
+                    constraints.maxWidth.isFinite && constraints.maxWidth > 0
+                        ? constraints.maxWidth
+                        : _lastPanelWidth;
+                const double barHeight = 40.0;
+                const double bottomMargin = 20.0;
+                const double backspaceSize = 40.0;
+                const double rightEdge = 16.0;
+                const double minGap = 10.0;
+
+                // Center the 220px bar when wide enough; shift left in narrow sidecars
+                // so it never overlaps the backspace button on the right.
+                final bool canCenter =
+                    (panelW - 220.0) / 2.0 >= (rightEdge + backspaceSize + minGap);
+                final double barWidth = canCenter
+                    ? 220.0
+                    : math.max(
+                        156.0,
+                        panelW - rightEdge * 2 - backspaceSize - minGap,
+                      );
+                final Alignment barAlignment =
+                    canCenter ? Alignment.bottomCenter : Alignment.bottomLeft;
+                final EdgeInsets barMargin = canCenter
+                    ? const EdgeInsets.only(bottom: bottomMargin)
+                    : const EdgeInsets.only(
+                        left: rightEdge,
+                        bottom: bottomMargin,
+                      );
+
+                final barStyle = glassProvider.createStyle(
+                  context: context,
+                  cornerRadius: barHeight / 2,
+                  refractionIndex: 1.1,
+                  refractionWidth: 24.0,
+                );
+
+                final tabBar = LiquidGlassTabBar(
+                  items: [
+                    for (final tab in PanelTab.values)
+                      LiquidGlassTabBarItem(
+                        label: _getTabLabel(tab),
+                        iconBuilder: (_, __) => const SizedBox.shrink(),
+                      ),
+                  ],
+                  selectedIndex: _currentTab.index,
+                  onChanged: _onTabSelectedFromBar,
+                  width: barWidth,
+                  height: barHeight,
+                  alignment: barAlignment,
+                  margin: barMargin,
+                  itemPadding: 3,
+                  style: barStyle,
+                  itemStyle: LiquidGlassTabItemStyle(
+                    selectedColor: theme.colorScheme.primary,
+                    unselectedColor: isDark
+                        ? const Color(0xFF8E8E93)
+                        : const Color(0xFF636366),
+                    iconSize: 0,
+                    underGlassIconSize: 0,
+                    iconLabelGap: 0,
+                    labelFontSize: 13,
+                    underGlassLabelFontSize: 14,
+                    selectedFontWeight: FontWeight.w700,
+                    unselectedFontWeight: FontWeight.w600,
+                  ),
+                  pillStyle: LiquidGlassTabPillStyle(
+                    mode: LiquidGlassPillMode.both,
+                    show: true,
+                    animated: true,
+                    growHeight: 7,
+                    rest: LiquidGlassStyle(
+                      shape: const LiquidGlassShape.continuousRoundedRectangle(
+                        cornerRadius: 28,
+                        clipQuality: LiquidGlassClipQuality.roundedRectangle,
+                      ),
+                      color: isDark
+                          ? const Color(0x38FFFFFF)
+                          : const Color(0x2EAEAEB2),
+                    ),
+                  ),
+                );
+
+                return tabBar.buildGlassPillBar(
+                  body: bodyColumn,
+                  chromeChild: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Positioned(
+                        right: rightEdge,
+                        bottom: bottomMargin,
+                        child: _buildBackspaceButton(isDark, theme),
+                      ),
+                    ],
+                  ),
+                  bottomInset: 0,
+                  pixelRatio: 1.0,
+                  useSync: true,
+                  batch: false,
+                );
+              },
+            )
+          : Stack(
+              children: [
+                bodyColumn,
+                if (!isSearching) _buildFloatingNav(),
+              ],
+            ),
     );
   }
 
@@ -746,6 +885,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           controller: _pageController,
           physics: const ClampingScrollPhysics(),
           onPageChanged: (index) {
+            if (_isAnimatingTabFromBar) return;
             setState(() {
               _currentTab = PanelTab.values[index];
               _lastSelectedTab = _currentTab;

@@ -86,6 +86,9 @@ Widget buildLiquidGlassNavGlyph(
   required bool selected,
   bool underGlass = false,
 }) {
+  if (size <= 0) {
+    return const SizedBox.shrink();
+  }
   final LiquidGlassGlyphBuilder? builder = item.iconBuilder;
   if (builder == null) {
     return Icon(
