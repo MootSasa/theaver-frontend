@@ -71,11 +71,15 @@ class EmojiStickerPanel extends StatefulWidget {
 
 class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     with TickerProviderStateMixin {
-  PanelTab _currentTab = PanelTab.emoji;
+  static PanelTab _lastSelectedTab = PanelTab.emoji;
+
+  PanelTab _currentTab = _lastSelectedTab;
   final ScrollController _gridScrollController = ScrollController();
   final ScrollController _gifScrollController = ScrollController();
   final ScrollController _stickerScrollController = ScrollController();
-  final PageController _pageController = PageController();
+  late PageController _pageController = PageController(
+    initialPage: _currentTab.index,
+  );
 
   late final AnimationController _searchCollapseController;
   late final AnimationController _stickerCollapseController;
@@ -173,6 +177,19 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   void didUpdateWidget(covariant EmojiStickerPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!oldWidget.isVisible && widget.isVisible) {
+      _currentTab = _lastSelectedTab;
+      if (!_pageController.hasClients) {
+        _pageController.dispose();
+        _pageController = PageController(initialPage: _currentTab.index);
+      } else if (_pageController.page?.round() != _currentTab.index) {
+        _pageController.jumpToPage(_currentTab.index);
+      }
+      if (!_gridScrollController.hasClients) {
+        _searchCollapseController.value = 0.0;
+      }
+      if (!_stickerScrollController.hasClients) {
+        _stickerCollapseController.value = 0.0;
+      }
       _displayedRecentEmojis = List<Emoji>.from(_recentEmojis);
       _displayedPackUsageStats = Map<String, int>.from(_packUsageStats);
       StickerService.instance.ensureInitialized();
@@ -543,6 +560,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           onPageChanged: (index) {
             setState(() {
               _currentTab = PanelTab.values[index];
+              _lastSelectedTab = _currentTab;
               if (_currentTab == PanelTab.emoji) {
                 _onScroll();
               } else if (_currentTab == PanelTab.sticker) {
@@ -2321,6 +2339,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                     onTap: () {
                       if (_currentTab != tab) {
                         HapticUtils.selection();
+                        _lastSelectedTab = tab;
                         _pageController.animateToPage(
                           tab.index,
                           duration: const Duration(milliseconds: 300),
