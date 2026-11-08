@@ -344,39 +344,19 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       return const SizedBox.shrink();
     }
 
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final theavTheme = TheavTheme.of(context);
 
-    final content = Stack(
-      children: [
-        Positioned.fill(
-          child: glassProvider.enabled
-              ? LiquidGlassLens(
-                  style: glassProvider.createStyle(
-                    context: context,
-                    cornerRadius: 0,
-                    borderWidth: 0,
-                    refractionIndex: 1.02,
-                    refractionWidth: 24,
-                  ),
-                  child: const SizedBox.expand(),
-                )
-              : ClipRect(
-                  child: BackdropFilter(
-                    filter: BlurUtils.createDownsampledBlur(15),
-                    child: Container(
-                      color: isDark
-                          ? Colors.black.withValues(alpha: 0.65)
-                          : Colors.white.withValues(alpha: 0.65),
-                    ),
-                  ),
-                ),
+    final content = DecoratedBox(
+      decoration: BoxDecoration(
+        color: theavTheme.secondaryBg.withValues(alpha: 1.0),
+        border: Border(
+          top: BorderSide(
+            color: theavTheme.dividerColor,
+            width: 0.5,
+          ),
         ),
-        Positioned.fill(
-          child: _buildPanelContent(false),
-        ),
-      ],
+      ),
+      child: _buildPanelContent(false),
     );
 
     if (widget.expandToAvailableHeight) {
@@ -424,17 +404,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     FocusNode focusNode, {
     bool isGrouped = false,
     double opacity = 1.0,
+    bool lensVisible = true,
   }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final glassProvider = context.watch<LiquidGlassProvider>();
+    final clampedOpacity = opacity.clamp(0.0, 1.0);
 
-    if (opacity <= 0.01) return const SizedBox.shrink();
+    if (!isGrouped && clampedOpacity <= 0.01) {
+      return const SizedBox.shrink();
+    }
 
     final Widget searchContent = Opacity(
-      opacity: opacity.clamp(0.0, 1.0),
+      opacity: clampedOpacity,
       child: IgnorePointer(
-        ignoring: opacity <= 0.1,
+        ignoring: clampedOpacity <= 0.1 || !lensVisible,
         child: Row(
           children: [
             const SizedBox(width: 12),
@@ -493,46 +477,51 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       ),
     );
 
+    if (glassProvider.enabled) {
+      final searchStyle = glassProvider.createStyle(
+        context: context,
+        cornerRadius: 24,
+        refractionWidth: 24,
+      );
+
+      return Container(
+        height: 40 + 8,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: LiquidGlassLens(
+          visibility: lensVisible,
+          style: searchStyle,
+          child: SizedBox(
+            height: 40,
+            child: searchContent,
+          ),
+        ),
+      );
+    }
+
+    if (clampedOpacity <= 0.01) {
+      return const SizedBox.shrink();
+    }
+
     final boxDecoration = BoxDecoration(
       borderRadius: BorderRadius.circular(24),
       border: Border.all(
         color: (isDark ? Colors.white : Colors.black)
-            .withValues(alpha: 0.1 * opacity),
+            .withValues(alpha: 0.1 * clampedOpacity),
         width: 0.5,
       ),
       color: isDark
-          ? const Color(0xFF2C2C2E).withValues(alpha: 0.7 * opacity)
-          : Colors.white.withValues(alpha: 0.7 * opacity),
-    );
-
-    final searchStyle = glassProvider.createStyle(
-      context: context,
-      cornerRadius: 24,
-      refractionWidth: 24,
+          ? const Color(0xFF2C2C2E).withValues(alpha: 0.92 * clampedOpacity)
+          : Colors.white.withValues(alpha: 0.92 * clampedOpacity),
     );
 
     return Container(
       height: 40 + 8,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: glassProvider.enabled
-          ? LiquidGlassLens(
-              style: searchStyle,
-              child: SizedBox(
-                height: 40,
-                child: searchContent,
-              ),
-            )
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: BackdropFilter(
-                filter: BlurUtils.createDownsampledBlur(15),
-                child: Container(
-                  height: 40,
-                  decoration: boxDecoration,
-                  child: searchContent,
-                ),
-              ),
-            ),
+      child: Container(
+        height: 40,
+        decoration: boxDecoration,
+        child: searchContent,
+      ),
     );
   }
 
@@ -625,18 +614,14 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       animation: _searchCollapseController,
       child: _buildEmojiSetSelector(isGrouped: true),
       builder: (context, selectorWidget) {
-        final collapse = _searchCollapseController.value;
-        if (collapse >= 0.98) {
-          return SizedBox(
-            height: _kEmojiSelectorHeight,
-            child: selectorWidget!,
-          );
-        }
-
-        final textOpacity =
-            Curves.easeOut.transform((1.0 - collapse * 1.5).clamp(0.0, 1.0));
-        final fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
-        final blendSmoothness = math.sin(collapse * math.pi) * 28.0;
+        final collapse = _searchCollapseController.value.clamp(0.0, 1.0);
+        final bool isSearchLensVisible = collapse < 0.99;
+        final double textOpacity = (1.0 - collapse * 1.2).clamp(0.0, 1.0);
+        final double fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
+        final double blendSmoothness =
+            (collapse <= 0.005 || collapse >= 0.99)
+                ? 0.0
+                : math.sin(collapse * math.pi) * 26.0;
 
         final searchWidget = Positioned(
           top: _kEmojiSelectorHeight,
@@ -647,7 +632,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             child: Transform.translate(
               offset: Offset(0, -collapse * _kEmojiSelectorHeight),
               child: Transform.scale(
-                scale: 1.0 - (collapse * 0.15),
+                scaleX: 1.0 - (collapse * 0.12),
+                scaleY: 1.0 - (collapse * 0.25),
                 child: _buildSearch(
                   'Поиск эмодзи',
                   _emojiSearchController,
@@ -656,39 +642,35 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   _emojiSearchFocusNode,
                   isGrouped: true,
                   opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+                  lensVisible: isSearchLensVisible,
                 ),
               ),
             ),
           ),
         );
 
-        if (glassProvider.enabled &&
-            sharedStyle != null &&
-            collapse > 0.01 &&
-            collapse < 0.98) {
+        final stack = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            searchWidget,
+            selectorWidget!,
+          ],
+        );
+
+        if (glassProvider.enabled && sharedStyle != null) {
           return SizedBox(
             height: _kEmojiSelectorHeight + _kSearchHeight,
             child: LiquidGlassBlender(
               smoothness: blendSmoothness,
               style: sharedStyle,
-              child: Stack(
-                children: [
-                  searchWidget,
-                  selectorWidget!,
-                ],
-              ),
+              child: stack,
             ),
           );
         }
 
         return SizedBox(
           height: _kEmojiSelectorHeight + _kSearchHeight,
-          child: Stack(
-            children: [
-              searchWidget,
-              selectorWidget!,
-            ],
-          ),
+          child: stack,
         );
       },
     );
@@ -708,18 +690,14 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       animation: _stickerCollapseController,
       child: _buildStickerSetSelector(),
       builder: (context, selectorWidget) {
-        final collapse = _stickerCollapseController.value;
-        if (collapse >= 0.98) {
-          return SizedBox(
-            height: _kEmojiSelectorHeight,
-            child: selectorWidget!,
-          );
-        }
-
-        final textOpacity =
-            Curves.easeOut.transform((1.0 - collapse * 1.5).clamp(0.0, 1.0));
-        final fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
-        final blendSmoothness = math.sin(collapse * math.pi) * 28.0;
+        final collapse = _stickerCollapseController.value.clamp(0.0, 1.0);
+        final bool isSearchLensVisible = collapse < 0.99;
+        final double textOpacity = (1.0 - collapse * 1.2).clamp(0.0, 1.0);
+        final double fallbackOpacity = (1.0 - collapse).clamp(0.0, 1.0);
+        final double blendSmoothness =
+            (collapse <= 0.005 || collapse >= 0.99)
+                ? 0.0
+                : math.sin(collapse * math.pi) * 26.0;
 
         final searchWidget = Positioned(
           top: _kEmojiSelectorHeight,
@@ -730,7 +708,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             child: Transform.translate(
               offset: Offset(0, -collapse * _kEmojiSelectorHeight),
               child: Transform.scale(
-                scale: 1.0 - (collapse * 0.15),
+                scaleX: 1.0 - (collapse * 0.12),
+                scaleY: 1.0 - (collapse * 0.25),
                 child: _buildSearch(
                   'Поиск стикеров',
                   _stickerSearchController,
@@ -739,39 +718,35 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   _stickerSearchFocusNode,
                   isGrouped: true,
                   opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+                  lensVisible: isSearchLensVisible,
                 ),
               ),
             ),
           ),
         );
 
-        if (glassProvider.enabled &&
-            sharedStyle != null &&
-            collapse > 0.01 &&
-            collapse < 0.98) {
+        final stack = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            searchWidget,
+            selectorWidget!,
+          ],
+        );
+
+        if (glassProvider.enabled && sharedStyle != null) {
           return SizedBox(
             height: _kEmojiSelectorHeight + _kSearchHeight,
             child: LiquidGlassBlender(
               smoothness: blendSmoothness,
               style: sharedStyle,
-              child: Stack(
-                children: [
-                  searchWidget,
-                  selectorWidget!,
-                ],
-              ),
+              child: stack,
             ),
           );
         }
 
         return SizedBox(
           height: _kEmojiSelectorHeight + _kSearchHeight,
-          child: Stack(
-            children: [
-              searchWidget,
-              selectorWidget!,
-            ],
-          ),
+          child: stack,
         );
       },
     );
@@ -1321,8 +1296,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
         width: 0.5,
       ),
       color: isDark
-          ? const Color(0xFF2C2C2E).withValues(alpha: 0.7)
-          : Colors.white.withValues(alpha: 0.7),
+          ? const Color(0xFF2C2C2E).withValues(alpha: 0.92)
+          : Colors.white.withValues(alpha: 0.92),
     );
 
     final selectorStyle = glassProvider.createStyle(
@@ -1343,16 +1318,13 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 child: selectorContent,
               ),
             )
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: BackdropFilter(
-                filter: BlurUtils.createDownsampledBlur(15),
-                child: Container(
-                  height: 40,
-                  width: double.infinity,
-                  decoration: boxDecoration,
-                  child: selectorContent,
-                ),
+          : Container(
+              height: 40,
+              width: double.infinity,
+              decoration: boxDecoration,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24),
+                child: selectorContent,
               ),
             ),
     );

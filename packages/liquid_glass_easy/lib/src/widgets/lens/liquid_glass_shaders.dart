@@ -153,6 +153,15 @@ class LiquidGlassShaders {
   static bool isBlenderLoadedFor(bool impeller) =>
       _metaballPrograms.containsKey(impeller);
 
+  /// Synchronously creates a fresh metaball blender shader instance if the
+  /// program for [impeller] is already compiled and cached, or returns `null`
+  /// if it still needs to be loaded via [ensureBlenderLoaded].
+  @internal
+  static ui.FragmentShader? tryCreateBlenderShader([bool? impeller]) {
+    final bool backend = impeller ?? _defaultImpeller;
+    return _metaballPrograms[backend]?.fragmentShader();
+  }
+
   /// Loads and compiles the merged-surface program `LiquidGlassBlender` and
   /// `LiquidGlassGroup` draw with, once per backend, and hands it back.
   ///
