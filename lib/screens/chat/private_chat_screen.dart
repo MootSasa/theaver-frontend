@@ -593,6 +593,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   bool _handleTileBack() {
     if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (MessageContextMenuService().isShowing) {
       MessageContextMenuService().dismiss();
       return true;
@@ -3947,16 +3948,27 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       builder: (context, glassProvider, _) {
         final glassEnabled = glassProvider.enabled;
 
+        final bool isKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+
         return ChatScaffold(
-          canPop: !_isSelectionMode && !_showEmojiPanel && MediaQuery.of(context).viewInsets.bottom == 0,
+          canPop: !_isSelectionMode &&
+              !_showEmojiPanel &&
+              !isKeyboardVisible &&
+              !_isVoiceRecording &&
+              !_isVideoRecording,
           onPopInvoked: (didPop, _) {
             if (!didPop) {
               if (_isSelectionMode) {
                 _clearSelection();
               } else if (_showEmojiPanel) {
-                setState(() => _showEmojiPanel = false);
-              } else if (MediaQuery.of(context).viewInsets.bottom > 0) {
+                _closeEmojiPanel();
+              } else if (isKeyboardVisible) {
                 FocusScope.of(context).unfocus();
+              } else if (_isVideoRecording) {
+                _onVideoRecordingCancelled();
+              } else if (_isVoiceRecording) {
+                _voiceRecorderService.cancelRecording();
+                setState(() => _isVoiceRecording = false);
               }
             }
           },
@@ -4203,36 +4215,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final messageInput = _buildMessageInput();
 
-    final bool isKeyboardVisible = bottomInset > 0;
-
-    // Use PopScope to handle back button for closing emoji panel or cancelling active recordings
-    return PopScope(
-      canPop: !_isSelectionMode && !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
-      onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) {
-          if (_isSelectionMode) {
-            _clearSelection();
-          } else if (_showEmojiPanel) {
-            _closeEmojiPanel();
-          } else if (isKeyboardVisible) {
-            FocusScope.of(context).unfocus();
-          } else if (_isVideoRecording) {
-            _onVideoRecordingCancelled();
-          } else if (_isVoiceRecording) {
-            _voiceRecorderService.cancelRecording();
-            setState(() => _isVoiceRecording = false);
-          }
-        }
-      },
-      child: Column(
-        children: [
-          Expanded(
-            child: AnimatedBuilder(
-              animation: _emojiPanelAnimation,
-              builder: (context, _) {
-                final double panelProgress = shouldShowPanel && !_emojiPanelController.isAnimating
-                    ? 1.0
-                    : _emojiPanelAnimation.value;
+    return Column(
+      children: [
+        Expanded(
+          child: AnimatedBuilder(
+            animation: _emojiPanelAnimation,
+            builder: (context, _) {
+              final double panelProgress = shouldShowPanel && !_emojiPanelController.isAnimating
+                  ? 1.0
+                  : _emojiPanelAnimation.value;
                 final bool isPanelRendered = shouldShowPanel ||
                     _emojiPanelController.isAnimating ||
                     panelProgress > 0.0;
@@ -4453,8 +4444,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   Widget _buildFeedItem(int index) {

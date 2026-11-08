@@ -194,6 +194,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   }
 
   bool _handleBackForTile() {
+    if (!mounted || ModalRoute.of(context)?.isCurrent == false) return false;
     if (widget.isSelectionMode) {
       widget.onCancelSelection?.call();
       return true;

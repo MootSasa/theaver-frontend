@@ -55,6 +55,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   late final HeroController _leftHeroController =
       MaterialApp.createMaterialHeroController();
   final Map<String, HeroController> _chatTileHeroControllers = {};
+  final TilingBackGuardNavigatorObserver _leftBackObserver =
+      TilingBackGuardNavigatorObserver();
+  final Map<String, TilingBackGuardNavigatorObserver> _chatTileBackObservers = {};
 
   late final AnimationController _singlePaneChatController;
   bool _wasShowingSinglePaneChat = false;
@@ -129,6 +132,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     // Очищаем ключи и HeroController'ы удалённых тайлов
     final currentIds = _controller.chatTiles.map((t) => t.tileId).toSet();
     _chatTileSubtreeKeys.removeWhere((id, _) => !currentIds.contains(id));
+    _chatTileBackObservers.removeWhere((id, _) => !currentIds.contains(id));
     final removedHeroIds = _chatTileHeroControllers.keys
         .where((id) => !currentIds.contains(id))
         .toList();
@@ -164,11 +168,19 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   bool _onHardwareKey(KeyEvent event) {
     if (!mounted) return false;
     final route = ModalRoute.of(context);
-    if (route != null && !route.isCurrent) return false;
+    if (route != null) {
+      if (!route.isCurrent) return false;
+      final secAnim = route.secondaryAnimation;
+      if (secAnim != null && secAnim.status != AnimationStatus.dismissed) {
+        return false;
+      }
+    }
+    // Системная клавиша «Назад» на Android (LogicalKeyboardKey.goBack) обрабатывается
+    // нативно через SystemNavigator / PopScope. Перехват goBack здесь вызывал двойной pop.
     if (event is KeyDownEvent &&
         (event.logicalKey == LogicalKeyboardKey.escape ||
-            event.logicalKey == LogicalKeyboardKey.browserBack ||
-            event.logicalKey == LogicalKeyboardKey.goBack)) {
+            event.logicalKey == LogicalKeyboardKey.browserBack)) {
+      if (_controller.isPopTransitionActive) return true;
       final rootNav = Navigator.maybeOf(context, rootNavigator: true);
       _controller.handleBackAction(rootNavigator: rootNav);
       return true;
@@ -297,13 +309,16 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
             controller: _leftHeroController,
             child: Navigator(
               key: _leftTileNavigatorKey,
+              observers: [_leftBackObserver],
               onGenerateRoute: (settings) {
                 final sub = _onGenerateSubRoute(settings);
                 if (sub != null) return sub;
-                return MaterialPageRoute(
+                final route = MaterialPageRoute(
                   builder: (_) => const MainScreen(),
                   settings: settings,
                 );
+                _controller.leftRootRoute = route;
+                return route;
               },
             ),
           ),
@@ -325,6 +340,10 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       descriptor.tileId,
       () => MaterialApp.createMaterialHeroController(),
     );
+    final backObserver = _chatTileBackObservers.putIfAbsent(
+      descriptor.tileId,
+      () => TilingBackGuardNavigatorObserver(),
+    );
 
     final bool isFocusedChatTile =
         _controller.activeTileId == descriptor.tileId;
@@ -342,6 +361,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
             controller: heroController,
             child: Navigator(
               key: descriptor.navigatorKey,
+              observers: [backObserver],
               onGenerateRoute: (settings) {
                 final sub = _onGenerateSubRoute(settings);
                 if (sub != null) return sub;
@@ -480,16 +500,33 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     if (!_isCurrentlySinglePaneMode()) return false;
     if (!_controller.singlePaneShowingChat) return false;
     if (_isClosingSinglePaneAnimated) return false;
+    if (_controller.isPopTransitionActive) return false;
     if (_singlePaneChatController.isAnimating) return false;
     if (_singlePaneChatController.value < 0.99) return false;
 
     final rootModal = ModalRoute.of(context);
-    if (rootModal != null && !rootModal.isCurrent) return false;
+    if (rootModal != null) {
+      if (!rootModal.isCurrent) return false;
+      final rootSecAnim = rootModal.secondaryAnimation;
+      if (rootSecAnim != null &&
+          rootSecAnim.status != AnimationStatus.dismissed) {
+        return false;
+      }
+    }
 
     final chatNav = activeChat.navigatorKey.currentState;
-    if (chatNav != null && chatNav.canPop()) return false;
-    if (activeChat.rootRoute != null && !activeChat.rootRoute!.isCurrent) {
+    if (chatNav != null && (chatNav.canPop() || chatNav.userGestureInProgress)) {
       return false;
+    }
+    final chatRootRoute = activeChat.rootRoute;
+    if (chatRootRoute != null) {
+      if (!chatRootRoute.isCurrent) return false;
+      final secAnim = chatRootRoute.secondaryAnimation;
+      if (secAnim != null &&
+          (secAnim.status != AnimationStatus.dismissed ||
+              secAnim.value > 0.001)) {
+        return false;
+      }
     }
 
     return true;
@@ -566,6 +603,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                       },
                       onDismissed: () {
                         _isSinglePaneInteractiveDrag = false;
+                        _controller.recordBackTransition();
                         _controller.closeChatTile(activeChat.tileId);
                       },
                       child: chatTileWidget,

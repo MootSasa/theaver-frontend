@@ -2867,15 +2867,6 @@ class ProfileScreenState extends State<ProfileScreen>
       return KeyEventResult.ignored;
     }
 
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
-      if (_isAnyMenuOpen) {
-        _closeAllMenus();
-      } else {
-        Navigator.maybePop(context);
-      }
-      return KeyEventResult.handled;
-    }
-
     final sections = _buildSections(context.l10n);
     final safeIdx =
         _selectedSectionIndex.clamp(0, math.max<int>(0, sections.length - 1));

@@ -721,6 +721,7 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   bool _handleTileBack() {
     if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (MessageContextMenuService().isShowing) {
       MessageContextMenuService().dismiss();
       return true;

@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
+import '../services/tiling_layout_controller.dart';
 import '../widgets/tiling/tile_viewport_scope.dart';
 import '../widgets/tiling/trackpad_swipe_back_indicator.dart';
 import 'haptic_utils.dart';
@@ -156,11 +157,20 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
   bool _canPop() {
     if (!mounted) return false;
     if (_isActive) return true;
+    if (TilingLayoutController.instance.isPopTransitionActive) return false;
     final modalRoute = ModalRoute.of(context);
     if (modalRoute?.isCurrent != true) return false;
+    final secAnim = modalRoute?.secondaryAnimation;
+    if (secAnim != null && secAnim.status != AnimationStatus.dismissed) {
+      return false;
+    }
     if (!widget.animation.isCompleted) return false;
     final navigator = Navigator.maybeOf(context);
-    if (navigator == null || !navigator.canPop()) return false;
+    if (navigator == null ||
+        !navigator.canPop() ||
+        navigator.userGestureInProgress) {
+      return false;
+    }
 
     // We allow swipe back even if PopScope(canPop: false) is active,
     // because we want iOS-style "always back" gesture in chats.
@@ -211,6 +221,7 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
 
     if (shouldPop) {
       HapticUtils.impact();
+      TilingLayoutController.instance.recordBackTransition();
       // Use spring to finish the slide
       final simulation = SpringSimulation(
         const SpringDescription(mass: 1.0, stiffness: 400, damping: 28),
@@ -222,6 +233,7 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
         if (mounted) {
           navigator.didStopUserGesture();
           if (modalRoute?.isCurrent == true) {
+            TilingLayoutController.instance.recordBackTransition();
             navigator.pop();
           }
         }
@@ -272,6 +284,11 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
     final screenWidth = tileSize.width;
     final bottomInset = TileViewportScope.viewInsetsOf(context).bottom;
     final isInsideTile = TileViewportScope.maybeTileIdOf(context) != null;
+    final sysLeftInset = MediaQuery.systemGestureInsetsOf(context).left;
+    final platform = Theme.of(context).platform;
+    final isMobile =
+        platform == TargetPlatform.android || platform == TargetPlatform.iOS;
+    final leftEdgeInset = isMobile ? math.max(28.0, sysLeftInset) : 0.0;
 
     Widget detector = RawGestureDetector(
       gestures: <Type, GestureRecognizerFactory>{
@@ -282,6 +299,7 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
             screenHeight: screenHeight,
             screenWidth: screenWidth,
             bottomInset: bottomInset,
+            leftEdgeInset: leftEdgeInset,
           ),
           (_BackGestureRecognizer instance) {
             instance.canPopGetter = _canPop;
@@ -289,6 +307,7 @@ class _SwipeBackGestureDetectorState extends State<_SwipeBackGestureDetector> {
             instance.screenHeight = screenHeight;
             instance.screenWidth = screenWidth;
             instance.bottomInset = bottomInset;
+            instance.leftEdgeInset = leftEdgeInset;
             instance.onStart = _onHorizontalDragStart;
             instance.onUpdate = _onHorizontalDragUpdate;
             instance.onEnd = _onHorizontalDragEnd;
@@ -402,6 +421,7 @@ class _InteractiveSwipeBackGestureDetectorState
 
     if (shouldDismiss) {
       HapticUtils.impact();
+      TilingLayoutController.instance.recordBackTransition();
       final simulation = SpringSimulation(
         const SpringDescription(mass: 1.0, stiffness: 400, damping: 28),
         widget.animationController.value,
@@ -451,6 +471,11 @@ class _InteractiveSwipeBackGestureDetectorState
     final screenHeight = tileSize.height;
     final screenWidth = tileSize.width;
     final bottomInset = TileViewportScope.viewInsetsOf(context).bottom;
+    final sysLeftInset = MediaQuery.systemGestureInsetsOf(context).left;
+    final platform = Theme.of(context).platform;
+    final isMobile =
+        platform == TargetPlatform.android || platform == TargetPlatform.iOS;
+    final leftEdgeInset = isMobile ? math.max(28.0, sysLeftInset) : 0.0;
 
     return RawGestureDetector(
       gestures: <Type, GestureRecognizerFactory>{
@@ -462,6 +487,7 @@ class _InteractiveSwipeBackGestureDetectorState
             screenHeight: screenHeight,
             screenWidth: screenWidth,
             bottomInset: bottomInset,
+            leftEdgeInset: leftEdgeInset,
           ),
           (_BackGestureRecognizer instance) {
             instance.canPopGetter = _canSwipe;
@@ -469,6 +495,7 @@ class _InteractiveSwipeBackGestureDetectorState
             instance.screenHeight = screenHeight;
             instance.screenWidth = screenWidth;
             instance.bottomInset = bottomInset;
+            instance.leftEdgeInset = leftEdgeInset;
             instance.onStart = _onHorizontalDragStart;
             instance.onUpdate = _onHorizontalDragUpdate;
             instance.onEnd = _onHorizontalDragEnd;
@@ -491,6 +518,7 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
   double screenHeight;
   double screenWidth;
   double bottomInset;
+  double leftEdgeInset;
   bool _gestureAccepted = false;
 
   _BackGestureRecognizer({
@@ -499,6 +527,7 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
     required this.screenHeight,
     required this.screenWidth,
     required this.bottomInset,
+    this.leftEdgeInset = 0.0,
   });
 
   bool _isAllowedDeviceKind(PointerDeviceKind kind) {
@@ -510,7 +539,13 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
         kind == PointerDeviceKind.invertedStylus;
   }
 
-  bool _isPointInExcludedArea(Offset localPosition) {
+  bool _isPointInExcludedArea(Offset localPosition, {bool isPointerDown = false}) {
+    // Exclude the left system edge zone on mobile at touch start so Android/iOS
+    // system edge-back gesture never triggers both system back and custom swipe-back.
+    if (isPointerDown && leftEdgeInset > 0 && localPosition.dx < leftEdgeInset) {
+      return true;
+    }
+
     // Top app bar / header area (status bar + floating glass bar) is reserved for buttons
     if (localPosition.dy < 110.0) return true;
 
@@ -525,7 +560,9 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
   bool isPointerAllowed(PointerEvent event) {
     if (!canPopGetter()) return false;
     if (!_isAllowedDeviceKind(event.kind)) return false;
-    if (_isPointInExcludedArea(event.localPosition)) return false;
+    if (_isPointInExcludedArea(event.localPosition, isPointerDown: true)) {
+      return false;
+    }
     if (isPopBlockedGetter() && event.localPosition.dy > screenHeight * 0.5) {
       return false;
     }
@@ -537,7 +574,7 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
     if (!_isAllowedDeviceKind(event.kind)) {
       return;
     }
-    if (_isPointInExcludedArea(event.localPosition)) {
+    if (_isPointInExcludedArea(event.localPosition, isPointerDown: true)) {
       return;
     }
     _gestureAccepted = false;

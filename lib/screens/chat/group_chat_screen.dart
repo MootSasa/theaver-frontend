@@ -1060,6 +1060,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   bool _handleTileBack() {
     if (!mounted) return false;
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (MessageContextMenuService().isShowing) {
       MessageContextMenuService().dismiss();
       return true;
