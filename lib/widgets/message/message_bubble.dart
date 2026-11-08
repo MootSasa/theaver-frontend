@@ -1732,9 +1732,12 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (_isGif) {
+      final meta = message.mediaPayload ?? const <String, dynamic>{};
+      final previewUrl = meta['preview_url']?.toString();
       return GifMessageWidget(
         key: ValueKey('gif_${message.localId ?? message.id}'),
         gifUrl: resolvedUrl,
+        previewUrl: previewUrl,
         width: message.mediaWidth,
         height: message.mediaHeight,
         floatingTimestampBadge: Container(

@@ -4152,7 +4152,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           key: const ValueKey('private_chat_messages_list'),
           controller: _scrollController,
           reverse: true,
-          cacheExtent: 1500.0,
+          cacheExtent: 500.0,
           addRepaintBoundaries: false,
           // В glass-режиме добавляем верхний отступ,
           // чтобы сообщения не прятались за glass AppBar

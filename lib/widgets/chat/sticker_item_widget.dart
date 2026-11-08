@@ -1,11 +1,194 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:lottie/lottie.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/emoji_utils.dart';
+
+/// Network image widget that supports pausing multi-frame animations (`animated_webp`, `.gif`).
+/// Standard [Image.network] keeps an active [ImageStreamListener] forever, forcing
+/// [MultiFrameImageStreamCompleter] to decode frames at 30-60 FPS even when `animate == false`
+/// or when scrolled off-screen. By detaching the listener as soon as the first frame arrives
+/// when [animate] is `false`, [MultiFrameImageStreamCompleter] cancels its decode timer (0% CPU/GPU).
+class ControlledAnimatedNetworkImage extends StatefulWidget {
+  final String url;
+  final double? width;
+  final double? height;
+  final int? cacheWidth;
+  final BoxFit fit;
+  final FilterQuality filterQuality;
+  final bool animate;
+  final WidgetBuilder? errorBuilder;
+
+  const ControlledAnimatedNetworkImage({
+    super.key,
+    required this.url,
+    this.width,
+    this.height,
+    this.cacheWidth,
+    this.fit = BoxFit.contain,
+    this.filterQuality = FilterQuality.low,
+    this.animate = true,
+    this.errorBuilder,
+  });
+
+  @override
+  State<ControlledAnimatedNetworkImage> createState() =>
+      _ControlledAnimatedNetworkImageState();
+}
+
+class _ControlledAnimatedNetworkImageState
+    extends State<ControlledAnimatedNetworkImage> {
+  ImageStream? _imageStream;
+  ImageStreamListener? _listener;
+  ImageInfo? _imageInfo;
+  bool _isListening = false;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _listener = ImageStreamListener(
+      _handleFrame,
+      onError: _handleError,
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _resolveImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant ControlledAnimatedNetworkImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url ||
+        oldWidget.cacheWidth != widget.cacheWidth) {
+      _resolveImage();
+    } else if (oldWidget.animate != widget.animate) {
+      _updateSubscription();
+    }
+  }
+
+  void _resolveImage() {
+    if (widget.url.isEmpty) {
+      _stopListening();
+      _disposeImageInfo();
+      return;
+    }
+    _hasError = false;
+    final ImageProvider baseProvider = NetworkImage(widget.url);
+    final ImageProvider provider = ResizeImage.resizeIfNeeded(
+      widget.cacheWidth,
+      null,
+      baseProvider,
+    );
+    final ImageStream newStream =
+        provider.resolve(createLocalImageConfiguration(context));
+    if (newStream.key != _imageStream?.key) {
+      _stopListening();
+      _imageStream = newStream;
+      _startListening();
+    } else {
+      _updateSubscription();
+    }
+  }
+
+  void _startListening() {
+    if (_imageStream == null || _listener == null || _isListening) return;
+    _isListening = true;
+    _imageStream!.addListener(_listener!);
+  }
+
+  void _stopListening() {
+    if (_imageStream == null || _listener == null || !_isListening) return;
+    _isListening = false;
+    _imageStream!.removeListener(_listener!);
+  }
+
+  void _updateSubscription() {
+    if (widget.animate) {
+      _startListening();
+    } else if (_imageInfo != null) {
+      // We already have a frame to display statically; detach listener so
+      // MultiFrameImageStreamCompleter stops decoding frames immediately.
+      _stopListening();
+    } else {
+      // Need at least the first frame before we can detach.
+      _startListening();
+    }
+  }
+
+  void _handleFrame(ImageInfo info, bool synchronousCall) {
+    if (!mounted) {
+      return;
+    }
+    final ImageInfo? oldInfo = _imageInfo;
+    _imageInfo = info.clone();
+    if (oldInfo != null) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        oldInfo.dispose();
+      });
+    }
+    if (!widget.animate) {
+      // Detach immediately after capturing the first frame so animation timer stops.
+      _stopListening();
+    }
+    if (mounted) {
+      setState(() {
+        _hasError = false;
+      });
+    }
+  }
+
+  void _handleError(Object exception, StackTrace? stackTrace) {
+    if (!mounted) return;
+    setState(() {
+      _hasError = true;
+    });
+  }
+
+  void _disposeImageInfo() {
+    final ImageInfo? old = _imageInfo;
+    _imageInfo = null;
+    if (old != null) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        old.dispose();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _stopListening();
+    _disposeImageInfo();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasError && widget.errorBuilder != null) {
+      return widget.errorBuilder!(context);
+    }
+    final ui.Image? raw = _imageInfo?.image;
+    if (raw == null) {
+      return SizedBox(width: widget.width, height: widget.height);
+    }
+    return RawImage(
+      image: raw,
+      scale: _imageInfo?.scale ?? 1.0,
+      width: widget.width,
+      height: widget.height,
+      fit: widget.fit,
+      filterQuality: widget.filterQuality,
+    );
+  }
+}
 
 /// Renders a sticker or custom emoji media asset (`.webp`, `animated_webp`, `.tgs`, `.json`, `.gif`)
 /// on a strictly transparent background (`Colors.transparent`).
@@ -70,7 +253,7 @@ class _StickerMediaViewState extends State<StickerMediaView> {
     if (!widget.isLottie || widget.fileUrl.isEmpty) return;
     final cached = StickerService.instance.getCachedComposition(widget.fileUrl);
     if (cached != null) {
-      if (mounted) {
+      if (mounted && _composition != cached) {
         setState(() => _composition = cached);
       }
       if (!widget.animate && _bakedFirstFrame == null) {
@@ -122,17 +305,15 @@ class _StickerMediaViewState extends State<StickerMediaView> {
           fit: widget.fit,
         );
       } else if (_composition != null) {
-        content = RepaintBoundary(
-          child: Lottie(
-            composition: _composition,
-            width: widget.width,
-            height: widget.height,
-            fit: widget.fit,
-            animate: widget.animate,
-            repeat: widget.repeat,
-            frameRate:
-                widget.width <= 80 ? const FrameRate(30) : FrameRate.max,
-          ),
+        content = Lottie(
+          composition: _composition,
+          width: widget.width,
+          height: widget.height,
+          fit: widget.fit,
+          animate: widget.animate,
+          repeat: widget.repeat,
+          frameRate: const FrameRate(30),
+          renderCache: RenderCache.drawingCommands,
         );
       } else if (_bakedFirstFrame != null) {
         content = RawImage(
@@ -146,20 +327,18 @@ class _StickerMediaViewState extends State<StickerMediaView> {
       }
     } else {
       final resolvedUrl = StickerService.resolveUrl(widget.fileUrl);
-      final isStaticWebp = widget.format.toLowerCase() == 'webp';
-      final int? targetCacheWidth = isStaticWebp && widget.width.isFinite
-          ? (widget.width * 2.5).round().clamp(64, 512)
+      final int? targetCacheWidth = widget.width.isFinite
+          ? (widget.width * 1.8).round().clamp(48, 320)
           : null;
-      content = Image.network(
-        resolvedUrl,
+      content = ControlledAnimatedNetworkImage(
+        url: resolvedUrl,
         width: widget.width,
         height: widget.height,
         cacheWidth: targetCacheWidth,
         fit: widget.fit,
-        gaplessPlayback: true,
-        filterQuality:
-            widget.width <= 80 ? FilterQuality.low : FilterQuality.medium,
-        errorBuilder: (_, __, ___) => SizedBox(
+        animate: widget.animate,
+        filterQuality: FilterQuality.low,
+        errorBuilder: (_) => SizedBox(
           width: widget.width,
           height: widget.height,
         ),
@@ -176,10 +355,12 @@ class _StickerMediaViewState extends State<StickerMediaView> {
       );
     }
 
-    return SizedBox(
-      width: widget.width,
-      height: widget.height,
-      child: content,
+    return RepaintBoundary(
+      child: SizedBox(
+        width: widget.width,
+        height: widget.height,
+        child: content,
+      ),
     );
   }
 }
@@ -214,12 +395,17 @@ class InlineCustomEmojiWidget extends StatefulWidget {
 
 class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
   final LayerLink _layerLink = LayerLink();
+  final Key _visibilityKey = UniqueKey();
   StickerItem? _sticker;
+  bool _isVisible = true;
 
   @override
   void initState() {
     super.initState();
-    _resolveSticker();
+    _sticker = StickerService.instance.getStickerByIdSync(widget.customEmojiId);
+    if (_sticker == null) {
+      _resolveSticker();
+    }
   }
 
   @override
@@ -227,7 +413,13 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.customEmojiId != widget.customEmojiId ||
         oldWidget.directUrl != widget.directUrl) {
-      _resolveSticker();
+      final cached =
+          StickerService.instance.getStickerByIdSync(widget.customEmojiId);
+      if (cached != null) {
+        _sticker = cached;
+      } else {
+        _resolveSticker();
+      }
     }
   }
 
@@ -235,11 +427,11 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
     if (widget.customEmojiId.isEmpty) return;
     final cached = StickerService.instance.getStickerByIdSync(widget.customEmojiId);
     if (cached != null) {
-      if (mounted) setState(() => _sticker = cached);
+      if (mounted && _sticker != cached) setState(() => _sticker = cached);
       return;
     }
     final fetched = await StickerService.instance.getStickerById(widget.customEmojiId);
-    if (mounted && fetched != null) {
+    if (mounted && fetched != null && _sticker != fetched) {
       setState(() => _sticker = fetched);
     }
   }
@@ -289,7 +481,7 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
       format: format,
       width: widget.size,
       height: widget.size,
-      animate: true,
+      animate: _isVisible,
       adaptiveTintColor: tint,
     );
 
@@ -301,6 +493,19 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
           link: _layerLink,
           child: media,
         ),
+      );
+    }
+
+    if (widget.size >= 40.0) {
+      return VisibilityDetector(
+        key: _visibilityKey,
+        onVisibilityChanged: (info) {
+          final visible = info.visibleFraction > 0.01;
+          if (mounted && _isVisible != visible) {
+            setState(() => _isVisible = visible);
+          }
+        },
+        child: media,
       );
     }
 

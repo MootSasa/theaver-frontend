@@ -1067,7 +1067,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                     format: item.format,
                     width: 30,
                     height: 30,
-                    animate: true,
+                    animate: _currentTab == PanelTab.emoji && widget.isVisible,
                   ),
                 ),
               );
@@ -1717,19 +1717,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Image.network(
-                      resolvedUrl,
-                      fit: BoxFit.cover,
-                      cacheWidth: 240,
-                      filterQuality: FilterQuality.low,
-                      gaplessPlayback: true,
-                      errorBuilder: (_, __, ___) => Center(
-                        child: Text(
-                          'GIF',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: theme.textSecondary,
+                    RepaintBoundary(
+                      child: ControlledAnimatedNetworkImage(
+                        url: resolvedUrl,
+                        cacheWidth: 220,
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.low,
+                        animate: _currentTab == PanelTab.gif && widget.isVisible,
+                        errorBuilder: (_) => Center(
+                          child: Text(
+                            'GIF',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: theme.textSecondary,
+                            ),
                           ),
                         ),
                       ),
@@ -2123,7 +2125,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                       format: item.format,
                       width: 68,
                       height: 68,
-                      animate: true,
+                      animate: _currentTab == PanelTab.sticker && widget.isVisible,
                     ),
                     if (item.hasFullscreenEffect)
                       Positioned(
