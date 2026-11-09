@@ -853,35 +853,89 @@ class NotificationService with WidgetsBindingObserver {
               ? (isGroup && senderName.isNotEmpty ? '$senderName: $messageText' : messageText)
               : 'Новое сообщение';
 
-          WebNotificationHelper.showBrowserNotification(
-            title: displayTitle,
-            body: displayBody,
-            iconUrl: getValidAvatarUrl(avatarUrl),
-            tag: 'chat_$chatId',
-            onTap: () {
-              _navigateFromNotificationData({
-                'chat_id': chatId,
-                'chat_name': chatName,
-                'sender_name': senderName,
-                'avatar_url': avatarUrl,
-                'is_group': isGroup,
-                'type': 'new_message',
-              });
-            },
-          );
+          if (!isInAppNotificationsDisabled) {
+            showInAppBanner(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: avatarUrl,
+              isGroup: isGroup,
+            );
+          }
+
+          if (!_isAppInForeground) {
+            WebNotificationHelper.showBrowserNotification(
+              title: displayTitle,
+              body: displayBody,
+              iconUrl: getValidAvatarUrl(avatarUrl),
+              tag: 'chat_$chatId',
+              onTap: () {
+                _navigateFromNotificationData({
+                  'chat_id': chatId,
+                  'chat_name': chatName,
+                  'sender_name': senderName,
+                  'avatar_url': avatarUrl,
+                  'is_group': isGroup,
+                  'type': 'new_message',
+                });
+              },
+            );
+          }
+        } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+          bool isWindowFocused = false;
+          try {
+            isWindowFocused = await windowManager.isFocused();
+          } catch (_) {
+            isWindowFocused = _isAppInForeground;
+          }
+
+          if (isWindowFocused && !isInAppNotificationsDisabled) {
+            showInAppBanner(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: avatarUrl,
+              isGroup: isGroup,
+            );
+          } else {
+            await showMessageNotification(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: avatarUrl,
+              mediaUrl: mediaUrl,
+              isGroup: isGroup,
+              messageId: messageId,
+            );
+          }
         } else {
-          // Нативные платформы (Android, iOS, Windows, Linux, macOS):
-          // Доставляем стандартное системное уведомление устройства напрямую через ОС
-          await showMessageNotification(
-            chatId: chatId,
-            chatName: chatName,
-            senderName: senderName,
-            messageText: messageText,
-            avatarUrl: avatarUrl,
-            mediaUrl: mediaUrl,
-            isGroup: isGroup,
-            messageId: messageId,
-          );
+          // Мобильные платформы (Android / iOS):
+          // Если приложение на переднем плане — всплывающий in-app баннер в интерфейсе
+          // Если свернуто в фон — системное уведомление ОС
+          if (_isAppInForeground && !isInAppNotificationsDisabled) {
+            showInAppBanner(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: avatarUrl,
+              isGroup: isGroup,
+            );
+          } else {
+            await showMessageNotification(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: avatarUrl,
+              mediaUrl: mediaUrl,
+              isGroup: isGroup,
+              messageId: messageId,
+            );
+          }
         }
       }
     });
@@ -1242,16 +1296,27 @@ class NotificationService with WidgetsBindingObserver {
           final messageId = data['id']?.toString() ?? data['message_id']?.toString();
 
           if (shouldShowNotification(chatId) && !_isDuplicateNotification(chatId, messageText, messageId: messageId)) {
-            showMessageNotification(
-              chatId: chatId,
-              chatName: chatName,
-              senderName: senderName,
-              messageText: messageText,
-              avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
-              mediaUrl: data['media_url']?.toString() ?? data['image']?.toString() ?? data['file_url']?.toString(),
-              isGroup: isGroup,
-              messageId: messageId,
-            );
+            if (_isAppInForeground && !isInAppNotificationsDisabled) {
+              showInAppBanner(
+                chatId: chatId,
+                chatName: chatName,
+                senderName: senderName,
+                messageText: messageText,
+                avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
+                isGroup: isGroup,
+              );
+            } else {
+              showMessageNotification(
+                chatId: chatId,
+                chatName: chatName,
+                senderName: senderName,
+                messageText: messageText,
+                avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
+                mediaUrl: data['media_url']?.toString() ?? data['image']?.toString() ?? data['file_url']?.toString(),
+                isGroup: isGroup,
+                messageId: messageId,
+              );
+            }
           }
         }
         break;
