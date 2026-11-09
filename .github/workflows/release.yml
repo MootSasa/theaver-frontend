@@ -109,6 +109,10 @@ jobs:
         env:
           GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON }}
           AGCONNECT_SERVICES: ${{ secrets.AGCONNECT_SERVICES_JSON }}
+          RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$GOOGLE_SERVICES" ]; then
@@ -125,7 +129,15 @@ jobs:
             mkdir -p ~/.android
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > android/app/debug.keystore
-            echo "✅ Restored consistent Android signing keystore"
+            echo "✅ Restored consistent Android debug keystore"
+          fi
+          if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_STORE_PASSWORD" ]; then
+            echo "$RELEASE_KEYSTORE_B64" | base64 -d > android/app/release-keystore.jks
+            printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=release-keystore.jks\n" \
+              "$RELEASE_STORE_PASSWORD" \
+              "${RELEASE_KEY_PASSWORD:-$RELEASE_STORE_PASSWORD}" \
+              "${RELEASE_KEY_ALIAS:-theaver}" > android/key.properties
+            echo "✅ Restored production Android release keystore & key.properties"
           fi
 
       - name: Set up Java 17
@@ -285,6 +297,9 @@ jobs:
 
       - name: Package Windows Portable ZIP & Setup Installer
         shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
           $ver = "${{ needs.prepare-release.outputs.version }}"
           $ch = "${{ needs.prepare-release.outputs.channel }}"
@@ -292,6 +307,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist/windows" | Out-Null
           $outDir = (Resolve-Path "dist/windows").Path
           $zipOutput = Join-Path $outDir "theaver-v${ver}-${ch}-windows-x64.zip"
+
+          if (Test-Path "scripts/sign_windows.ps1") {
+            & "scripts/sign_windows.ps1" -Directory $releaseDir
+          }
           
           Write-Host "Compressing $releaseDir into $zipOutput..."
           Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOutput -Force
@@ -312,6 +331,10 @@ jobs:
               "/DMyOutputBaseFilename=$setupBaseName" `
               "/DMyIconFile=$iconPath" `
               "windows/installer/setup.iss"
+            $setupExe = Join-Path $outDir "$setupBaseName.exe"
+            if ((Test-Path "scripts/sign_windows.ps1") -and (Test-Path $setupExe)) {
+              & "scripts/sign_windows.ps1" -Files @($setupExe)
+            }
             Write-Host "Created Windows Setup Installer in $outDir"
           } else {
             Write-Warning "Inno Setup compiler (ISCC.exe) not found, skipping installer build."
@@ -384,7 +407,10 @@ jobs:
           BDATE="$(date +'%d.%m.%Y')"
           flutter build linux --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE"
 
-      - name: Package Linux Bundle into tar.gz
+      - name: Package & Sign Linux Bundle into tar.gz
+        env:
+          LINUX_GPG_PRIVATE_KEY_BASE64: ${{ secrets.LINUX_GPG_PRIVATE_KEY_BASE64 }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
         run: |
           VER="${{ needs.prepare-release.outputs.version }}"
           CH="${{ needs.prepare-release.outputs.channel }}"
@@ -394,12 +420,16 @@ jobs:
           
           tar -czf "$ARCHIVE_NAME" -C "$BUNDLE_DIR" .
           echo "Created $ARCHIVE_NAME"
+          if [ -f "scripts/sign_linux.sh" ]; then
+            bash scripts/sign_linux.sh "$PWD/$ARCHIVE_NAME"
+          fi
 
       - name: Upload Linux Binaries
         uses: actions/upload-artifact@v4
         with:
           name: linux-binaries
-          path: dist/linux/*.tar.gz
+          path: |
+            dist/linux/*.tar.gz*
           retention-days: 7
 
   build-macos:
