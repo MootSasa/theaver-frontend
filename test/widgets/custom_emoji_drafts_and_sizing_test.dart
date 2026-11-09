@@ -4,6 +4,7 @@ import 'package:theaver/models/chat_draft.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/sticker_service.dart';
 import 'package:theaver/utils/emoji_utils.dart';
+import 'package:theaver/utils/entity_parser.dart';
 import 'package:theaver/widgets/chat/rich_text_editing_controller.dart';
 
 void main() {
@@ -69,8 +70,8 @@ void main() {
       final controller = RichTextEditingController();
       const rawText = 'Hello 🔥 world 😂!';
       final entities = <MessageEntity>[
-        MessageEntity(type: 'bold', offset: 0, length: 5),
-        MessageEntity(
+        const MessageEntity(type: 'bold', offset: 0, length: 5),
+        const MessageEntity(
           type: 'custom_emoji',
           offset: 6,
           length: 2,
@@ -78,7 +79,7 @@ void main() {
           documentUrl: '/uploads/stickers/501.tgs',
           format: 'tgs',
         ),
-        MessageEntity(
+        const MessageEntity(
           type: 'custom_emoji',
           offset: 15,
           length: 2,
@@ -114,7 +115,7 @@ void main() {
     test('serializes and deserializes entities in ChatDraft', () {
       final draft = ChatDraft(
         text: '👍 test',
-        entities: [
+        entities: const [
           MessageEntity(
             type: 'custom_emoji',
             offset: 0,
@@ -160,7 +161,7 @@ void main() {
       expect(EmojiUtils.countTotalEmojiOnly('😀', const []), 1);
       expect(EmojiUtils.countTotalEmojiOnly('😀😂🔥👍🎉❤️✨🚀', const []), 8);
 
-      final customOnly = [
+      const customOnly = [
         MessageEntity(type: 'custom_emoji', offset: 0, length: 2, customEmojiId: '1'),
         MessageEntity(type: 'custom_emoji', offset: 2, length: 2, customEmojiId: '2'),
         MessageEntity(type: 'custom_emoji', offset: 4, length: 2, customEmojiId: '3'),
@@ -168,11 +169,76 @@ void main() {
       ];
       expect(EmojiUtils.countTotalEmojiOnly('😀😂🔥👍', customOnly), 4);
 
-      final mixed = [
+      const mixed = [
         MessageEntity(type: 'custom_emoji', offset: 0, length: 2, customEmojiId: '1'),
       ];
       expect(EmojiUtils.countTotalEmojiOnly('😀 😂 🔥', mixed), 3);
       expect(EmojiUtils.countTotalEmojiOnly('😀 hello', mixed), 0);
+    });
+  });
+
+  group('Custom emoji URL suppression & link preview isolation', () {
+    test('EntityParser.isInternalStorageUrl recognizes internal storage and rejects it for previews', () {
+      expect(EntityParser.isInternalStorageUrl('https://storage.theaver.app/stickers/101.webp'), isTrue);
+      expect(EntityParser.isInternalStorageUrl('https://storage.theaver.app/avatars/avatar_12.jpg'), isTrue);
+      expect(EntityParser.isInternalStorageUrl('http://storage.theaver.app/test'), isTrue);
+      expect(EntityParser.isInternalStorageUrl('http://127.0.0.1:9000/bucket/item'), isTrue);
+      expect(EntityParser.isInternalStorageUrl('http://localhost:9000/media'), isTrue);
+
+      // External web links should NOT be internal storage URLs
+      expect(EntityParser.isInternalStorageUrl('https://github.com/flutter/flutter'), isFalse);
+      expect(EntityParser.isInternalStorageUrl('https://google.com'), isFalse);
+      expect(EntityParser.isInternalStorageUrl('https://example.com/image.png'), isFalse);
+    });
+
+    test('insertCustomEmoji sets documentUrl and keeps url null so link preview is not triggered', () {
+      final controller = RichTextEditingController();
+      const item = StickerItem(
+        id: 777,
+        packId: 10,
+        fileUrl: 'https://storage.theaver.app/stickers/777.webp',
+        format: 'webp',
+        emojiList: ['🚀'],
+      );
+
+      controller.insertCustomEmoji(item);
+
+      // RichSpan for custom emoji must have null url
+      expect(controller.spans.length, 1);
+      final span = controller.spans.first;
+      expect(span.type, 'custom_emoji');
+      expect(span.url, isNull);
+      expect(span.documentUrl, 'https://storage.theaver.app/stickers/777.webp');
+
+      // Generated MessageEntity must also have null url
+      final entities = controller.entities;
+      expect(entities.length, 1);
+      final entity = entities.first;
+      expect(entity.type, 'custom_emoji');
+      expect(entity.url, isNull);
+      expect(entity.documentUrl, 'https://storage.theaver.app/stickers/777.webp');
+    });
+
+    test('loadMessage with custom emoji entity ensures span.url remains null', () {
+      final controller = RichTextEditingController();
+      const rawText = 'Check this 🚀 out!';
+      final entities = <MessageEntity>[
+        const MessageEntity(
+          type: 'custom_emoji',
+          offset: 11,
+          length: 2,
+          customEmojiId: '888',
+          documentUrl: 'https://storage.theaver.app/stickers/888.webp',
+          format: 'webp',
+        ),
+      ];
+
+      controller.loadMessage(rawText, entities);
+
+      final customSpans = controller.spans.where((s) => s.type == 'custom_emoji').toList();
+      expect(customSpans.length, 1);
+      expect(customSpans.first.url, isNull);
+      expect(customSpans.first.documentUrl, 'https://storage.theaver.app/stickers/888.webp');
     });
   });
 }

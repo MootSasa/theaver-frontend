@@ -1021,18 +1021,27 @@ class MessageBubble extends StatelessWidget {
     final previewOpts = message.linkPreviewOptions;
     final bool previewDisabled = previewOpts?.isDisabled ?? false;
     String? previewUrl = previewOpts?.url;
+    if (previewUrl != null && EntityParser.isInternalStorageUrl(previewUrl)) {
+      previewUrl = null;
+    }
     if ((previewUrl == null || previewUrl.isEmpty) && !previewDisabled) {
       if (message.content.contains('http://') ||
           message.content.contains('https://') ||
           message.content.contains('www.')) {
         final urls = EntityParser.extractUrls(message.content);
-        if (urls.isNotEmpty) previewUrl = urls.first;
+        for (final u in urls) {
+          if (!EntityParser.isInternalStorageUrl(u)) {
+            previewUrl = u;
+            break;
+          }
+        }
       }
       if ((previewUrl == null || previewUrl.isEmpty) && message.entities.isNotEmpty) {
         for (final e in message.entities) {
           if ((e.type == 'text_link' || e.type == 'link' || e.type == 'url') &&
               e.url != null &&
-              e.url!.isNotEmpty) {
+              e.url!.isNotEmpty &&
+              !EntityParser.isInternalStorageUrl(e.url!)) {
             previewUrl = e.url;
             break;
           }
@@ -1040,7 +1049,10 @@ class MessageBubble extends StatelessWidget {
       }
     }
     final bool hasEffectivePreview =
-        previewUrl != null && previewUrl.isNotEmpty && !previewDisabled;
+        previewUrl != null &&
+        previewUrl.isNotEmpty &&
+        !previewDisabled &&
+        !EntityParser.isInternalStorageUrl(previewUrl);
     final bool showAbove = previewOpts?.showAboveText ?? false;
     final bool previewAtBottom = hasEffectivePreview && !showAbove && !hasMedia;
 

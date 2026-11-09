@@ -54,6 +54,7 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
   }
 
   void _loadMetadata() {
+    if (widget.url.isEmpty || EntityParser.isInternalStorageUrl(widget.url)) return;
     final cached = LinkMetadataService.instance.getCached(widget.url);
     if (cached != null) {
       _metadata = cached;

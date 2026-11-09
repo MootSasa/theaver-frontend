@@ -175,13 +175,20 @@ class _ChatInputBarState extends State<ChatInputBar> {
   }
 
   void _extractUrls(String text) {
-    final urls = <String>[...EntityParser.extractUrls(text)];
+    final urls = <String>[
+      for (final u in EntityParser.extractUrls(text))
+        if (!EntityParser.isInternalStorageUrl(u)) u,
+    ];
     if (widget.controller is RichTextEditingController) {
       final richCtrl = widget.controller as RichTextEditingController;
       for (final span in richCtrl.spans) {
-        if (span.url != null && span.url!.trim().isNotEmpty) {
+        if ((span.type == 'text_link' || span.type == 'link' || span.type == 'url') &&
+            span.url != null &&
+            span.url!.trim().isNotEmpty) {
           final u = EntityParser.normalizeUrl(span.url!);
-          if (!urls.contains(u)) urls.add(u);
+          if (!EntityParser.isInternalStorageUrl(u) && !urls.contains(u)) {
+            urls.add(u);
+          }
         }
       }
     }
@@ -242,6 +249,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
       }
 
       LinkPreviewOptions? sendPreviewOptions = _effectiveLinkPreviewOptions;
+      if (sendPreviewOptions != null &&
+          sendPreviewOptions.url != null &&
+          EntityParser.isInternalStorageUrl(sendPreviewOptions.url!)) {
+        sendPreviewOptions = null;
+      }
       if (sendPreviewOptions == null &&
           !_linkPreviewDismissed &&
           _detectedUrls.isNotEmpty) {

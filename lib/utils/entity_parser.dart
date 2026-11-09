@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import '../config/app_config.dart';
 import '../services/chat_service.dart';
 
 /// Result of parsing markdown text into clean text with message entities.
@@ -88,6 +89,43 @@ class EntityParser {
       break;
     }
     return cleaned;
+  }
+
+  /// Returns whether a URL points to an internal object storage or media CDN host (MinIO/S3),
+  /// such as storage.theaver.app, AppConfig.storageUrl, or local MinIO instances.
+  /// Internal storage URLs must not generate chat link preview banners or cards.
+  static bool isInternalStorageUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return false;
+    try {
+      final clean = cleanUrl(url);
+      final normalized = clean.contains('://') ? clean : 'https://$clean';
+      final uri = Uri.tryParse(normalized);
+      if (uri == null) return false;
+      final host = uri.host.toLowerCase();
+      if (host.isEmpty) return false;
+
+      // Production / staging storage domain patterns
+      if (host == 'storage.theaver.app' || host.endsWith('.storage.theaver.app')) {
+        return true;
+      }
+
+      // Configured storage host check
+      final configStorage = Uri.tryParse(AppConfig.storageUrl);
+      if (configStorage != null &&
+          configStorage.host.isNotEmpty &&
+          host == configStorage.host.toLowerCase()) {
+        return true;
+      }
+
+      // Localhost / Docker MinIO storage
+      if ((host == 'localhost' || host == '127.0.0.1') && uri.port == 9000) {
+        return true;
+      }
+
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static final RegExp _mdLinkRegex =

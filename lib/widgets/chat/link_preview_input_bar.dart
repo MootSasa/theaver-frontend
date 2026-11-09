@@ -63,7 +63,7 @@ class _LinkPreviewInputBarState extends State<LinkPreviewInputBar> {
 
   void _loadMetadata() {
     final url = _activeUrl;
-    if (url.isEmpty) return;
+    if (url.isEmpty || EntityParser.isInternalStorageUrl(url)) return;
 
     final cached = LinkMetadataService.instance.getCached(url);
     if (cached != null) {
