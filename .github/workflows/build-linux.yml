@@ -100,7 +100,10 @@ jobs:
           echo "Building Linux x86_64..."
           flutter build linux --${{ inputs.build_type }} $EXTRA_ARGS
 
-      - name: Package Linux Bundle into tar.gz
+      - name: Package & Sign Linux Bundle (x86_64)
+        env:
+          LINUX_GPG_PRIVATE_KEY_BASE64: ${{ secrets.LINUX_GPG_PRIVATE_KEY_BASE64 }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
         run: |
           PROJECT_DIR="${{ steps.locate_project.outputs.path }}"
           BUNDLE_DIR="$PROJECT_DIR/build/linux/x64/${{ inputs.build_type }}/bundle"
@@ -113,12 +116,16 @@ jobs:
           
           echo "Packaging $BUNDLE_DIR into $ARCHIVE_NAME..."
           tar -czf "$ARCHIVE_NAME" -C "$BUNDLE_DIR" .
+          if [ -f "$PROJECT_DIR/scripts/sign_linux.sh" ]; then
+            bash "$PROJECT_DIR/scripts/sign_linux.sh" "$PWD/$ARCHIVE_NAME"
+          fi
 
       - name: Upload Linux x86_64 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: theaver-linux-${{ inputs.build_type }}-x86_64
-          path: theaver-linux-${{ inputs.build_type }}-x86_64.tar.gz
+          path: |
+            theaver-linux-${{ inputs.build_type }}-x86_64.tar.gz*
           if-no-files-found: error
           retention-days: 30
 
@@ -188,7 +195,10 @@ jobs:
           echo "Building Linux ARM64..."
           flutter build linux --${{ inputs.build_type }} $EXTRA_ARGS
 
-      - name: Package Linux Bundle into tar.gz
+      - name: Package & Sign Linux Bundle (ARM64)
+        env:
+          LINUX_GPG_PRIVATE_KEY_BASE64: ${{ secrets.LINUX_GPG_PRIVATE_KEY_BASE64 }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
         run: |
           PROJECT_DIR="${{ steps.locate_project.outputs.path }}"
           BUNDLE_DIR=$(find "$PROJECT_DIR/build/linux" -type d -name "bundle" | grep -i "${{ inputs.build_type }}" | head -n 1)
@@ -201,11 +211,15 @@ jobs:
           
           echo "Packaging $BUNDLE_DIR into $ARCHIVE_NAME..."
           tar -czf "$ARCHIVE_NAME" -C "$BUNDLE_DIR" .
+          if [ -f "$PROJECT_DIR/scripts/sign_linux.sh" ]; then
+            bash "$PROJECT_DIR/scripts/sign_linux.sh" "$PWD/$ARCHIVE_NAME"
+          fi
 
       - name: Upload Linux ARM64 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: theaver-linux-${{ inputs.build_type }}-arm64
-          path: theaver-linux-${{ inputs.build_type }}-arm64.tar.gz
+          path: |
+            theaver-linux-${{ inputs.build_type }}-arm64.tar.gz*
           if-no-files-found: warn
           retention-days: 30

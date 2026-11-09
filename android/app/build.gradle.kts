@@ -1,8 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
 }
 
 android {
@@ -40,11 +49,32 @@ android {
                 keyPassword = "android"
             }
         }
+        create("release") {
+            val keyAliasProp = keystoreProperties.getProperty("keyAlias") ?: System.getenv("ANDROID_KEY_ALIAS")
+            val keyPasswordProp = keystoreProperties.getProperty("keyPassword") ?: System.getenv("ANDROID_KEY_PASSWORD")
+            val storeFileProp = keystoreProperties.getProperty("storeFile")
+            val storePasswordProp = keystoreProperties.getProperty("storePassword") ?: System.getenv("ANDROID_STORE_PASSWORD")
+            val releaseKeystore = if (!storeFileProp.isNullOrBlank()) file(storeFileProp) else file("release-keystore.jks")
+            if (releaseKeystore.exists() && !keyAliasProp.isNullOrBlank() && !storePasswordProp.isNullOrBlank()) {
+                keyAlias = keyAliasProp
+                keyPassword = if (!keyPasswordProp.isNullOrBlank()) keyPasswordProp else storePasswordProp
+                storeFile = releaseKeystore
+                storePassword = storePasswordProp
+            } else {
+                val localDebugKeystore = file("debug.keystore")
+                if (localDebugKeystore.exists()) {
+                    storeFile = localDebugKeystore
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                }
+            }
+        }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

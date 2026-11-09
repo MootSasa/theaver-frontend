@@ -48,3 +48,11 @@ app.*.map.json
 /android/app/agconnect-services.json
 !/android/app/agconnect-services.json.example
 .artifacts/
+
+# Private code-signing keys & secrets (keep public root certs tracked)
+/signing/android/
+/signing/windows/*.pfx
+/signing/windows/*.key
+/signing/windows/*.env
+/signing/linux/*-private.asc
+/signing/linux/*.env

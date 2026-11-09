@@ -91,6 +91,9 @@ jobs:
 
       - name: Package Windows Portable ZIP & Setup Installer
         shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
           $buildMode = if ("${{ inputs.build_type }}" -eq "release") { "Release" } else { "Debug" }
           $projectDir = (Resolve-Path "${{ steps.locate_project.outputs.path }}").Path
@@ -100,6 +103,11 @@ jobs:
           if (-not (Test-Path $releaseDir)) {
             Write-Error "Release directory not found: $releaseDir"
             exit 1
+          }
+
+          $signScript = Join-Path $projectDir "scripts/sign_windows.ps1"
+          if (Test-Path $signScript) {
+            & $signScript -Directory $releaseDir
           }
           
           Write-Host "Compressing $releaseDir into $zipOutput..."
@@ -118,6 +126,10 @@ jobs:
               "/DMyOutputBaseFilename=$setupBaseName" `
               "/DMyIconFile=$iconPath" `
               $issPath
+            $setupExe = Join-Path $outDir "$setupBaseName.exe"
+            if ((Test-Path $signScript) -and (Test-Path $setupExe)) {
+              & $signScript -Files @($setupExe)
+            }
           }
 
       - name: Upload Windows x64 Artifact
