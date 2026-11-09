@@ -853,92 +853,35 @@ class NotificationService with WidgetsBindingObserver {
               ? (isGroup && senderName.isNotEmpty ? '$senderName: $messageText' : messageText)
               : 'Новое сообщение';
 
-          if (isInAppNotificationsDisabled ||
-              !WebNotificationHelper.isTabFocused ||
-              currentActiveChatId != chatId) {
-            WebNotificationHelper.showBrowserNotification(
-              title: displayTitle,
-              body: displayBody,
-              iconUrl: getValidAvatarUrl(avatarUrl),
-              tag: 'chat_$chatId',
-              onTap: () {
-                _navigateFromNotificationData({
-                  'chat_id': chatId,
-                  'chat_name': chatName,
-                  'sender_name': senderName,
-                  'avatar_url': avatarUrl,
-                  'is_group': isGroup,
-                  'type': 'new_message',
-                });
-              },
-            );
-          }
-          if (!isInAppNotificationsDisabled) {
-            showInAppBanner(
-              chatId: chatId,
-              chatName: chatName,
-              senderName: senderName,
-              messageText: messageText,
-              avatarUrl: avatarUrl,
-              isGroup: isGroup,
-            );
-          }
-        } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-          bool isFocused = false;
-          try {
-            isFocused = await windowManager.isFocused();
-          } catch (_) {}
-
-          final isCurrentChatActive = currentActiveChatId != null && currentActiveChatId == chatId;
-          // Показываем системный тост, если окно не в фокусе, свернуто, открыт другой чат или отключены встроенные уведомления
-          if ((isInAppNotificationsDisabled && !isCurrentChatActive) ||
-              !isFocused ||
-              !isCurrentChatActive) {
-            await showMessageNotification(
-              chatId: chatId,
-              chatName: chatName,
-              senderName: senderName,
-              messageText: messageText,
-              avatarUrl: avatarUrl,
-              mediaUrl: mediaUrl,
-              isGroup: isGroup,
-              messageId: messageId,
-            );
-          }
-          if (isFocused && !isInAppNotificationsDisabled) {
-            showInAppBanner(
-              chatId: chatId,
-              chatName: chatName,
-              senderName: senderName,
-              messageText: messageText,
-              avatarUrl: avatarUrl,
-              isGroup: isGroup,
-            );
-          }
+          WebNotificationHelper.showBrowserNotification(
+            title: displayTitle,
+            body: displayBody,
+            iconUrl: getValidAvatarUrl(avatarUrl),
+            tag: 'chat_$chatId',
+            onTap: () {
+              _navigateFromNotificationData({
+                'chat_id': chatId,
+                'chat_name': chatName,
+                'sender_name': senderName,
+                'avatar_url': avatarUrl,
+                'is_group': isGroup,
+                'type': 'new_message',
+              });
+            },
+          );
         } else {
-          // Мобильные платформы (Android / iOS):
-          if (_isAppInForeground && !isInAppNotificationsDisabled) {
-            showInAppBanner(
-              chatId: chatId,
-              chatName: chatName,
-              senderName: senderName,
-              messageText: messageText,
-              avatarUrl: avatarUrl,
-              isGroup: isGroup,
-            );
-          } else {
-            // В фоне (или при отключённых встроенных уведомлениях) показываем локальное уведомление в системной шторке
-            await showMessageNotification(
-              chatId: chatId,
-              chatName: chatName,
-              senderName: senderName,
-              messageText: messageText,
-              avatarUrl: avatarUrl,
-              mediaUrl: mediaUrl,
-              isGroup: isGroup,
-              messageId: messageId,
-            );
-          }
+          // Нативные платформы (Android, iOS, Windows, Linux, macOS):
+          // Доставляем стандартное системное уведомление устройства напрямую через ОС
+          await showMessageNotification(
+            chatId: chatId,
+            chatName: chatName,
+            senderName: senderName,
+            messageText: messageText,
+            avatarUrl: avatarUrl,
+            mediaUrl: mediaUrl,
+            isGroup: isGroup,
+            messageId: messageId,
+          );
         }
       }
     });
@@ -1042,6 +985,9 @@ class NotificationService with WidgetsBindingObserver {
       final androidPlugin = _localNotifications
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       await androidPlugin?.requestNotificationsPermission();
+      try {
+        await _localNotifications.cancel(-1);
+      } catch (_) {}
     }
 
     try {
@@ -1099,12 +1045,12 @@ class NotificationService with WidgetsBindingObserver {
     await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
       'private_chats', 'Личные чаты',
       description: 'Уведомления о новых сообщениях в личных чатах',
-      importance: Importance.high,
+      importance: Importance.max,
     ));
     await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
       'group_chats', 'Групповые чаты',
       description: 'Уведомления о новых сообщениях в группах',
-      importance: Importance.high,
+      importance: Importance.max,
     ));
     await androidPlugin.createNotificationChannel(const AndroidNotificationChannel(
       'channels', 'Каналы',
@@ -1267,14 +1213,17 @@ class NotificationService with WidgetsBindingObserver {
     final type = data['type'] ?? '';
     switch (type) {
       case 'sync_required':
-        if (data.containsKey('chat_id') && data.containsKey('chat_name')) {
-          showInAppBanner(
-            chatId: data['chat_id']!,
-            chatName: data['chat_name']!,
-            senderName: data['sender_name'] ?? '',
-            messageText: data['message_text'] ?? '',
-            isGroup: data['is_group'] == 'true',
-          );
+        if (data.containsKey('chat_id')) {
+          final chatId = data['chat_id']!.toString();
+          if (shouldShowNotification(chatId)) {
+            showMessageNotification(
+              chatId: chatId,
+              chatName: data['chat_name']?.toString() ?? 'Theaver',
+              senderName: data['sender_name']?.toString() ?? '',
+              messageText: data['message_text']?.toString() ?? 'Новое сообщение',
+              isGroup: data['is_group'] == 'true',
+            );
+          }
         }
         break;
       case 'new_message':
@@ -1293,26 +1242,16 @@ class NotificationService with WidgetsBindingObserver {
           final messageId = data['id']?.toString() ?? data['message_id']?.toString();
 
           if (shouldShowNotification(chatId) && !_isDuplicateNotification(chatId, messageText, messageId: messageId)) {
-            if (_isAppInForeground && !isInAppNotificationsDisabled) {
-              showInAppBanner(
-                chatId: chatId,
-                chatName: chatName,
-                senderName: senderName,
-                messageText: messageText,
-                isGroup: isGroup,
-              );
-            } else {
-              showMessageNotification(
-                chatId: chatId,
-                chatName: chatName,
-                senderName: senderName,
-                messageText: messageText,
-                avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
-                mediaUrl: data['media_url']?.toString(),
-                isGroup: isGroup,
-                messageId: messageId,
-              );
-            }
+            showMessageNotification(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
+              mediaUrl: data['media_url']?.toString() ?? data['image']?.toString() ?? data['file_url']?.toString(),
+              isGroup: isGroup,
+              messageId: messageId,
+            );
           }
         }
         break;
@@ -1690,8 +1629,6 @@ class NotificationService with WidgetsBindingObserver {
       enableVibration: effective?.vibration != VibrationPattern.none,
       vibrationPattern: _getVibrationPattern(effective?.vibration),
       playSound: effective?.soundEnabled ?? true,
-      groupKey: 'com.theaver.messenger.MESSAGES',
-      setAsGroupSummary: false,
       autoCancel: true,
       onlyAlertOnce: false,
       styleInformation: styleInformation,
@@ -2222,24 +2159,6 @@ class NotificationService with WidgetsBindingObserver {
 
   void updateUnreadCount(int count) {
     _unreadCount = count;
-    if (kIsWeb) return;
-    if (Platform.isAndroid && count > 0) {
-      _showBadgeSummary(count);
-    } else if (Platform.isAndroid && count == 0) {
-      _localNotifications.cancel(-1);
-    }
-  }
-
-  Future<void> _showBadgeSummary(int count) async {
-    const androidDetails = AndroidNotificationDetails(
-      'silent', 'Беззвучные',
-      channelDescription: 'Счётчик непрочитанных',
-      importance: Importance.low, priority: Priority.low,
-      playSound: false, enableVibration: false,
-      setAsGroupSummary: true, groupKey: 'theaver_summary', autoCancel: false,
-    );
-    const details = NotificationDetails(android: androidDetails);
-    await _localNotifications.show(-1, 'Theaver', '$count непрочитанных', details);
   }
 
   Future<void> cancelChatNotifications(String chatId, {String? chatTitle}) async {
@@ -2475,9 +2394,9 @@ class NotificationService with WidgetsBindingObserver {
   }[id] ?? 'Уведомления Theaver';
 
   Importance _getImportance(EffectiveChatSettings? e) =>
-      e?.isMuted == true ? Importance.low : Importance.high;
+      e?.isMuted == true ? Importance.low : Importance.max;
   Priority _getPriority(EffectiveChatSettings? e) =>
-      e?.isMuted == true ? Priority.low : Priority.high;
+      e?.isMuted == true ? Priority.low : Priority.max;
 
   Int64List? _getVibrationPattern(VibrationPattern? p) => switch (p) {
     VibrationPattern.none => null,
