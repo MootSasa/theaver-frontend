@@ -12,15 +12,14 @@ import '../../theme/theav_theme.dart';
 import '../../utils/emoji_utils.dart';
 
 /// Network/disk image widget that supports pausing multi-frame animations (`animated_webp`, `.gif`),
-/// disk caching via [StickerService], concurrent animation capping, and frame-rate throttling.
+/// disk caching via [StickerService], and native multi-frame playback timing.
 ///
 /// Key performance guarantees:
 /// 1. NEVER wraps `animated_webp` or `.gif` in [ResizeImage], avoiding Flutter's C++ `SkWebpCodec`
 ///    `O(N²)` software frame re-decoding bug when `targetWidth != nativeWidth`.
 /// 2. Resolves from local disk (`FileImage`) via [StickerService] so scrolling never re-downloads over HTTP.
-/// 3. Caps simultaneous active multi-frame raster animations at `_kMaxConcurrentRasterAnimators` (4)
-///    and throttles UI `setState` frame rebuilds to `_kMinFrameIntervalMs` (55ms ≈ 18 FPS),
-///    skipping frame rebuilds while the user is fast-flinging a scrollable list.
+/// 3. Renders multi-frame GIF/WebP animations at their exact native encoded frame durations
+///    without dropping frames, and detaches the stream completer immediately when paused or off-screen.
 class ControlledAnimatedNetworkImage extends StatefulWidget {
   final String url;
   final double? width;
@@ -52,14 +51,11 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
 
 class _ControlledAnimatedNetworkImageState
     extends State<ControlledAnimatedNetworkImage> {
-  static const int _kMinFrameIntervalMs = 30;
-
   ImageStream? _imageStream;
   ImageStreamListener? _listener;
   ImageInfo? _imageInfo;
   bool _isListening = false;
   bool _hasError = false;
-  int _lastFramePaintMs = 0;
   int _resolveToken = 0;
   String _resolvedUrl = '';
 
@@ -182,22 +178,9 @@ class _ControlledAnimatedNetworkImageState
     if (!mounted) {
       return;
     }
-    final bool isFirstFrame = _imageInfo == null;
-    if (!isFirstFrame) {
-      if (!_isAllowedToAnimate) {
-        _stopListening();
-        return;
-      }
-      final int nowMs = DateTime.now().millisecondsSinceEpoch;
-      if (nowMs - _lastFramePaintMs < _kMinFrameIntervalMs) {
-        return;
-      }
-      if (Scrollable.recommendDeferredLoadingForContext(context)) {
-        return;
-      }
-      _lastFramePaintMs = nowMs;
-    } else {
-      _lastFramePaintMs = DateTime.now().millisecondsSinceEpoch;
+    if (!_isAllowedToAnimate && _imageInfo != null) {
+      _stopListening();
+      return;
     }
 
     final ImageInfo? oldInfo = _imageInfo;
@@ -400,8 +383,7 @@ class _StickerMediaViewState extends State<StickerMediaView> {
           fit: widget.fit,
           animate: widget.animate,
           repeat: widget.repeat,
-          frameRate: const FrameRate(30),
-          renderCache: RenderCache.drawingCommands,
+          frameRate: FrameRate.composition,
         );
       } else if (_bakedFirstFrame != null) {
         content = RawImage(
