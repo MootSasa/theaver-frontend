@@ -913,8 +913,17 @@ class NotificationService with WidgetsBindingObserver {
           }
         } else {
           // Мобильные платформы (Android / iOS):
-          // Если приложение на переднем плане — всплывающий in-app баннер в интерфейсе
-          // Если свернуто в фон — системное уведомление ОС
+          // Доставляем стандартное системное уведомление устройства напрямую через ОС
+          await showMessageNotification(
+            chatId: chatId,
+            chatName: chatName,
+            senderName: senderName,
+            messageText: messageText,
+            avatarUrl: avatarUrl,
+            mediaUrl: mediaUrl,
+            isGroup: isGroup,
+            messageId: messageId,
+          );
           if (_isAppInForeground && !isInAppNotificationsDisabled) {
             showInAppBanner(
               chatId: chatId,
@@ -923,17 +932,6 @@ class NotificationService with WidgetsBindingObserver {
               messageText: messageText,
               avatarUrl: avatarUrl,
               isGroup: isGroup,
-            );
-          } else {
-            await showMessageNotification(
-              chatId: chatId,
-              chatName: chatName,
-              senderName: senderName,
-              messageText: messageText,
-              avatarUrl: avatarUrl,
-              mediaUrl: mediaUrl,
-              isGroup: isGroup,
-              messageId: messageId,
             );
           }
         }
@@ -1146,12 +1144,17 @@ class NotificationService with WidgetsBindingObserver {
 
   Future<void> _registerPushTokenOnServer(String token, String type) async {
     try {
+      final authToken = await AuthService.getToken();
+      if (authToken == null || authToken.isEmpty) {
+        debugPrint('NotificationService: push token cached ($type), waiting for user authentication');
+        return;
+      }
+
       final prefs = await SharedPreferences.getInstance();
       final deviceId = AccountManager().currentDeviceId ??
           prefs.getString('current_device_id') ??
           prefs.getString('device_id') ??
           'unknown';
-      final authToken = await AuthService.getToken();
 
       final payload = {
         'token': token,
@@ -1164,7 +1167,7 @@ class NotificationService with WidgetsBindingObserver {
 
       final options = Options(
         headers: {
-          if (authToken != null) 'Authorization': 'Bearer $authToken',
+          'Authorization': 'Bearer $authToken',
           'Content-Type': 'application/json',
         },
       );
@@ -1189,6 +1192,13 @@ class NotificationService with WidgetsBindingObserver {
   }
 
   Future<void> registerCurrentToken() async {
+    if (_pushToken == null || _pushToken!.isEmpty) {
+      if (_detector.serviceType == PushServiceType.hms) {
+        _pushToken = await _hmsPushService?.getToken();
+      } else if (_detector.serviceType == PushServiceType.gms) {
+        _pushToken = await _firebaseMessaging?.getToken();
+      }
+    }
     if (_pushToken != null && _pushToken!.isNotEmpty) {
       final type = _detector.serviceType == PushServiceType.hms ? 'hms' : 'fcm';
       await _registerPushTokenOnServer(_pushToken!, type);
@@ -1263,7 +1273,7 @@ class NotificationService with WidgetsBindingObserver {
 
   // ============ Common Push Data Handler ============
 
-  void _handlePushData(Map<String, dynamic> data) {
+  Future<void> _handlePushData(Map<String, dynamic> data) async {
     final type = data['type'] ?? '';
     switch (type) {
       case 'sync_required':
@@ -1296,6 +1306,17 @@ class NotificationService with WidgetsBindingObserver {
           final messageId = data['id']?.toString() ?? data['message_id']?.toString();
 
           if (shouldShowNotification(chatId) && !_isDuplicateNotification(chatId, messageText, messageId: messageId)) {
+            // Deliver native OS system notification
+            await showMessageNotification(
+              chatId: chatId,
+              chatName: chatName,
+              senderName: senderName,
+              messageText: messageText,
+              avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
+              mediaUrl: data['media_url']?.toString() ?? data['image']?.toString() ?? data['file_url']?.toString(),
+              isGroup: isGroup,
+              messageId: messageId,
+            );
             if (_isAppInForeground && !isInAppNotificationsDisabled) {
               showInAppBanner(
                 chatId: chatId,
@@ -1304,17 +1325,6 @@ class NotificationService with WidgetsBindingObserver {
                 messageText: messageText,
                 avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
                 isGroup: isGroup,
-              );
-            } else {
-              showMessageNotification(
-                chatId: chatId,
-                chatName: chatName,
-                senderName: senderName,
-                messageText: messageText,
-                avatarUrl: data['avatar_url']?.toString() ?? data['avatar']?.toString(),
-                mediaUrl: data['media_url']?.toString() ?? data['image']?.toString() ?? data['file_url']?.toString(),
-                isGroup: isGroup,
-                messageId: messageId,
               );
             }
           }

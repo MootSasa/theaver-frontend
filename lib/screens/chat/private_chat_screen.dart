@@ -1487,6 +1487,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (!_inputFocusNode.hasFocus) {
       _inputFocusNode.requestFocus();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+    });
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
@@ -1495,6 +1500,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (!_inputFocusNode.hasFocus) {
       _inputFocusNode.requestFocus();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+    });
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {
@@ -4399,6 +4409,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                       child: EmojiStickerPanel(
                                         controller: _textController,
                                         focusNode: _inputFocusNode,
+                                        onEmojiSelected: _insertEmojiText,
                                         onBackspace: _handleBackspace,
                                         onClose: _closeEmojiPanel,
                                         height: targetPanelHeight,

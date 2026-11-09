@@ -647,6 +647,11 @@ class _ChannelScreenState extends State<ChannelScreen>
     if (!_inputFocusNode.hasFocus) {
       _inputFocusNode.requestFocus();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+    });
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
@@ -654,6 +659,11 @@ class _ChannelScreenState extends State<ChannelScreen>
     if (!_inputFocusNode.hasFocus) {
       _inputFocusNode.requestFocus();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+    });
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {
@@ -2467,6 +2477,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                       child: EmojiStickerPanel(
                         controller: _messageController,
                         focusNode: _inputFocusNode,
+                        onEmojiSelected: _insertEmojiText,
                         onBackspace: _handleBackspace,
                         onClose: _closeEmojiPanel,
                         onCustomEmojiSelected: _insertCustomEmojiItem,

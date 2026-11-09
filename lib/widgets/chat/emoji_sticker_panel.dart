@@ -1110,6 +1110,11 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     if (widget.onEmojiSelected != null) {
       widget.onEmojiSelected!(emoji.emoji);
       widget.focusNode?.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (widget.focusNode != null && !widget.focusNode!.hasFocus) {
+          widget.focusNode!.requestFocus();
+        }
+      });
       return;
     }
 
@@ -1131,11 +1136,21 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
         selection: TextSelection.collapsed(offset: start + emoji.emoji.length),
       );
       widget.focusNode?.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (widget.focusNode != null && !widget.focusNode!.hasFocus) {
+          widget.focusNode!.requestFocus();
+        }
+      });
       return;
     }
 
     StickerService.instance.activeInputTarget?.onInsertEmoji(emoji.emoji);
     widget.focusNode?.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.focusNode != null && !widget.focusNode!.hasFocus) {
+        widget.focusNode!.requestFocus();
+      }
+    });
   }
 
   void _onCustomEmojiItemTapped(StickerItem item) {
@@ -1144,17 +1159,32 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     if (widget.onCustomEmojiSelected != null) {
       widget.onCustomEmojiSelected!(item);
       widget.focusNode?.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (widget.focusNode != null && !widget.focusNode!.hasFocus) {
+          widget.focusNode!.requestFocus();
+        }
+      });
       return;
     }
     final ctrl = widget.controller;
     if (ctrl is RichTextEditingController) {
       ctrl.insertCustomEmoji(item);
       widget.focusNode?.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (widget.focusNode != null && !widget.focusNode!.hasFocus) {
+          widget.focusNode!.requestFocus();
+        }
+      });
       return;
     }
     if (StickerService.instance.activeInputTarget != null) {
       StickerService.instance.activeInputTarget!.onInsertCustomEmoji(item);
       widget.focusNode?.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (widget.focusNode != null && !widget.focusNode!.hasFocus) {
+          widget.focusNode!.requestFocus();
+        }
+      });
       return;
     }
     final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';

@@ -874,7 +874,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                         focusNode: _effectiveFocusNode,
                         scrollController: _scrollController,
                         selectionControls: telegramTextSelectionControls,
-                        readOnly: widget.isEmojiPanelOpen && _isMobilePlatform,
+                        readOnly: false,
                         showCursor: isFocused,
                         cursorColor:
                             showItalicCursor ? Colors.transparent : cursorColor,
@@ -883,7 +883,9 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                         cursorOpacityAnimates: true,
                         textCapitalization: TextCapitalization.sentences,
                         maxLines: null,
-                        keyboardType: TextInputType.multiline,
+                        keyboardType: widget.isEmojiPanelOpen && _isMobilePlatform
+                            ? TextInputType.none
+                            : TextInputType.multiline,
                         strutStyle: const StrutStyle(
                           fontSize: _kInputFontSize,
                           height: 1.2,

@@ -170,7 +170,7 @@ class AuthService {
   			debugPrint('AuthService: Error creating saved chat: $e');
   		}
   		// Register push token for this new session
-  		NotificationService().registerCurrentToken();
+  		await NotificationService().registerCurrentToken();
   		return {
   		'success': true,
   		'authToken': data['auth_token'],
@@ -798,8 +798,9 @@ class AuthService {
     }
 
     // Register device session
-      await accountManager.registerDeviceSession(userId);
-    }
+    await accountManager.registerDeviceSession(userId);
+    NotificationService().registerCurrentToken();
+  }
   
     /// Upload avatar image to server.
     /// Returns a map containing the avatar URL on success.
