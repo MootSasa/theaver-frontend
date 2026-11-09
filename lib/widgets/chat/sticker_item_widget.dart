@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:lottie/lottie.dart';
 import 'package:visibility_detector/visibility_detector.dart';
@@ -15,11 +17,11 @@ import '../../utils/emoji_utils.dart';
 /// disk caching via [StickerService], and native multi-frame playback timing.
 ///
 /// Key performance guarantees:
-/// 1. NEVER wraps `animated_webp` or `.gif` in [ResizeImage], avoiding Flutter's C++ `SkWebpCodec`
-///    `O(N²)` software frame re-decoding bug when `targetWidth != nativeWidth`.
-/// 2. Resolves from local disk (`FileImage`) via [StickerService] so scrolling never re-downloads over HTTP.
-/// 3. Renders multi-frame GIF/WebP animations at their exact native encoded frame durations
-///    without dropping frames, and detaches the stream completer immediately when paused or off-screen.
+/// 1. Decouples GIF and animated WebP playback from monitor refresh rate (VSync) using a dedicated
+///    wall-clock frame timer, preventing fast-forward / frame skipping on 120Hz/144Hz/240Hz monitors.
+/// 2. Clamps sub-10ms / 0ms frame delays to 100ms in accordance with standard browser / GIF89a specifications.
+/// 3. Resolves from local disk via [StickerService] so scrolling never re-downloads over HTTP.
+/// 4. Disposes decoded frame bitmaps immediately to prevent GPU/CPU memory bloat.
 class ControlledAnimatedNetworkImage extends StatefulWidget {
   final String url;
   final double? width;
@@ -30,6 +32,7 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
   final bool animate;
   final bool isAnimatedWebpOrGif;
   final WidgetBuilder? errorBuilder;
+  final VoidCallback? onFirstFrameLoaded;
 
   const ControlledAnimatedNetworkImage({
     super.key,
@@ -42,6 +45,7 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
     this.animate = true,
     this.isAnimatedWebpOrGif = false,
     this.errorBuilder,
+    this.onFirstFrameLoaded,
   });
 
   @override
@@ -51,13 +55,26 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
 
 class _ControlledAnimatedNetworkImageState
     extends State<ControlledAnimatedNetworkImage> {
+  // Static image stream
   ImageStream? _imageStream;
   ImageStreamListener? _listener;
   ImageInfo? _imageInfo;
   bool _isListening = false;
+
+  // Dedicated wall-clock codec player for GIFs & animated WebP
+  ui.Codec? _codec;
+  ui.Image? _codecFrameImage;
+  Timer? _codecTimer;
+  int _codecCurrentFrameIndex = 0;
+  int _codecFrameCount = 0;
+
   bool _hasError = false;
   int _resolveToken = 0;
   String _resolvedUrl = '';
+
+  bool get _isAnimated =>
+      widget.isAnimatedWebpOrGif ||
+      widget.url.toLowerCase().contains('.gif');
 
   bool get _isAllowedToAnimate => widget.animate;
 
@@ -81,11 +98,21 @@ class _ControlledAnimatedNetworkImageState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url ||
         oldWidget.isAnimatedWebpOrGif != widget.isAnimatedWebpOrGif ||
-        (!widget.isAnimatedWebpOrGif &&
-            oldWidget.cacheWidth != widget.cacheWidth)) {
+        (!_isAnimated && oldWidget.cacheWidth != widget.cacheWidth)) {
       _prepareAndResolve();
     } else if (oldWidget.animate != widget.animate) {
-      _updateSubscription();
+      if (_isAnimated) {
+        if (widget.animate) {
+          if (_codecTimer == null && _codec != null && _codecFrameCount > 1) {
+            _advanceCodecFrame(_resolveToken);
+          }
+        } else {
+          _codecTimer?.cancel();
+          _codecTimer = null;
+        }
+      } else {
+        _updateSubscription();
+      }
     }
   }
 
@@ -95,6 +122,7 @@ class _ControlledAnimatedNetworkImageState
       _stopListening();
       _imageStream = null;
       _disposeImageInfo();
+      _clearCodec();
       return;
     }
     if (_resolvedUrl != widget.url) {
@@ -102,9 +130,15 @@ class _ControlledAnimatedNetworkImageState
       _stopListening();
       _imageStream = null;
       _disposeImageInfo();
+      _clearCodec();
     }
     _hasError = false;
     final token = ++_resolveToken;
+
+    if (_isAnimated) {
+      _loadAnimatedCodec(token);
+      return;
+    }
 
     if (!kIsWeb) {
       final syncFile =
@@ -127,17 +161,118 @@ class _ControlledAnimatedNetworkImageState
     _resolveProvider(NetworkImage(widget.url));
   }
 
+  Future<void> _loadAnimatedCodec(int token) async {
+    try {
+      Uint8List? bytes;
+      if (!kIsWeb) {
+        final syncFile =
+            StickerService.instance.getCachedRasterFileSync(widget.url);
+        if (syncFile != null && await syncFile.exists()) {
+          bytes = await syncFile.readAsBytes();
+        } else {
+          final file = await StickerService.instance
+              .getOrDownloadRasterFile(widget.url);
+          if (file != null && await file.exists()) {
+            bytes = await file.readAsBytes();
+          }
+        }
+      }
+      if (bytes == null || bytes.isEmpty) {
+        final resolved = StickerService.resolveUrl(widget.url);
+        if (resolved.isNotEmpty) {
+          final resp = await http.get(Uri.parse(resolved));
+          if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
+            bytes = resp.bodyBytes;
+          }
+        }
+      }
+
+      if (!mounted || token != _resolveToken || bytes == null || bytes.isEmpty) {
+        if (mounted && token == _resolveToken) {
+          setState(() => _hasError = true);
+        }
+        return;
+      }
+
+      final codec = await ui.instantiateImageCodec(bytes);
+      if (!mounted || token != _resolveToken) {
+        codec.dispose();
+        return;
+      }
+
+      _clearCodec();
+      _codec = codec;
+      _codecFrameCount = codec.frameCount;
+      _codecCurrentFrameIndex = 0;
+
+      await _advanceCodecFrame(token);
+      widget.onFirstFrameLoaded?.call();
+    } catch (e) {
+      debugPrint('ControlledAnimatedNetworkImage: codec load error: $e');
+      if (mounted && token == _resolveToken) {
+        setState(() => _hasError = true);
+      }
+    }
+  }
+
+  Future<void> _advanceCodecFrame(int token) async {
+    if (!mounted || token != _resolveToken || _codec == null) return;
+    try {
+      final frameInfo = await _codec!.getNextFrame();
+      if (!mounted || token != _resolveToken) {
+        frameInfo.image.dispose();
+        return;
+      }
+
+      final old = _codecFrameImage;
+      _codecFrameImage = frameInfo.image;
+      old?.dispose();
+
+      _codecCurrentFrameIndex =
+          (_codecCurrentFrameIndex + 1) % _codecFrameCount;
+      if (mounted) {
+        setState(() {
+          _hasError = false;
+        });
+      }
+
+      if (_codecFrameCount > 1 && widget.animate) {
+        Duration duration = frameInfo.duration;
+        // Spec recommendation: clamp 0ms or sub-10ms delay to 100ms (10 FPS)
+        if (duration <= const Duration(milliseconds: 10)) {
+          duration = const Duration(milliseconds: 100);
+        }
+        _codecTimer?.cancel();
+        _codecTimer = Timer(duration, () {
+          if (mounted && token == _resolveToken && widget.animate) {
+            _advanceCodecFrame(token);
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('ControlledAnimatedNetworkImage: advance error: $e');
+    }
+  }
+
+  void _clearCodec() {
+    _codecTimer?.cancel();
+    _codecTimer = null;
+    final old = _codecFrameImage;
+    _codecFrameImage = null;
+    old?.dispose();
+    _codec?.dispose();
+    _codec = null;
+    _codecFrameCount = 0;
+    _codecCurrentFrameIndex = 0;
+  }
+
   void _resolveProvider(ImageProvider baseProvider) {
     if (!mounted) return;
-    // CRITICAL: Never wrap multi-frame animated WebP or GIF in ResizeImage!
-    // ResizeImage forces SkWebpCodec to re-decode all prior frames 0..N on every tick (O(N²)).
-    final ImageProvider provider = widget.isAnimatedWebpOrGif
-        ? baseProvider
-        : ResizeImage.resizeIfNeeded(
-            widget.cacheWidth,
-            null,
-            baseProvider,
-          );
+    final ImageProvider provider = ResizeImage.resizeIfNeeded(
+      widget.cacheWidth,
+      null,
+      baseProvider,
+    );
     final ImageStream newStream =
         provider.resolve(createLocalImageConfiguration(context));
     if (newStream.key != _imageStream?.key) {
@@ -165,11 +300,8 @@ class _ControlledAnimatedNetworkImageState
     if (_isAllowedToAnimate) {
       _startListening();
     } else if (_imageInfo != null) {
-      // We already have a frame to display statically; detach listener so
-      // MultiFrameImageStreamCompleter stops decoding frames immediately.
       _stopListening();
     } else {
-      // Need at least the first frame before we can detach.
       _startListening();
     }
   }
@@ -191,7 +323,6 @@ class _ControlledAnimatedNetworkImageState
       });
     }
     if (!_isAllowedToAnimate) {
-      // Detach immediately after capturing the first frame so animation timer stops.
       _stopListening();
     }
     if (mounted) {
@@ -223,6 +354,7 @@ class _ControlledAnimatedNetworkImageState
     _resolveToken++;
     _stopListening();
     _disposeImageInfo();
+    _clearCodec();
     super.dispose();
   }
 
@@ -231,9 +363,25 @@ class _ControlledAnimatedNetworkImageState
     if (_hasError && widget.errorBuilder != null) {
       return widget.errorBuilder!(context);
     }
+
+    if (_isAnimated) {
+      if (_codecFrameImage != null) {
+        return RawImage(
+          image: _codecFrameImage,
+          width: widget.width,
+          height: widget.height,
+          fit: widget.fit,
+          filterQuality: widget.filterQuality,
+        );
+      }
+      return widget.errorBuilder?.call(context) ??
+          SizedBox(width: widget.width, height: widget.height);
+    }
+
     final ui.Image? raw = _imageInfo?.image;
     if (raw == null) {
-      return SizedBox(width: widget.width, height: widget.height);
+      return widget.errorBuilder?.call(context) ??
+          SizedBox(width: widget.width, height: widget.height);
     }
     return RawImage(
       image: raw,

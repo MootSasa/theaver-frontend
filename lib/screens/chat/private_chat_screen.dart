@@ -1484,11 +1484,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       selection: TextSelection.collapsed(offset: start + emoji.length),
     );
     _onInputTextChanged(newText);
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
     _textController.insertCustomEmoji(item);
     _onInputTextChanged(_textController.text);
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {
@@ -4392,6 +4398,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                       height: targetPanelHeight,
                                       child: EmojiStickerPanel(
                                         controller: _textController,
+                                        focusNode: _inputFocusNode,
                                         onBackspace: _handleBackspace,
                                         onClose: _closeEmojiPanel,
                                         height: targetPanelHeight,

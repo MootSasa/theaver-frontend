@@ -547,11 +547,9 @@ class _ChannelScreenState extends State<ChannelScreen>
         });
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
-          if (!_inputFocusNode.hasFocus) {
-            _inputFocusNode.requestFocus();
-          }
-        } else {
-          _inputFocusNode.unfocus();
+        }
+        if (!_inputFocusNode.hasFocus) {
+          _inputFocusNode.requestFocus();
         }
         _transitionTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted && _isKeyboardFalling) {
@@ -564,8 +562,11 @@ class _ChannelScreenState extends State<ChannelScreen>
           _isKeyboardFalling = false;
           _isKeyboardRising = false;
         });
-        if (_isMobilePlatform && !_inputFocusNode.hasFocus) {
+        if (!_inputFocusNode.hasFocus) {
           _inputFocusNode.requestFocus();
+        }
+        if (_isMobilePlatform) {
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
         _emojiPanelController.forward(from: 0.0);
       }
@@ -643,10 +644,16 @@ class _ChannelScreenState extends State<ChannelScreen>
       text: newText,
       selection: TextSelection.collapsed(offset: start + emoji.length),
     );
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
     _messageController.insertCustomEmoji(item);
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {
@@ -2459,6 +2466,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                       minHeight: _keyboardHeight,
                       child: EmojiStickerPanel(
                         controller: _messageController,
+                        focusNode: _inputFocusNode,
                         onBackspace: _handleBackspace,
                         onClose: _closeEmojiPanel,
                         onCustomEmojiSelected: _insertCustomEmojiItem,

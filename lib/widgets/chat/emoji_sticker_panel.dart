@@ -53,6 +53,7 @@ enum PanelTab { emoji, gif, sticker }
 
 class EmojiStickerPanel extends StatefulWidget {
   final TextEditingController? controller;
+  final FocusNode? focusNode;
   final VoidCallback onBackspace;
   final VoidCallback onClose;
   final double height;
@@ -66,6 +67,7 @@ class EmojiStickerPanel extends StatefulWidget {
   const EmojiStickerPanel({
     super.key,
     this.controller,
+    this.focusNode,
     required this.onBackspace,
     required this.onClose,
     this.height = _kPanelHeight,
@@ -1107,6 +1109,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
 
     if (widget.onEmojiSelected != null) {
       widget.onEmojiSelected!(emoji.emoji);
+      widget.focusNode?.requestFocus();
       return;
     }
 
@@ -1117,7 +1120,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
 
       int start = selection.start;
       int end = selection.end;
-      if (start < 0 || end < 0) {
+      if (start < 0 || end < 0 || start > text.length || end > text.length) {
         start = text.length;
         end = text.length;
       }
@@ -1127,10 +1130,12 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
         text: newText,
         selection: TextSelection.collapsed(offset: start + emoji.emoji.length),
       );
+      widget.focusNode?.requestFocus();
       return;
     }
 
     StickerService.instance.activeInputTarget?.onInsertEmoji(emoji.emoji);
+    widget.focusNode?.requestFocus();
   }
 
   void _onCustomEmojiItemTapped(StickerItem item) {
@@ -1138,15 +1143,18 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     _updatePackUsage(item.packId.toString());
     if (widget.onCustomEmojiSelected != null) {
       widget.onCustomEmojiSelected!(item);
+      widget.focusNode?.requestFocus();
       return;
     }
     final ctrl = widget.controller;
     if (ctrl is RichTextEditingController) {
       ctrl.insertCustomEmoji(item);
+      widget.focusNode?.requestFocus();
       return;
     }
     if (StickerService.instance.activeInputTarget != null) {
       StickerService.instance.activeInputTarget!.onInsertCustomEmoji(item);
+      widget.focusNode?.requestFocus();
       return;
     }
     final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';

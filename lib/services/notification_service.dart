@@ -1,7 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform, File;
-import 'package:flutter/material.dart' show Color, Widget, WidgetsFlutterBinding;
+import 'package:flutter/material.dart'
+    show
+        Color,
+        Widget,
+        WidgetsFlutterBinding,
+        WidgetsBindingObserver,
+        AppLifecycleState,
+        WidgetsBinding;
 import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -377,7 +384,7 @@ Future<void> _processBackgroundPushData(Map<String, dynamic> data) async {
     );
     return;
   }
-  if (data.containsKey('chat_id') && data.containsKey('chat_name')) {
+  if (msgType == 'new_message' || data.containsKey('chat_id')) {
     await _showBackgroundNotification(localNotifications, data);
   }
 }
@@ -498,7 +505,7 @@ Future<void> _showBackgroundNotification(
 ///
 /// Поддерживает дуальный push: FCM (Google) + HMS Push Kit (Huawei).
 /// Автоматически определяет доступный сервис через PushServiceDetector.
-class NotificationService {
+class NotificationService with WidgetsBindingObserver {
   NotificationService._internal();
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
@@ -660,6 +667,17 @@ class NotificationService {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onAppResume();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      onAppPause();
+    }
+  }
+
   /// Кэш недавно показанных уведомлений для защиты от дублирования (гонка WebSocket и Push)
   final Map<String, DateTime> _recentlyShownNotifications = {};
   final Map<String, DateTime> _shownIncomingCallIds = {};
@@ -683,6 +701,7 @@ class NotificationService {
   Future<void> init(NotificationSettingsProvider settingsProvider) async {
     if (_initialized) return;
     _settingsProvider = settingsProvider;
+    WidgetsBinding.instance.addObserver(this);
 
     try {
       // 1. Детектирование push-сервиса

@@ -731,11 +731,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         });
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
-          if (!_inputFocusNode.hasFocus) {
-            _inputFocusNode.requestFocus();
-          }
-        } else {
-          _inputFocusNode.unfocus();
+        }
+        if (!_inputFocusNode.hasFocus) {
+          _inputFocusNode.requestFocus();
         }
         _transitionTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted && _isKeyboardFalling) {
@@ -748,8 +746,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _isKeyboardFalling = false;
           _isKeyboardRising = false;
         });
-        if (_isMobilePlatform && !_inputFocusNode.hasFocus) {
+        if (!_inputFocusNode.hasFocus) {
           _inputFocusNode.requestFocus();
+        }
+        if (_isMobilePlatform) {
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
         _emojiPanelController.forward(from: 0.0);
       }
@@ -830,11 +831,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       selection: TextSelection.collapsed(offset: start + emoji.length),
     );
     _onInputTextChanged(newText);
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
     _messageController.insertCustomEmoji(item);
     _onInputTextChanged(_messageController.text);
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {
@@ -4417,6 +4424,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     maxHeight: _keyboardHeight + safeBottom,
                     child: EmojiStickerPanel(
                       controller: _messageController,
+                      focusNode: _inputFocusNode,
                       onBackspace: _handleBackspace,
                       onClose: _closeEmojiPanel,
                       onCustomEmojiSelected: _insertCustomEmojiItem,

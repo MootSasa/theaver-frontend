@@ -242,6 +242,7 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
     'gif_vis_${widget.gifUrl}_${identityHashCode(this)}',
   );
   bool _isVisible = true;
+  bool _isFullLoaded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -289,7 +290,7 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (previewUrl.isNotEmpty && previewUrl != fullUrl)
+                if (previewUrl.isNotEmpty && previewUrl != fullUrl && !_isFullLoaded)
                   RepaintBoundary(
                     child: ControlledAnimatedNetworkImage(
                       url: previewUrl,
@@ -310,6 +311,11 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
                     fit: BoxFit.cover,
                     filterQuality: FilterQuality.low,
                     animate: _isVisible,
+                    onFirstFrameLoaded: () {
+                      if (mounted && !_isFullLoaded) {
+                        setState(() => _isFullLoaded = true);
+                      }
+                    },
                     errorBuilder: (_) => previewUrl.isNotEmpty
                         ? const SizedBox.shrink()
                         : Container(
