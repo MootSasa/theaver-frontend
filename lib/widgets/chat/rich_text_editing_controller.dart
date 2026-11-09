@@ -48,11 +48,11 @@ class RichSpan {
             : (type == 'link' ? 'text_link' : type),
         offset: start,
         length: end - start,
-        url: url ?? documentUrl,
+        url: type == 'custom_emoji' ? null : (url ?? documentUrl),
         language: language,
         collapsed: type == 'collapse' ? true : (type == 'blockquote' || type == 'quote' ? false : null),
         customEmojiId: customEmojiId,
-        documentUrl: documentUrl ?? url,
+        documentUrl: documentUrl ?? (type == 'custom_emoji' ? url : null),
         format: format,
       );
 }
@@ -183,7 +183,7 @@ class RichTextEditingController extends TextEditingController {
               type: 'custom_emoji',
               customEmojiId: e.customEmojiId,
               documentUrl: e.documentUrl ?? e.url,
-              url: e.url ?? e.documentUrl,
+              url: null,
               format: e.format,
               fallbackEmoji: fallback.isNotEmpty ? fallback : '😀',
             ));
@@ -437,7 +437,7 @@ class RichTextEditingController extends TextEditingController {
       type: 'custom_emoji',
       customEmojiId: item.id.toString(),
       documentUrl: item.fileUrl,
-      url: item.fileUrl,
+      url: null,
       format: item.format,
       fallbackEmoji: fallback,
     ));
