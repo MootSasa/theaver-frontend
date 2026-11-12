@@ -8,5 +8,13 @@
 	<!-- Time Sensitive Notifications capability (incoming calls break through Focus modes). -->
 	<key>com.apple.developer.usernotifications.time-sensitive</key>
 	<true/>
+	<!-- Communication Notifications (chat pushes with sender/chat avatar). -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+	<!-- App Group shared with the NotificationService extension (base URLs, auth token). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.app.theaver.messenger</string>
+	</array>
 </dict>
 </plist>

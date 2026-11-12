@@ -2,6 +2,7 @@ import Flutter
 import UIKit
 import AVFoundation
 import MediaPlayer
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, FlutterStreamHandler {
@@ -13,10 +14,17 @@ import MediaPlayer
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    // AppDelegate (FlutterAppDelegate) is the notification center delegate: it handles
+    // the native "reply"/"mark_read" actions of remote chat pushes and forwards
+    // everything else to the plugins (firebase_messaging, flutter_local_notifications).
+    UNUserNotificationCenter.current().delegate = self
+    registerNotificationCategories()
+
     let controller = window?.rootViewController as? FlutterViewController
     if let messenger = controller?.binaryMessenger {
       setupMediaMuxer(messenger: messenger)
       setupProximityAndMediaSession(messenger: messenger)
+      setupNativeNotifications(messenger: messenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -26,6 +34,7 @@ import MediaPlayer
     let messenger = engineBridge.applicationRegistrar.messenger()
     setupMediaMuxer(messenger: messenger)
     setupProximityAndMediaSession(messenger: messenger)
+    setupNativeNotifications(messenger: messenger)
   }
 
   private func setupProximityAndMediaSession(messenger: FlutterBinaryMessenger) {
@@ -167,6 +176,292 @@ import MediaPlayer
   @objc private func proximityStateDidChange() {
     let isNear = UIDevice.current.proximityState
     proximityEventSink?(isNear)
+  }
+
+  // MARK: - Native notifications (chat pushes)
+
+  /// Shared with the NotificationService extension (keep in sync with NotificationService.swift).
+  private enum NativeNotifications {
+    static let channelName = "app.theaver.messenger/native_notifications"
+    static let appGroupId = "group.app.theaver.messenger"
+    static let baseUrlKey = "notif_base_url"
+    static let storageUrlKey = "notif_storage_url"
+    static let authTokenKey = "notif_auth_token"
+    static let userIdKey = "notif_user_id"
+
+    static let messageCategory = "message"
+    static let callCategory = "incoming_call"
+    static let replyAction = "reply"
+    static let markReadAction = "mark_read"
+
+    static var defaults: UserDefaults? {
+      return UserDefaults(suiteName: appGroupId)
+    }
+
+    /// Non-empty string from a push / channel value (String or NSNumber).
+    static func string(_ raw: Any?) -> String? {
+      var value: String?
+      if let s = raw as? String {
+        value = s
+      } else if let n = raw as? NSNumber {
+        value = n.stringValue
+      }
+      guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !trimmed.isEmpty,
+            trimmed != "null" else {
+        return nil
+      }
+      return trimmed
+    }
+
+    /// API base URL without a trailing "/" or "/api".
+    static func apiBase() -> String? {
+      guard var base = defaults?.string(forKey: baseUrlKey)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !base.isEmpty else {
+        return nil
+      }
+      while base.hasSuffix("/") {
+        base.removeLast()
+      }
+      if base.lowercased().hasSuffix("/api") {
+        base.removeLast(4)
+      }
+      return base.isEmpty ? nil : base
+    }
+
+    static func authToken() -> String? {
+      guard let token = defaults?.string(forKey: authTokenKey), !token.isEmpty else {
+        return nil
+      }
+      return token
+    }
+  }
+
+  /// Message (reply / read) and call (accept / decline) categories. Merged with the
+  /// categories already registered (flutter_local_notifications registers the same ids;
+  /// ours win, the definitions are identical).
+  private func registerNotificationCategories() {
+    let reply = UNTextInputNotificationAction(
+      identifier: NativeNotifications.replyAction,
+      title: "Ответить",
+      options: [],
+      textInputButtonTitle: "Отправить",
+      textInputPlaceholder: "Сообщение"
+    )
+    // No .foreground option: handled in the background, the app is not opened.
+    let markRead = UNNotificationAction(
+      identifier: NativeNotifications.markReadAction,
+      title: "Прочитано",
+      options: []
+    )
+    let messageCategory = UNNotificationCategory(
+      identifier: NativeNotifications.messageCategory,
+      actions: [reply, markRead],
+      intentIdentifiers: [],
+      options: []
+    )
+
+    let accept = UNNotificationAction(identifier: "accept_call", title: "Принять", options: [.foreground])
+    let decline = UNNotificationAction(identifier: "decline_call", title: "Отклонить", options: [.destructive])
+    let callCategory = UNNotificationCategory(
+      identifier: NativeNotifications.callCategory,
+      actions: [accept, decline],
+      intentIdentifiers: [],
+      options: []
+    )
+
+    let ours: Set<UNNotificationCategory> = [messageCategory, callCategory]
+    let ourIds = Set(ours.map { $0.identifier })
+    let center = UNUserNotificationCenter.current()
+    center.getNotificationCategories { existing in
+      let merged = existing.filter { !ourIds.contains($0.identifier) }.union(ours)
+      center.setNotificationCategories(merged)
+    }
+  }
+
+  private func setupNativeNotifications(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: NativeNotifications.channelName, binaryMessenger: messenger)
+    channel.setMethodCallHandler { (call, result) in
+      let args = call.arguments as? [String: Any]
+      switch call.method {
+      case "configure":
+        if let defaults = NativeNotifications.defaults, let args = args {
+          let mapping: [(String, String)] = [
+            ("base_url", NativeNotifications.baseUrlKey),
+            ("storage_url", NativeNotifications.storageUrlKey),
+            ("token", NativeNotifications.authTokenKey),
+            ("user_id", NativeNotifications.userIdKey),
+          ]
+          for (argKey, defaultsKey) in mapping {
+            guard args.keys.contains(argKey) else { continue }
+            if let value = NativeNotifications.string(args[argKey]) {
+              defaults.set(value, forKey: defaultsKey)
+            } else {
+              // Empty / null value (e.g. token on logout) => remove.
+              defaults.removeObject(forKey: defaultsKey)
+            }
+          }
+        }
+        result(nil)
+      case "cancelChat":
+        if let chatId = NativeNotifications.string(args?["chat_id"]) {
+          AppDelegate.removeDeliveredChatNotifications(chatId: chatId, completion: nil)
+        }
+        result(nil)
+      case "cancelAll":
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        result(nil)
+      default:
+        // setState, showChatNotification, getInitialTap, ...: no-op on iOS
+        // (pushes are rendered by the NotificationService extension).
+        result(nil)
+      }
+    }
+  }
+
+  /// Removes delivered notifications of a chat (thread "chat_<id>" or userInfo chat_id).
+  private static func removeDeliveredChatNotifications(chatId: String, completion: (() -> Void)?) {
+    let threadId = "chat_\(chatId)"
+    let center = UNUserNotificationCenter.current()
+    center.getDeliveredNotifications { notifications in
+      let ids = notifications.filter { notification in
+        let content = notification.request.content
+        if content.threadIdentifier == threadId {
+          return true
+        }
+        return NativeNotifications.string(content.userInfo["chat_id"]) == chatId
+      }.map { $0.request.identifier }
+      if !ids.isEmpty {
+        center.removeDeliveredNotifications(withIdentifiers: ids)
+      }
+      completion?()
+    }
+  }
+
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let action = response.actionIdentifier
+    let request = response.notification.request
+    if action == NativeNotifications.replyAction || action == NativeNotifications.markReadAction,
+       request.trigger is UNPushNotificationTrigger,
+       let chatId = NativeNotifications.string(request.content.userInfo["chat_id"]) {
+      let text = (response as? UNTextInputNotificationResponse)?.userText
+      handleNativeChatAction(action: action, chatId: chatId, text: text, completionHandler: completionHandler)
+      return
+    }
+    super.userNotificationCenter(center, didReceive: response, withCompletionHandler: completionHandler)
+  }
+
+  /// Sends the reply and/or marks the chat as read directly via the REST API, so the
+  /// actions work even when the app was killed (iOS launches it in the background).
+  private func handleNativeChatAction(
+    action: String,
+    chatId: String,
+    text: String?,
+    completionHandler: @escaping () -> Void
+  ) {
+    let lock = NSLock()
+    var finished = false
+    var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    func finish() {
+      lock.lock()
+      if finished {
+        lock.unlock()
+        return
+      }
+      finished = true
+      lock.unlock()
+      DispatchQueue.main.async {
+        completionHandler()
+        if backgroundTask != .invalid {
+          UIApplication.shared.endBackgroundTask(backgroundTask)
+          backgroundTask = .invalid
+        }
+      }
+    }
+
+    backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "theaver.notification_action") {
+      finish()
+    }
+
+    guard let base = NativeNotifications.apiBase(),
+          let token = NativeNotifications.authToken(),
+          let encodedChatId = chatId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+          let messagesUrl = URL(string: "\(base)/api/chats/\(encodedChatId)/messages"),
+          let readUrl = URL(string: "\(base)/api/chats/\(encodedChatId)/messages/read") else {
+      finish()
+      return
+    }
+
+    let markRead: (@escaping () -> Void) -> Void = { done in
+      AppDelegate.postJSON(url: readUrl, token: token, body: [:]) { _ in
+        AppDelegate.removeDeliveredChatNotifications(chatId: chatId) {
+          done()
+        }
+      }
+    }
+
+    if action == NativeNotifications.markReadAction {
+      markRead { finish() }
+      return
+    }
+
+    // Reply.
+    guard let message = text?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty else {
+      finish()
+      return
+    }
+    let body: [String: Any] = [
+      "content": message,
+      "message_type": "text",
+      "local_id": UUID().uuidString.lowercased(),
+    ]
+    AppDelegate.postJSON(url: messagesUrl, token: token, body: body) { success in
+      if success {
+        markRead { finish() }
+      } else {
+        AppDelegate.showReplyFailedNotification(chatId: chatId) { finish() }
+      }
+    }
+  }
+
+  private static func postJSON(
+    url: URL,
+    token: String,
+    body: [String: Any],
+    completion: @escaping (Bool) -> Void
+  ) {
+    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [])
+    URLSession.shared.dataTask(with: request) { _, response, error in
+      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      completion(error == nil && (200..<300).contains(status))
+    }.resume()
+  }
+
+  /// Local notification shown when a background reply could not be sent.
+  private static func showReplyFailedNotification(chatId: String, completion: @escaping () -> Void) {
+    let content = UNMutableNotificationContent()
+    content.title = "Theaver"
+    content.body = "Не удалось отправить сообщение. Откройте чат, чтобы повторить."
+    content.threadIdentifier = "chat_\(chatId)"
+    content.userInfo = ["type": "new_message", "chat_id": chatId]
+    let request = UNNotificationRequest(
+      identifier: "reply_failed_\(chatId)",
+      content: content,
+      trigger: nil
+    )
+    UNUserNotificationCenter.current().add(request) { _ in
+      completion()
+    }
   }
 
   private func setupMediaMuxer(messenger: FlutterBinaryMessenger) {

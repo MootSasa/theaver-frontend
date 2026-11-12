@@ -77,5 +77,9 @@
 		<string>audio</string>
 		<string>remote-notification</string>
 	</array>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
 	</dict>
 	</plist>
