@@ -73,6 +73,25 @@ void main() {
       expect(ChatMessageNotification.fromWebSocket(<String, dynamic>{'message': <String, dynamic>{}}), isNull);
     });
 
+    test('fromWebSocket picks chat avatar for groups and sender avatar for private chats', () {
+      final group = ChatMessageNotification.fromWebSocket(<String, dynamic>{
+        'chat_id': '1',
+        'chat_type': 'group',
+        'avatar_url': 'https://s/sender.jpg',
+        'chat_avatar_url': 'https://s/group.jpg',
+        'message': <String, dynamic>{'sender_avatar_url': 'https://s/sender.jpg', 'content': 'hi'},
+      })!;
+      expect(group.avatarUrl, 'https://s/group.jpg');
+      expect(group.senderAvatarUrl, 'https://s/sender.jpg');
+
+      final private = ChatMessageNotification.fromWebSocket(<String, dynamic>{
+        'chat_id': '2',
+        'chat_type': 'private',
+        'message': <String, dynamic>{'sender_avatar_url': 'https://s/u.jpg', 'content': 'hi'},
+      })!;
+      expect(private.avatarUrl, 'https://s/u.jpg');
+    });
+
     test('fromPush maps backend payload incl. channel and mention flags', () {
       final m = ChatMessageNotification.fromPush(<String, dynamic>{
         'type': 'new_message',

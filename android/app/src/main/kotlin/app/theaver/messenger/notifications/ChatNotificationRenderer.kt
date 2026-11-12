@@ -150,10 +150,23 @@ object ChatNotificationRenderer {
             val isGroup = !isChannel && (data["is_group"] == "true" || chatType == "group")
             val chatName = data["chat_name"]?.takeIf { it.isNotBlank() } ?: data["sender_name"] ?: "Theaver"
             val senderName = data["sender_name"].orEmpty()
-            val chatAvatarUrl = data["avatar_url"].orEmpty()
-            val senderAvatarUrl = if (isGroup) data["sender_avatar_url"].orEmpty() else chatAvatarUrl
 
-            store.saveChatMeta(chatId, data)
+            // Avatars may be missing in one of the sources (WebSocket / FCM / HMS):
+            // remember the last known ones so every notification shows an avatar.
+            val senderAvatarFromData = data["sender_avatar_url"].orEmpty()
+            val chatAvatarUrl = data["avatar_url"].orEmpty()
+                .ifEmpty { if (!isGroup && !isChannel) senderAvatarFromData else "" }
+                .ifEmpty { store.knownAvatar("chat:$chatId") }
+            if (chatAvatarUrl.isNotEmpty()) store.rememberAvatar("chat:$chatId", chatAvatarUrl)
+            val senderAvatarUrl = if (isGroup) {
+                senderAvatarFromData.ifEmpty { if (senderId.isNotEmpty()) store.knownAvatar("user:$senderId") else "" }
+            } else {
+                chatAvatarUrl
+            }
+            if (senderId.isNotEmpty() && senderAvatarUrl.isNotEmpty()) store.rememberAvatar("user:$senderId", senderAvatarUrl)
+            val resolved = if (chatAvatarUrl == data["avatar_url"]) data else HashMap(data).apply { put("avatar_url", chatAvatarUrl) }
+
+            store.saveChatMeta(chatId, resolved)
             val history = store.appendHistory(
                 chatId,
                 NotificationStore.HistoryEntry(
@@ -166,7 +179,7 @@ object ChatNotificationRenderer {
                     messageId = messageId,
                 )
             )
-            post(context, store, data, chatId, chatName, isGroup, isChannel, history, silentUpdate = false)
+            post(context, store, resolved, chatId, chatName, isGroup, isChannel, history, silentUpdate = false)
         } catch (e: Throwable) {
             Log.e(TAG, "show failed", e)
         }

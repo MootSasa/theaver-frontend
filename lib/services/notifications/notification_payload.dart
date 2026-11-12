@@ -146,6 +146,11 @@ class ChatMessageNotification {
     final isChannel = chatType == 'channel' || payloadBool(data['is_channel']);
     final isGroup = !isChannel &&
         (payloadBool(data['is_group']) || payloadBool(msg['is_group']) || chatType == 'group');
+    final senderAvatar = payloadString(msg, const ['sender_avatar_url', 'sender_avatar']);
+    // Groups/channels: the chat avatar; private chats: the sender (= the chat) avatar.
+    final chatAvatar = (isGroup || isChannel)
+        ? payloadString(data, const ['chat_avatar_url', 'chat_avatar'], payloadString(data, const ['avatar_url']))
+        : payloadString(data, const ['avatar_url', 'chat_avatar'], senderAvatar);
 
     return ChatMessageNotification(
       chatId: chatId,
@@ -154,8 +159,8 @@ class ChatMessageNotification {
       senderId: payloadString(msg, const ['sender_id'], payloadString(data, const ['sender_id'])),
       text: text,
       messageId: _nullIfEmpty(payloadString(msg, const ['id'], payloadString(data, const ['id', 'message_id']))),
-      avatarUrl: _nullIfEmpty(payloadString(data, const ['avatar_url', 'chat_avatar'])),
-      senderAvatarUrl: _nullIfEmpty(payloadString(msg, const ['sender_avatar_url', 'sender_avatar'])),
+      avatarUrl: _nullIfEmpty(chatAvatar),
+      senderAvatarUrl: _nullIfEmpty(senderAvatar),
       mediaUrl: _nullIfEmpty(mediaUrl),
       isGroup: isGroup,
       isChannel: isChannel,

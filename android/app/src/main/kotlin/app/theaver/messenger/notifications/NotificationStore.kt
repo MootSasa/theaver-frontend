@@ -47,6 +47,17 @@ internal class NotificationStore(context: Context) {
         get() = prefs.getStringSet(KEY_ACTIVE_CHATS, emptySet()) ?: emptySet()
         set(v) = prefs.edit().putStringSet(KEY_ACTIVE_CHATS, HashSet(v)).apply()
 
+    // ---------------- known avatars ----------------
+
+    /** Last known avatar URL for "chat:<id>" / "user:<id>". */
+    fun knownAvatar(key: String): String = prefs.getString(KEY_AVATAR_PREFIX + key, "") ?: ""
+
+    fun rememberAvatar(key: String, url: String) {
+        if (url.isEmpty() || url.startsWith("data:")) return
+        if (knownAvatar(key) == url) return
+        prefs.edit().putString(KEY_AVATAR_PREFIX + key, url).apply()
+    }
+
     // ---------------- de-duplication ----------------
 
     /** Returns true if [key] was seen in the last [ttlMs]; otherwise records it. */
@@ -201,6 +212,7 @@ internal class NotificationStore(context: Context) {
         private const val KEY_HISTORY_PREFIX = "history_"
         private const val KEY_META_PREFIX = "meta_"
         private const val KEY_ACTIVE_NOTIF_CHATS = "notif_chats"
+        private const val KEY_AVATAR_PREFIX = "avatar_"
         const val MAX_HISTORY = 8
     }
 }
