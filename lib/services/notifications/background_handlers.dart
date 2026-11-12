@@ -75,6 +75,16 @@ void hmsMessagingBackgroundHandler(hms.RemoteMessage message) async {
 /// Handles data-only pushes while the app UI is not running.
 Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
   final msgType = data['type']?.toString() ?? '';
+
+  // On Android chat messages and read receipts are rendered/cancelled by the native
+  // TheaverFirebaseMessagingService / TheaverHmsMessageService (single renderer for
+  // all notifications); rendering them here would duplicate them.
+  if (!kIsWeb &&
+      Platform.isAndroid &&
+      (msgType == 'new_message' || msgType == 'read_status_updated')) {
+    return;
+  }
+
   final plugin = await initBackgroundNotificationsPlugin();
 
   switch (msgType) {

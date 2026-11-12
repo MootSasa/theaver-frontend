@@ -72,6 +72,14 @@ class NotificationService with WidgetsBindingObserver {
 
   static const MethodChannel _native = MethodChannel('app.theaver.messenger/push_detector');
 
+  /// Native chat-notification renderer (Android) / notification config (iOS).
+  /// On Android every chat notification — WebSocket or FCM/HMS push — is drawn by
+  /// the same native code: chat avatar, history, "Ответить"/"Прочитано".
+  static const MethodChannel _nativeNotifications =
+      MethodChannel('app.theaver.messenger/native_notifications');
+
+  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+
   FirebaseMessaging? _firebaseMessaging;
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
   late final MessageNotificationPresenter _presenter = MessageNotificationPresenter(_localNotifications);
@@ -191,6 +199,54 @@ class NotificationService with WidgetsBindingObserver {
       activeChatId: _isAppInForeground ? currentActiveChatId : null,
       pushAvailable: _pushAvailable,
     );
+    if (_isAndroid) {
+      final active = <String>{
+        ..._activeChatIds,
+        if (TilingLayoutController.instance.isWorkspaceMounted)
+          ...TilingLayoutController.instance.chatTiles.map((t) => t.chatId),
+      }.where((id) => id.isNotEmpty).toList();
+      _nativeNotifications.invokeMethod('setState', <String, dynamic>{
+        'foreground': _isAppInForeground,
+        'foreground_enabled': foregroundNotificationsEnabled,
+        'active_chat_ids': _isAppInForeground ? active : <String>[],
+      }).catchError((_) {});
+    }
+  }
+
+  /// Passes API URLs and the auth token to native code so notification actions
+  /// ("Ответить"/"Прочитано") work without Flutter running.
+  Future<void> configureNativeNotifications() async {
+    if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
+    try {
+      await _nativeNotifications.invokeMethod('configure', <String, dynamic>{
+        'base_url': AppConfig.baseUrl,
+        'storage_url': AppConfig.storageUrl,
+        'token': await AuthService.getToken() ?? '',
+        'user_id': await AuthService.getUserId() ?? '',
+      });
+    } catch (e) {
+      debugPrint('NotificationService: native configure failed: $e');
+    }
+  }
+
+  Future<void> _initNativeNotificationBridge() async {
+    if (!_isAndroid) return;
+    _nativeNotifications.setMethodCallHandler((call) async {
+      if (call.method == 'onNotificationTap') {
+        final payload = (call.arguments as Map?)?['payload']?.toString();
+        if (payload != null && payload.isNotEmpty) {
+          _navigateFromNotificationData(normalizePushPayload(payload));
+        }
+        return true;
+      }
+      return null;
+    });
+    try {
+      final initial = await _nativeNotifications.invokeMethod<String>('getInitialTap');
+      if (initial != null && initial.isNotEmpty) {
+        _navigateFromNotificationData(normalizePushPayload(initial));
+      }
+    } catch (_) {}
   }
 
   // ======================= Pending navigation / calls =======================
@@ -273,6 +329,10 @@ class NotificationService with WidgetsBindingObserver {
 
     // WebSocket notifications work regardless of the push provider outcome.
     _subscribeWebSocketMessages();
+    await _step('native notifications', () async {
+      await configureNativeNotifications();
+      await _initNativeNotificationBridge();
+    });
 
     if (_isMobile) {
       switch (_detector.serviceType) {
@@ -427,6 +487,9 @@ class NotificationService with WidgetsBindingObserver {
         'service_type': type,
         'type': type,
         'device_id': deviceId,
+        // Android renders chat pushes natively (data messages): avatar, history,
+        // reply/read actions — the same look as foreground notifications.
+        if (_isAndroid) 'push_render': 'native',
       };
       final options = Options(headers: <String, String>{
         'Authorization': 'Bearer $authToken',
@@ -460,10 +523,20 @@ class NotificationService with WidgetsBindingObserver {
       _pushAvailable = true;
       await _registerPushTokenOnServer(token, _detector.serviceType == PushServiceType.hms ? 'hms' : 'fcm');
     }
+    await configureNativeNotifications();
     _syncClientState();
   }
 
   Future<void> unregisterPushToken() async {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      // Logged out: native notification actions must not use the old token.
+      _nativeNotifications.invokeMethod('configure', <String, dynamic>{
+        'base_url': AppConfig.baseUrl,
+        'storage_url': AppConfig.storageUrl,
+        'token': '',
+        'user_id': '',
+      }).catchError((_) {});
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
       final deviceId = AccountManager().currentDeviceId ??
@@ -600,6 +673,30 @@ class NotificationService with WidgetsBindingObserver {
 
     if (_usesLocalNotifier) {
       await _showDesktopMessage(m, showPreview: showPreview, soundEnabled: soundEnabled);
+      return;
+    }
+
+    if (_isAndroid) {
+      try {
+        await _nativeNotifications.invokeMethod('showChatNotification', <String, dynamic>{
+          'type': 'new_message',
+          'chat_id': m.chatId,
+          'chat_name': m.chatName,
+          'chat_type': m.isChannel ? 'channel' : (m.isGroup ? 'group' : 'private'),
+          'is_group': '${m.isGroup}',
+          'is_channel': '${m.isChannel}',
+          'is_mention': '${m.isMention}',
+          'sender_id': m.senderId,
+          'sender_name': showPreview ? m.senderName : '',
+          'message_text': showPreview ? m.text : 'Новое сообщение',
+          if (m.messageId != null) 'id': m.messageId,
+          if (m.avatarUrl != null) 'avatar_url': m.avatarUrl,
+          if (m.senderAvatarUrl != null) 'sender_avatar_url': m.senderAvatarUrl,
+          if (!soundEnabled) 'sound': 'none',
+        });
+      } catch (e) {
+        debugPrint('NotificationService: native chat notification failed: $e');
+      }
       return;
     }
 
@@ -1012,6 +1109,9 @@ class NotificationService with WidgetsBindingObserver {
     await _presenter.cancelChat(chatId);
     if (Platform.isAndroid) {
       try {
+        await _nativeNotifications.invokeMethod('cancelChat', <String, dynamic>{'chat_id': chatId});
+      } catch (_) {}
+      try {
         await _native.invokeMethod('cancelChatNotifications', {'chat_id': chatId});
       } catch (_) {}
       if (_detector.serviceType == PushServiceType.hms) {
@@ -1035,6 +1135,9 @@ class NotificationService with WidgetsBindingObserver {
     if (_usesLocalNotifier) return;
     await _presenter.cancelAll();
     if (Platform.isAndroid) {
+      try {
+        await _nativeNotifications.invokeMethod('cancelAll');
+      } catch (_) {}
       try {
         await _native.invokeMethod('cancelAllNotifications');
       } catch (_) {}

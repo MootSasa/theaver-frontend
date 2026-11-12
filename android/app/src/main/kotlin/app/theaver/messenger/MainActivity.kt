@@ -23,6 +23,7 @@ import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import app.theaver.messenger.notifications.NativeNotificationsChannel
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
@@ -56,6 +57,7 @@ class MainActivity : FlutterFragmentActivity() {
         super.onCreate(savedInstanceState)
         currentActivityRef = WeakReference(this)
         applyLockScreenFlagsIfNeeded(intent)
+        NativeNotificationsChannel.handleIntent(intent)
         applyHighRefreshRate()
         window?.decorView?.post { applyHighRefreshRate() }
     }
@@ -64,6 +66,7 @@ class MainActivity : FlutterFragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         applyLockScreenFlagsIfNeeded(intent)
+        NativeNotificationsChannel.handleIntent(intent)
     }
 
     override fun onResume() {
@@ -109,6 +112,7 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         PushDetectorHandler.register(flutterEngine, applicationContext)
+        NativeNotificationsChannel.register(flutterEngine, applicationContext)
     }
 
     /**

@@ -139,6 +139,33 @@ android:networkSecurityConfig="@xml/network_security_config">
             android:foregroundServiceType="phoneCall|microphone|camera|mediaProjection|dataSync"
             android:exported="false" />
 
+        <!-- Chat notifications are rendered natively (avatar, history, reply/read actions)
+             for every source. These services replace the plugin services and forward
+             everything that is not a chat message back to the plugins. -->
+        <service
+            android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService"
+            tools:node="remove" />
+        <service
+            android:name=".notifications.TheaverFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <service
+            android:name="com.huawei.hms.flutter.push.hms.FlutterHmsMessageService"
+            tools:node="remove" />
+        <service
+            android:name=".notifications.TheaverHmsMessageService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.huawei.push.action.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <receiver
+            android:name=".notifications.NotificationActionReceiver"
+            android:exported="false" />
+
         <!-- FileProvider for installing APK updates across Android 7.0 - 15+ -->
         <provider
             android:name="androidx.core.content.FileProvider"

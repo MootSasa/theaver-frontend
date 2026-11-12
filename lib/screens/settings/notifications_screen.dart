@@ -10,6 +10,7 @@ import '../../l10n/app_localizations.dart';
 import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/notifications/huawei_autostart_prompt.dart';
 import '../../utils/haptic_utils.dart';
 import 'chat_type_notifications_screen.dart';
 import 'badge_settings_screen.dart';
@@ -445,6 +446,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           NotificationSettingsLauncher.openAppNotificationSettings();
                         },
                       ),
+                      if (HuaweiAutoStartPrompt.isRelevant)
+                        ListTile(
+                          leading: const Icon(Icons.rocket_launch_outlined, color: Color(0xFF0088CC)),
+                          title: const Text('Автозапуск (Huawei)'),
+                          subtitle: const Text('Нужен, чтобы уведомления приходили, когда Theaver закрыт'),
+                          trailing: const Icon(Icons.open_in_new, color: Colors.grey),
+                          onTap: () {
+                            HapticUtils.tap();
+                            HuaweiAutoStartPrompt.openSettings();
+                          },
+                        ),
                       ListTile(
                         leading: const Icon(Icons.update, color: Color(0xFF0088CC)),
                         title: const Text('Повторять уведомления'),

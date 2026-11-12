@@ -100,6 +100,13 @@ dependencies {
     implementation("com.google.android.material:material:1.9.0")
     // HMS Core Push Kit is provided by the huawei_push Flutter plugin
     implementation("com.huawei.agconnect:agconnect-core:1.9.1.300")
+    // Compile-time access for the native chat notification services
+    // (TheaverFirebaseMessagingService / TheaverHmsMessageService); the runtime
+    // artifacts come from the firebase_messaging and huawei_push plugins.
+    compileOnly(platform("com.google.firebase:firebase-bom:33.16.0"))
+    compileOnly("com.google.firebase:firebase-messaging")
+    compileOnly("com.huawei.hms:push:6.13.0.300")
+    implementation("androidx.core:core-ktx:1.13.1")
 }
 
 flutter {

@@ -50,6 +50,7 @@ import '../../widgets/chat/round_video_thumbnail.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/call/call_device_transfer_banner.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
+import '../../widgets/notifications/huawei_autostart_prompt.dart';
 import '../../services/notification_service.dart';
 import '../../services/proximity_audio_service.dart';
 import '../../models/chat_folder.dart';
@@ -426,6 +427,8 @@ class _MainScreenState extends State<MainScreen>
     await Future.delayed(const Duration(milliseconds: 1200));
     if (!mounted) return;
     await NotificationPermissionDialog.checkAndPrompt(context);
+    if (!mounted) return;
+    await HuaweiAutoStartPrompt.maybeShow(context);
   }
 
   Future<void> _checkForUpdates({
