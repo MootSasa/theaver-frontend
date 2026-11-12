@@ -5,10 +5,13 @@ import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.hardware.display.DisplayManager
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.Display
 import android.view.MotionEvent
 import android.view.Surface
@@ -19,6 +22,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
@@ -28,6 +32,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     companion object {
         private var currentActivityRef: WeakReference<MainActivity>? = null
+        private const val REQUEST_PICK_SOUND = 47021
 
         fun getCurrentActivity(): MainActivity? = currentActivityRef?.get()
     }
@@ -253,10 +258,75 @@ class MainActivity : FlutterFragmentActivity() {
      * с типом FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION.
      */
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == REQUEST_PICK_SOUND) {
+            deliverPickedSound(resultCode, data)
+            return
+        }
         if (resultCode == Activity.RESULT_OK && data != null) {
             CallForegroundService.promoteToMediaProjection(applicationContext)
         }
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    // ===================== System notification sound picker =====================
+
+    private var pendingSoundResult: MethodChannel.Result? = null
+
+    /**
+     * Opens the system ringtone picker (TYPE_NOTIFICATION), like Telegram does for
+     * per-chat notification sounds. Result map: {cancelled, uri, title} where
+     * uri == null means "system default" and uri == "" means "silent".
+     */
+    fun pickNotificationSound(currentUri: String?, result: MethodChannel.Result) {
+        pendingSoundResult?.success(mapOf("cancelled" to true))
+        pendingSoundResult = result
+        try {
+            val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, Settings.System.DEFAULT_NOTIFICATION_URI)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Звук уведомлений")
+                val existing: Uri? = when {
+                    currentUri == null -> Settings.System.DEFAULT_NOTIFICATION_URI
+                    currentUri.isEmpty() -> null
+                    else -> Uri.parse(currentUri)
+                }
+                putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, existing)
+            }
+            startActivityForResult(intent, REQUEST_PICK_SOUND)
+        } catch (e: Exception) {
+            pendingSoundResult = null
+            result.error("picker_unavailable", e.message, null)
+        }
+    }
+
+    private fun deliverPickedSound(resultCode: Int, data: Intent?) {
+        val result = pendingSoundResult ?: return
+        pendingSoundResult = null
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            result.success(mapOf("cancelled" to true))
+            return
+        }
+        val picked: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        }
+        when {
+            picked == null -> result.success(mapOf("cancelled" to false, "uri" to "", "title" to "Без звука"))
+            picked == Settings.System.DEFAULT_NOTIFICATION_URI ->
+                result.success(mapOf("cancelled" to false, "uri" to null, "title" to "По умолчанию"))
+            else -> {
+                val title = try {
+                    RingtoneManager.getRingtone(this, picked)?.getTitle(this)
+                } catch (_: Exception) {
+                    null
+                }
+                result.success(mapOf("cancelled" to false, "uri" to picked.toString(), "title" to (title ?: "Мелодия")))
+            }
+        }
     }
 
     fun enableCallLockScreenWakeup(enable: Boolean) {
