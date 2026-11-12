@@ -1013,9 +1013,8 @@ class _MainScreenState extends State<MainScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // При возврате из фона: восстановить статус активного чата,
-      // переподключить WS если не подключён, затем обновить чаты
-      NotificationService().onAppResume();
+      // При возврате из фона: переподключить WS если не подключён, затем обновить чаты.
+      // Состояние foreground/background отслеживает сам NotificationService.
       if (!_isWsConnected) {
         _wsService.tryReconnect();
         _loadChats();
@@ -1024,11 +1023,6 @@ class _MainScreenState extends State<MainScreen>
           DateTime.now().difference(_lastUpdateCheckAt!) > const Duration(hours: 1)) {
         _checkForUpdates(fromBackgroundTimer: true);
       }
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      // При уходе в фон: снять подавление push-уведомлений для этого устройства
-      NotificationService().onAppPause();
     }
   }
 

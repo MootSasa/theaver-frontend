@@ -99,6 +99,22 @@ class PushDetectorHandler(private val context: Context) {
                         requestIgnoreBatteryOptimizations()
                         result.success(true)
                     }
+                    "openAppNotificationSettings" -> {
+                        openNotificationSettings(null)
+                        result.success(true)
+                    }
+                    "openChannelSettings" -> {
+                        openNotificationSettings(call.argument<String>("channel_id"))
+                        result.success(true)
+                    }
+                    "pickNotificationSound" -> {
+                        val activity = MainActivity.getCurrentActivity()
+                        if (activity == null) {
+                            result.error("no_activity", "MainActivity is not available", null)
+                        } else {
+                            activity.pickNotificationSound(call.argument<String>("current_uri"), result)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -196,80 +212,59 @@ class PushDetectorHandler(private val context: Context) {
         return manufacturer.contains("huawei") || brand.contains("huawei") || brand.contains("honor")
     }
 
-    private fun cancelChatNotifications(chatId: String, chatTitle: String? = null) {
+    private fun openNotificationSettings(channelId: String?) {
+        try {
+            val intent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                if (!channelId.isNullOrEmpty()) {
+                    android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                        putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                        putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, channelId)
+                    }
+                } else {
+                    android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                        putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    }
+                }
+            } else {
+                android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                }
+            }
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Cancels notifications of a chat: our own (tag `chat_<id>`, posted by
+     * flutter_local_notifications) and FCM-rendered ones (same tag, set by the backend).
+     * Only exact tag / chat_id extras matches — no title heuristics, which used to
+     * cancel notifications of other chats with similar names.
+     */
+    private fun cancelChatNotifications(chatId: String, @Suppress("UNUSED_PARAMETER") chatTitle: String? = null) {
         if (chatId.isEmpty()) return
         try {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
             val targetChatId = chatId.trim()
-            val targetTitle = chatTitle?.trim()?.lowercase()
+            val chatTag = "chat_$targetChatId"
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 val active = nm.activeNotifications ?: return
                 for (sbn in active) {
                     val rawTag = sbn.tag
-                    val id = sbn.id
-                    val notif = sbn.notification
-                    val extras = notif?.extras
-
-                    var match = false
-
-                    // 1. Tag matching
-                    if (rawTag != null) {
-                        if (rawTag == "chat_$targetChatId" ||
-                            rawTag.startsWith("chat_${targetChatId}_") ||
-                            rawTag == targetChatId ||
-                            rawTag.contains("chat_$targetChatId")) {
-                            match = true
-                        }
-                    }
-
-                    // 2. Extras matching (chat_id, data JSON, key search)
-                    if (!match && extras != null) {
-                        val extraChatId = extras.getString("chat_id") ?: extras.getString("chatId")
-                        if (extraChatId != null && extraChatId == targetChatId) {
-                            match = true
-                        } else {
-                            for (key in extras.keySet()) {
-                                val value = extras.get(key)?.toString() ?: ""
-                                if (value == targetChatId ||
-                                    value.contains("\"chat_id\":\"$targetChatId\"") ||
-                                    value.contains("\"chat_id\":$targetChatId")) {
-                                    match = true
-                                    break
-                                }
-                            }
-                        }
-
-                        // 3. Title matching (if chatTitle is supplied)
-                        if (!match && !targetTitle.isNullOrEmpty()) {
-                            val notifTitle = extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()?.trim()?.lowercase()
-                            if (notifTitle != null && (notifTitle == targetTitle || notifTitle.contains(targetTitle))) {
-                                match = true
-                            }
-                        }
-                    }
-
-                    // 4. Fallback ID match (numeric ID == chatId)
-                    if (!match) {
-                        val numChatId = targetChatId.toIntOrNull()
-                        if (numChatId != null && id == numChatId) {
-                            match = true
-                        }
-                    }
-
-                    if (match) {
-                        if (rawTag != null) {
-                            nm.cancel(rawTag, id)
-                        } else {
-                            nm.cancel(null, id)
-                            nm.cancel(id)
-                        }
+                    val extras = sbn.notification?.extras
+                    val tagMatch = rawTag != null &&
+                        (rawTag == chatTag || rawTag.startsWith("${chatTag}_"))
+                    val extrasChatId = extras?.getString("chat_id") ?: extras?.getString("chatId")
+                    val payload = extras?.getString("payload") ?: ""
+                    val extrasMatch = extrasChatId == targetChatId ||
+                        payload.contains("\"chat_id\":\"$targetChatId\"")
+                    if (tagMatch || extrasMatch) {
+                        nm.cancel(rawTag, sbn.id)
                     }
                 }
             } else {
-                nm.cancel("chat_$targetChatId", 0)
-                val num = targetChatId.toIntOrNull()
-                if (num != null) nm.cancel(num)
+                nm.cancel(chatTag, 0)
             }
         } catch (_: Throwable) {}
     }

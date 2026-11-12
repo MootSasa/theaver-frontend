@@ -16,6 +16,7 @@ class WebNotificationHelper {
     String? iconUrl,
     String? tag,
     VoidCallback? onTap,
+    bool requireInteraction = false,
   }) {}
 
   static void playNotificationSound() {}

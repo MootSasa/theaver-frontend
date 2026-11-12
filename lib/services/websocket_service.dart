@@ -254,6 +254,8 @@ class WebSocketService {
 
   String? _currentUserId;
   String? _activeChatId;
+  String _appState = 'foreground';
+  bool _pushAvailable = false;
 
   /// Update current user ID (call when switching accounts)
   Future<void> updateUserId(String? userId) async {
@@ -340,10 +342,9 @@ class WebSocketService {
       // Start online token refresh timer
       _startOnlineRefreshTimer();
 
-      // Re-send currently open chat on this device to suppress push notifications
-      if (_activeChatId != null && _activeChatId!.isNotEmpty) {
-        sendActiveChat(_activeChatId);
-      }
+      // Re-send app state + open chat so the server knows whether this device
+      // renders notifications itself (foreground) or needs a push (background).
+      _sendClientStateNow();
 
       // Trigger pending avatar upload if any
       if (_currentUserId != null) {
@@ -733,8 +734,30 @@ class WebSocketService {
   /// so that the server suppresses push notifications for this specific chat.
   void sendActiveChat(String? chatId) {
     _activeChatId = (chatId != null && chatId.isNotEmpty) ? chatId : null;
-    sendMessage('active_chat', {
-      'chat_id': chatId ?? '',
+    _sendClientStateNow();
+  }
+
+  /// Reports push-relevant client state to the server (see backend
+  /// api/websocket_client_state.go): foreground devices get no push for new
+  /// messages (the app shows a system notification itself), background devices
+  /// with a working push service get an OS-rendered push.
+  void sendClientState({
+    required bool isForeground,
+    String? activeChatId,
+    required bool pushAvailable,
+  }) {
+    _appState = isForeground ? 'foreground' : 'background';
+    _activeChatId =
+        (activeChatId != null && activeChatId.isNotEmpty) ? activeChatId : null;
+    _pushAvailable = pushAvailable;
+    _sendClientStateNow();
+  }
+
+  void _sendClientStateNow() {
+    sendMessage('client_state', {
+      'app_state': _appState,
+      'chat_id': _activeChatId ?? '',
+      'push_available': _pushAvailable,
     });
   }
 

@@ -106,6 +106,7 @@ class WebNotificationHelper {
     String? iconUrl,
     String? tag,
     VoidCallback? onTap,
+    bool requireInteraction = false,
   }) {
     try {
       if (web.Notification.permission != 'granted') {
@@ -121,6 +122,8 @@ class WebNotificationHelper {
         body: body,
         icon: icon,
         tag: tag ?? 'theaver-msg',
+        renotify: tag != null,
+        requireInteraction: requireInteraction,
       );
 
       final notif = web.Notification(title, options);
@@ -133,11 +136,13 @@ class WebNotificationHelper {
         onTap?.call();
       }).toJS;
 
-      Timer(const Duration(seconds: 6), () {
-        try {
-          notif.close();
-        } catch (_) {}
-      });
+      if (!requireInteraction) {
+        Timer(const Duration(seconds: 8), () {
+          try {
+            notif.close();
+          } catch (_) {}
+        });
+      }
     } catch (e) {
       debugPrint('WebNotificationHelper: showBrowserNotification error: $e');
     }
