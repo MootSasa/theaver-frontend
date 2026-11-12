@@ -28,8 +28,6 @@ class NotificationExceptionsScreen extends StatelessWidget {
     }
     if (s.soundEnabled == false) {
       parts.add('Звук выкл');
-    } else if (s.soundUri != null && s.soundUri!.isNotEmpty) {
-      parts.add('Звук: ${s.soundUri}');
     }
     if (s.mentionsOnly) {
       parts.add('Только упоминания');
@@ -235,6 +233,8 @@ class NotificationExceptionsScreen extends StatelessWidget {
             builder: (_) => ChatNotificationSettingsScreen(
               chatId: ex.settings.chatId,
               chatName: ex.chatTitle,
+              isGroup: ex.chatType != 'private',
+              isChannel: ex.chatType == 'channel',
             ),
           ),
         );

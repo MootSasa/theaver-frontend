@@ -8,26 +8,32 @@ class SoundOption {
   const SoundOption({required this.id, required this.title});
 }
 
+/// Id «без звука». Пустой id ('') — звук по умолчанию.
+const String kSilentSoundId = 'none';
+
+// Встроенных звуковых файлов в проекте нет, поэтому доступны только
+// «По умолчанию» и «Без звука». На Android конкретный звук чата выбирается
+// через системный выбор мелодии (см. NotificationService.pickChatSound).
 const List<SoundOption> kAvailableNotificationSounds = [
-  SoundOption(id: '', title: 'По умолчанию (Theaver)'),
-  SoundOption(id: 'ding', title: 'Ding'),
-  SoundOption(id: 'chime', title: 'Chime'),
-  SoundOption(id: 'chord', title: 'Chord'),
-  SoundOption(id: 'pop', title: 'Pop'),
-  SoundOption(id: 'pulse', title: 'Pulse'),
-  SoundOption(id: 'note', title: 'Note'),
-  SoundOption(id: 'whistle', title: 'Whistle'),
-  SoundOption(id: 'none', title: 'Без звука'),
+  SoundOption(id: '', title: 'По умолчанию'),
+  SoundOption(id: kSilentSoundId, title: 'Без звука'),
 ];
 
 const List<SoundOption> kAvailableRingtones = [
   SoundOption(id: '', title: 'По умолчанию'),
-  SoundOption(id: 'ring_classic', title: 'Классический'),
-  SoundOption(id: 'ring_digital', title: 'Цифровой'),
-  SoundOption(id: 'ring_soft', title: 'Мягкий звонок'),
-  SoundOption(id: 'ring_pulse', title: 'Импульс'),
-  SoundOption(id: 'none', title: 'Без мелодии'),
+  SoundOption(id: kSilentSoundId, title: 'Без мелодии'),
 ];
+
+/// Нормализует сохранённый id звука: всё, кроме [kSilentSoundId],
+/// (включая устаревшие id удалённых встроенных звуков) считается «по умолчанию».
+String normalizeSoundId(String? id) => id == kSilentSoundId ? kSilentSoundId : '';
+
+/// Человекочитаемое название сохранённого звука.
+String soundOptionLabel(String? id, {bool isRingtone = false}) {
+  final normalized = normalizeSoundId(id);
+  final options = isRingtone ? kAvailableRingtones : kAvailableNotificationSounds;
+  return options.firstWhere((o) => o.id == normalized, orElse: () => options.first).title;
+}
 
 class SoundPickerSheet extends StatelessWidget {
   final String? currentSoundId;
@@ -57,7 +63,7 @@ class SoundPickerSheet extends StatelessWidget {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => SoundPickerSheet(
-        currentSoundId: currentSoundId ?? '',
+        currentSoundId: normalizeSoundId(currentSoundId),
         options: isRingtone ? kAvailableRingtones : kAvailableNotificationSounds,
         title: title,
         onSelected: onSelected,

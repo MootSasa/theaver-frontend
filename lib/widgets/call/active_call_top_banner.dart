@@ -6,11 +6,10 @@ import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
-import '../../services/notification_settings_provider.dart';
 
-/// Top banner shown across the app whenever:
-/// 1) An incoming call is ringing (`callProvider.hasIncomingCall`), or
-/// 2) An active call or voice channel is minimized (`callProvider.hasActiveCall && callProvider.isMinimized`).
+/// Top banner shown across the app whenever an active call or voice channel is
+/// minimized (`callProvider.hasActiveCall && callProvider.isMinimized`).
+/// Incoming calls are announced only via the system call notification.
 ///
 /// When [child] is provided, the banner smoothly pushes [child] down instead of
 /// overlapping the screen's [AppBar] / header controls.
@@ -74,14 +73,10 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
   @override
   Widget build(BuildContext context) {
     final callProvider = context.watch<CallStateProvider>();
-    final disableInApp = context
-        .select<NotificationSettingsProvider?, bool>(
-          (p) => p?.globalSettings.disableInAppNotifications ?? false,
-        );
-    final isIncoming = callProvider.hasIncomingCall && !disableInApp;
-    final isMinimizedActive =
-        callProvider.hasActiveCall && callProvider.isMinimized;
-    final shouldShow = isIncoming || isMinimizedActive;
+    // Incoming calls are announced only via the system call notification
+    // (NotificationService.showCallNotification); this banner is shown solely
+    // for a minimized active call.
+    final shouldShow = callProvider.hasActiveCall && callProvider.isMinimized;
 
     if (shouldShow &&
         _visibilityCtrl.status != AnimationStatus.forward &&
@@ -96,10 +91,8 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
     return AnimatedBuilder(
       animation: _visibilityCtrl,
       builder: (context, _) {
-        final incoming = disableInApp ? null : callProvider.incomingCall;
         final active = callProvider.activeCall;
-        if ((_visibilityCtrl.isDismissed && !shouldShow) ||
-            (incoming == null && active == null)) {
+        if ((_visibilityCtrl.isDismissed && !shouldShow) || active == null) {
           return widget.child ?? const SizedBox.shrink();
         }
 
@@ -112,19 +105,8 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
         final topInset = widget.child != null ? mq.padding.top : 0.0;
 
         Widget bannerSection;
-        if (incoming != null && active == null) {
-          bannerSection = _buildIncomingBanner(
-            context: context,
-            callProvider: callProvider,
-            p: p,
-            isDark: isDark,
-            glassProvider: glassProvider,
-            useGlass: useGlass,
-            isFullGlass: isFullGlass,
-            topInset: topInset,
-          );
-        } else {
-          final call = active!;
+        {
+          final call = active;
           final stream = callProvider.focusedStream;
 
           final innerContent = Material(
@@ -393,187 +375,6 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
           ],
         );
       },
-    );
-  }
-
-  Widget _buildIncomingBanner({
-    required BuildContext context,
-    required CallStateProvider callProvider,
-    required TheavPalette p,
-    required bool isDark,
-    required LiquidGlassProvider glassProvider,
-    required bool useGlass,
-    required bool isFullGlass,
-    required double topInset,
-  }) {
-    final incoming = callProvider.incomingCall!;
-    final callerTitle =
-        incoming.title.isNotEmpty ? incoming.title : 'Входящий звонок';
-    final subtitle = incoming.callType == 'group' || incoming.callType == 'stage'
-        ? 'Приглашение в голосовой канал'
-        : (incoming.isVideo
-            ? 'Входящий видеозвонок...'
-            : 'Входящий аудиозвонок...');
-
-    final innerContent = Material(
-      type: MaterialType.transparency,
-      child: DefaultTextStyle.merge(
-        style: const TextStyle(decoration: TextDecoration.none),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Row(
-            children: [
-              AnimatedBuilder(
-                animation: _pulseCtrl,
-                builder: (context, _) => Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF00E676)
-                        .withValues(alpha: 0.18 + 0.16 * _pulseCtrl.value),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    incoming.isVideo
-                        ? Icons.videocam_rounded
-                        : Icons.phone_in_talk_rounded,
-                    size: 20,
-                    color: const Color(0xFF00E676),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      callerTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        decoration: TextDecoration.none,
-                        color: isDark ? Colors.white : p.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        decoration: TextDecoration.none,
-                        color: isDark
-                            ? const Color(0xFF69F0AE)
-                            : const Color(0xFF00897B),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Decline Button
-              GestureDetector(
-                onTap: () {
-                  HapticFeedback.mediumImpact();
-                  callProvider.declineIncomingCall();
-                },
-                child: Container(
-                  width: 38,
-                  height: 38,
-                  decoration: const BoxDecoration(
-                    color: Colors.redAccent,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.call_end_rounded,
-                    size: 19,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Accept Button
-              GestureDetector(
-                onTap: () async {
-                  HapticFeedback.mediumImpact();
-                  await callProvider.acceptIncomingCall();
-                  widget.onRestoreCall();
-                },
-                child: Container(
-                  width: 38,
-                  height: 38,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF00C853),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    incoming.isVideo
-                        ? Icons.videocam_rounded
-                        : Icons.call_rounded,
-                    size: 19,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    return ClipRect(
-      child: Align(
-        alignment: Alignment.topCenter,
-        heightFactor: _heightFactor.value,
-        child: SlideTransition(
-          position: _slideOffset,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(12, topInset + 6, 12, 8),
-            child: SizedBox(
-              height: 62,
-              width: double.infinity,
-              child: useGlass
-                  ? LiquidGlassLens(
-                      style: glassProvider.createStyle(
-                        context: context,
-                        cornerRadius: 26,
-                        color: const Color(0xFF00C853)
-                            .withValues(alpha: isDark ? 0.18 : 0.24),
-                        refractionIndex: isFullGlass ? 1.12 : 1.05,
-                        refractionWidth: 24.0,
-                      ),
-                      child: innerContent,
-                    )
-                  : ClipRRect(
-                      borderRadius: BorderRadius.circular(26),
-                      child: BackdropFilter.grouped(
-                        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                        child: Material(
-                          color: isDark
-                              ? const Color(0xFF132A21).withValues(alpha: 0.94)
-                              : const Color(0xFFE8F5E9).withValues(alpha: 0.96),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(26),
-                            side: BorderSide(
-                              color: const Color(0xFF00C853)
-                                  .withValues(alpha: 0.45),
-                              width: 1.0,
-                            ),
-                          ),
-                          child: innerContent,
-                        ),
-                      ),
-                    ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

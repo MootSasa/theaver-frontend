@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../services/notification_service.dart';
 import '../../services/push_service_detector.dart';
 import '../../services/notification_settings_provider.dart';
+import '../../services/notification_settings_launcher.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
@@ -11,7 +12,6 @@ import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 import 'chat_type_notifications_screen.dart';
-import 'in_app_notifications_screen.dart';
 import 'badge_settings_screen.dart';
 import 'notification_exceptions_screen.dart';
 import 'widgets/sound_picker_sheet.dart';
@@ -375,9 +375,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       if (s.callNotifications) ...[
                         ListTile(
                           title: const Text('Мелодия звонка'),
-                          subtitle: Text(s.callRingtone != null && s.callRingtone!.isNotEmpty
-                              ? s.callRingtone!
-                              : 'По умолчанию'),
+                          subtitle: Text(soundOptionLabel(s.callRingtone, isRingtone: true)),
                           trailing: const Icon(Icons.chevron_right, color: Colors.grey),
                           onTap: () {
                             SoundPickerSheet.show(
@@ -427,34 +425,24 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         },
                       ),
                       AdaptiveSwitchListTile(
-                        secondary: const Icon(Icons.notifications_paused_outlined, color: Color(0xFF0088CC)),
-                        title: const Text('Отключить встроенные уведомления'),
+                        secondary: const Icon(Icons.phone_android, color: Color(0xFF0088CC)),
+                        title: const Text('Уведомления при открытом приложении'),
                         subtitle: const Text(
-                          'Отправлять все уведомления через стандартный сервис уведомлений устройства',
+                          'Показывать системные уведомления, пока Theaver открыт',
                         ),
-                        value: s.disableInAppNotifications,
+                        value: s.foregroundNotifications,
                         onChanged: (val) {
                           HapticUtils.selection();
-                          provider.updateGlobalSettings(disableInAppNotifications: val);
+                          provider.updateGlobalSettings(foregroundNotifications: val);
                         },
                       ),
                       ListTile(
-                        leading: const Icon(Icons.phone_android, color: Color(0xFF0088CC)),
-                        title: const Text('Уведомления в приложении'),
-                        subtitle: Text(
-                          s.disableInAppNotifications
-                              ? 'Отключены (используются системные уведомления)'
-                              : 'Звуки, вибрация, предпросмотр',
-                        ),
-                        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                        leading: const Icon(Icons.settings_applications_outlined, color: Color(0xFF0088CC)),
+                        title: const Text('Системные настройки уведомлений'),
+                        trailing: const Icon(Icons.open_in_new, color: Colors.grey),
                         onTap: () {
                           HapticUtils.tap();
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const InAppNotificationsScreen(),
-                            ),
-                          );
+                          NotificationSettingsLauncher.openAppNotificationSettings();
                         },
                       ),
                       ListTile(

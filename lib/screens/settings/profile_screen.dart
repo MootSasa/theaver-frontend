@@ -36,7 +36,7 @@ import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/notifications/in_app_notification_banner.dart';
+import '../../widgets/common/sync_banner.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../widgets/profile/avatar_gallery_viewer.dart';
 import '../../widgets/profile/expandable_avatar.dart';
@@ -2513,7 +2513,7 @@ class ProfileScreenState extends State<ProfileScreen>
 
       if (result['synced'] == false) {
         final l10n = context.l10n;
-        InAppNotificationBanner.showBottomSyncBanner(
+        SyncBanner.show(
           context,
           title: l10n.translate('edit_profile_sync_offline_title'),
           message: l10n.translate('edit_profile_sync_offline_msg'),

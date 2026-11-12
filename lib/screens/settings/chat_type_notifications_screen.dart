@@ -53,14 +53,6 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
     }
   }
 
-  String _soundLabel(String? uri) {
-    if (uri == null || uri.isEmpty) return 'По умолчанию';
-    for (final opt in kAvailableNotificationSounds) {
-      if (opt.id == uri) return opt.title;
-    }
-    return uri;
-  }
-
   void _showVibrationPicker(
     BuildContext context,
     VibrationPattern current,
@@ -123,7 +115,6 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
             bool isEnabled;
             bool isPreview;
             bool isSound;
-            String? soundUri;
             VibrationPattern vibration;
 
             switch (category) {
@@ -131,21 +122,18 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                 isEnabled = s.privateChatNotifications;
                 isPreview = s.privateChatPreview;
                 isSound = s.privateChatSound;
-                soundUri = s.privateChatSoundUri;
                 vibration = s.privateChatVibration;
                 break;
               case ChatCategory.groupChats:
                 isEnabled = s.groupChatNotifications;
                 isPreview = s.groupChatPreview;
                 isSound = s.groupChatSound;
-                soundUri = s.groupChatSoundUri;
                 vibration = s.groupChatVibration;
                 break;
               case ChatCategory.channels:
                 isEnabled = s.channelNotifications;
                 isPreview = s.channelPreview;
                 isSound = s.channelSound;
-                soundUri = s.channelSoundUri;
                 vibration = s.channelVibration;
                 break;
             }
@@ -204,7 +192,7 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                       ),
                       ListTile(
                         title: Text(l10n.translate('notifications_sound')),
-                        subtitle: Text(_soundLabel(soundUri)),
+                        subtitle: Text(soundOptionLabel(isSound ? '' : kSilentSoundId)),
                         trailing: AdaptiveSwitch(
                           value: isSound,
                           onChanged: (val) {
@@ -221,22 +209,25 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                         onTap: () {
                           SoundPickerSheet.show(
                             context,
-                            currentSoundId: soundUri,
+                            currentSoundId: isSound ? '' : kSilentSoundId,
                             onSelected: (newSound) {
+                              // Встроенных звуков нет: сохраняем только вкл/выкл,
+                              // а устаревший id звука сбрасываем.
+                              final enabled = newSound != kSilentSoundId;
                               if (category == ChatCategory.privateChats) {
                                 provider.updateGlobalSettings(
-                                  privateChatSoundUri: newSound,
-                                  privateChatSound: newSound != 'none',
+                                  privateChatSoundUri: '',
+                                  privateChatSound: enabled,
                                 );
                               } else if (category == ChatCategory.groupChats) {
                                 provider.updateGlobalSettings(
-                                  groupChatSoundUri: newSound,
-                                  groupChatSound: newSound != 'none',
+                                  groupChatSoundUri: '',
+                                  groupChatSound: enabled,
                                 );
                               } else {
                                 provider.updateGlobalSettings(
-                                  channelSoundUri: newSound,
-                                  channelSound: newSound != 'none',
+                                  channelSoundUri: '',
+                                  channelSound: enabled,
                                 );
                               }
                             },
@@ -290,8 +281,8 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                       ...categoryExceptions.map((ex) {
                         final isMuted = ex.settings.muteState == MuteState.muted;
                         String statusDesc = isMuted ? 'Без звука' : 'Включены';
-                        if (ex.settings.soundUri != null && ex.settings.soundUri!.isNotEmpty) {
-                          statusDesc += ' • ${_soundLabel(ex.settings.soundUri)}';
+                        if (!isMuted && ex.settings.soundEnabled == false) {
+                          statusDesc += ' • Звук выключен';
                         }
 
                         return ListTile(
@@ -328,6 +319,8 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                                 builder: (_) => ChatNotificationSettingsScreen(
                                   chatId: ex.settings.chatId,
                                   chatName: ex.chatTitle,
+                                  isGroup: ex.chatType != 'private',
+                                  isChannel: ex.chatType == 'channel',
                                 ),
                               ),
                             );

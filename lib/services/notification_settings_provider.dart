@@ -164,11 +164,7 @@ class NotificationSettingsProvider extends ChangeNotifier {
     bool? contentPreview,
     bool? includeMutedChats,
     bool? accountNotifications,
-    bool? inAppSounds,
-    bool? inAppVibrate,
-    bool? inAppPreview,
-    bool? inAppChatSounds,
-    bool? disableInAppNotifications,
+    bool? foregroundNotifications,
     int? repeatNotifications,
   }) async {
     final updated = _globalSettings.copyWith(
@@ -200,11 +196,7 @@ class NotificationSettingsProvider extends ChangeNotifier {
       contentPreview: contentPreview,
       includeMutedChats: includeMutedChats,
       accountNotifications: accountNotifications,
-      inAppSounds: inAppSounds,
-      inAppVibrate: inAppVibrate,
-      inAppPreview: inAppPreview,
-      inAppChatSounds: inAppChatSounds,
-      disableInAppNotifications: disableInAppNotifications,
+      foregroundNotifications: foregroundNotifications,
       repeatNotifications: repeatNotifications,
     );
     await saveGlobalSettings(updated);

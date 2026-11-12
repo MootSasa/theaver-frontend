@@ -7,7 +7,6 @@ import 'package:flutter/material.dart' show MaterialPageRoute;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:window_manager/window_manager.dart';
 import '../models/call_models.dart';
 import '../screens/call/group_call_screen.dart';
 import '../screens/call/video_call_screen.dart';
@@ -3113,43 +3112,19 @@ class CallStateProvider extends ChangeNotifier {
             .where((p) => p.userId == callerId)
             .firstOrNull
             ?.avatarUrl;
-    final forceSystemNotification =
-        NotificationService().isInAppNotificationsDisabled;
-
-    if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-      bool isFocused = true;
-      try {
-        isFocused = await windowManager.isFocused();
-      } catch (_) {}
-      if (forceSystemNotification ||
-          !isFocused ||
-          !NotificationService().isAppInForeground) {
-        await NotificationService().showCallNotification(
-          callId: session.id,
-          chatId: session.chatId,
-          callerId: callerId,
-          callerName: displayCaller,
-          callerAvatar: avatar,
-          isVideo: session.isVideo,
-          isGroup: session.callType == 'group' || session.callType == 'stage',
-          chatTitle: session.title,
-        );
-      }
-      return;
-    }
-
-    if (forceSystemNotification || !NotificationService().isAppInForeground) {
-      await NotificationService().showCallNotification(
-        callId: session.id,
-        chatId: session.chatId,
-        callerId: callerId,
-        callerName: displayCaller,
-        callerAvatar: avatar,
-        isVideo: session.isVideo,
-        isGroup: session.callType == 'group' || session.callType == 'stage',
-        chatTitle: session.title,
-      );
-    }
+    // Incoming calls are always announced with the system call notification
+    // (full-screen intent / heads-up with Accept/Decline) — there is no custom
+    // in-app incoming call banner anymore, in foreground or background.
+    await NotificationService().showCallNotification(
+      callId: session.id,
+      chatId: session.chatId,
+      callerId: callerId,
+      callerName: displayCaller,
+      callerAvatar: avatar,
+      isVideo: session.isVideo,
+      isGroup: session.callType == 'group' || session.callType == 'stage',
+      chatTitle: session.title,
+    );
   }
 
   void _startTimer(DateTime startedAt) {

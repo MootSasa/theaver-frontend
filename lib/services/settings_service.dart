@@ -770,12 +770,10 @@ class GlobalNotificationSettings {
   final bool includeMutedChats;
   final bool accountNotifications;
 
-  // In-App уведомления
-  final bool inAppSounds;
-  final bool inAppVibrate;
-  final bool inAppPreview;
-  final bool inAppChatSounds;
-  final bool disableInAppNotifications;
+  // Показывать системные уведомления, когда приложение открыто (foreground).
+  // Заменяет старые in-app настройки (inAppSounds, inAppVibrate, inAppPreview,
+  // inAppChatSounds, disableInAppNotifications).
+  final bool foregroundNotifications;
 
   // Повтор уведомлений (в минутах, 0 = выкл)
   final int repeatNotifications;
@@ -809,11 +807,7 @@ class GlobalNotificationSettings {
     this.contentPreview = true,
     this.includeMutedChats = false,
     this.accountNotifications = true,
-    this.inAppSounds = true,
-    this.inAppVibrate = true,
-    this.inAppPreview = true,
-    this.inAppChatSounds = true,
-    this.disableInAppNotifications = false,
+    this.foregroundNotifications = true,
     this.repeatNotifications = 0,
   });
 
@@ -848,11 +842,7 @@ class GlobalNotificationSettings {
     'contentPreview': contentPreview,
     'includeMutedChats': includeMutedChats,
     'accountNotifications': accountNotifications,
-    'inAppSounds': inAppSounds,
-    'inAppVibrate': inAppVibrate,
-    'inAppPreview': inAppPreview,
-    'inAppChatSounds': inAppChatSounds,
-    'disableInAppNotifications': disableInAppNotifications,
+    'foregroundNotifications': foregroundNotifications,
     'repeatNotifications': repeatNotifications,
   };
 
@@ -885,11 +875,9 @@ class GlobalNotificationSettings {
     'content_preview': contentPreview,
     'include_muted_chats': includeMutedChats,
     'account_notifications': accountNotifications,
-    'in_app_sounds': inAppSounds,
-    'in_app_vibrate': inAppVibrate,
-    'in_app_preview': inAppPreview,
-    'in_app_chat_sounds': inAppChatSounds,
-    'disable_in_app_notifications': disableInAppNotifications,
+    'foreground_notifications': foregroundNotifications,
+    // Обратная совместимость со старыми версиями приложения
+    'disable_in_app_notifications': !foregroundNotifications,
     'repeat_notifications': repeatNotifications,
   };
 
@@ -923,13 +911,19 @@ class GlobalNotificationSettings {
       contentPreview: json['contentPreview'] ?? json['content_preview'] ?? true,
       includeMutedChats: json['includeMutedChats'] ?? json['include_muted_chats'] ?? false,
       accountNotifications: json['accountNotifications'] ?? json['account_notifications'] ?? true,
-      inAppSounds: json['inAppSounds'] ?? json['in_app_sounds'] ?? true,
-      inAppVibrate: json['inAppVibrate'] ?? json['in_app_vibrate'] ?? true,
-      inAppPreview: json['inAppPreview'] ?? json['in_app_preview'] ?? true,
-      inAppChatSounds: json['inAppChatSounds'] ?? json['in_app_chat_sounds'] ?? true,
-      disableInAppNotifications: json['disableInAppNotifications'] ?? json['disable_in_app_notifications'] ?? false,
+      foregroundNotifications: _parseForegroundNotifications(json),
       repeatNotifications: json['repeatNotifications'] ?? json['repeat_notifications'] ?? 0,
     );
+  }
+
+  /// Читает foregroundNotifications; если ключа нет — мигрирует со старого
+  /// `disableInAppNotifications` / `disable_in_app_notifications`.
+  static bool _parseForegroundNotifications(Map<String, dynamic> json) {
+    final value = json['foregroundNotifications'] ?? json['foreground_notifications'];
+    if (value is bool) return value;
+    final legacyDisabled =
+        json['disableInAppNotifications'] ?? json['disable_in_app_notifications'];
+    return !(legacyDisabled is bool ? legacyDisabled : false);
   }
 
   static VibrationPattern _parseVibration(dynamic value) {
@@ -1006,11 +1000,7 @@ class GlobalNotificationSettings {
     bool? contentPreview,
     bool? includeMutedChats,
     bool? accountNotifications,
-    bool? inAppSounds,
-    bool? inAppVibrate,
-    bool? inAppPreview,
-    bool? inAppChatSounds,
-    bool? disableInAppNotifications,
+    bool? foregroundNotifications,
     int? repeatNotifications,
   }) {
     return GlobalNotificationSettings(
@@ -1042,11 +1032,7 @@ class GlobalNotificationSettings {
       contentPreview: contentPreview ?? this.contentPreview,
       includeMutedChats: includeMutedChats ?? this.includeMutedChats,
       accountNotifications: accountNotifications ?? this.accountNotifications,
-      inAppSounds: inAppSounds ?? this.inAppSounds,
-      inAppVibrate: inAppVibrate ?? this.inAppVibrate,
-      inAppPreview: inAppPreview ?? this.inAppPreview,
-      inAppChatSounds: inAppChatSounds ?? this.inAppChatSounds,
-      disableInAppNotifications: disableInAppNotifications ?? this.disableInAppNotifications,
+      foregroundNotifications: foregroundNotifications ?? this.foregroundNotifications,
       repeatNotifications: repeatNotifications ?? this.repeatNotifications,
     );
   }
@@ -1141,15 +1127,19 @@ class ChatNotificationSettings {
     VibrationPattern? vibration,
     bool? mentionsOnly,
     List<String>? keywords,
+    // Явный сброс nullable-полей к null («как в общих настройках»).
+    bool clearSoundEnabled = false,
+    bool clearSoundUri = false,
+    bool clearVibration = false,
   }) {
     return ChatNotificationSettings(
       chatId: chatId ?? this.chatId,
       muteState: muteState ?? this.muteState,
       muteUntil: muteUntil ?? this.muteUntil,
       previewEnabled: previewEnabled ?? this.previewEnabled,
-      soundEnabled: soundEnabled ?? this.soundEnabled,
-      soundUri: soundUri ?? this.soundUri,
-      vibration: vibration ?? this.vibration,
+      soundEnabled: clearSoundEnabled ? null : (soundEnabled ?? this.soundEnabled),
+      soundUri: clearSoundUri ? null : (soundUri ?? this.soundUri),
+      vibration: clearVibration ? null : (vibration ?? this.vibration),
       mentionsOnly: mentionsOnly ?? this.mentionsOnly,
       keywords: keywords ?? this.keywords,
     );

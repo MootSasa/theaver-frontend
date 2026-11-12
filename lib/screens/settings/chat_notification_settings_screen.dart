@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/notification_service.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
@@ -10,14 +12,26 @@ import '../../utils/haptic_utils.dart';
 
 /// Экран настроек уведомлений для конкретного чата.
 /// Доступен из профиля чата / информации о группе.
+///
+/// На Android звук и вибрация чата применяются через отдельный системный
+/// канал уведомлений `chat_<id>_v<n>` (как в Telegram): звук выбирается
+/// системным выбором мелодии, а URI звука хранится только на устройстве.
 class ChatNotificationSettingsScreen extends StatefulWidget {
   final String chatId;
   final String chatName;
+
+  /// Групповой чат или канал (влияет на базовый канал уведомлений Android).
+  final bool isGroup;
+
+  /// Канал (для выбора глобальной вибрации по умолчанию).
+  final bool isChannel;
 
   const ChatNotificationSettingsScreen({
     Key? key,
     required this.chatId,
     required this.chatName,
+    this.isGroup = false,
+    this.isChannel = false,
   }) : super(key: key);
 
   @override
@@ -29,12 +43,25 @@ class _ChatNotificationSettingsScreenState
     extends State<ChatNotificationSettingsScreen> {
   final TextEditingController _keywordController = TextEditingController();
 
+  static const String _soundTitlePrefsPrefix = 'notif_chat_sound_title_';
+
+  /// Название звука, выбранного в системном пикере (Android).
+  String? _androidSoundTitle;
+
+  /// Для чата создан собственный канал уведомлений (Android).
+  bool _hasCustomChannel = false;
+
+  bool get _supportsChannels => NotificationService().supportsChatChannels;
+
+  String get _soundTitleKey => '$_soundTitlePrefsPrefix${widget.chatId}';
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<NotificationSettingsProvider>().init();
     });
+    _loadChannelState();
   }
 
   @override
@@ -147,14 +174,18 @@ class _ChatNotificationSettingsScreenState
                   color: Color(0xFF0088CC)),
               title: Text(l10n.translate('chat_notif_sound')),
               subtitle: Text(
-                soundEnabled == null
-                    ? l10n.translate('chat_notif_use_global')
-                    : soundEnabled
-                        ? l10n.translate('notifications_sound_on')
-                        : l10n.translate('notifications_sound_off'),
+                _supportsChannels && _androidSoundTitle != null
+                    ? _androidSoundTitle!
+                    : soundEnabled == null
+                        ? l10n.translate('chat_notif_use_global')
+                        : soundEnabled
+                            ? 'По умолчанию'
+                            : 'Без звука',
               ),
               trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-              onTap: () => _showSoundOptions(context, provider, soundEnabled, l10n),
+              onTap: () => _supportsChannels
+                  ? _pickAndroidSound(provider)
+                  : _showSoundOptions(context, provider, soundEnabled, l10n),
             ),
 
             // === Вибрация ===
@@ -172,16 +203,35 @@ class _ChatNotificationSettingsScreenState
               onTap: () => _showVibrationPicker(
                 context,
                 vibration ?? VibrationPattern.default_,
-                (pattern) {
-                  _updateChatSetting(
-                    provider,
-                    (existing) => existing.copyWith(vibration: pattern),
-                  );
-                },
+                (pattern) => _setVibration(provider, pattern),
                 allowUseGlobal: true,
                 l10n: l10n,
               ),
             ),
+
+            // === Системный канал уведомлений (Android) ===
+            if (_supportsChannels) ...[
+              ListTile(
+                leading: const Icon(Icons.settings_applications_outlined,
+                    color: Color(0xFF0088CC)),
+                title: const Text('Системные настройки канала'),
+                trailing: const Icon(Icons.open_in_new, color: Colors.grey),
+                onTap: () {
+                  HapticUtils.tap();
+                  NotificationService().openChatChannelSettings(widget.chatId);
+                },
+              ),
+              if (_hasCustomChannel)
+                ListTile(
+                  leading: const Icon(Icons.settings_backup_restore,
+                      color: Color(0xFF0088CC)),
+                  title: const Text('Сбросить к настройкам по умолчанию'),
+                  onTap: () {
+                    HapticUtils.tap();
+                    _resetChatChannel(provider);
+                  },
+                ),
+            ],
 
             // === Только упоминания ===
             _buildSectionHeader(l10n.translate('chat_notif_mentions_section')),
@@ -271,6 +321,7 @@ class _ChatNotificationSettingsScreenState
               subtitle: Text(l10n.translate('chat_notif_reset_desc')),
               onTap: () {
                 HapticUtils.tap();
+                if (_supportsChannels) _removeChatChannel();
                 provider.removeChatSettings(widget.chatId);
                 Navigator.pop(context);
               },
@@ -279,6 +330,150 @@ class _ChatNotificationSettingsScreenState
         );
       },
     );
+  }
+
+  // ======================= Android: per-chat channel =======================
+
+  Future<void> _loadChannelState() async {
+    if (!_supportsChannels) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final title = prefs.getString(_soundTitleKey);
+      final uri = await NotificationService().chatSoundUri(widget.chatId);
+      if (!mounted) return;
+      setState(() {
+        _androidSoundTitle = title;
+        _hasCustomChannel = title != null || uri != null;
+      });
+    } catch (e) {
+      debugPrint('ChatNotificationSettings: failed to load channel state: $e');
+    }
+  }
+
+  Future<void> _storeSoundTitle(String? title) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (title == null) {
+        await prefs.remove(_soundTitleKey);
+      } else {
+        await prefs.setString(_soundTitleKey, title);
+      }
+    } catch (_) {}
+  }
+
+  /// Эффективная вибрация чата: per-chat настройка или глобальная для типа чата.
+  VibrationPattern _effectiveVibration(NotificationSettingsProvider provider) {
+    final perChat = provider.getChatSettings(widget.chatId)?.vibration;
+    if (perChat != null) return perChat;
+    final global = provider.globalSettings;
+    if (widget.isChannel) return global.channelVibration;
+    return widget.isGroup ? global.groupChatVibration : global.privateChatVibration;
+  }
+
+  Future<void> _applyChannel(
+    NotificationSettingsProvider provider, {
+    required String? soundUri,
+  }) {
+    return NotificationService().applyChatChannelSettings(
+      chatId: widget.chatId,
+      chatTitle: widget.chatName,
+      isGroup: widget.isGroup,
+      useCustomChannel: true,
+      soundUri: soundUri,
+      vibration: _effectiveVibration(provider),
+    );
+  }
+
+  /// Открывает системный выбор мелодии и применяет звук к каналу чата.
+  Future<void> _pickAndroidSound(NotificationSettingsProvider provider) async {
+    HapticUtils.tap();
+    final service = NotificationService();
+    final currentUri = await service.chatSoundUri(widget.chatId);
+    final pick = await service.pickChatSound(currentUri: currentUri);
+    if (pick == null || !mounted) return;
+
+    final silent = pick.uri == '';
+    // На сервер уходит только вкл/выкл звука: «Без звука» направляет пуши в
+    // беззвучный канал. URI звука локален для устройства и не отправляется.
+    _updateChatSetting(
+      provider,
+      (existing) => existing.copyWith(soundEnabled: !silent, soundUri: ''),
+    );
+
+    final title = pick.title.isNotEmpty
+        ? pick.title
+        : (silent ? 'Без звука' : 'По умолчанию');
+    await _storeSoundTitle(title);
+    await _applyChannel(provider, soundUri: pick.uri);
+    if (!mounted) return;
+    setState(() {
+      _androidSoundTitle = title;
+      _hasCustomChannel = true;
+    });
+  }
+
+  void _setVibration(
+      NotificationSettingsProvider provider, VibrationPattern? pattern) {
+    _updateChatSetting(
+      provider,
+      (existing) => pattern == null
+          ? existing.copyWith(clearVibration: true)
+          : existing.copyWith(vibration: pattern),
+    );
+    if (!_supportsChannels) return;
+    // «Как в общих настройках» без собственного канала — менять нечего.
+    if (pattern == null && !_hasCustomChannel) return;
+    _applyVibrationToChannel(provider);
+  }
+
+  Future<void> _applyVibrationToChannel(
+      NotificationSettingsProvider provider) async {
+    final service = NotificationService();
+    String? soundUri;
+    String? title = _androidSoundTitle;
+    if (_hasCustomChannel) {
+      soundUri = await service.chatSoundUri(widget.chatId);
+    } else {
+      final soundOff =
+          provider.getChatSettings(widget.chatId)?.soundEnabled == false;
+      soundUri = soundOff ? '' : null;
+      title = soundOff ? 'Без звука' : 'По умолчанию';
+    }
+    if (title != null) await _storeSoundTitle(title);
+    await _applyChannel(provider, soundUri: soundUri);
+    if (!mounted) return;
+    setState(() {
+      _androidSoundTitle = title;
+      _hasCustomChannel = true;
+    });
+  }
+
+  /// Удаляет собственный канал чата и сбрасывает звук/вибрацию к общим настройкам.
+  Future<void> _resetChatChannel(NotificationSettingsProvider provider) async {
+    _updateChatSetting(
+      provider,
+      (existing) => existing.copyWith(
+        clearSoundEnabled: true,
+        clearSoundUri: true,
+        clearVibration: true,
+      ),
+    );
+    await _removeChatChannel();
+  }
+
+  Future<void> _removeChatChannel() async {
+    await NotificationService().applyChatChannelSettings(
+      chatId: widget.chatId,
+      chatTitle: widget.chatName,
+      isGroup: widget.isGroup,
+      useCustomChannel: false,
+    );
+    await _storeSoundTitle(null);
+    if (!mounted) return;
+    setState(() {
+      _androidSoundTitle = null;
+      _hasCustomChannel = false;
+    });
   }
 
   void _updateChatSetting(
@@ -513,33 +708,35 @@ class _ChatNotificationSettingsScreenState
                   _updateChatSetting(
                     provider,
                     (existing) =>
-                        existing.copyWith(soundEnabled: null),
+                        existing.copyWith(clearSoundEnabled: true, soundUri: ''),
                   );
                   Navigator.pop(context);
                 },
               ),
               ListTile(
-                title: Text(l10n.translate('notifications_sound_on')),
+                title: const Text('По умолчанию'),
                 trailing: currentSound == true
                     ? const Icon(Icons.check, color: Color(0xFF0088CC))
                     : null,
                 onTap: () {
                   _updateChatSetting(
                     provider,
-                    (existing) => existing.copyWith(soundEnabled: true),
+                    (existing) =>
+                        existing.copyWith(soundEnabled: true, soundUri: ''),
                   );
                   Navigator.pop(context);
                 },
               ),
               ListTile(
-                title: Text(l10n.translate('notifications_sound_off')),
+                title: const Text('Без звука'),
                 trailing: currentSound == false
                     ? const Icon(Icons.check, color: Color(0xFF0088CC))
                     : null,
                 onTap: () {
                   _updateChatSetting(
                     provider,
-                    (existing) => existing.copyWith(soundEnabled: false),
+                    (existing) =>
+                        existing.copyWith(soundEnabled: false, soundUri: ''),
                   );
                   Navigator.pop(context);
                 },
@@ -554,7 +751,7 @@ class _ChatNotificationSettingsScreenState
   void _showVibrationPicker(
     BuildContext context,
     VibrationPattern current,
-    ValueChanged<VibrationPattern> onChanged, {
+    ValueChanged<VibrationPattern?> onChanged, {
     bool allowUseGlobal = false,
     required AppLocalizations l10n,
   }) {
@@ -580,11 +777,9 @@ class _ChatNotificationSettingsScreenState
                 ListTile(
                   title: Text(l10n.translate('chat_notif_use_global')),
                   onTap: () {
+                    HapticUtils.selection();
                     // null означает «использовать глобальное»
-                    _updateChatSetting(
-                      context.read<NotificationSettingsProvider>(),
-                      (existing) => existing.copyWith(vibration: null),
-                    );
+                    onChanged(null);
                     Navigator.pop(context);
                   },
                 ),
