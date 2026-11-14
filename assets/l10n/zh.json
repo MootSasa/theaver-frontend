@@ -1382,5 +1382,6 @@
   "customizationSecondColor": "第二种颜色",
   "customizationThirdColor": "第三种颜色",
   "customizationChatPreviewQuote": "更新了 Theaver 的个人资料设计",
-  "customizationChatPreviewMessage": "您的名称、徽章和引用回复在群聊中将如此显示。"
+  "customizationChatPreviewMessage": "您的名称、徽章和引用回复在群聊中将如此显示。",
+  "emojiStatusSelectHint": "选择表情与备注"
 }

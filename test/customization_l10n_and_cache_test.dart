@@ -38,6 +38,7 @@ void main() {
     'emojiStatusTitle',
     'emojiStatusClear',
     'emojiStatusNoteHint',
+    'emojiStatusSelectHint',
     'emojiStatusUnicodeTab',
     'emojiStatusCustomTab',
     'emojiStatusExpiryLabel',

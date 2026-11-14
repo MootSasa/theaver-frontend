@@ -1382,5 +1382,6 @@
   "customizationSecondColor": "두 번째 색상",
   "customizationThirdColor": "세 번째 색상",
   "customizationChatPreviewQuote": "Theaver 프로필 디자인을 업데이트했어요",
-  "customizationChatPreviewMessage": "그룹 채팅에서 이름, 배지, 답장 인용구가 이렇게 표시됩니다."
+  "customizationChatPreviewMessage": "그룹 채팅에서 이름, 배지, 답장 인용구가 이렇게 표시됩니다.",
+  "emojiStatusSelectHint": "이모지와 메모 선택"
 }

@@ -1382,5 +1382,6 @@
   "customizationSecondColor": "2色目",
   "customizationThirdColor": "3色目",
   "customizationChatPreviewQuote": "Theaverのプロフィールデザインを更新しました",
-  "customizationChatPreviewMessage": "グループチャットでの名前・バッジ・引用の表示イメージです。"
+  "customizationChatPreviewMessage": "グループチャットでの名前・バッジ・引用の表示イメージです。",
+  "emojiStatusSelectHint": "絵文字とメモを選択"
 }

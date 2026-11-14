@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:ios_color_picker/show_ios_color_picker.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 
 import '../../config/app_config.dart';
@@ -27,17 +30,19 @@ import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/profile/color_palette_picker.dart';
 import '../../widgets/profile/name_color_picker.dart';
-import '../../widgets/profile/profile_segmented_control.dart';
+import '../../widgets/profile/profile_floating_top_switcher.dart';
 import '../../widgets/profile/reply_message_preview_card.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
 
-/// Экран «Оформление профиля» в едином стиле настроек Theaver:
-/// - Полноширинная живая обложка профиля под плавающим [SettingsFloatingHeader].
-/// - Скользящий 3-секционный [ProfileSegmentedControl] («Профиль», «Имя в чатах», «Статус»).
-/// - Карточки [SettingsGroup], [AdaptiveSwitch] и мгновенное применение изменений без нижних кнопок сохранения.
+/// Экран «Оформление профиля», визуально совпадающий с реальным экраном профиля:
+/// - Полноэкранный цветной/градиентный фон и растворяющийся баннер как на `ProfileScreen`;
+/// - Плавающая верхняя шапка с круглой кнопкой `←` и переключателем `Профиль / Имя в чатах`
+///   с живой плавающей пилюлей в Liquid Glass (контент и текст проходят прямо под ней при скролле);
+/// - Аватар без индикатора «в сети», полупрозрачные карточки [ProfileGlassSection]
+///   и выбор эмодзи-статуса прямо на вкладке «Профиль» через стеклянную шторку.
 class ProfileCustomizationScreen extends StatefulWidget {
   final int initialTab;
 
@@ -53,11 +58,16 @@ class ProfileCustomizationScreen extends StatefulWidget {
 
 class _ProfileCustomizationScreenState
     extends State<ProfileCustomizationScreen> {
-  late int _activeTab;
-  Duration? _selectedDuration; // null = forever
+  late int _activeTab; // 0 = Профиль, 1 = Имя в чатах
+  Duration? _selectedDuration; // null = Навсегда
   final TextEditingController _noteController = TextEditingController();
   final IOSColorPickerController _colorPickerController =
       IOSColorPickerController();
+  final ScrollController _profileScrollController = ScrollController();
+  final ScrollController _nameScrollController = ScrollController();
+
+  double _profileScrollOffset = 0.0;
+  double _nameScrollOffset = 0.0;
 
   ProfileColorPreset? _draftCoverPreset;
   NameColorPreset? _draftNamePreset;
@@ -70,17 +80,28 @@ class _ProfileCustomizationScreenState
   bool _isUploadingBanner = false;
   String? _userId;
 
-  static int _normalizeInitialTab(int raw) {
-    if (raw <= 0) return 0;
-    if (raw == 1) return 1;
-    if (raw == 2) return 2;
-    return 0;
+  static int _normalizeInitialTab(int raw) => raw == 1 ? 1 : 0;
+
+  static double _computeCoverLuminance(ProfileColorPreset preset) {
+    if (preset.isGradient &&
+        preset.gradientColors != null &&
+        preset.gradientColors!.isNotEmpty) {
+      final sum = preset.gradientColors!.fold<double>(
+        0.0,
+        (acc, c) => acc + c.computeLuminance(),
+      );
+      return sum / preset.gradientColors!.length;
+    }
+    return preset.backgroundColor.computeLuminance();
   }
 
   @override
   void initState() {
     super.initState();
     _activeTab = _normalizeInitialTab(widget.initialTab);
+
+    _profileScrollController.addListener(_onProfileScroll);
+    _nameScrollController.addListener(_onNameScroll);
 
     final themeProvider = context.read<ProfileThemeProvider>();
     final existingStatus = themeProvider.currentEmojiStatus;
@@ -99,11 +120,41 @@ class _ProfileCustomizationScreenState
 
     PeerCustomizationCache.instance.refreshCatalogs();
     StickerService.instance.ensureInitialized();
+
+    if (widget.initialTab == 2) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _openEmojiStatusSheet(context);
+        }
+      });
+    }
+  }
+
+  void _onProfileScroll() {
+    final next = _profileScrollController.hasClients
+        ? _profileScrollController.offset.clamp(0.0, double.infinity)
+        : 0.0;
+    if ((next - _profileScrollOffset).abs() > 0.5) {
+      setState(() => _profileScrollOffset = next);
+    }
+  }
+
+  void _onNameScroll() {
+    final next = _nameScrollController.hasClients
+        ? _nameScrollController.offset.clamp(0.0, double.infinity)
+        : 0.0;
+    if ((next - _nameScrollOffset).abs() > 0.5) {
+      setState(() => _nameScrollOffset = next);
+    }
   }
 
   @override
   void dispose() {
     _flushPendingSync();
+    _profileScrollController.removeListener(_onProfileScroll);
+    _nameScrollController.removeListener(_onNameScroll);
+    _profileScrollController.dispose();
+    _nameScrollController.dispose();
     _noteController.dispose();
     _colorPickerController.dispose();
     super.dispose();
@@ -425,9 +476,14 @@ class _ProfileCustomizationScreenState
                           final updated =
                               currentStyle == ReplyStripStyle.candyCane
                                   ? NameColorPreset.fromCustomTriple(
-                                      draft1, draft2, draft3)
+                                      draft1,
+                                      draft2,
+                                      draft3,
+                                    )
                                   : NameColorPreset.fromCustomGradient(
-                                      draft1, draft2);
+                                      draft1,
+                                      draft2,
+                                    );
                           _applyNameColorDebounced(updated, currentStyle);
                         },
                       );
@@ -451,9 +507,14 @@ class _ProfileCustomizationScreenState
                           final updated =
                               currentStyle == ReplyStripStyle.candyCane
                                   ? NameColorPreset.fromCustomTriple(
-                                      draft1, draft2, draft3)
+                                      draft1,
+                                      draft2,
+                                      draft3,
+                                    )
                                   : NameColorPreset.fromCustomGradient(
-                                      draft1, draft2);
+                                      draft1,
+                                      draft2,
+                                    );
                           _applyNameColorDebounced(updated, currentStyle);
                         },
                       );
@@ -558,7 +619,7 @@ class _ProfileCustomizationScreenState
   }
 
   // ---------------------------------------------------------------------------
-  // Мгновенные действия: Эмодзи-статус, заметка и срок действия
+  // Мгновенные действия: Эмодзи-статус, заметка и срок действия (на вкладке «Профиль»)
   // ---------------------------------------------------------------------------
 
   DateTime? _computeExpiresAt() => _selectedDuration != null
@@ -681,6 +742,285 @@ class _ProfileCustomizationScreenState
         );
   }
 
+  String _statusSubtitle(BuildContext context, EmojiStatusData? activeStatus) {
+    final note = _noteController.text.trim();
+    if (activeStatus != null) {
+      if (note.isNotEmpty) return note;
+      if (activeStatus.note.trim().isNotEmpty) return activeStatus.note.trim();
+      if (_selectedDuration == const Duration(hours: 1)) {
+        return translateOrFallback(context, 'emojiStatusExpiry1h', '1 hour');
+      }
+      if (_selectedDuration == const Duration(hours: 4)) {
+        return translateOrFallback(context, 'emojiStatusExpiry4h', '4 hours');
+      }
+      if (_selectedDuration == const Duration(hours: 24)) {
+        return translateOrFallback(context, 'emojiStatusExpiry24h', '24 hours');
+      }
+      if (_selectedDuration == const Duration(days: 7)) {
+        return translateOrFallback(context, 'emojiStatusExpiry7d', '7 days');
+      }
+      return translateOrFallback(context, 'emojiStatusExpiryNever', 'Forever');
+    }
+    return translateOrFallback(
+      context,
+      'emojiStatusSelectHint',
+      'Choose emoji and note',
+    );
+  }
+
+  Future<void> _openEmojiStatusSheet(BuildContext context) async {
+    HapticUtils.tap();
+    await showTheavGlassModalSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Consumer<ProfileThemeProvider>(
+              builder: (ctx, sheetThemeProvider, _) {
+                final mq = MediaQuery.of(ctx);
+                final kbBottom = mq.viewInsets.bottom;
+                final sheetHeight =
+                    (mq.size.height * 0.74 - kbBottom).clamp(240.0, 540.0);
+                final theme = Theme.of(ctx);
+                final theav = TheavTheme.of(ctx);
+                final activeStatus = sheetThemeProvider.currentEmojiStatus;
+
+                final durationOptions = <(Duration?, String)>[
+                  (
+                    null,
+                    translateOrFallback(ctx, 'emojiStatusExpiryNever', 'Forever')
+                  ),
+                  (
+                    const Duration(hours: 1),
+                    translateOrFallback(ctx, 'emojiStatusExpiry1h', '1 hour')
+                  ),
+                  (
+                    const Duration(hours: 4),
+                    translateOrFallback(ctx, 'emojiStatusExpiry4h', '4 hours')
+                  ),
+                  (
+                    const Duration(hours: 24),
+                    translateOrFallback(ctx, 'emojiStatusExpiry24h', '24 hours')
+                  ),
+                  (
+                    const Duration(days: 7),
+                    translateOrFallback(ctx, 'emojiStatusExpiry7d', '7 days')
+                  ),
+                ];
+
+                int selectedDurationIdx = 0;
+                for (int i = 0; i < durationOptions.length; i++) {
+                  if (durationOptions[i].$1 == _selectedDuration) {
+                    selectedDurationIdx = i;
+                    break;
+                  }
+                }
+
+                final showMetaControls = sheetHeight >= 280.0;
+
+                return Padding(
+                  padding: EdgeInsets.only(bottom: kbBottom),
+                  child: SizedBox(
+                    height: sheetHeight,
+                    child: Column(
+                      children: [
+                        Text(
+                          translateOrFallback(
+                            ctx,
+                            'emojiStatusTitle',
+                            'Emoji Status',
+                          ),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        if (showMetaControls)
+                          SettingsGroup(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 2,
+                                ),
+                                child: Row(
+                                  children: [
+                                    if (activeStatus != null)
+                                      EmojiStatusBadge(
+                                        status: activeStatus,
+                                        size: 22,
+                                        animate: true,
+                                        interactive: false,
+                                        fallbackColor: theav.accent,
+                                      )
+                                    else
+                                      iconoir.Emoji(
+                                        width: 22,
+                                        height: 22,
+                                        color: theav.accent,
+                                      ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _noteController,
+                                        maxLength: 64,
+                                        decoration: InputDecoration(
+                                          counterText: '',
+                                          border: InputBorder.none,
+                                          isDense: true,
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                            vertical: 11,
+                                          ),
+                                          hintText: translateOrFallback(
+                                            ctx,
+                                            'emojiStatusNoteHint',
+                                            'Add a short note (up to 64 chars)',
+                                          ),
+                                          hintStyle: TextStyle(
+                                            color: theav.textSecondary,
+                                            fontSize: 14.5,
+                                          ),
+                                        ),
+                                        onChanged: (val) {
+                                          _onStatusNoteChanged(val);
+                                          setSheetState(() {});
+                                        },
+                                      ),
+                                    ),
+                                    if (activeStatus != null ||
+                                        _noteController.text.isNotEmpty)
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        tooltip: translateOrFallback(
+                                          ctx,
+                                          'emojiStatusClear',
+                                          'Clear Status',
+                                        ),
+                                        onPressed: () async {
+                                          await _clearEmojiStatus();
+                                          if (ctx.mounted) {
+                                            setSheetState(() {});
+                                          }
+                                        },
+                                        icon: iconoir.Xmark(
+                                          width: 18,
+                                          height: 18,
+                                          color: theav.textSecondary,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuButton<int>(
+                                onSelected: (idx) async {
+                                  await _onDurationSelected(
+                                    durationOptions[idx].$1,
+                                  );
+                                  if (ctx.mounted) {
+                                    setSheetState(() {});
+                                  }
+                                },
+                                itemBuilder: (menuCtx) => [
+                                  for (int i = 0;
+                                      i < durationOptions.length;
+                                      i++)
+                                    PopupMenuItem<int>(
+                                      value: i,
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(durationOptions[i].$2),
+                                          ),
+                                          if (i == selectedDurationIdx)
+                                            iconoir.Check(
+                                              width: 18,
+                                              height: 18,
+                                              color: theav.accent,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      iconoir.Clock(
+                                        width: 20,
+                                        height: 20,
+                                        color: theav.accent,
+                                      ),
+                                      const SizedBox(width: 13),
+                                      Expanded(
+                                        child: Text(
+                                          translateOrFallback(
+                                            ctx,
+                                            'emojiStatusExpiryLabel',
+                                            'Duration',
+                                          ),
+                                          style: theme.textTheme.bodyMedium,
+                                        ),
+                                      ),
+                                      Text(
+                                        durationOptions[selectedDurationIdx].$2,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: theav.accent,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      iconoir.NavArrowDown(
+                                        width: 16,
+                                        height: 16,
+                                        color: theav.accent,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: ColoredBox(
+                              color: theme.cardColor,
+                              child: EmojiStickerPanel(
+                                emojiOnly: true,
+                                expandToAvailableHeight: true,
+                                selectedEmoji: activeStatus?.type == 'unicode'
+                                    ? activeStatus?.emoji
+                                    : null,
+                                selectedCustomEmojiId:
+                                    activeStatus?.type == 'sticker'
+                                        ? activeStatus?.stickerId
+                                        : null,
+                                onEmojiSelected: _selectUnicodeStatus,
+                                onCustomEmojiSelected:
+                                    _selectCustomStickerStatus,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Шторка «Все бейджи платформы»
   // ---------------------------------------------------------------------------
@@ -780,214 +1120,144 @@ class _ProfileCustomizationScreenState
   }
 
   // ---------------------------------------------------------------------------
-  // Полноширинная живая шапка профиля (без рамок и без плашки «Live Preview»)
+  // Вкладка 0: «Профиль» (визуально 1:1 как реальный ProfileScreen)
   // ---------------------------------------------------------------------------
 
-  Widget _buildHeroSection(
-    BuildContext context,
-    ProfileThemeProvider themeProvider,
-  ) {
-    final topClearance = SettingsFloatingHeader.topClearanceOf(context);
-    final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 100;
-    if (isKeyboardOpen) {
-      return SizedBox(height: topClearance);
-    }
-
+  Widget _buildProfileTab({
+    required BuildContext context,
+    required ProfileThemeProvider themeProvider,
+    required PeerCustomizationCache cache,
+    required LiquidGlassProvider glassProvider,
+    required ProfileColorPreset coverPreset,
+    required bool isDarkBackdrop,
+    required double topContentPadding,
+  }) {
     final displayName = _displayName();
     final avatarUrl = _avatarUrl();
-
-    if (_activeTab == 1) {
-      return Padding(
-        padding: EdgeInsets.only(top: topClearance + 6, bottom: 4),
-        child: ReplyMessagePreviewCard(
-          preset: _effectiveNamePreset(themeProvider),
-          stripStyle: _effectiveStripStyle(themeProvider),
-          userName: displayName,
-          avatarUrl: avatarUrl,
-          userId: _userId,
-          avatarDecoration: themeProvider.currentAvatarDecoration,
-          emojiStatus: themeProvider.currentEmojiStatus,
-          badge: themeProvider.currentVisibleBadge,
-        ),
-      );
-    }
-
-    final coverPreset = _effectiveCoverPreset(themeProvider);
     final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
     final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
     final activeStatus = themeProvider.currentEmojiStatus;
-    final draftNote = _noteController.text.trim();
-    final effectiveNote = _activeTab == 2 && activeStatus != null
-        ? draftNote
-        : (activeStatus?.note.trim() ?? '');
+    final effectiveNote = activeStatus != null
+        ? (_noteController.text.trim().isNotEmpty
+            ? _noteController.text.trim()
+            : activeStatus.note.trim())
+        : '';
 
-    final BoxDecoration coverDecoration = coverPreset.isGradient &&
-            coverPreset.gradientColors != null
-        ? BoxDecoration(
-            gradient: LinearGradient(
-              colors: coverPreset.gradientColors!,
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-            ),
-          )
-        : BoxDecoration(color: coverPreset.backgroundColor);
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-      width: double.infinity,
-      decoration: coverDecoration,
-      child: Stack(
-        children: [
-          if (hasBanner)
-            Positioned.fill(
-              child: ShaderMask(
-                shaderCallback: (rect) => const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white,
-                    Colors.white,
-                    Colors.transparent,
-                  ],
-                  stops: [0.0, 0.62, 1.0],
-                ).createShader(rect),
-                blendMode: BlendMode.dstIn,
-                child: ControlledAnimatedNetworkImage(
-                  url: bannerUrl,
-                  fit: BoxFit.cover,
-                  animate: true,
-                ),
-              ),
-            ),
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: hasBanner ? 0.24 : 0.04),
-                    Colors.black.withValues(alpha: hasBanner ? 0.44 : 0.14),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(20, topClearance + 8, 20, 22),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AvatarWithStatus(
-                    userId: _userId,
-                    avatarUrl: avatarUrl,
-                    name: displayName,
-                    radius: 42,
-                    isOnline: true,
-                    decorationOverride: themeProvider.currentAvatarDecoration,
-                    showDecoration: true,
-                    animateDecoration: true,
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.3,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                      if (activeStatus != null) ...[
-                        const SizedBox(width: 6),
-                        EmojiStatusBadge(
-                          status: activeStatus,
-                          size: 20,
-                          animate: true,
-                          interactive: false,
-                          fallbackColor: Colors.white,
-                        ),
-                      ],
-                      if (themeProvider.currentVisibleBadge != null)
-                        PeerBadgesRow(
-                          isBot: false,
-                          isVerified: false,
-                          badge: themeProvider.currentVisibleBadge,
-                          interactiveBadge: false,
-                          accentColor: Colors.white,
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    effectiveNote.isNotEmpty
-                        ? effectiveNote
-                        : translateOrFallback(
-                            context,
-                            'profile_online',
-                            'online',
-                          ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w500,
-                      color: effectiveNote.isNotEmpty
-                          ? Colors.white.withValues(alpha: 0.88)
-                          : coverPreset.statusColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Вкладка 0: Профиль (Обложка и баннер + Рамка аватара + Бейдж)
-  // ---------------------------------------------------------------------------
-
-  Widget _buildProfileTab(
-    BuildContext context,
-    ProfileThemeProvider themeProvider,
-    PeerCustomizationCache cache,
-  ) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final theav = TheavTheme.of(context);
-    final coverPreset = _effectiveCoverPreset(themeProvider);
-    final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
-    final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
+    final onCoverForeground =
+        isDarkBackdrop ? Colors.white : const Color(0xFF1C1C1E);
+    final secondaryForeground = isDarkBackdrop
+        ? Colors.white.withValues(alpha: 0.62)
+        : const Color(0xFF6C6C70);
+    final statusTextColor =
+        isDarkBackdrop ? coverPreset.statusColor : const Color(0xFF007AFF);
+    final sectionAccent =
+        isDarkBackdrop ? coverPreset.ringColor : const Color(0xFF0088CC);
+    final destructiveColor =
+        isDarkBackdrop ? const Color(0xFFFF6B6B) : const Color(0xFFD32F2F);
 
     final currentDecorationId = themeProvider.currentAvatarDecoration?.id;
     final decorations = cache.decorationsCatalog;
-    final displayName = _displayName();
-    final avatarUrl = _avatarUrl();
     final ownBadge = themeProvider.currentOwnBadge;
 
     return ListView(
-      padding: const EdgeInsets.only(top: 4, bottom: 32),
+      key: const PageStorageKey<String>('profile_customization_tab_profile'),
+      controller: _profileScrollController,
+      padding: EdgeInsets.only(top: topContentPadding, bottom: 40),
       children: [
+        // 0. Живая шапка профиля как на реальном ProfileScreen (без кружка «в сети» у аватара)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 18),
+          child: Column(
+            children: [
+              AvatarWithStatus(
+                userId: _userId,
+                avatarUrl: avatarUrl,
+                name: displayName,
+                radius: 55,
+                isOnline: false,
+                decorationOverride: themeProvider.currentAvatarDecoration,
+                showDecoration: true,
+                animateDecoration: true,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      displayName,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 23,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
+                        color: onCoverForeground,
+                      ),
+                    ),
+                  ),
+                  if (activeStatus != null) ...[
+                    const SizedBox(width: 6),
+                    EmojiStatusBadge(
+                      status: activeStatus,
+                      size: 20,
+                      animate: true,
+                      interactive: false,
+                      fallbackColor: onCoverForeground,
+                    ),
+                  ],
+                  if (themeProvider.currentVisibleBadge != null)
+                    PeerBadgesRow(
+                      isBot: false,
+                      isVerified: false,
+                      badge: themeProvider.currentVisibleBadge,
+                      interactiveBadge: false,
+                      accentColor: coverPreset.ringColor,
+                    ),
+                ],
+              ),
+              if (effectiveNote.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  effectiveNote,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: onCoverForeground.withValues(alpha: 0.78),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 3),
+              Text(
+                translateOrFallback(context, 'profile_online', 'online'),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: statusTextColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+
         // 1. Обложка и баннер
-        SettingsGroup(
+        ProfileGlassSection(
           title: translateOrFallback(
             context,
             'customizationSectionCoverBanner',
             'Cover & Banner',
           ),
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          accentColor: sectionAccent,
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1001,7 +1271,7 @@ class _ProfileCustomizationScreenState
               leading: iconoir.MediaImage(
                 width: 22,
                 height: 22,
-                color: theav.accent,
+                color: sectionAccent,
               ),
               title: Text(
                 translateOrFallback(context, 'bannerUpload', 'Upload Banner'),
@@ -1012,18 +1282,20 @@ class _ProfileCustomizationScreenState
                   'bannerHint',
                   'Recommended 16:9 image, up to 15 MB',
                 ),
-                style: TextStyle(fontSize: 12.5, color: theav.textSecondary),
               ),
               trailing: _isUploadingBanner
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 18,
                       height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: sectionAccent,
+                      ),
                     )
                   : iconoir.NavArrowRight(
                       width: 18,
                       height: 18,
-                      color: theav.textSecondary,
+                      color: secondaryForeground,
                     ),
               onTap: _isUploadingBanner ? null : _pickAndUploadBanner,
             ),
@@ -1032,11 +1304,11 @@ class _ProfileCustomizationScreenState
                 leading: iconoir.Trash(
                   width: 22,
                   height: 22,
-                  color: theav.palette.error,
+                  color: destructiveColor,
                 ),
                 title: Text(
                   translateOrFallback(context, 'bannerRemove', 'Remove Banner'),
-                  style: TextStyle(color: theav.palette.error),
+                  style: TextStyle(color: destructiveColor),
                 ),
                 onTap: _isUploadingBanner ? null : _removeBanner,
               ),
@@ -1045,7 +1317,7 @@ class _ProfileCustomizationScreenState
                 leading: iconoir.RefreshDouble(
                   width: 22,
                   height: 22,
-                  color: theav.textSecondary,
+                  color: secondaryForeground,
                 ),
                 title: Text(
                   translateOrFallback(
@@ -1059,13 +1331,86 @@ class _ProfileCustomizationScreenState
           ],
         ),
 
-        // 2. Рамка аватара (горизонтальная карусель внутри SettingsGroup)
-        SettingsGroup(
+        // 2. Эмодзи-статус (выбор на вкладке «Профиль» в стеклянной шторке)
+        ProfileGlassSection(
+          title: translateOrFallback(
+            context,
+            'emojiStatusTitle',
+            'Emoji Status',
+          ),
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          accentColor: sectionAccent,
+          children: [
+            ListTile(
+              key: const ValueKey<String>('profile_emoji_status_row'),
+              leading: activeStatus != null
+                  ? EmojiStatusBadge(
+                      status: activeStatus,
+                      size: 24,
+                      animate: true,
+                      interactive: false,
+                      fallbackColor: sectionAccent,
+                    )
+                  : iconoir.Emoji(
+                      width: 22,
+                      height: 22,
+                      color: sectionAccent,
+                    ),
+              title: Text(
+                translateOrFallback(
+                  context,
+                  'emojiStatusTitle',
+                  'Emoji Status',
+                ),
+              ),
+              subtitle: Text(
+                _statusSubtitle(context, activeStatus),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (activeStatus != null)
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: translateOrFallback(
+                        context,
+                        'emojiStatusClear',
+                        'Clear Status',
+                      ),
+                      onPressed: _clearEmojiStatus,
+                      icon: iconoir.Xmark(
+                        width: 18,
+                        height: 18,
+                        color: secondaryForeground,
+                      ),
+                    ),
+                  iconoir.NavArrowRight(
+                    width: 18,
+                    height: 18,
+                    color: secondaryForeground,
+                  ),
+                ],
+              ),
+              onTap: () => _openEmojiStatusSheet(context),
+            ),
+          ],
+        ),
+
+        // 3. Рамка аватара
+        ProfileGlassSection(
           title: translateOrFallback(
             context,
             'customizationSectionAvatarFrame',
             'Avatar Frame',
           ),
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          accentColor: sectionAccent,
           children: [
             SizedBox(
               height: 112,
@@ -1101,8 +1446,9 @@ class _ProfileCustomizationScreenState
                         ),
                         decoration: BoxDecoration(
                           color: isSelected
-                              ? theav.accent
-                                  .withValues(alpha: isDark ? 0.16 : 0.10)
+                              ? (isDarkBackdrop
+                                  ? Colors.white.withValues(alpha: 0.16)
+                                  : sectionAccent.withValues(alpha: 0.12))
                               : Colors.transparent,
                           borderRadius: BorderRadius.circular(14),
                         ),
@@ -1113,6 +1459,7 @@ class _ProfileCustomizationScreenState
                               avatarUrl: avatarUrl,
                               name: displayName,
                               radius: 24,
+                              isOnline: false,
                               decorationOverride: preset,
                               showDecoration: preset != null,
                               animateDecoration: isSelected,
@@ -1123,14 +1470,14 @@ class _ProfileCustomizationScreenState
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
-                              style: theme.textTheme.bodySmall?.copyWith(
+                              style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: isSelected
                                     ? FontWeight.w600
                                     : FontWeight.w400,
                                 color: isSelected
-                                    ? theav.accent
-                                    : theav.textPrimary,
+                                    ? onCoverForeground
+                                    : secondaryForeground,
                               ),
                             ),
                           ],
@@ -1144,20 +1491,24 @@ class _ProfileCustomizationScreenState
           ],
         ),
 
-        // 3. Бейдж профиля
-        SettingsGroup(
+        // 4. Бейдж профиля
+        ProfileGlassSection(
           title: translateOrFallback(
             context,
             'customizationSectionBadge',
             'Profile Badge',
           ),
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          accentColor: sectionAccent,
           children: [
             if (ownBadge != null)
               ListTile(
                 leading: PeerBadgesRow.buildCapsule(
                   label: ownBadge.shortTag,
                   color: ownBadge.accentColor,
-                  isDark: isDark,
+                  isDark: isDarkBackdrop,
                 ),
                 title: Text(
                   translateOrFallback(
@@ -1172,7 +1523,6 @@ class _ProfileCustomizationScreenState
                     'badgesDisplaySwitch',
                     'Show badge next to name',
                   ),
-                  style: TextStyle(fontSize: 12.5, color: theav.textSecondary),
                 ),
                 trailing: AdaptiveSwitch(
                   value: themeProvider.isBadgeDisplayed,
@@ -1186,7 +1536,7 @@ class _ProfileCustomizationScreenState
                 leading: iconoir.Medal(
                   width: 22,
                   height: 22,
-                  color: theav.textSecondary,
+                  color: secondaryForeground,
                 ),
                 title: Text(
                   translateOrFallback(
@@ -1196,7 +1546,7 @@ class _ProfileCustomizationScreenState
                   ),
                   style: TextStyle(
                     fontSize: 14.5,
-                    color: theav.textSecondary,
+                    color: secondaryForeground,
                   ),
                 ),
               ),
@@ -1204,7 +1554,7 @@ class _ProfileCustomizationScreenState
               leading: iconoir.InfoCircle(
                 width: 22,
                 height: 22,
-                color: theav.accent,
+                color: sectionAccent,
               ),
               title: Text(
                 translateOrFallback(
@@ -1216,7 +1566,7 @@ class _ProfileCustomizationScreenState
               trailing: iconoir.NavArrowRight(
                 width: 18,
                 height: 18,
-                color: theav.textSecondary,
+                color: secondaryForeground,
               ),
               onTap: () => _showAllBadgesSheet(
                 context,
@@ -1231,28 +1581,66 @@ class _ProfileCustomizationScreenState
   }
 
   // ---------------------------------------------------------------------------
-  // Вкладка 1: Имя в чатах
+  // Вкладка 1: «Имя в чатах» (скроллится под плавающим верхним переключателем)
   // ---------------------------------------------------------------------------
 
-  Widget _buildNameTab(
-    BuildContext context,
-    ProfileThemeProvider themeProvider,
-  ) {
-    final theav = TheavTheme.of(context);
+  Widget _buildNameTab({
+    required BuildContext context,
+    required ProfileThemeProvider themeProvider,
+    required LiquidGlassProvider glassProvider,
+    required ProfileColorPreset coverPreset,
+    required bool isDarkBackdrop,
+    required double topContentPadding,
+  }) {
+    final displayName = _displayName();
+    final avatarUrl = _avatarUrl();
     final namePreset = _effectiveNamePreset(themeProvider);
     final stripStyle = _effectiveStripStyle(themeProvider);
     final isNonDefault = namePreset.id != NameColorPresets.red.id ||
         stripStyle != ReplyStripStyle.solid;
+    final secondaryForeground = isDarkBackdrop
+        ? Colors.white.withValues(alpha: 0.62)
+        : const Color(0xFF6C6C70);
+    final sectionAccent =
+        isDarkBackdrop ? coverPreset.ringColor : const Color(0xFF0088CC);
 
     return ListView(
-      padding: const EdgeInsets.only(top: 4, bottom: 32),
+      key: const PageStorageKey<String>('profile_customization_tab_name'),
+      controller: _nameScrollController,
+      padding: EdgeInsets.only(top: topContentPadding, bottom: 40),
       children: [
-        SettingsGroup(
+        ProfileGlassSection(
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          accentColor: sectionAccent,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(6),
+              child: ReplyMessagePreviewCard(
+                margin: EdgeInsets.zero,
+                preset: namePreset,
+                stripStyle: stripStyle,
+                userName: displayName,
+                avatarUrl: avatarUrl,
+                userId: _userId,
+                avatarDecoration: themeProvider.currentAvatarDecoration,
+                emojiStatus: themeProvider.currentEmojiStatus,
+                badge: themeProvider.currentVisibleBadge,
+              ),
+            ),
+          ],
+        ),
+        ProfileGlassSection(
           title: translateOrFallback(
             context,
             'customizationNameColorTitle',
             'Name Color',
           ),
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          accentColor: sectionAccent,
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1266,12 +1654,16 @@ class _ProfileCustomizationScreenState
             ),
           ],
         ),
-        SettingsGroup(
+        ProfileGlassSection(
           title: translateOrFallback(
             context,
             'customizationReplyStripTitle',
             'Reply Strip Style',
           ),
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          accentColor: sectionAccent,
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1285,13 +1677,17 @@ class _ProfileCustomizationScreenState
           ],
         ),
         if (isNonDefault)
-          SettingsGroup(
+          ProfileGlassSection(
+            glassEnabled: glassProvider.enabled,
+            isLite: glassProvider.isLite,
+            isDarkBackdrop: isDarkBackdrop,
+            accentColor: sectionAccent,
             children: [
               ListTile(
                 leading: iconoir.RefreshDouble(
                   width: 22,
                   height: 22,
-                  color: theav.textSecondary,
+                  color: secondaryForeground,
                 ),
                 title: Text(
                   translateOrFallback(
@@ -1309,208 +1705,79 @@ class _ProfileCustomizationScreenState
   }
 
   // ---------------------------------------------------------------------------
-  // Вкладка 2: Эмодзи-статус
+  // Плавающая верхняя шапка (кнопка «←» + переключатель «Профиль / Имя в чатах»
+  // вместо капсулы «Оформление профиля»)
   // ---------------------------------------------------------------------------
 
-  Widget _buildStatusTab(
-    BuildContext context,
-    ProfileThemeProvider themeProvider,
-  ) {
-    final theme = Theme.of(context);
-    final theav = TheavTheme.of(context);
-    final activeStatus = themeProvider.currentEmojiStatus;
-
-    final durationOptions = <(Duration?, String)>[
-      (null, translateOrFallback(context, 'emojiStatusExpiryNever', 'Forever')),
-      (
-        const Duration(hours: 1),
-        translateOrFallback(context, 'emojiStatusExpiry1h', '1 hour')
+  Widget _buildFloatingTopBar({
+    required BuildContext context,
+    required LiquidGlassProvider glassProvider,
+    required bool isDarkBackdrop,
+  }) {
+    final labels = <String>[
+      translateOrFallback(
+        context,
+        'customizationSegmentProfile',
+        'Profile',
       ),
-      (
-        const Duration(hours: 4),
-        translateOrFallback(context, 'emojiStatusExpiry4h', '4 hours')
-      ),
-      (
-        const Duration(hours: 24),
-        translateOrFallback(context, 'emojiStatusExpiry24h', '24 hours')
-      ),
-      (
-        const Duration(days: 7),
-        translateOrFallback(context, 'emojiStatusExpiry7d', '7 days')
+      translateOrFallback(
+        context,
+        'customizationSegmentName',
+        'Chat Name',
       ),
     ];
 
-    int selectedDurationIdx = 0;
-    for (int i = 0; i < durationOptions.length; i++) {
-      if (durationOptions[i].$1 == _selectedDuration) {
-        selectedDurationIdx = i;
-        break;
-      }
-    }
+    return SizedBox(
+      height: SettingsFloatingHeader.buttonSize,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final availableWidth = constraints.maxWidth;
+          const leftOccupied =
+              SettingsFloatingHeader.buttonSize + SettingsFloatingHeader.headerGap;
+          final maxSwitcherWidth =
+              math.max(0.0, availableWidth - leftOccupied);
+          final targetSwitcherWidth = math.min(maxSwitcherWidth, 276.0);
+          final centeredLeft = (availableWidth - targetSwitcherWidth) / 2.0;
+          final double switcherLeft = centeredLeft
+              .clamp(
+                leftOccupied,
+                math.max(leftOccupied, availableWidth - targetSwitcherWidth),
+              )
+              .toDouble();
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final showMetaControls = constraints.maxHeight >= 220.0;
-        return Column(
-          children: [
-            if (showMetaControls)
-              SettingsGroup(
-                margin: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 2,
-                    ),
-                    child: Row(
-                      children: [
-                        if (activeStatus != null)
-                          EmojiStatusBadge(
-                            status: activeStatus,
-                            size: 22,
-                            animate: true,
-                            interactive: false,
-                            fallbackColor: theav.accent,
-                          )
-                        else
-                          iconoir.Emoji(
-                            width: 22,
-                            height: 22,
-                            color: theav.accent,
-                          ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: TextField(
-                            controller: _noteController,
-                            maxLength: 64,
-                            decoration: InputDecoration(
-                              counterText: '',
-                              border: InputBorder.none,
-                              isDense: true,
-                              contentPadding: const EdgeInsets.symmetric(
-                                vertical: 12,
-                              ),
-                              hintText: translateOrFallback(
-                                context,
-                                'emojiStatusNoteHint',
-                                'Add a short note (up to 64 chars)',
-                              ),
-                              hintStyle: TextStyle(
-                                color: theav.textSecondary,
-                                fontSize: 14.5,
-                              ),
-                            ),
-                            onChanged: _onStatusNoteChanged,
-                          ),
-                        ),
-                        if (activeStatus != null ||
-                            _noteController.text.isNotEmpty)
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            tooltip: translateOrFallback(
-                              context,
-                              'emojiStatusClear',
-                              'Clear Status',
-                            ),
-                            onPressed: _clearEmojiStatus,
-                            icon: iconoir.Xmark(
-                              width: 18,
-                              height: 18,
-                              color: theav.textSecondary,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  PopupMenuButton<int>(
-                    onSelected: (idx) =>
-                        _onDurationSelected(durationOptions[idx].$1),
-                    itemBuilder: (ctx) => [
-                      for (int i = 0; i < durationOptions.length; i++)
-                        PopupMenuItem<int>(
-                          value: i,
-                          child: Row(
-                            children: [
-                              Expanded(child: Text(durationOptions[i].$2)),
-                              if (i == selectedDurationIdx)
-                                iconoir.Check(
-                                  width: 18,
-                                  height: 18,
-                                  color: theav.accent,
-                                ),
-                            ],
-                          ),
-                        ),
-                    ],
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 11,
-                      ),
-                      child: Row(
-                        children: [
-                          iconoir.Clock(
-                            width: 21,
-                            height: 21,
-                            color: theav.accent,
-                          ),
-                          const SizedBox(width: 15),
-                          Expanded(
-                            child: Text(
-                              translateOrFallback(
-                                context,
-                                'emojiStatusExpiryLabel',
-                                'Duration',
-                              ),
-                              style: theme.textTheme.bodyMedium,
-                            ),
-                          ),
-                          Text(
-                            durationOptions[selectedDurationIdx].$2,
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: theav.accent,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          iconoir.NavArrowDown(
-                            width: 16,
-                            height: 16,
-                            color: theav.accent,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: ColoredBox(
-                    color: theme.cardColor,
-                    child: EmojiStickerPanel(
-                      emojiOnly: true,
-                      expandToAvailableHeight: true,
-                      selectedEmoji: activeStatus?.type == 'unicode'
-                          ? activeStatus?.emoji
-                          : null,
-                      selectedCustomEmojiId: activeStatus?.type == 'sticker'
-                          ? activeStatus?.stickerId
-                          : null,
-                      onEmojiSelected: _selectUnicodeStatus,
-                      onCustomEmojiSelected: _selectCustomStickerStatus,
-                    ),
-                  ),
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: ProfileFloatingBackButton(
+                  onTap: () => Navigator.of(context).maybePop(),
+                  glassEnabled: glassProvider.enabled,
+                  isLite: glassProvider.isLite,
+                  isDarkBackdrop: isDarkBackdrop,
                 ),
               ),
-            ),
-          ],
-        );
-      },
+              if (targetSwitcherWidth > 0)
+                Positioned(
+                  left: switcherLeft,
+                  top: 0,
+                  bottom: 0,
+                  width: targetSwitcherWidth,
+                  child: ProfileFloatingTopSwitcher(
+                    segments: labels,
+                    selectedIndex: _activeTab,
+                    glassEnabled: glassProvider.enabled,
+                    isLite: glassProvider.isLite,
+                    isDarkBackdrop: isDarkBackdrop,
+                    onChanged: (idx) => setState(() => _activeTab = idx),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -1520,57 +1787,184 @@ class _ProfileCustomizationScreenState
     final themeProvider = context.watch<ProfileThemeProvider>();
     final cache = context.watch<PeerCustomizationCache>();
 
-    final Widget activeBody = switch (_activeTab) {
-      1 => _buildNameTab(context, themeProvider),
-      2 => _buildStatusTab(context, themeProvider),
-      _ => _buildProfileTab(context, themeProvider, cache),
-    };
+    final coverPreset = _effectiveCoverPreset(themeProvider);
+    final isDarkBackdrop = _computeCoverLuminance(coverPreset) < 0.60;
+    final baseBgColor = coverPreset.isGradient &&
+            coverPreset.gradientColors != null &&
+            coverPreset.gradientColors!.isNotEmpty
+        ? coverPreset.gradientColors!.last
+        : coverPreset.backgroundColor;
 
-    return SettingsFloatingScaffold(
-      title: translateOrFallback(
-        context,
-        'customizationTitle',
-        'Profile Customization',
-      ),
-      padBodyTop: false,
-      body: Column(
-        children: [
-          AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: _buildHeroSection(context, themeProvider),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-            child: ProfileSegmentedControl(
-              enabled: glassProvider.enabled,
-              isLite: glassProvider.isLite,
-              neutralSurface: true,
-              height: 36,
-              selectedIndex: _activeTab,
-              labels: [
-                translateOrFallback(
-                  context,
-                  'customizationSegmentProfile',
-                  'Profile',
-                ),
-                translateOrFallback(
-                  context,
-                  'customizationSegmentName',
-                  'Chat Name',
-                ),
-                translateOrFallback(
-                  context,
-                  'customizationSegmentStatus',
-                  'Status',
-                ),
-              ],
-              onTabChanged: (idx) => setState(() => _activeTab = idx),
+    final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
+    final hasBanner =
+        _activeTab == 0 && bannerUrl != null && bannerUrl.isNotEmpty;
+    final bannerOpacity =
+        (1.0 - (_profileScrollOffset / 180.0)).clamp(0.0, 1.0);
+
+    final statusBarHeight = MediaQuery.paddingOf(context).top;
+    final headerTopY = statusBarHeight + 8.0;
+    final topContentPadding =
+        headerTopY + SettingsFloatingHeader.buttonSize + 14.0;
+
+    final activeScrollOffset =
+        _activeTab == 0 ? _profileScrollOffset : _nameScrollOffset;
+    final statusBarEdgeProgress =
+        (activeScrollOffset / 72.0).clamp(0.0, 1.0);
+
+    final overlayStyle = SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness:
+          isDarkBackdrop ? Brightness.light : Brightness.dark,
+      statusBarBrightness:
+          isDarkBackdrop ? Brightness.dark : Brightness.light,
+    );
+
+    final Widget activeTabScroll = _activeTab == 1
+        ? _buildNameTab(
+            context: context,
+            themeProvider: themeProvider,
+            glassProvider: glassProvider,
+            coverPreset: coverPreset,
+            isDarkBackdrop: isDarkBackdrop,
+            topContentPadding: topContentPadding,
+          )
+        : _buildProfileTab(
+            context: context,
+            themeProvider: themeProvider,
+            cache: cache,
+            glassProvider: glassProvider,
+            coverPreset: coverPreset,
+            isDarkBackdrop: isDarkBackdrop,
+            topContentPadding: topContentPadding,
+          );
+
+    final hasOuterBatch = LiquidGlassBatch.backdropIdOf(context) != null;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: Scaffold(
+        backgroundColor: baseBgColor,
+        body: Stack(
+          children: [
+            // 1. Полноэкранный адаптивный фон и фиксированный градиент как на реальном ProfileScreen
+            Positioned.fill(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOutCubic,
+                decoration: coverPreset.isGradient &&
+                        coverPreset.gradientColors != null
+                    ? BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: coverPreset.gradientColors!,
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        ),
+                      )
+                    : BoxDecoration(color: baseBgColor),
+              ),
             ),
-          ),
-          Expanded(child: activeBody),
-        ],
+
+            // 2. Растворяющийся верхний баннер профиля (идентично ProfileScreen)
+            if (hasBanner && bannerOpacity > 0.01)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: math.max(250.0, topContentPadding + 150.0),
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: bannerOpacity,
+                    child: ShaderMask(
+                      shaderCallback: (rect) => const LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.white,
+                          Colors.white,
+                          Colors.transparent,
+                        ],
+                        stops: [0.0, 0.52, 1.0],
+                      ).createShader(rect),
+                      blendMode: BlendMode.dstIn,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          ControlledAnimatedNetworkImage(
+                            url: bannerUrl,
+                            fit: BoxFit.cover,
+                            animate: bannerOpacity > 0.1,
+                          ),
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.black.withValues(alpha: 0.22),
+                                  Colors.black.withValues(alpha: 0.42),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // 3. Полноэкранный скроллируемый контент (проходит прямо под плавающей шапкой)
+            Positioned.fill(
+              child: LiquidGlassBatch(
+                enabled: glassProvider.enabled && !hasOuterBatch,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  child: activeTabScroll,
+                ),
+              ),
+            ),
+
+            // 4. Мягкое затемнение/размытие для строки состояния при прокрутке текста вверх
+            if (glassProvider.enabled &&
+                statusBarHeight > 0 &&
+                statusBarEdgeProgress > 0.01)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: statusBarHeight + 10.0 * statusBarEdgeProgress,
+                child: IgnorePointer(
+                  child: LiquidGlassScrollEdge(
+                    edge: LiquidGlassEdge.top,
+                    style: LiquidGlassScrollEdgeStyle.soft,
+                    blur: math.max(glassProvider.blur, 10.0) *
+                        statusBarEdgeProgress,
+                    color: Colors.black.withValues(
+                      alpha: (isDarkBackdrop ? 0.32 : 0.16) *
+                          statusBarEdgeProgress,
+                    ),
+                  ),
+                ),
+              ),
+
+            // 5. Плавающий верхний бар: кнопка «←» + переключатель «Профиль / Имя в чатах»
+            Positioned(
+              top: headerTopY,
+              left: SettingsFloatingHeader.horizontalPadding,
+              right: SettingsFloatingHeader.horizontalPadding,
+              child: LiquidGlassBatch(
+                enabled: glassProvider.enabled && !hasOuterBatch,
+                child: _buildFloatingTopBar(
+                  context: context,
+                  glassProvider: glassProvider,
+                  isDarkBackdrop: isDarkBackdrop,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -1382,5 +1382,6 @@
   "customizationSecondColor": "Secondo colore",
   "customizationThirdColor": "Terzo colore",
   "customizationChatPreviewQuote": "Design del profilo aggiornato in Theaver",
-  "customizationChatPreviewMessage": "Ecco come appaiono nome, badge e citazione nelle chat di gruppo."
+  "customizationChatPreviewMessage": "Ecco come appaiono nome, badge e citazione nelle chat di gruppo.",
+  "emojiStatusSelectHint": "Scegli emoji e nota"
 }
