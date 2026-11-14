@@ -38,10 +38,10 @@ import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/chat/sticker_item_widget.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/common/sync_banner.dart';
+import '../../widgets/profile/profile_banner_layer.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../widgets/profile/avatar_gallery_viewer.dart';
 import '../../widgets/profile/expandable_avatar.dart';
@@ -3712,44 +3712,18 @@ class ProfileScreenState extends State<ProfileScreen>
                           top: 0,
                           left: 0,
                           right: 0,
-                          height: math.max(220.0, topSpacerHeight + 24.0),
+                          height: (activeCustomization?.bannerLayout ??
+                                  const ProfileBannerLayout())
+                              .heightMode
+                              .resolveProfileHeight(topSpacerHeight),
                           child: IgnorePointer(
                             child: Opacity(
                               opacity: bannerOpacity,
-                              child: ShaderMask(
-                                shaderCallback: (rect) => const LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.white,
-                                    Colors.white,
-                                    Colors.transparent,
-                                  ],
-                                  stops: [0.0, 0.52, 1.0],
-                                ).createShader(rect),
-                                blendMode: BlendMode.dstIn,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    ControlledAnimatedNetworkImage(
-                                      url: resolvedBannerUrl,
-                                      fit: BoxFit.cover,
-                                      animate: bannerOpacity > 0.1,
-                                    ),
-                                    DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        gradient: LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            Colors.black.withValues(alpha: 0.22),
-                                            Colors.black.withValues(alpha: 0.42),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                              child: ProfileBannerLayer(
+                                bannerUrl: resolvedBannerUrl,
+                                layout: activeCustomization?.bannerLayout ??
+                                    const ProfileBannerLayout(),
+                                animate: bannerOpacity > 0.1,
                               ),
                             ),
                           ),

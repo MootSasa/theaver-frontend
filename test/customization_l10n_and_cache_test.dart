@@ -52,6 +52,18 @@ void main() {
     'bannerUpload',
     'bannerRemove',
     'bannerHint',
+    'bannerAdjust',
+    'bannerAdjustHint',
+    'bannerReplace',
+    'bannerDragZoomHint',
+    'bannerHeightLabel',
+    'bannerHeightCompact',
+    'bannerHeightStandard',
+    'bannerHeightTall',
+    'bannerZoomLabel',
+    'bannerDimLabel',
+    'bannerBlurLabel',
+    'bannerSave',
     'badgesTitle',
     'badgesEmpty',
     'badgesDisplaySwitch',
@@ -230,4 +242,78 @@ void main() {
     );
     expect(cache.getSync('user_expired')?.activeEmojiStatus, isNull);
   });
+
+  test(
+    'ProfileBannerLayout clamping, PeerCustomization roundtrip, partial merge preservation, clear reset, and expired-status cache clone',
+    () {
+      SharedPreferences.setMockInitialValues({});
+      final clamped = ProfileBannerLayout.fromAppearanceMap({
+        'profile_banner_scale': 8.0,
+        'profile_banner_pos_x': -4.5,
+        'profile_banner_pos_y': 2.2,
+        'profile_banner_dim': 0.99,
+        'profile_banner_blur': -5.0,
+        'profile_banner_height': 'giant',
+      });
+      expect(clamped.scale, 3.0);
+      expect(clamped.posX, -1.0);
+      expect(clamped.posY, 1.0);
+      expect(clamped.dim, 0.75);
+      expect(clamped.blur, 0.0);
+      expect(clamped.heightMode, ProfileBannerHeightMode.standard);
+
+      final custom = PeerCustomization.fromJson({
+        'profile_banner_url': 'https://example.com/banner.webp',
+        'profile_banner_scale': 1.8,
+        'profile_banner_pos_x': -0.35,
+        'profile_banner_pos_y': 0.42,
+        'profile_banner_dim': 0.55,
+        'profile_banner_blur': 8.5,
+        'profile_banner_height': 'tall',
+      });
+      expect(custom.bannerLayout.scale, closeTo(1.8, 0.001));
+      expect(custom.bannerLayout.posX, closeTo(-0.35, 0.001));
+      expect(custom.bannerLayout.posY, closeTo(0.42, 0.001));
+      expect(custom.bannerLayout.dim, closeTo(0.55, 0.001));
+      expect(custom.bannerLayout.blur, closeTo(8.5, 0.01));
+      expect(custom.bannerLayout.heightMode, ProfileBannerHeightMode.tall);
+
+      final roundtrip = PeerCustomization.fromJson(custom.toJson());
+      expect(roundtrip.bannerLayout, custom.bannerLayout);
+
+      // Partial chat-list appearance merge without profile_banner_* preserves layout
+      final partialMerged = custom.mergeAppearanceMap({
+        'name_color_preset_id': 'name_green',
+      });
+      expect(partialMerged.nameColorPresetId, 'name_green');
+      expect(partialMerged.profileBannerUrl, 'https://example.com/banner.webp');
+      expect(partialMerged.bannerLayout, custom.bannerLayout);
+
+      // Clearing profile_banner_url resets bannerLayout back to default
+      final cleared = partialMerged.mergeAppearanceMap({
+        'profile_banner_url': null,
+      });
+      expect(cleared.profileBannerUrl, isNull);
+      expect(cleared.bannerLayout.isDefault, isTrue);
+
+      // Cache getSync strips expired emojiStatus without dropping bannerLayout
+      final expiredWithLayout = PeerCustomization(
+        profileBannerUrl: 'https://example.com/b.gif',
+        bannerLayout: custom.bannerLayout,
+        emojiStatus: EmojiStatusData(
+          type: 'unicode',
+          emoji: '⏳',
+          expiresAt: DateTime.now().toUtc().subtract(const Duration(seconds: 5)),
+        ),
+      );
+      PeerCustomizationCache.instance.put(
+        'u_banner_cache',
+        expiredWithLayout,
+        notify: false,
+      );
+      final cached = PeerCustomizationCache.instance.getSync('u_banner_cache');
+      expect(cached?.activeEmojiStatus, isNull);
+      expect(cached?.bannerLayout, custom.bannerLayout);
+    },
+  );
 }

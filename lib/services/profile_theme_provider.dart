@@ -289,6 +289,7 @@ class ProfileThemeProvider extends ChangeNotifier {
   AvatarDecorationPreset? get currentAvatarDecoration => _ownCustomization.avatarDecoration;
   EmojiStatusData? get currentEmojiStatus => _ownCustomization.activeEmojiStatus;
   String? get currentBannerUrl => _ownCustomization.profileBannerUrl;
+  ProfileBannerLayout get currentBannerLayout => _ownCustomization.bannerLayout;
   UserBadge? get currentOwnBadge => _ownCustomization.badge;
   UserBadge? get currentVisibleBadge => _ownCustomization.visibleBadge;
   bool get isBadgeDisplayed => _ownCustomization.badgeIsDisplayed;
@@ -498,6 +499,7 @@ class ProfileThemeProvider extends ChangeNotifier {
     bool clearEmojiStatus = false,
     bool clearEmojiStatusUntil = false,
     bool clearProfileBanner = false,
+    ProfileBannerLayout? bannerLayout,
     bool? badgeIsDisplayed,
     String? profileColorPresetId,
     String? nameColorPresetId,
@@ -572,6 +574,9 @@ class ProfileThemeProvider extends ChangeNotifier {
       badge: previous.badge,
       badgeIsDisplayed: badgeIsDisplayed ?? previous.badgeIsDisplayed,
       profileBannerUrl: clearProfileBanner ? null : previous.profileBannerUrl,
+      bannerLayout: clearProfileBanner
+          ? const ProfileBannerLayout()
+          : (bannerLayout ?? previous.bannerLayout),
     );
 
     _ownCustomization = next;
@@ -612,7 +617,11 @@ class ProfileThemeProvider extends ChangeNotifier {
         }
       }
 
-      if (clearProfileBanner) body['clear_profile_banner'] = true;
+      if (clearProfileBanner) {
+        body['clear_profile_banner'] = true;
+      } else if (bannerLayout != null) {
+        body.addAll(bannerLayout.toAppearanceFields());
+      }
       if (badgeIsDisplayed != null) body['badge_is_displayed'] = badgeIsDisplayed;
       if (profileColorPresetId != null) body['profile_color_preset_id'] = profileColorPresetId;
       if (nameColorPresetId != null) body['name_color_preset_id'] = nameColorPresetId;
@@ -665,6 +674,7 @@ class ProfileThemeProvider extends ChangeNotifier {
     String? filePath,
     Uint8List? bytes,
     String fileName = 'banner.jpg',
+    ProfileBannerLayout? layout,
   }) async {
     try {
       final token = await _resolveTokenForUser(_currentUserId);
@@ -675,6 +685,15 @@ class ProfileThemeProvider extends ChangeNotifier {
         Uri.parse('${AppConfig.baseUrl}/api/user/banner'),
       );
       request.headers['Authorization'] = 'Bearer $token';
+
+      if (layout != null) {
+        request.fields['scale'] = layout.scale.toStringAsFixed(3);
+        request.fields['pos_x'] = layout.posX.toStringAsFixed(3);
+        request.fields['pos_y'] = layout.posY.toStringAsFixed(3);
+        request.fields['dim'] = layout.dim.toStringAsFixed(3);
+        request.fields['blur'] = layout.blur.toStringAsFixed(2);
+        request.fields['height'] = layout.heightMode.wireValue;
+      }
 
       if (bytes != null) {
         request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));

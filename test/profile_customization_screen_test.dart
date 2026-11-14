@@ -1,9 +1,12 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/models/name_color_preset.dart';
 import 'package:theaver/models/profile_customization.dart';
+import 'package:theaver/screens/settings/profile_banner_editor_screen.dart';
 import 'package:theaver/screens/settings/profile_customization_screen.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/peer_customization_cache.dart';
@@ -13,6 +16,7 @@ import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/common/glass_modal_sheet.dart';
 import 'package:theaver/widgets/profile/floating_emoji_status_menu.dart';
 import 'package:theaver/widgets/profile/name_color_picker.dart';
+import 'package:theaver/widgets/profile/profile_banner_layer.dart';
 import 'package:theaver/widgets/profile/profile_floating_top_switcher.dart';
 import 'package:theaver/widgets/profile/reply_message_preview_card.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
@@ -423,6 +427,244 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(FloatingEmojiStatusMenu), findsNothing);
+
+      // Flush PeerCustomizationCache 500ms persist debounce timer
+      await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
+
+  testWidgets(
+    'Shows Adjust Banner row when banner exists, edits position/height/zoom/dim/blur & reset, and saves to provider',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final themeProvider = ProfileThemeProvider()
+        ..seedOwnCustomizationForTest(
+          const PeerCustomization(
+            profileBannerUrl: 'https://example.com/banner.webp',
+          ),
+          userId: 'u_banner_edit',
+        );
+      final glassProvider = LiquidGlassProvider();
+
+      await tester.pumpWidget(
+        _buildTestHarness(
+          themeProvider: themeProvider,
+          glassProvider: glassProvider,
+        ),
+      );
+      await tester.pump();
+
+      final bannerFinder = find.byKey(
+        const ValueKey<String>('profile_customization_banner'),
+      );
+      expect(bannerFinder, findsOneWidget);
+      final initialBannerHeight = tester.getSize(bannerFinder).height;
+      expect(initialBannerHeight, closeTo(250.0, 1.0));
+
+      final adjustRowFinder = find.byKey(
+        const ValueKey<String>('profile_banner_adjust_row'),
+      );
+      await tester.ensureVisible(adjustRowFinder);
+      await tester.pump();
+      expect(adjustRowFinder, findsOneWidget);
+
+      await tester.tap(adjustRowFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(find.byType(ProfileBannerEditorScreen), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(ProfileGlassSection),
+          matching: find.byType(ProfileGlassSection),
+        ),
+        findsNothing,
+      );
+
+      final heroAvatar = tester.widget<AvatarWithStatus>(
+        find.descendant(
+          of: find.byType(ProfileBannerEditorScreen),
+          matching: find.byType(AvatarWithStatus),
+        ),
+      );
+      expect(heroAvatar.isOnline, isFalse);
+
+      // No ImageFiltered in ProfileBannerLayer while blur == 0.0
+      final blurFilterFinder = find.descendant(
+        of: find.descendant(
+          of: find.byType(ProfileBannerEditorScreen),
+          matching: find.byType(ProfileBannerLayer),
+        ),
+        matching: find.byType(ImageFiltered),
+      );
+      expect(blurFilterFinder, findsNothing);
+
+      // Enable blur and verify ImageFiltered mounts
+      final blurSliderFinder = find.byKey(
+        const ValueKey<String>('banner_blur_slider'),
+      );
+      await tester.ensureVisible(blurSliderFinder);
+      tester.widget<Slider>(blurSliderFinder).onChanged!(6.0);
+      await tester.pump();
+      expect(blurFilterFinder, findsOneWidget);
+
+      // Tap Reset button and confirm blur resets cleanly
+      await tester.tap(
+        find.byKey(const ValueKey<String>('banner_editor_reset_btn')),
+      );
+      await tester.pump();
+      expect(blurFilterFinder, findsNothing);
+
+      // Drag preview stage to update focal posX/posY
+      await tester.drag(
+        find.byKey(const ValueKey<String>('banner_editor_gesture_stage')),
+        const Offset(60, -40),
+      );
+      await tester.pump();
+
+      // Switch height to tall and set zoom/dim/blur
+      await tester.tap(
+        find.byKey(const ValueKey<String>('banner_height_tall')),
+      );
+      await tester.pump(const Duration(milliseconds: 220));
+
+      final scaleSliderFinder = find.byKey(
+        const ValueKey<String>('banner_scale_slider'),
+      );
+      tester.widget<Slider>(scaleSliderFinder).onChanged!(1.8);
+      final dimSliderFinder = find.byKey(
+        const ValueKey<String>('banner_dim_slider'),
+      );
+      tester.widget<Slider>(dimSliderFinder).onChanged!(0.5);
+      tester.widget<Slider>(blurSliderFinder).onChanged!(6.0);
+      await tester.pump();
+
+      // Save and verify pop + provider + rendered banner height update
+      await tester.tap(
+        find.byKey(const ValueKey<String>('banner_editor_save_btn')),
+      );
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(find.byType(ProfileBannerEditorScreen), findsNothing);
+      final saved = themeProvider.currentBannerLayout;
+      expect(saved.heightMode, ProfileBannerHeightMode.tall);
+      expect(saved.scale, closeTo(1.8, 0.01));
+      expect(saved.dim, closeTo(0.5, 0.01));
+      expect(saved.blur, closeTo(6.0, 0.05));
+      expect(saved.posX, isNot(0.0));
+      expect(saved.posY, isNot(0.0));
+
+      expect(
+        tester.getSize(bannerFinder).height,
+        greaterThan(initialBannerHeight),
+      );
+
+      // Flush PeerCustomizationCache 500ms persist debounce timer
+      await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
+
+  testWidgets(
+    'ProfileBannerEditorScreen previews in-memory local bytes on 800x600 Liquid Glass surface and passes bytes/layout to onSaveOverride',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final themeProvider = ProfileThemeProvider()
+        ..seedOwnCustomizationForTest(
+          const PeerCustomization(),
+          userId: 'u_banner_local',
+        );
+      final glassProvider = LiquidGlassProvider();
+      await glassProvider.setMode(GlassMode.full);
+
+      // Valid 1x1 transparent PNG
+      final pngBytes = Uint8List.fromList(const <int>[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+        0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
+        0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+        0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+        0x42, 0x60, 0x82,
+      ]);
+
+      ProfileBannerLayout? submittedLayout;
+      Uint8List? submittedBytes;
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<ProfileThemeProvider>.value(
+              value: themeProvider,
+            ),
+            ChangeNotifierProvider<LiquidGlassProvider>.value(
+              value: glassProvider,
+            ),
+            ChangeNotifierProvider<PeerCustomizationCache>.value(
+              value: PeerCustomizationCache.instance,
+            ),
+          ],
+          child: MaterialApp(
+            theme: ThemeData.light(useMaterial3: true),
+            home: Builder(
+              builder: (ctx) => Center(
+                child: FilledButton(
+                  onPressed: () {
+                    Navigator.of(ctx).push<bool>(
+                      MaterialPageRoute<bool>(
+                        builder: (_) => ProfileBannerEditorScreen(
+                          initialBytes: pngBytes,
+                          initialFileName: 'sample.png',
+                          displayName: 'Test User',
+                          onSaveOverride: (
+                            layout, {
+                            filePath,
+                            bytes,
+                            fileName,
+                          }) async {
+                            submittedLayout = layout;
+                            submittedBytes = bytes;
+                            return true;
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Open Editor'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Open Editor'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(find.byType(ProfileBannerEditorScreen), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey<String>('banner_height_compact')),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(
+        find.byKey(const ValueKey<String>('banner_editor_save_btn')),
+      );
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(submittedLayout?.heightMode, ProfileBannerHeightMode.compact);
+      expect(submittedBytes, equals(pngBytes));
+      expect(find.byType(ProfileBannerEditorScreen), findsNothing);
 
       // Flush PeerCustomizationCache 500ms persist debounce timer
       await tester.pump(const Duration(milliseconds: 600));

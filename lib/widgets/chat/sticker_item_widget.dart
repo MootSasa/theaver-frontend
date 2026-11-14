@@ -27,6 +27,7 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
   final double? height;
   final int? cacheWidth;
   final BoxFit fit;
+  final AlignmentGeometry alignment;
   final FilterQuality filterQuality;
   final bool animate;
   final bool isAnimatedWebpOrGif;
@@ -40,6 +41,7 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
     this.height,
     this.cacheWidth,
     this.fit = BoxFit.contain,
+    this.alignment = Alignment.center,
     this.filterQuality = FilterQuality.low,
     this.animate = true,
     this.isAnimatedWebpOrGif = false,
@@ -242,6 +244,7 @@ class _ControlledAnimatedNetworkImageState
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
+      alignment: widget.alignment,
       filterQuality: widget.filterQuality,
     );
   }

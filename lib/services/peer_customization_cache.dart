@@ -81,6 +81,7 @@ class PeerCustomizationCache extends ChangeNotifier {
         badge: entry.badge,
         badgeIsDisplayed: entry.badgeIsDisplayed,
         profileBannerUrl: entry.profileBannerUrl,
+        bannerLayout: entry.bannerLayout,
       );
       _peers[userId] = cleaned;
       return cleaned;

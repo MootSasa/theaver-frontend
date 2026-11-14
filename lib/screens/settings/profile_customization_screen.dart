@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -22,18 +21,19 @@ import '../../services/profile_theme_provider.dart';
 import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/haptic_utils.dart';
-import '../../widgets/chat/sticker_item_widget.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/profile/color_palette_picker.dart';
 import '../../widgets/profile/floating_emoji_status_menu.dart';
 import '../../widgets/profile/name_color_picker.dart';
+import '../../widgets/profile/profile_banner_layer.dart';
 import '../../widgets/profile/profile_floating_top_switcher.dart';
 import '../../widgets/profile/reply_message_preview_card.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
+import 'profile_banner_editor_screen.dart';
 
 /// Экран «Оформление профиля», визуально совпадающий с реальным экраном профиля:
 /// - Полноэкранный цветной/градиентный фон и растворяющийся баннер как на `ProfileScreen`;
@@ -329,26 +329,41 @@ class _ProfileCustomizationScreenState
       return;
     }
 
-    setState(() => _isUploadingBanner = true);
     final provider = context.read<ProfileThemeProvider>();
-    final uploadedUrl = await provider.uploadBanner(
-      filePath: kIsWeb ? null : file.path,
-      bytes: kIsWeb ? file.bytes : null,
-      fileName: file.name,
-    );
-    if (!mounted) return;
-    setState(() => _isUploadingBanner = false);
-
-    if (uploadedUrl == null || uploadedUrl.isEmpty) {
-      _showToast(
-        translateOrFallback(
-          context,
-          'customizationUploadError',
-          'Failed to upload banner',
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => ProfileBannerEditorScreen(
+          initialFilePath: kIsWeb ? null : file.path,
+          initialBytes: kIsWeb ? file.bytes : null,
+          initialFileName: file.name,
+          initialLayout: ProfileBannerLayout(
+            heightMode: provider.currentBannerLayout.heightMode,
+          ),
+          displayName: _displayName(),
+          avatarUrl: _avatarUrl(),
+          userId: _userId,
         ),
-        isError: true,
-      );
-    }
+      ),
+    );
+  }
+
+  Future<void> _openBannerEditor() async {
+    if (_isUploadingBanner) return;
+    final provider = context.read<ProfileThemeProvider>();
+    final bannerUrl = AppConfig.resolveMediaUrl(provider.currentBannerUrl);
+    if (bannerUrl == null || bannerUrl.isEmpty) return;
+    HapticUtils.tap();
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => ProfileBannerEditorScreen(
+          initialBannerUrl: bannerUrl,
+          initialLayout: provider.currentBannerLayout,
+          displayName: _displayName(),
+          avatarUrl: _avatarUrl(),
+          userId: _userId,
+        ),
+      ),
+    );
   }
 
   Future<void> _removeBanner() async {
@@ -1013,6 +1028,35 @@ class _ProfileCustomizationScreenState
             ),
             if (hasBanner)
               ListTile(
+                key: const ValueKey<String>('profile_banner_adjust_row'),
+                leading: Icon(
+                  Icons.tune_rounded,
+                  size: 22,
+                  color: sectionAccent,
+                ),
+                title: Text(
+                  translateOrFallback(
+                    context,
+                    'bannerAdjust',
+                    'Adjust Banner',
+                  ),
+                ),
+                subtitle: Text(
+                  translateOrFallback(
+                    context,
+                    'bannerAdjustHint',
+                    'Size, position, dimming & blur',
+                  ),
+                ),
+                trailing: iconoir.NavArrowRight(
+                  width: 18,
+                  height: 18,
+                  color: secondaryForeground,
+                ),
+                onTap: _isUploadingBanner ? null : _openBannerEditor,
+              ),
+            if (hasBanner)
+              ListTile(
                 leading: iconoir.Trash(
                   width: 22,
                   height: 22,
@@ -1475,7 +1519,8 @@ class _ProfileCustomizationScreenState
             top: 0,
             left: 0,
             right: 0,
-            height: math.max(250.0, topContentPadding + 150.0),
+            height: themeProvider.currentBannerLayout.heightMode
+                .resolveCustomizationHeight(topContentPadding),
             child: IgnorePointer(
               child: ValueListenableBuilder<double>(
                 valueListenable: _bannerScrollOffset,
@@ -1487,40 +1532,10 @@ class _ProfileCustomizationScreenState
                     child: child,
                   );
                 },
-                child: ShaderMask(
-                  shaderCallback: (rect) => const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.white,
-                      Colors.white,
-                      Colors.transparent,
-                    ],
-                    stops: [0.0, 0.52, 1.0],
-                  ).createShader(rect),
-                  blendMode: BlendMode.dstIn,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      ControlledAnimatedNetworkImage(
-                        url: bannerUrl,
-                        fit: BoxFit.cover,
-                        animate: true,
-                      ),
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.black.withValues(alpha: 0.22),
-                              Colors.black.withValues(alpha: 0.42),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                child: ProfileBannerLayer(
+                  bannerUrl: bannerUrl,
+                  layout: themeProvider.currentBannerLayout,
+                  animate: true,
                 ),
               ),
             ),

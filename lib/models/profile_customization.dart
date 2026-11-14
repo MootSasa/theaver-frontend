@@ -1,5 +1,196 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+
+/// Height preset for profile cover banners across customization & full profile views.
+enum ProfileBannerHeightMode {
+  compact('compact'),
+  standard('standard'),
+  tall('tall');
+
+  final String wireValue;
+  const ProfileBannerHeightMode(this.wireValue);
+
+  static ProfileBannerHeightMode fromWire(String? raw) {
+    final normalized = raw?.trim().toLowerCase();
+    for (final mode in values) {
+      if (mode.wireValue == normalized) return mode;
+    }
+    return ProfileBannerHeightMode.standard;
+  }
+
+  double resolveCustomizationHeight(double topContentPadding) {
+    switch (this) {
+      case ProfileBannerHeightMode.compact:
+        return math.max(195.0, topContentPadding + 100.0);
+      case ProfileBannerHeightMode.standard:
+        return math.max(250.0, topContentPadding + 150.0);
+      case ProfileBannerHeightMode.tall:
+        return math.max(325.0, topContentPadding + 225.0);
+    }
+  }
+
+  double resolveProfileHeight(double topSpacerHeight) {
+    switch (this) {
+      case ProfileBannerHeightMode.compact:
+        return math.max(175.0, topSpacerHeight - 28.0);
+      case ProfileBannerHeightMode.standard:
+        return math.max(220.0, topSpacerHeight + 24.0);
+      case ProfileBannerHeightMode.tall:
+        return math.max(295.0, topSpacerHeight + 96.0);
+    }
+  }
+}
+
+/// Non-destructive visual layout & filter settings for a profile banner.
+class ProfileBannerLayout {
+  final double scale;
+  final double posX;
+  final double posY;
+  final double dim;
+  final double blur;
+  final ProfileBannerHeightMode heightMode;
+
+  const ProfileBannerLayout({
+    this.scale = 1.0,
+    this.posX = 0.0,
+    this.posY = 0.0,
+    this.dim = 0.32,
+    this.blur = 0.0,
+    this.heightMode = ProfileBannerHeightMode.standard,
+  });
+
+  static double _sanitizeDouble(
+    dynamic raw,
+    double fallback,
+    double min,
+    double max,
+  ) {
+    final parsed = raw is num
+        ? raw.toDouble()
+        : double.tryParse(raw?.toString() ?? '');
+    if (parsed == null || parsed.isNaN || parsed.isInfinite) {
+      return fallback;
+    }
+    return parsed.clamp(min, max).toDouble();
+  }
+
+  factory ProfileBannerLayout.sanitized({
+    double scale = 1.0,
+    double posX = 0.0,
+    double posY = 0.0,
+    double dim = 0.32,
+    double blur = 0.0,
+    ProfileBannerHeightMode heightMode = ProfileBannerHeightMode.standard,
+  }) {
+    return ProfileBannerLayout(
+      scale: _sanitizeDouble(scale, 1.0, 1.0, 3.0),
+      posX: _sanitizeDouble(posX, 0.0, -1.0, 1.0),
+      posY: _sanitizeDouble(posY, 0.0, -1.0, 1.0),
+      dim: _sanitizeDouble(dim, 0.32, 0.0, 0.75),
+      blur: _sanitizeDouble(blur, 0.0, 0.0, 20.0),
+      heightMode: heightMode,
+    );
+  }
+
+  bool get isDefault =>
+      (scale - 1.0).abs() < 0.005 &&
+      posX.abs() < 0.005 &&
+      posY.abs() < 0.005 &&
+      (dim - 0.32).abs() < 0.005 &&
+      blur < 0.05 &&
+      heightMode == ProfileBannerHeightMode.standard;
+
+  Alignment get alignment =>
+      Alignment(posX.clamp(-1.0, 1.0).toDouble(), posY.clamp(-1.0, 1.0).toDouble());
+
+  ProfileBannerLayout copyWith({
+    double? scale,
+    double? posX,
+    double? posY,
+    double? dim,
+    double? blur,
+    ProfileBannerHeightMode? heightMode,
+  }) {
+    return ProfileBannerLayout.sanitized(
+      scale: scale ?? this.scale,
+      posX: posX ?? this.posX,
+      posY: posY ?? this.posY,
+      dim: dim ?? this.dim,
+      blur: blur ?? this.blur,
+      heightMode: heightMode ?? this.heightMode,
+    );
+  }
+
+  factory ProfileBannerLayout.fromAppearanceMap(Map<String, dynamic> map) {
+    return ProfileBannerLayout(
+      scale: _sanitizeDouble(map['profile_banner_scale'], 1.0, 1.0, 3.0),
+      posX: _sanitizeDouble(map['profile_banner_pos_x'], 0.0, -1.0, 1.0),
+      posY: _sanitizeDouble(map['profile_banner_pos_y'], 0.0, -1.0, 1.0),
+      dim: _sanitizeDouble(map['profile_banner_dim'], 0.32, 0.0, 0.75),
+      blur: _sanitizeDouble(map['profile_banner_blur'], 0.0, 0.0, 20.0),
+      heightMode: ProfileBannerHeightMode.fromWire(
+        map['profile_banner_height']?.toString(),
+      ),
+    );
+  }
+
+  ProfileBannerLayout mergeAppearanceMap(Map<String, dynamic> map) {
+    return ProfileBannerLayout(
+      scale: map.containsKey('profile_banner_scale')
+          ? _sanitizeDouble(map['profile_banner_scale'], 1.0, 1.0, 3.0)
+          : scale,
+      posX: map.containsKey('profile_banner_pos_x')
+          ? _sanitizeDouble(map['profile_banner_pos_x'], 0.0, -1.0, 1.0)
+          : posX,
+      posY: map.containsKey('profile_banner_pos_y')
+          ? _sanitizeDouble(map['profile_banner_pos_y'], 0.0, -1.0, 1.0)
+          : posY,
+      dim: map.containsKey('profile_banner_dim')
+          ? _sanitizeDouble(map['profile_banner_dim'], 0.32, 0.0, 0.75)
+          : dim,
+      blur: map.containsKey('profile_banner_blur')
+          ? _sanitizeDouble(map['profile_banner_blur'], 0.0, 0.0, 20.0)
+          : blur,
+      heightMode: map.containsKey('profile_banner_height')
+          ? ProfileBannerHeightMode.fromWire(
+              map['profile_banner_height']?.toString(),
+            )
+          : heightMode,
+    );
+  }
+
+  Map<String, dynamic> toAppearanceFields() => {
+        'profile_banner_scale': double.parse(scale.toStringAsFixed(3)),
+        'profile_banner_pos_x': double.parse(posX.toStringAsFixed(3)),
+        'profile_banner_pos_y': double.parse(posY.toStringAsFixed(3)),
+        'profile_banner_dim': double.parse(dim.toStringAsFixed(3)),
+        'profile_banner_blur': double.parse(blur.toStringAsFixed(2)),
+        'profile_banner_height': heightMode.wireValue,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ProfileBannerLayout &&
+          runtimeType == other.runtimeType &&
+          (scale - other.scale).abs() < 0.001 &&
+          (posX - other.posX).abs() < 0.001 &&
+          (posY - other.posY).abs() < 0.001 &&
+          (dim - other.dim).abs() < 0.001 &&
+          (blur - other.blur).abs() < 0.01 &&
+          heightMode == other.heightMode;
+
+  @override
+  int get hashCode => Object.hash(
+        (scale * 1000).round(),
+        (posX * 1000).round(),
+        (posY * 1000).round(),
+        (dim * 1000).round(),
+        (blur * 100).round(),
+        heightMode,
+      );
+}
 
 /// Parses `#RRGGBB` or `#AARRGGBB` hex colors safely with a fallback.
 Color parseHexColor(String? hex, Color fallback) {
@@ -386,6 +577,7 @@ class PeerCustomization {
   final UserBadge? badge;
   final bool badgeIsDisplayed;
   final String? profileBannerUrl;
+  final ProfileBannerLayout bannerLayout;
 
   const PeerCustomization({
     this.nameColorPresetId,
@@ -396,6 +588,7 @@ class PeerCustomization {
     this.badge,
     this.badgeIsDisplayed = true,
     this.profileBannerUrl,
+    this.bannerLayout = const ProfileBannerLayout(),
   });
 
   EmojiStatusData? get activeEmojiStatus => emojiStatus?.activeOrNull;
@@ -410,7 +603,8 @@ class PeerCustomization {
       avatarDecoration == null &&
       activeEmojiStatus == null &&
       badge == null &&
-      (profileBannerUrl == null || profileBannerUrl!.isEmpty);
+      (profileBannerUrl == null || profileBannerUrl!.isEmpty) &&
+      bannerLayout.isDefault;
 
   factory PeerCustomization.fromJson(Map<String, dynamic> json) {
     final decRaw = json['avatar_decoration'];
@@ -453,6 +647,7 @@ class PeerCustomization {
       badgeIsDisplayed:
           json['badge_is_displayed'] == null ? true : json['badge_is_displayed'] == true,
       profileBannerUrl: (banner != null && banner.isNotEmpty) ? banner : null,
+      bannerLayout: ProfileBannerLayout.fromAppearanceMap(json),
     );
   }
 
@@ -469,6 +664,19 @@ class PeerCustomization {
 
   /// Applies a partial/full appearance update where explicit keys with `null` values clear prior values.
   PeerCustomization mergeAppearanceMap(Map<String, dynamic> map) {
+    final isClearingBannerUrl = map.containsKey('profile_banner_url') &&
+        (map['profile_banner_url'] == null ||
+            map['profile_banner_url'].toString().isEmpty);
+    final hasExplicitLayoutKeys = map.containsKey('profile_banner_scale') ||
+        map.containsKey('profile_banner_pos_x') ||
+        map.containsKey('profile_banner_pos_y') ||
+        map.containsKey('profile_banner_dim') ||
+        map.containsKey('profile_banner_blur') ||
+        map.containsKey('profile_banner_height');
+    final nextBannerLayout = (isClearingBannerUrl && !hasExplicitLayoutKeys)
+        ? const ProfileBannerLayout()
+        : bannerLayout.mergeAppearanceMap(map);
+
     return PeerCustomization(
       nameColorPresetId: map.containsKey('name_color_preset_id')
           ? map['name_color_preset_id']?.toString()
@@ -504,6 +712,7 @@ class PeerCustomization {
               ? map['profile_banner_url'].toString()
               : null)
           : profileBannerUrl,
+      bannerLayout: nextBannerLayout,
     );
   }
 
@@ -520,6 +729,9 @@ class PeerCustomization {
         'badge_is_displayed': badgeIsDisplayed,
         if (profileBannerUrl != null && profileBannerUrl!.isNotEmpty)
           'profile_banner_url': profileBannerUrl,
+        if ((profileBannerUrl != null && profileBannerUrl!.isNotEmpty) ||
+            !bannerLayout.isDefault)
+          ...bannerLayout.toAppearanceFields(),
       };
 
   String toJsonString() => jsonEncode(toJson());
