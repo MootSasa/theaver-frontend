@@ -9,17 +9,19 @@ class BlurUtils {
   static ui.ImageFilter createDownsampledBlur(
     double sigma, {
     double scale = 0.25,
+    ui.TileMode tileMode = ui.TileMode.decal,
   }) {
     if (sigma <= 0.0) {
-      return ui.ImageFilter.blur(sigmaX: 0.0, sigmaY: 0.0);
+      return ui.ImageFilter.blur(sigmaX: 0.0, sigmaY: 0.0, tileMode: tileMode);
     }
-    final int key = (sigma * 100).round();
+    final int key = Object.hash((sigma * 100).round(), tileMode);
     final ui.ImageFilter? cached = _cache[key];
     if (cached != null) return cached;
 
     final ui.ImageFilter filter = ui.ImageFilter.blur(
       sigmaX: sigma,
       sigmaY: sigma,
+      tileMode: tileMode,
     );
 
     if (_cache.length > 64) {

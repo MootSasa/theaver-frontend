@@ -1520,7 +1520,10 @@ class _ProfileCustomizationScreenState
             left: 0,
             right: 0,
             height: themeProvider.currentBannerLayout.heightMode
-                .resolveCustomizationHeight(topContentPadding),
+                .resolveCustomizationHeight(
+                  topContentPadding,
+                  devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+                ),
             child: IgnorePointer(
               child: ValueListenableBuilder<double>(
                 valueListenable: _bannerScrollOffset,

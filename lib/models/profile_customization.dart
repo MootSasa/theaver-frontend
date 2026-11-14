@@ -19,26 +19,48 @@ enum ProfileBannerHeightMode {
     return ProfileBannerHeightMode.standard;
   }
 
-  double resolveCustomizationHeight(double topContentPadding) {
-    switch (this) {
-      case ProfileBannerHeightMode.compact:
-        return math.max(195.0, topContentPadding + 100.0);
-      case ProfileBannerHeightMode.standard:
-        return math.max(250.0, topContentPadding + 150.0);
-      case ProfileBannerHeightMode.tall:
-        return math.max(325.0, topContentPadding + 225.0);
-    }
+  /// Snaps a logical vertical extent onto the physical pixel grid to avoid
+  /// sub-pixel seams along [ShaderMask] / [ClipRect] banner edges.
+  static double snapToPixelGrid(
+    double logicalExtent,
+    double devicePixelRatio,
+  ) {
+    final dpr = (devicePixelRatio <= 0 ||
+            devicePixelRatio.isNaN ||
+            devicePixelRatio.isInfinite)
+        ? 1.0
+        : devicePixelRatio;
+    return (logicalExtent * dpr).roundToDouble() / dpr;
   }
 
-  double resolveProfileHeight(double topSpacerHeight) {
-    switch (this) {
-      case ProfileBannerHeightMode.compact:
-        return math.max(175.0, topSpacerHeight - 28.0);
-      case ProfileBannerHeightMode.standard:
-        return math.max(220.0, topSpacerHeight + 24.0);
-      case ProfileBannerHeightMode.tall:
-        return math.max(295.0, topSpacerHeight + 96.0);
-    }
+  double resolveCustomizationHeight(
+    double topContentPadding, {
+    double devicePixelRatio = 1.0,
+  }) {
+    final double raw = switch (this) {
+      ProfileBannerHeightMode.compact =>
+        math.max(196.0, topContentPadding + 122.0),
+      ProfileBannerHeightMode.standard =>
+        math.max(250.0, topContentPadding + 162.0),
+      ProfileBannerHeightMode.tall =>
+        math.max(328.0, topContentPadding + 228.0),
+    };
+    return snapToPixelGrid(raw, devicePixelRatio);
+  }
+
+  double resolveProfileHeight(
+    double topSpacerHeight, {
+    double devicePixelRatio = 1.0,
+  }) {
+    final double raw = switch (this) {
+      ProfileBannerHeightMode.compact =>
+        math.max(196.0, topSpacerHeight + 8.0),
+      ProfileBannerHeightMode.standard =>
+        math.max(220.0, topSpacerHeight + 48.0),
+      ProfileBannerHeightMode.tall =>
+        math.max(304.0, topSpacerHeight + 148.0),
+    };
+    return snapToPixelGrid(raw, devicePixelRatio);
   }
 }
 

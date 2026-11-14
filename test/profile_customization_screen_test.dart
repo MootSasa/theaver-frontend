@@ -1,6 +1,8 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -668,6 +670,110 @@ void main() {
 
       // Flush PeerCustomizationCache 500ms persist debounce timer
       await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
+
+  testWidgets(
+    'ProfileBannerLayer leaves zero opaque pixels along bottom ShaderMask boundary under fractional height, dim, and blur',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(240, 280));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final Uint8List pngBytes = await tester.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder);
+        canvas.drawRect(
+          const Rect.fromLTWH(0, 0, 16, 16),
+          Paint()..color = const Color(0xFF1890FF),
+        );
+        final picture = recorder.endRecording();
+        final img = await picture.toImage(16, 16);
+        final bd = await img.toByteData(format: ui.ImageByteFormat.png);
+        img.dispose();
+        picture.dispose();
+        return bd!.buffer.asUint8List();
+      }) as Uint8List;
+
+      final boundaryKey = GlobalKey();
+      const double fractionalHeight = 175.3;
+      const double testDpr = 2.75;
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: RepaintBoundary(
+              key: boundaryKey,
+              child: SizedBox(
+                width: 200,
+                height: 240,
+                child: Stack(
+                  children: [
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: fractionalHeight,
+                      child: ProfileBannerLayer(
+                        localBytes: pngBytes,
+                        layout: const ProfileBannerLayout(
+                          heightMode: ProfileBannerHeightMode.compact,
+                          dim: 0.45,
+                          blur: 4.0,
+                        ),
+                        animate: false,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        await precacheImage(
+          MemoryImage(pngBytes),
+          tester.element(find.byType(ProfileBannerLayer)),
+        );
+      });
+      await tester.pump();
+
+      final boundary =
+          boundaryKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+      final raster = await tester.runAsync(() async {
+        final ui.Image image = await boundary.toImage(pixelRatio: testDpr);
+        final ByteData? rgba =
+            await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        final int width = image.width;
+        final int height = image.height;
+        image.dispose();
+        return (width: width, height: height, bytes: rgba!.buffer.asUint8List());
+      }) as ({int width, int height, Uint8List bytes});
+
+      int alphaAt(int x, int y) =>
+          raster.bytes[(y * raster.width + x) * 4 + 3];
+
+      final int centerX = raster.width ~/ 2;
+      expect(alphaAt(centerX, 30), greaterThan(180));
+
+      final int minRow = (fractionalHeight * testDpr).floor() - 2;
+      final int maxRow = (fractionalHeight * testDpr).ceil() + 3;
+      expect(maxRow, lessThan(raster.height));
+
+      for (int y = minRow; y <= maxRow; y++) {
+        for (final x in <int>[
+          raster.width ~/ 4,
+          centerX,
+          (raster.width * 3) ~/ 4,
+        ]) {
+          expect(
+            alphaAt(x, y),
+            equals(0),
+            reason: 'Expected zero alpha at boundary pixel ($x, $y)',
+          );
+        }
+      }
     },
   );
 }

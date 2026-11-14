@@ -574,9 +574,14 @@ class _ProfileBannerEditorScreenState extends State<ProfileBannerEditorScreen> {
     final topPadding = mediaQuery.padding.top;
     final topContentPadding = topPadding + 8.0 + kProfileFloatingBarHeight + 8.0;
     final maxStageHeight = math.max(220.0, mediaQuery.size.height * 0.44);
-    final rawBannerHeight =
-        _layout.heightMode.resolveCustomizationHeight(topContentPadding);
-    final stageHeight = rawBannerHeight.clamp(195.0, maxStageHeight).toDouble();
+    final rawBannerHeight = _layout.heightMode.resolveCustomizationHeight(
+      topContentPadding,
+      devicePixelRatio: mediaQuery.devicePixelRatio,
+    );
+    final stageHeight = ProfileBannerHeightMode.snapToPixelGrid(
+      rawBannerHeight.clamp(196.0, maxStageHeight).toDouble(),
+      mediaQuery.devicePixelRatio,
+    );
 
     final hasLightCoverAndNoDarkBanner = !isDarkBackdrop && !hasBannerMedia;
     final onHeroForeground = hasLightCoverAndNoDarkBanner

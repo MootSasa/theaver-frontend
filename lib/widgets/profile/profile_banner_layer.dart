@@ -70,6 +70,38 @@ class ProfileBannerLayer extends StatelessWidget {
     return const SizedBox.shrink();
   }
 
+  /// C1-continuous smoothstep fade mask ending before the bottom clip edge so
+  /// sub-pixel rounding of [ShaderMaskLayer] never leaves a hairline seam.
+  static final LinearGradient _fadeMaskGradient = _buildSmoothFadeMaskGradient();
+
+  static LinearGradient _buildSmoothFadeMaskGradient() {
+    const double fadeStart = 0.38;
+    const double fadeEnd = 0.97;
+    const int steps = 8;
+
+    final stops = <double>[0.0];
+    final colors = <Color>[const Color(0xFFFFFFFF)];
+
+    for (var i = 0; i <= steps; i++) {
+      final u = i / steps;
+      final t = fadeStart + (fadeEnd - fadeStart) * u;
+      final smooth = u * u * (3.0 - 2.0 * u);
+      final alpha = (1.0 - smooth).clamp(0.0, 1.0).toDouble();
+      stops.add(t);
+      colors.add(Color.fromRGBO(255, 255, 255, alpha));
+    }
+
+    stops.add(1.0);
+    colors.add(const Color(0x00FFFFFF));
+
+    return LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      stops: stops,
+      colors: colors,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!hasMedia) return const SizedBox.shrink();
@@ -91,41 +123,56 @@ class ProfileBannerLayer extends StatelessWidget {
     // Avoid saveLayer cost on default unblurred banners for 120fps scrolling.
     if (blurSigma > 0.1) {
       media = ImageFiltered(
-        imageFilter: BlurUtils.createDownsampledBlur(blurSigma),
+        imageFilter: BlurUtils.createDownsampledBlur(
+          blurSigma,
+          tileMode: TileMode.clamp,
+        ),
         child: media,
       );
     }
 
     return ShaderMask(
-      shaderCallback: (bounds) {
-        return const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.white, Colors.white, Colors.transparent],
-          stops: [0.0, 0.54, 1.0],
-        ).createShader(bounds);
-      },
+      shaderCallback: _fadeMaskGradient.createShader,
       blendMode: BlendMode.dstIn,
-      child: ClipRect(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            media,
-            if (dim > 0.005)
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: (dim * 0.68).clamp(0.0, 0.75)),
-                      Colors.black.withValues(alpha: (dim * 1.32).clamp(0.0, 0.85)),
-                    ],
-                  ),
-                ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final bottomInset =
+              constraints.maxHeight.isFinite && constraints.maxHeight > 12.0
+                  ? 1.0
+                  : 0.0;
+          return Padding(
+            padding: EdgeInsets.only(bottom: bottomInset),
+            child: ClipRect(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  media,
+                  if (dim > 0.005)
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          stops: const [0.0, 0.52, 1.0],
+                          colors: [
+                            Colors.black.withValues(
+                              alpha: (dim * 1.05).clamp(0.0, 0.78),
+                            ),
+                            Colors.black.withValues(
+                              alpha: (dim * 0.88).clamp(0.0, 0.72),
+                            ),
+                            Colors.black.withValues(
+                              alpha: (dim * 0.30).clamp(0.0, 0.45),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
               ),
-          ],
-        ),
+            ),
+          );
+        },
       ),
     );
   }

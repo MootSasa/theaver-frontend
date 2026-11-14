@@ -330,4 +330,61 @@ void main() {
       expect(explicitNull.isEmpty, isTrue);
     },
   );
+
+  test(
+    'ProfileBannerHeightMode snaps heights to physical pixels across fractional DPIs and avoids landmark collisions',
+    () {
+      const fractionalDprs = <double>[1.25, 1.5, 1.75, 2.625, 2.75, 3.5];
+      const topSpacerHeight = 188.727272;
+      const topContentPadding = 94.727272;
+
+      for (final dpr in fractionalDprs) {
+        final compactProfile = ProfileBannerHeightMode.compact
+            .resolveProfileHeight(topSpacerHeight, devicePixelRatio: dpr);
+        final standardProfile = ProfileBannerHeightMode.standard
+            .resolveProfileHeight(topSpacerHeight, devicePixelRatio: dpr);
+        final tallProfile = ProfileBannerHeightMode.tall
+            .resolveProfileHeight(topSpacerHeight, devicePixelRatio: dpr);
+
+        final compactCustom = ProfileBannerHeightMode.compact
+            .resolveCustomizationHeight(topContentPadding, devicePixelRatio: dpr);
+        final standardCustom = ProfileBannerHeightMode.standard
+            .resolveCustomizationHeight(topContentPadding, devicePixelRatio: dpr);
+        final tallCustom = ProfileBannerHeightMode.tall
+            .resolveCustomizationHeight(topContentPadding, devicePixelRatio: dpr);
+
+        for (final h in <double>[
+          compactProfile,
+          standardProfile,
+          tallProfile,
+          compactCustom,
+          standardCustom,
+          tallCustom,
+        ]) {
+          final physical = h * dpr;
+          expect(
+            (physical - physical.roundToDouble()).abs(),
+            lessThan(1e-6),
+            reason: 'Expected $h * $dpr = $physical to align to pixel grid',
+          );
+        }
+
+        expect(compactProfile, lessThan(standardProfile));
+        expect(standardProfile, lessThan(tallProfile));
+        expect(compactCustom, lessThan(standardCustom));
+        expect(standardCustom, lessThan(tallCustom));
+
+        // Landmark clearance on ProfileScreen:
+        // compact clears bottom of avatar (topSpacerHeight),
+        // standard clears above LiquidGlassProfileButtons (+80),
+        // tall clears below LiquidGlassProfileButtons (+138).
+        expect(compactProfile, greaterThan(topSpacerHeight));
+        expect(standardProfile, lessThan(topSpacerHeight + 80.0));
+        expect(tallProfile, greaterThan(topSpacerHeight + 138.0));
+      }
+
+      expect(ProfileBannerHeightMode.snapToPixelGrid(175.4, 0), 175.0);
+      expect(ProfileBannerHeightMode.snapToPixelGrid(175.4, double.nan), 175.0);
+    },
+  );
 }

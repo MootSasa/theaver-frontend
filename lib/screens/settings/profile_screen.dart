@@ -3715,7 +3715,11 @@ class ProfileScreenState extends State<ProfileScreen>
                           height: (activeCustomization?.bannerLayout ??
                                   const ProfileBannerLayout())
                               .heightMode
-                              .resolveProfileHeight(topSpacerHeight),
+                              .resolveProfileHeight(
+                                topSpacerHeight,
+                                devicePixelRatio:
+                                    MediaQuery.devicePixelRatioOf(context),
+                              ),
                           child: IgnorePointer(
                             child: Opacity(
                               opacity: bannerOpacity,
