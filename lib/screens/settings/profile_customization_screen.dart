@@ -17,6 +17,7 @@ import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/sticker_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/chat/sticker_item_widget.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
@@ -43,31 +44,11 @@ class ProfileCustomizationScreen extends StatefulWidget {
 
 class _ProfileCustomizationScreenState
     extends State<ProfileCustomizationScreen> {
-  static const List<String> _unicodePresets = [
-    '🔥',
-    '✨',
-    '💻',
-    '🎧',
-    '🚀',
-    '🌙',
-    '☕',
-    '🎯',
-    '💎',
-    '🎨',
-    '🏖️',
-    '⚡',
-    '🎮',
-    '📚',
-    '❤️',
-    '😎',
-  ];
-
   late int _activeTab;
   int _statusSourceTab = 0; // 0 = unicode, 1 = custom emoji
   String _selectedUnicode = '✨';
   StickerItem? _selectedSticker;
   Duration? _selectedDuration; // null = never
-  final TextEditingController _unicodeController = TextEditingController();
   final TextEditingController _noteController = TextEditingController();
   final IOSColorPickerController _colorPickerController =
       IOSColorPickerController();
@@ -78,7 +59,6 @@ class _ProfileCustomizationScreenState
 
   bool _isSaving = false;
   bool _isUploadingBanner = false;
-  bool _loadingEmojiPacks = false;
   String? _userId;
 
   @override
@@ -107,8 +87,8 @@ class _ProfileCustomizationScreenState
             );
       } else if (existingStatus.emoji != null &&
           existingStatus.emoji!.isNotEmpty) {
+        _statusSourceTab = 0;
         _selectedUnicode = existingStatus.emoji!;
-        _unicodeController.text = existingStatus.emoji!;
       }
     }
 
@@ -122,22 +102,11 @@ class _ProfileCustomizationScreenState
     }
 
     PeerCustomizationCache.instance.refreshCatalogs();
-    _ensureCustomEmojisLoaded();
-  }
-
-  Future<void> _ensureCustomEmojisLoaded() async {
-    if (_loadingEmojiPacks) return;
-    if (mounted) setState(() => _loadingEmojiPacks = true);
-    try {
-      await StickerService.instance.ensureInitialized();
-    } finally {
-      if (mounted) setState(() => _loadingEmojiPacks = false);
-    }
+    StickerService.instance.ensureInitialized();
   }
 
   @override
   void dispose() {
-    _unicodeController.dispose();
     _noteController.dispose();
     _colorPickerController.dispose();
     super.dispose();
@@ -211,9 +180,7 @@ class _ProfileCustomizationScreenState
         expiresAt: until,
       );
     }
-    final unicode = _unicodeController.text.trim().isNotEmpty
-        ? _unicodeController.text.trim()
-        : _selectedUnicode;
+    final unicode = _selectedUnicode.trim();
     if (unicode.isEmpty) return null;
     return EmojiStatusData(
       type: 'unicode',
@@ -859,14 +826,6 @@ class _ProfileCustomizationScreenState
   ) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final stickerService = StickerService.instance;
-    final customEmojiPacks = [
-      ...stickerService.installedEmojiPacks,
-      ...stickerService.featuredEmojiPacks,
-    ];
-    final customItems = <StickerItem>[
-      for (final pack in customEmojiPacks) ...pack.stickers,
-    ];
 
     final durationOptions = <(Duration?, String)>[
       (null, translateOrFallback(context, 'emojiStatusExpiryNever', 'Forever')),
@@ -888,247 +847,154 @@ class _ProfileCustomizationScreenState
       ),
     ];
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      children: [
-        SegmentedButton<int>(
-          segments: [
-            ButtonSegment<int>(
-              value: 0,
-              label: Text(
-                translateOrFallback(
-                  context,
-                  'emojiStatusUnicodeTab',
-                  'Standard Emoji',
-                ),
-              ),
-            ),
-            ButtonSegment<int>(
-              value: 1,
-              label: Text(
-                translateOrFallback(
-                  context,
-                  'emojiStatusCustomTab',
-                  'Custom Emoji',
-                ),
-              ),
-            ),
-          ],
-          selected: {_statusSourceTab},
-          onSelectionChanged: (sel) {
-            HapticUtils.selection();
-            setState(() => _statusSourceTab = sel.first);
-            if (_statusSourceTab == 1 && customItems.isEmpty) {
-              _ensureCustomEmojisLoaded();
-            }
-          },
-        ),
-        const SizedBox(height: 14),
-        if (_statusSourceTab == 0) ...[
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _unicodePresets.map((emoji) {
-              final selected = _selectedUnicode == emoji &&
-                  (_unicodeController.text.trim().isEmpty ||
-                      _unicodeController.text.trim() == emoji);
-              return GestureDetector(
-                onTap: () {
-                  HapticUtils.selection();
-                  setState(() {
-                    _selectedUnicode = emoji;
-                    _unicodeController.text = emoji;
-                  });
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    color: selected
-                        ? theme.colorScheme.primary.withValues(alpha: 0.18)
-                        : theme.colorScheme.surfaceContainerHighest
-                            .withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: selected
-                          ? theme.colorScheme.primary
-                          : Colors.transparent,
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Center(
-                    child: Text(emoji, style: const TextStyle(fontSize: 22)),
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _unicodeController,
-            maxLength: 8,
-            decoration: InputDecoration(
-              labelText: translateOrFallback(
-                context,
-                'emojiStatusUnicodeTab',
-                'Standard Emoji',
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-              isDense: true,
-            ),
-            onChanged: (val) {
-              if (val.trim().isNotEmpty) {
-                setState(() => _selectedUnicode = val.trim());
-              }
-            },
-          ),
-        ] else ...[
-          if (_loadingEmojiPacks && customItems.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (customItems.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : theme.colorScheme.surfaceContainerHighest
-                        .withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                translateOrFallback(
-                  context,
-                  'emojiStatusCustomTab',
-                  'Custom Emoji',
-                ),
-                textAlign: TextAlign.center,
-              ),
-            )
-          else
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 56,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-              ),
-              itemCount: customItems.length.clamp(0, 60),
-              itemBuilder: (ctx, index) {
-                final item = customItems[index];
-                final selected = _selectedSticker?.id == item.id;
-                return GestureDetector(
-                  onTap: () {
-                    HapticUtils.selection();
-                    setState(() => _selectedSticker = item);
-                  },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? theme.colorScheme.primary.withValues(alpha: 0.18)
-                          : theme.colorScheme.surfaceContainerHighest
-                              .withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: selected
-                            ? theme.colorScheme.primary
-                            : Colors.transparent,
-                        width: 1.5,
-                      ),
-                    ),
-                    child: StickerMediaView(
-                      fileUrl: item.fileUrl,
-                      thumbnailUrl: item.thumbnailUrl,
-                      stickerId: item.id,
-                      format: item.format,
-                      width: 36,
-                      height: 36,
-                      animate: selected,
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-                );
-              },
-            ),
-          const SizedBox(height: 12),
-        ],
-        const SizedBox(height: 8),
-        TextField(
-          controller: _noteController,
-          maxLength: 64,
-          decoration: InputDecoration(
-            hintText: translateOrFallback(
-              context,
-              'emojiStatusNoteHint',
-              'Add a short note (up to 64 chars)',
-            ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            isDense: true,
-          ),
-          onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          translateOrFallback(context, 'emojiStatusExpiryLabel', 'Duration'),
-          style: theme.textTheme.labelLarge,
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: durationOptions.map((opt) {
-            final selected = _selectedDuration == opt.$1;
-            return ChoiceChip(
-              label: Text(opt.$2),
-              selected: selected,
-              onSelected: (_) {
-                HapticUtils.selection();
-                setState(() => _selectedDuration = opt.$1);
-              },
-            );
-          }).toList(),
-        ),
-        const SizedBox(height: 18),
-        Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final showFooterControls = constraints.maxHeight >= 240.0;
+        return Column(
           children: [
             Expanded(
-              child: OutlinedButton(
-                onPressed: _isSaving ? null : _clearEmojiStatus,
-                child: Text(
-                  translateOrFallback(
-                    context,
-                    'emojiStatusClear',
-                    'Clear Status',
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: (isDark ? Colors.white : Colors.black)
+                          .withValues(alpha: 0.08),
+                      width: 0.8,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: EmojiStickerPanel(
+                      emojiOnly: true,
+                      expandToAvailableHeight: true,
+                      selectedEmoji:
+                          _statusSourceTab == 0 ? _selectedUnicode : null,
+                      selectedCustomEmojiId:
+                          _statusSourceTab == 1 ? _selectedSticker?.id : null,
+                      onEmojiSelected: (emoji) {
+                        HapticUtils.selection();
+                        setState(() {
+                          _statusSourceTab = 0;
+                          _selectedUnicode = emoji;
+                          _selectedSticker = null;
+                        });
+                      },
+                      onCustomEmojiSelected: (sticker) {
+                        HapticUtils.selection();
+                        setState(() {
+                          _statusSourceTab = 1;
+                          _selectedSticker = sticker;
+                        });
+                      },
+                    ),
                   ),
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(
-                onPressed: _isSaving ? null : _saveEmojiStatus,
-                child: Text(
-                  translateOrFallback(
-                    context,
-                    'customizationSave',
-                    'Save Changes',
-                  ),
+            if (showFooterControls)
+              SafeArea(
+                top: false,
+                minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _noteController,
+                      maxLength: 64,
+                      decoration: InputDecoration(
+                        counterText: '',
+                        hintText: translateOrFallback(
+                          context,
+                          'emojiStatusNoteHint',
+                          'Add a short note (up to 64 chars)',
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 8),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Text(
+                              translateOrFallback(
+                                context,
+                                'emojiStatusExpiryLabel',
+                                'Duration',
+                              ),
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          for (int i = 0; i < durationOptions.length; i++) ...[
+                            if (i > 0) const SizedBox(width: 6),
+                            ChoiceChip(
+                              label: Text(durationOptions[i].$2),
+                              selected:
+                                  _selectedDuration == durationOptions[i].$1,
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              onSelected: (_) {
+                                HapticUtils.selection();
+                                setState(() =>
+                                    _selectedDuration = durationOptions[i].$1);
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _isSaving ? null : _clearEmojiStatus,
+                            child: Text(
+                              translateOrFallback(
+                                context,
+                                'emojiStatusClear',
+                                'Clear Status',
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: _isSaving ? null : _saveEmojiStatus,
+                            child: Text(
+                              translateOrFallback(
+                                context,
+                                'customizationSave',
+                                'Save Changes',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-            ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 
@@ -1506,7 +1372,13 @@ class _ProfileCustomizationScreenState
       ),
       body: Column(
         children: [
-          _buildLivePreviewCard(context, themeProvider),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            child: MediaQuery.viewInsetsOf(context).bottom > 100
+                ? const SizedBox.shrink()
+                : _buildLivePreviewCard(context, themeProvider),
+          ),
           _buildTabBar(context, glassEnabled),
           const SizedBox(height: 6),
           Expanded(child: activeBody),

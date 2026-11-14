@@ -52,6 +52,8 @@ class _GifJustifiedRow {
 enum PanelTab { emoji, gif, sticker }
 
 class EmojiStickerPanel extends StatefulWidget {
+  static void _defaultNoop() {}
+
   final TextEditingController? controller;
   final FocusNode? focusNode;
   final VoidCallback onBackspace;
@@ -59,6 +61,9 @@ class EmojiStickerPanel extends StatefulWidget {
   final double height;
   final bool isVisible;
   final bool expandToAvailableHeight;
+  final bool emojiOnly;
+  final String? selectedEmoji;
+  final int? selectedCustomEmojiId;
   final ValueChanged<String>? onEmojiSelected;
   final ValueChanged<StickerItem>? onCustomEmojiSelected;
   final ValueChanged<StickerItem>? onStickerSelected;
@@ -68,11 +73,14 @@ class EmojiStickerPanel extends StatefulWidget {
     super.key,
     this.controller,
     this.focusNode,
-    required this.onBackspace,
-    required this.onClose,
+    this.onBackspace = _defaultNoop,
+    this.onClose = _defaultNoop,
     this.height = _kPanelHeight,
     this.isVisible = true,
     this.expandToAvailableHeight = false,
+    this.emojiOnly = false,
+    this.selectedEmoji,
+    this.selectedCustomEmojiId,
     this.onEmojiSelected,
     this.onCustomEmojiSelected,
     this.onStickerSelected,
@@ -87,7 +95,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     with TickerProviderStateMixin {
   static PanelTab _lastSelectedTab = PanelTab.emoji;
 
-  PanelTab _currentTab = _lastSelectedTab;
+  late PanelTab _currentTab =
+      widget.emojiOnly ? PanelTab.emoji : _lastSelectedTab;
   final ScrollController _gridScrollController = ScrollController();
   final ScrollController _gifScrollController = ScrollController();
   final ScrollController _stickerScrollController = ScrollController();
@@ -301,13 +310,24 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     setState(() {});
   }
 
+  List<StickerPack> _effectiveEmojiPacks() {
+    final installed = StickerService.instance.installedEmojiPacks;
+    if (!widget.emojiOnly) return installed;
+    final seenIds = <int>{for (final p in installed) p.id};
+    return <StickerPack>[
+      ...installed,
+      for (final p in StickerService.instance.featuredEmojiPacks)
+        if (seenIds.add(p.id)) p,
+    ];
+  }
+
   void _ensureStickerSectionKeys() {
     _stickerSectionKeys.putIfAbsent('recent', () => GlobalKey());
     _stickerSectionKeys.putIfAbsent('favorites', () => GlobalKey());
     for (final pack in StickerService.instance.installedStickerPacks) {
       _stickerSectionKeys.putIfAbsent(pack.id.toString(), () => GlobalKey());
     }
-    for (final pack in StickerService.instance.installedEmojiPacks) {
+    for (final pack in _effectiveEmojiPacks()) {
       _sectionKeys.putIfAbsent('srv_${pack.id}', () => GlobalKey());
     }
   }
@@ -316,7 +336,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   void didUpdateWidget(covariant EmojiStickerPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!oldWidget.isVisible && widget.isVisible) {
-      _currentTab = _lastSelectedTab;
+      _currentTab = widget.emojiOnly ? PanelTab.emoji : _lastSelectedTab;
       if (!_pageController.hasClients) {
         _pageController.dispose();
         _pageController = PageController(initialPage: _currentTab.index);
@@ -617,6 +637,20 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       ],
     );
 
+    if (widget.emojiOnly) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragEnd: widget.expandToAvailableHeight
+            ? null
+            : (details) {
+                if ((details.primaryVelocity ?? 0) > 300) {
+                  widget.onClose();
+                }
+              },
+        child: bodyColumn,
+      );
+    }
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onVerticalDragEnd: widget.expandToAvailableHeight
@@ -881,6 +915,18 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 : MediaQuery.sizeOf(context).width;
         _lastPanelWidth = panelWidth;
         final emojiColumns = _computeEmojiColumns(panelWidth);
+        if (widget.emojiOnly) {
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: RepaintBoundary(
+                  child: _buildVerticalEmojiList(emojiColumns),
+                ),
+              ),
+              RepaintBoundary(child: _buildEmojiTopControls()),
+            ],
+          );
+        }
         final stickerColumns = _computeStickerColumns(panelWidth);
 
         return PageView(
@@ -1217,7 +1263,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     _ensureStickerSectionKeys();
     List<CategoryEmoji> categories = [...defaultEmojiSet];
 
-    final installedEmojiPacks = StickerService.instance.installedEmojiPacks;
+    final installedEmojiPacks = _effectiveEmojiPacks();
     final bool isSearching = _emojiSearchQuery.trim().isNotEmpty;
 
     if (!isSearching) {
@@ -1338,7 +1384,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
             emojiColumns: emojiColumns,
             skipFilter: isSearching,
           ),
-        const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
+        SliverPadding(
+          padding: EdgeInsets.only(bottom: widget.emojiOnly ? 20 : 80),
+        ),
       ],
     );
   }
@@ -1404,6 +1452,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               final item = items[index];
+              final isSelected = widget.selectedCustomEmojiId != null &&
+                  widget.selectedCustomEmojiId == item.id;
               return GestureDetector(
                 onTap: () => _onCustomEmojiItemTapped(item),
                 onLongPress: () {
@@ -1420,16 +1470,26 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   );
                 },
                 behavior: HitTestBehavior.opaque,
-                child: Center(
-                  child: StickerMediaView(
-                    key: ValueKey('ce_${item.id}'),
-                    fileUrl: item.fileUrl,
-                    thumbnailUrl: item.thumbnailUrl,
-                    stickerId: item.id,
-                    format: item.format,
-                    width: 30,
-                    height: 30,
-                    animate: _currentTab == PanelTab.emoji && widget.isVisible,
+                child: DecoratedBox(
+                  decoration: isSelected
+                      ? BoxDecoration(
+                          color: theme.accent.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: theme.accent, width: 1.5),
+                        )
+                      : const BoxDecoration(),
+                  child: Center(
+                    child: StickerMediaView(
+                      key: ValueKey('ce_${item.id}'),
+                      fileUrl: item.fileUrl,
+                      thumbnailUrl: item.thumbnailUrl,
+                      stickerId: item.id,
+                      format: item.format,
+                      width: 30,
+                      height: 30,
+                      animate:
+                          _currentTab == PanelTab.emoji && widget.isVisible,
+                    ),
                   ),
                 ),
               );
@@ -1491,11 +1551,23 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               final emoji = categoryEmoji.emoji[index];
+              final isSelected = widget.selectedCustomEmojiId == null &&
+                  widget.selectedEmoji != null &&
+                  widget.selectedEmoji == emoji.emoji;
               return GestureDetector(
                 onTap: () => _onEmojiSelected(emoji),
                 behavior: HitTestBehavior.opaque,
-                child: Center(
-                  child: EmojiUtils.appleEmoji(emoji.emoji, size: 26),
+                child: DecoratedBox(
+                  decoration: isSelected
+                      ? BoxDecoration(
+                          color: theme.accent.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: theme.accent, width: 1.5),
+                        )
+                      : const BoxDecoration(),
+                  child: Center(
+                    child: EmojiUtils.appleEmoji(emoji.emoji, size: 26),
+                  ),
                 ),
               );
             },
@@ -1568,7 +1640,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
         int countB = _displayedPackUsageStats[b.id] ?? 0;
         return countB.compareTo(countA);
       });
-    final installedEmojiPacks = StickerService.instance.installedEmojiPacks;
+    final installedEmojiPacks = _effectiveEmojiPacks();
 
     final selectorContent = SingleChildScrollView(
       scrollDirection: Axis.horizontal,

@@ -96,24 +96,113 @@ class _AnimatedRollingCountTextState extends State<AnimatedRollingCountText> {
           final beginOffset = isIncoming
               ? Offset(0.0, _goingUp ? 0.65 : -0.65)
               : Offset(0.0, _goingUp ? -0.65 : 0.65);
-          return FadeTransition(
-            opacity: animation,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: beginOffset,
-                end: Offset.zero,
-              ).animate(animation),
-              child: child,
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: beginOffset,
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        );
+      },
+      child: Text(
+        text,
+        key: ValueKey<String>(keyStr),
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: widget.style,
+      ),
+    ),
+  );
+  }
+}
+
+/// Telegram-style vertical top-to-bottom title switcher (`сверху вниз`) for header navigation.
+/// Incoming title slides down from above (`-0.85 -> 0.0`) while outgoing title slides down
+/// toward the bottom (`0.0 -> +0.85`) in synchronized lockstep.
+class AnimatedVerticalTitleText extends StatelessWidget {
+  final String title;
+  final String titleKey;
+  final TextStyle style;
+  final double width;
+  final double height;
+  final double horizontalPadding;
+
+  const AnimatedVerticalTitleText({
+    super.key,
+    required this.title,
+    required this.titleKey,
+    required this.style,
+    required this.width,
+    required this.height,
+    this.horizontalPadding = 18.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final effectiveKey = ValueKey<String>('${titleKey}_$title');
+    final maxTextWidth = math.max(40.0, width - horizontalPadding * 2);
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: ClipRect(
+        child: AnimatedSwitcher(
+          duration: reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 250),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          layoutBuilder: (currentChild, previousChildren) {
+            return Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                for (final prev in previousChildren)
+                  OverflowBox(
+                    minWidth: 0,
+                    maxWidth: math.max(maxTextWidth, 280.0),
+                    minHeight: 0,
+                    maxHeight: height,
+                    alignment: Alignment.center,
+                    child: prev,
+                  ),
+                if (currentChild != null) currentChild,
+              ],
+            );
+          },
+          transitionBuilder: (child, animation) {
+            final isIncoming = child.key == effectiveKey;
+            final beginOffset = isIncoming
+                ? const Offset(0.0, -0.85)
+                : const Offset(0.0, 0.85);
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: beginOffset,
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            );
+          },
+          child: ConstrainedBox(
+            key: effectiveKey,
+            constraints: BoxConstraints(maxWidth: maxTextWidth),
+            child: Text(
+              title,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: style,
             ),
-          );
-        },
-        child: Text(
-          text,
-          key: ValueKey<String>(keyStr),
-          maxLines: 1,
-          softWrap: false,
-          overflow: TextOverflow.ellipsis,
-          style: widget.style,
+          ),
         ),
       ),
     );
@@ -259,9 +348,12 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
         final isDark = theme.brightness == Brightness.dark;
         final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
 
-        final double edgePadding = totalWidth < 360.0 ? 12.0 : 16.0;
-        final double gap = totalWidth < 360.0 ? 6.0 : 8.0;
-        final double iconBtnWidth = totalWidth < 360.0 ? 31.0 : 35.0;
+        final double edgePadding = totalWidth < 380.0 ? 12.0 : 16.0;
+        final double normalGap = totalWidth < 360.0 ? 6.0 : 8.0;
+        final double selectGap = totalWidth < 360.0 ? 10.0 : 14.0;
+        final double gap = isSelectMode ? selectGap : normalGap;
+        final double capsuleHorizontalPadding =
+            totalWidth < 360.0 ? 6.0 : 8.0;
 
         final cfg = selectionConfig;
         final bool showPin =
@@ -282,9 +374,28 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           showOverflow,
         ].where((v) => v).length;
 
+        final double maxCapsuleBudget = math.max(
+          _ctrlSize,
+          totalWidth - edgePadding * 2 - _ctrlSize * 2 - selectGap * 2,
+        );
+        final double idealIconBtnWidth = totalWidth >= 380.0 ? 44.0 : 42.0;
+        final double iconBtnWidth = visibleQuickActionsCount == 0
+            ? idealIconBtnWidth
+            : math
+                .min(
+                  idealIconBtnWidth,
+                  (maxCapsuleBudget - capsuleHorizontalPadding * 2) /
+                      visibleQuickActionsCount,
+                )
+                .clamp(32.0, 46.0);
+
         final double capsuleWidth = visibleQuickActionsCount == 0
             ? _ctrlSize
-            : math.max(_ctrlSize, visibleQuickActionsCount * iconBtnWidth + 12.0);
+            : math.max(
+                _ctrlSize,
+                visibleQuickActionsCount * iconBtnWidth +
+                    capsuleHorizontalPadding * 2,
+              );
 
         final bool hasNormalLeft =
             normalLeftButton != null || showBackButton;
@@ -369,11 +480,17 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           totalWidth - rightOccupied - centerClosedWidth,
         );
         final double idealCenterLeft = (totalWidth - centerClosedWidth) / 2;
+        final double selectSlotStart =
+            showLeftControl ? (edgePadding + _ctrlSize) : edgePadding;
+        final double selectSlotEnd =
+            totalWidth - edgePadding - closedRightWidth;
+        final double idealSelectCenterLeft =
+            (selectSlotStart + selectSlotEnd - centerClosedWidth) / 2;
         final double centerLeft = centerMenuActive
             ? ((totalWidth - activeCenterWidth) / 2)
                 .clamp(8.0, math.max(8.0, totalWidth - activeCenterWidth - 8.0))
             : (isSelectMode
-                ? idealCenterLeft.clamp(leftOccupied, maxCenterLeft)
+                ? idealSelectCenterLeft.clamp(leftOccupied, maxCenterLeft)
                 : idealCenterLeft.clamp(
                     edgePadding,
                     math.max(edgePadding, totalWidth - edgePadding - centerClosedWidth),
@@ -423,6 +540,7 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           context,
           textColor: textColor,
           iconBtnWidth: iconBtnWidth,
+          capsuleHorizontalPadding: capsuleHorizontalPadding,
           capsuleWidth: capsuleWidth,
           rightMenuWidth: rightMenuWidth,
           overflowMenuActive: overflowMenuActive,
@@ -505,16 +623,19 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
             curve: Curves.easeOutCubic,
             top: 2,
             left: glassCenterLeft,
-            child: SizedBox(
-              width: glassCenterBoxWidth,
-              height: math.max(_ctrlSize, openCenterMenuHeight ?? _ctrlSize),
-              child: LiquidGlassMorph(
-                key: const ValueKey<String>('adaptive_center_morph'),
-                alignment: Alignment.topCenter,
-                motion: morphMotion,
-                smoothness: 28,
-                style: morphStyle,
-                child: centerContent,
+            child: IgnorePointer(
+              ignoring: isSelectMode,
+              child: SizedBox(
+                width: glassCenterBoxWidth,
+                height: math.max(_ctrlSize, openCenterMenuHeight ?? _ctrlSize),
+                child: LiquidGlassMorph(
+                  key: const ValueKey<String>('adaptive_center_morph'),
+                  alignment: Alignment.topCenter,
+                  motion: morphMotion,
+                  smoothness: 28,
+                  style: morphStyle,
+                  child: centerContent,
+                ),
               ),
             ),
           );
@@ -836,27 +957,12 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
       key: const ValueKey<String>('center_normal_title'),
       behavior: HitTestBehavior.opaque,
       onTap: onTitleTap,
-      child: Container(
+      child: AnimatedVerticalTitleText(
+        title: normalTitle,
+        titleKey: normalTitleKey,
+        style: titleStyle.copyWith(color: displayColor),
+        width: closedWidth,
         height: _ctrlSize,
-        padding: const EdgeInsets.symmetric(horizontal: 18.0),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Flexible(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 260),
-                child: Text(
-                  normalTitle,
-                  key: ValueKey<String>(normalTitleKey),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: titleStyle.copyWith(color: displayColor),
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -865,6 +971,7 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
     BuildContext context, {
     required Color textColor,
     required double iconBtnWidth,
+    required double capsuleHorizontalPadding,
     required double capsuleWidth,
     required double rightMenuWidth,
     required bool overflowMenuActive,
@@ -895,7 +1002,7 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
         width: capsuleWidth,
         height: _ctrlSize,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 5.0),
+          padding: EdgeInsets.symmetric(horizontal: capsuleHorizontalPadding),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,

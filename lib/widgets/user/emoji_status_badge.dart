@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/profile_customization.dart';
+import '../../services/sticker_service.dart';
+import '../../utils/emoji_utils.dart';
 import '../chat/sticker_item_widget.dart';
 import '../common/glass_modal_sheet.dart';
 
@@ -33,6 +35,9 @@ class _EmojiStatusBadgeState extends State<EmojiStatusBadge> {
   @override
   void initState() {
     super.initState();
+    if (!EmojiUtils.isFontLoaded.value && !EmojiUtils.isFontLoading.value) {
+      unawaited(EmojiUtils.loadAppleEmojiFont());
+    }
     _scheduleExpiryTimer();
   }
 
@@ -88,6 +93,12 @@ class _EmojiStatusBadgeState extends State<EmojiStatusBadge> {
 
     Widget glyph;
     if (active.type == 'sticker' && (active.stickerUrl?.isNotEmpty ?? false)) {
+      final cachedSticker = active.stickerId != null
+          ? StickerService.instance.getStickerByIdSync(active.stickerId)
+          : null;
+      final adaptiveTint = (cachedSticker?.isAdaptiveTextColor == true)
+          ? widget.fallbackColor
+          : null;
       glyph = StickerMediaView(
         fileUrl: active.stickerUrl!,
         thumbnailUrl: active.thumbnailUrl,
@@ -96,16 +107,26 @@ class _EmojiStatusBadgeState extends State<EmojiStatusBadge> {
         width: widget.size,
         height: widget.size,
         animate: shouldAnimate,
-        adaptiveTintColor: widget.fallbackColor,
+        adaptiveTintColor: adaptiveTint,
         fit: BoxFit.contain,
       );
     } else if (active.emoji != null && active.emoji!.isNotEmpty) {
-      glyph = Text(
-        active.emoji!,
-        style: TextStyle(
-          fontSize: widget.size * 0.88,
-          height: 1.05,
-        ),
+      final emojiText = active.emoji!;
+      glyph = ValueListenableBuilder<bool>(
+        valueListenable: EmojiUtils.isFontLoaded,
+        builder: (context, _, __) {
+          if (widget.size >= 36.0) {
+            return HighResStaticEmoji(
+              emoji: emojiText,
+              size: widget.size * 0.78,
+            );
+          }
+          return EmojiUtils.appleEmoji(
+            emojiText,
+            size: widget.size * 0.86,
+            fallbackStyle: const TextStyle(height: 1.05),
+          );
+        },
       );
     } else {
       return const SizedBox.shrink();
