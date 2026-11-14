@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 
 class PowerSavingScreen extends StatefulWidget {
   const PowerSavingScreen({Key? key}) : super(key: key);
@@ -52,10 +53,8 @@ class _PowerSavingScreenState extends State<PowerSavingScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('power_saving_title')),
-      ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('power_saving_title'),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : ListView(

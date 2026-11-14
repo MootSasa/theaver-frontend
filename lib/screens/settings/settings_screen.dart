@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'about_theaver_screen.dart';
 import 'profile_screen.dart';
@@ -16,16 +16,16 @@ import 'wallets_screen.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
+import '../../theme/theav_theme.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/profile_instant_cache.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import 'package:http/http.dart' as http;
 import '../auth/login_screen.dart';
@@ -116,59 +116,67 @@ class _SettingsScreenState extends State<SettingsScreen>
     super.build(context); // AutomaticKeepAliveClientMixin
     final l10n = context.l10n;
     final theme = Theme.of(context);
+    final theav = TheavTheme.of(context);
+    final accent = theav.accent;
+    final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
     final currentAccount = _currentAccount;
 
     // Меню «три точки» — содержит «Выйти» и «Очистить данные»
-    final appBarActions = [
-      PopupMenuButton<String>(
-        onSelected: (value) {
-          switch (value) {
-            case 'logout':
-              _handleLogout(context);
-              break;
-            case 'clear_data':
-              _showClearDataDialog(context);
-              break;
-          }
-        },
-        itemBuilder: (context) => [
-          PopupMenuItem(
-            value: 'logout',
-            child: ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: Text(
-                l10n.translate('menu_logout'),
-                style: const TextStyle(color: Colors.red),
-              ),
-              contentPadding: EdgeInsets.zero,
-              minLeadingWidth: 24,
+    final popupMenuButton = PopupMenuButton<String>(
+      padding: EdgeInsets.zero,
+      onSelected: (value) {
+        switch (value) {
+          case 'logout':
+            _handleLogout(context);
+            break;
+          case 'clear_data':
+            _showClearDataDialog(context);
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'logout',
+          child: ListTile(
+            leading: iconoir.LogOut(
+              width: 20,
+              height: 20,
+              color: theav.palette.error,
             ),
-          ),
-          PopupMenuItem(
-            value: 'clear_data',
-            child: ListTile(
-              leading: const Icon(Icons.delete_forever, color: Colors.orange),
-              title: Text(
-                l10n.translate('clear_data_title'),
-                style: const TextStyle(color: Colors.orange),
-              ),
-              contentPadding: EdgeInsets.zero,
-              minLeadingWidth: 24,
+            title: Text(
+              l10n.translate('menu_logout'),
+              style: TextStyle(color: theav.palette.error),
             ),
+            contentPadding: EdgeInsets.zero,
+            minLeadingWidth: 24,
           ),
-        ],
-        icon: const Icon(Icons.more_vert),
-      ),
-    ];
-
-    // AppBar title — крупная надпись «Настройки»
-    final appBarTitle = Text(
-      l10n.translate('settings_title'),
-      style: const TextStyle(
-        fontSize: 28,
-        fontWeight: FontWeight.bold,
+        ),
+        PopupMenuItem(
+          value: 'clear_data',
+          child: ListTile(
+            leading: const iconoir.Trash(
+              width: 20,
+              height: 20,
+              color: Colors.orange,
+            ),
+            title: Text(
+              l10n.translate('clear_data_title'),
+              style: const TextStyle(color: Colors.orange),
+            ),
+            contentPadding: EdgeInsets.zero,
+            minLeadingWidth: 24,
+          ),
+        ),
+      ],
+      icon: iconoir.MoreVert(
+        width: 22,
+        height: 22,
+        color: headerFg,
       ),
     );
+    final headerActions = [
+      SettingsHeaderAction(child: popupMenuButton),
+    ];
 
     // Содержимое списка настроек (без обёртки ListView)
     final listChildren = <Widget>[
@@ -182,7 +190,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Profile Section
           ListTile(
-            leading: const Icon(Icons.person, color: Color(0xFF0088CC)),
+            leading: iconoir.User(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_profile')),
             onTap: () {
               HapticUtils.tap();
@@ -203,7 +211,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Accounts Section
           ListTile(
-            leading: const Icon(Icons.switch_account, color: Color(0xFF0088CC)),
+            leading: iconoir.UserCircle(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('accounts_title')),
             subtitle: Text(
               '${_accountManager.accounts.length} ${l10n.translate('accounts_count')}',
@@ -227,8 +235,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Add Account Section
           ListTile(
-            leading:
-                const Icon(Icons.add_circle_outline, color: Color(0xFF0088CC)),
+            leading: iconoir.UserPlus(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_add_account')),
             onTap: () {
               HapticUtils.tap();
@@ -247,7 +254,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Chat Settings Section (Wallpaper + Liquid Glass)
           ListTile(
-            leading: const Icon(Icons.chat, color: Color(0xFF0088CC)),
+            leading: iconoir.ChatBubble(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_chat_settings')),
             onTap: () {
               HapticUtils.tap();
@@ -260,7 +267,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Privacy Section
           ListTile(
-            leading: const Icon(Icons.privacy_tip, color: Color(0xFF0088CC)),
+            leading: iconoir.ShieldCheck(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_privacy')),
             onTap: () {
               HapticUtils.tap();
@@ -273,7 +280,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Notifications Section
           ListTile(
-            leading: const Icon(Icons.notifications, color: Color(0xFF0088CC)),
+            leading: iconoir.Bell(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_notifications')),
             onTap: () {
               HapticUtils.tap();
@@ -290,7 +297,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Data & Storage Section
           ListTile(
-            leading: const Icon(Icons.storage, color: Color(0xFF0088CC)),
+            leading: iconoir.Database(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_data_storage')),
             onTap: () {
               HapticUtils.tap();
@@ -303,7 +310,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Devices Section
           ListTile(
-            leading: const Icon(Icons.devices, color: Color(0xFF0088CC)),
+            leading: iconoir.Laptop(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_devices')),
             onTap: () {
               HapticUtils.tap();
@@ -316,7 +323,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Chat Folders Section
           ListTile(
-            leading: const Icon(Icons.folder, color: Color(0xFF0088CC)),
+            leading: iconoir.Folder(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_folders')),
             onTap: () {
               HapticUtils.tap();
@@ -333,8 +340,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Wallets and Cards Section
           ListTile(
-            leading: const Icon(Icons.account_balance_wallet,
-                color: Color(0xFF0088CC)),
+            leading: iconoir.Wallet(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_wallets_cards')),
             onTap: () {
               HapticUtils.tap();
@@ -351,7 +357,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Power Saving Section
           ListTile(
-            leading: const Icon(Icons.battery_saver, color: Color(0xFF0088CC)),
+            leading: iconoir.BatteryCharging(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_power_saving')),
             onTap: () {
               HapticUtils.tap();
@@ -364,7 +370,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Language Section
           ListTile(
-            leading: const Icon(Icons.language, color: Color(0xFF0088CC)),
+            leading: iconoir.Language(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_language')),
             onTap: () {
               HapticUtils.tap();
@@ -377,7 +383,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // About Theaver Section
           ListTile(
-            leading: const Icon(Icons.info_outline_rounded, color: Color(0xFF0088CC)),
+            leading: iconoir.InfoCircle(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_about_theaver')),
             trailing: ValueListenableBuilder<AppUpdateDownloadState>(
               valueListenable: AppUpdateService.instance.stateNotifier,
@@ -412,88 +418,52 @@ class _SettingsScreenState extends State<SettingsScreen>
       const SizedBox(height: 24),
     ];
 
-    // ListView для classic-режима
-    final listView = ListView(
-      physics: const ClampingScrollPhysics(),
-      padding: widget.isEmbedded
-          ? const EdgeInsets.only(bottom: 120)
-          : null,
-      children: listChildren,
-    );
-
     // Встроенный режим — используется внутри PageView на главном экране
     if (widget.isEmbedded) {
-      final topPadding = MediaQuery.of(context).padding.top + 52.0;
       return ListView(
         physics: const ClampingScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 100),
-        children: [
-          SizedBox(height: topPadding),
-          ...listChildren,
-        ],
+        padding: EdgeInsets.only(
+          top: SettingsFloatingHeader.topClearanceOf(context),
+          bottom: 100,
+        ),
+        children: listChildren,
       );
     }
 
     // Самостоятельный экран (не встроенный)
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
+    final glassProvider = maybeLiquidGlassProvider(context);
+    final glassEnabled = glassProvider?.enabled ?? false;
+    final isLite = glassProvider?.isLite ?? false;
 
-        if (glassEnabled) {
-          final topPadding =
-              MediaQuery.of(context).padding.top + kToolbarHeight;
-
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: listView,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: appBarTitle,
-                    actions: appBarActions,
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-            bottomNavigationBar: LiquidGlassBottomBar(
+    return SettingsFloatingScaffold(
+      title: l10n.translate('settings_title'),
+      actions: headerActions,
+      body: ListView(
+        physics: const ClampingScrollPhysics(),
+        padding: EdgeInsets.only(
+          top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+          bottom: 24,
+        ),
+        children: listChildren,
+      ),
+      bottomNavigationBar: glassEnabled
+          ? LiquidGlassBottomBar(
               selectedIndex: 0,
               onTabSelected: (index) {
                 if (index != 0) {
                   Navigator.pop(context);
                 }
               },
-              isLite: glassProvider.isLite,
+              isLite: isLite,
+            )
+          : ClassicBottomBar(
+              selectedIndex: 0,
+              onTabSelected: (index) {
+                if (index != 0) {
+                  Navigator.pop(context);
+                }
+              },
             ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: appBarTitle,
-            actions: appBarActions,
-            centerTitle: true,
-          ),
-          body: listView,
-          bottomNavigationBar: ClassicBottomBar(
-            selectedIndex: 0,
-            onTabSelected: (index) {
-              if (index != 0) {
-                Navigator.pop(context);
-              }
-            },
-          ),
-        );
-      },
     );
   }
 
@@ -574,9 +544,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ],
                   ),
                 ),
-                Icon(
-                  Icons.chevron_right,
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0),
+                iconoir.NavArrowRight(
+                  width: 18,
+                  height: 18,
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0),
                 ),
               ],
             ),

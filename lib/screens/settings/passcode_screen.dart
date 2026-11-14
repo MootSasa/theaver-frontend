@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/privacy_settings_provider.dart';
@@ -35,8 +36,9 @@ class _PasscodeScreenState extends State<PasscodeScreen> {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.translate('security_pin_code'))),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('security_pin_code'),
+      padBodyTop: true,
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(

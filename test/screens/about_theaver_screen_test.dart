@@ -5,11 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/config/app_config.dart';
 import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/screens/settings/about_theaver_screen.dart';
+import 'package:theaver/services/glass_toast_service.dart';
 import 'package:theaver/services/update_service.dart';
+import 'package:theaver/widgets/settings/settings_floating_header.dart';
 
 class _TestAppLocalizations extends AppLocalizations {
   final Map<String, String> _strings;
@@ -79,13 +82,23 @@ void main() {
     setUp(() {
       SharedPreferences.setMockInitialValues({});
       AppUpdateService.instance.resetForTesting();
+      GlassToastService().hide();
+    });
+
+    tearDown(() {
+      GlassToastService().hide();
     });
 
     testWidgets(
-      'renders sections, commit badge, and unlocks Debug // W.I.P after 5 taps',
+      'renders floating pill header, Iconoir icons, sections, and unlocks Debug // W.I.P after 5 taps',
       (tester) async {
         await tester.pumpWidget(buildTestableScreen());
         await tester.pumpAndSettle();
+
+        expect(find.byType(SettingsFloatingHeader), findsOneWidget);
+        expect(find.byType(SettingsFloatingCircleButton), findsOneWidget);
+        expect(find.byType(iconoir.NavArrowLeft), findsOneWidget);
+        expect(find.byType(Icon), findsNothing);
 
         final versionHeaderText =
             'Theaver ${AppConfig.currentVersion} (${AppConfig.currentBuildNumber})';
@@ -114,12 +127,41 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Debug // W.I.P'), findsOneWidget);
+        expect(find.byType(Icon), findsNothing);
+
+        GlassToastService().hide();
+        await tester.pump();
 
         final prefs = await SharedPreferences.getInstance();
         expect(
           prefs.getBool(AboutTheaverScreen.debugMenuUnlockedKey),
           isTrue,
         );
+      },
+    );
+
+    testWidgets(
+      'opens Update Settings attached sheet and selects update channel without Material Icons',
+      (tester) async {
+        await tester.pumpWidget(buildTestableScreen());
+        await tester.pumpAndSettle();
+
+        final settingsTooltip = ruStrings['about_update_settings']!;
+        await tester.tap(find.byTooltip(settingsTooltip));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(SettingsAttachedSheet), findsOneWidget);
+        expect(find.text(settingsTooltip), findsOneWidget);
+        expect(find.text('Stable'), findsOneWidget);
+        expect(find.text('Beta'), findsOneWidget);
+        expect(find.text('Alpha'), findsOneWidget);
+        expect(find.byType(Icon), findsNothing);
+
+        await tester.ensureVisible(find.text('Stable'));
+        await tester.tap(find.text('Stable'));
+        await tester.pumpAndSettle();
+
+        expect(await AppUpdateService.instance.getChannel(), equals('stable'));
       },
     );
   });

@@ -4,10 +4,9 @@ import '../../services/notification_service.dart';
 import '../../services/push_service_detector.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/notification_settings_launcher.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/notifications/huawei_autostart_prompt.dart';
@@ -170,11 +169,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        final content = Consumer<NotificationSettingsProvider>(
+    return SettingsFloatingScaffold(
+      title: l10n.translate('notifications_title'),
+      body: Consumer<NotificationSettingsProvider>(
           builder: (context, provider, _) {
             final s = provider.globalSettings;
             final exceptions = provider.exceptions;
@@ -185,7 +182,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
             return ListView(
               physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: EdgeInsets.only(
+                top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+                bottom: 24,
+              ),
               children: [
                 // === Главный переключатель и статус доставки ===
                 SettingsGroup(
@@ -535,43 +535,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ],
             );
           },
-        );
-
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: content,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(l10n.translate('notifications_title')),
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(l10n.translate('notifications_title')),
-            centerTitle: true,
-          ),
-          body: content,
-        );
-      },
-    );
+        ),
+      );
   }
 }
 

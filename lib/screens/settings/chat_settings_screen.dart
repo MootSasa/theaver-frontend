@@ -15,7 +15,7 @@ import '../../services/wallpaper_provider.dart';
 import '../../services/emoji_haptic_service.dart';
 import '../../services/settings_service.dart';
 import '../../theme/theme_provider.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
@@ -208,26 +208,23 @@ class ChatSettingsScreen extends StatelessWidget {
     final activePrimary = activeTheme.palette.primary;
     final allThemes = TheavThemeService().getAllThemes();
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        final appBarActions = [
-          IconButton(
-            icon: const iconoir.Download(width: 22, height: 22),
+    final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
+        final headerActions = [
+          SettingsHeaderAction(
+            icon: iconoir.Download(width: 21, height: 21, color: headerFg),
             tooltip: l10n.translate('theme_import'),
-            onPressed: () => _importTheme(context),
+            onTap: () => _importTheme(context),
           ),
-          IconButton(
-            icon: const iconoir.ShareAndroid(width: 22, height: 22),
+          SettingsHeaderAction(
+            icon: iconoir.ShareAndroid(width: 20, height: 20, color: headerFg),
             tooltip: l10n.translate('theme_export'),
-            onPressed: () => _exportActiveTheme(context),
+            onTap: () => _exportActiveTheme(context),
           ),
         ];
 
         final listView = ListView(
           padding: EdgeInsets.only(
-            top: glassEnabled ? 12 : 0,
+            top: SettingsFloatingHeader.topClearanceOf(context) + 4,
             bottom: 30,
           ),
           children: [
@@ -715,42 +712,11 @@ class ChatSettingsScreen extends StatelessWidget {
           ],
         );
 
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: listView,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(l10n.translate('settings_chat_settings')),
-                    actions: appBarActions,
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(l10n.translate('settings_chat_settings')),
-            actions: appBarActions,
-          ),
+        return SettingsFloatingScaffold(
+          title: l10n.translate('settings_chat_settings'),
+          actions: headerActions,
           body: listView,
         );
-      },
-    );
   }
 
   String _themeModeLabel(ThemeMode mode, AppLocalizations l10n) {

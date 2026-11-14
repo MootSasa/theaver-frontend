@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/privacy_settings_provider.dart';
@@ -11,8 +12,8 @@ class BlockedUsersScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.translate('security_blocked_users'))),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('security_blocked_users'),
       body: Consumer<PrivacySettingsProvider>(
         builder: (context, provider, _) {
           final blocked = provider.blockedUsers;

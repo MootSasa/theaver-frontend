@@ -3,10 +3,9 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/notification_service.dart';
 import '../../services/notification_settings_provider.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 
@@ -75,46 +74,9 @@ class _ChatNotificationSettingsScreenState
     final l10n = context.l10n;
     final theme = Theme.of(context);
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        if (glassEnabled) {
-          final topPadding =
-              MediaQuery.of(context).padding.top + kToolbarHeight;
-
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: _buildSettingsList(context, l10n, theme),
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(widget.chatName),
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(widget.chatName),
-            centerTitle: true,
-          ),
-          body: _buildSettingsList(context, l10n, theme),
-        );
-      },
+    return SettingsFloatingScaffold(
+      title: widget.chatName,
+      body: _buildSettingsList(context, l10n, theme),
     );
   }
 
@@ -133,7 +95,10 @@ class _ChatNotificationSettingsScreenState
 
         return ListView(
           physics: const ClampingScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 80),
+          padding: EdgeInsets.only(
+            top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+            bottom: 80,
+          ),
           children: [
             // === Без звука (Mute) ===
             _buildSectionHeader(l10n.translate('chat_notif_mute_section')),

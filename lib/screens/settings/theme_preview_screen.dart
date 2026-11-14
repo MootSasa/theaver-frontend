@@ -18,6 +18,7 @@ import '../../widgets/chat/classic_bottom_bar.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/message/message_bubble.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
 
 /// Fullscreen Theme Preview Screen showing two interactive preview tabs:
@@ -139,10 +140,8 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
     final l10n = context.l10n;
 
     if (_isLoading) {
-      return Scaffold(
-        appBar: AppBar(
-          title: Text(l10n.translate('theme_preview_title')),
-        ),
+      return SettingsFloatingScaffold(
+        title: l10n.translate('theme_preview_title'),
         body: const Center(
           child: CircularProgressIndicator(),
         ),
@@ -150,10 +149,8 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
     }
 
     if (_errorMessage != null || _theme == null) {
-      return Scaffold(
-        appBar: AppBar(
-          title: Text(l10n.translate('theme_preview_title')),
-        ),
+      return SettingsFloatingScaffold(
+        title: l10n.translate('theme_preview_title'),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,

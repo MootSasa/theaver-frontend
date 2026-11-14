@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
 
@@ -234,46 +236,34 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       contentPadding: EdgeInsets.zero,
     );
 
-    return Scaffold(
+    return SettingsFloatingScaffold(
+      title: l10n.translate('edit_profile_title'),
       backgroundColor: backgroundColor,
-      appBar: AppBar(
-        backgroundColor: backgroundColor,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new_rounded, color: primaryTextColor, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          l10n.translate('edit_profile_title'),
-          style: TextStyle(
-            color: primaryTextColor,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        centerTitle: true,
-        actions: [
-          _isSaving
-              ? const Padding(
-                  padding: EdgeInsets.all(14.0),
-                  child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: brandColor,
-                    ),
+      actions: [
+        SettingsHeaderAction(
+          icon: _isSaving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: brandColor,
                   ),
                 )
-              : IconButton(
-                  icon: const Icon(Icons.check_rounded, color: brandColor, size: 26),
-                  onPressed: _saveProfile,
-                  tooltip: l10n.translate('edit_profile_save'),
+              : const iconoir.Check(
+                  color: brandColor,
+                  width: 22,
+                  height: 22,
                 ),
-        ],
-      ),
+          onTap: _isSaving ? () {} : _saveProfile,
+          tooltip: l10n.translate('edit_profile_save'),
+        ),
+      ],
       body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: EdgeInsets.only(
+          top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+          bottom: 24,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

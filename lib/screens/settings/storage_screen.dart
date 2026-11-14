@@ -1,6 +1,7 @@
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -12,7 +13,6 @@ import '../../services/cache_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
 
@@ -358,58 +358,28 @@ class _StorageScreenState extends State<StorageScreen> {
         final glassEnabled = glassProvider.enabled;
         final isLite = glassProvider.isLite;
 
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: _isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : ListView(
-                          physics: const ClampingScrollPhysics(),
-                          padding: EdgeInsets.only(top: topPadding + 10, bottom: 40),
-                          children: _buildSections(context, l10n, glassEnabled: true, isLite: isLite),
-                        ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(l10n.translate('storage_title')),
-                    centerTitle: true,
-                    isLite: isLite,
-                  ),
-                ),
-                if (_isClearing)
-                  Container(
-                    color: Colors.black45,
-                    child: const Center(child: CircularProgressIndicator()),
-                  ),
-              ],
-            ),
-          );
-        }
-
-        // Standard Material 3 Design
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(l10n.translate('storage_title')),
-            centerTitle: true,
-          ),
+        return SettingsFloatingScaffold(
+          title: l10n.translate('storage_title'),
           body: _isLoading
               ? const Center(child: CircularProgressIndicator())
               : Stack(
                   children: [
                     ListView(
                       physics: const ClampingScrollPhysics(),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      children: _buildSections(context, l10n, glassEnabled: false, isLite: false),
+                      padding: EdgeInsets.only(
+                        top: SettingsFloatingHeader.topClearanceOf(context) + 10,
+                        bottom: 40,
+                      ),
+                      children: _buildSections(
+                        context,
+                        l10n,
+                        glassEnabled: glassEnabled,
+                        isLite: isLite,
+                      ),
                     ),
                     if (_isClearing)
                       Container(
-                        color: Colors.black26,
+                        color: glassEnabled ? Colors.black45 : Colors.black26,
                         child: const Center(child: CircularProgressIndicator()),
                       ),
                   ],

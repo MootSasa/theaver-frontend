@@ -5,10 +5,9 @@ import 'package:ios_color_picker/show_ios_color_picker.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../theme/theme_provider.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/user/avatar_with_status.dart';
 
 /// Screen allowing granular customization of every single color in [TheavPalette],
@@ -78,17 +77,16 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        final bodyList = ListView(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: glassEnabled ? 12 : 8,
-            bottom: 40,
-          ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('theme_advanced_settings'),
+      backgroundColor: _theme.palette.background,
+      body: ListView(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: SettingsFloatingHeader.topClearanceOf(context) + 12,
+          bottom: 40,
+        ),
           children: [
             // Section 1: Interface & App Bar
             _buildSectionCard(
@@ -435,61 +433,8 @@ class _AdvancedThemeColorsScreenState extends State<AdvancedThemeColorsScreen> {
               ],
             ),
           ],
-        );
-
-        if (glassEnabled) {
-          return Scaffold(
-            backgroundColor: _theme.palette.background,
-            body: Stack(
-              children: [
-                Padding(
-                  padding: EdgeInsets.only(
-                    top: MediaQuery.of(context).padding.top + kToolbarHeight,
-                  ),
-                  child: bodyList,
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(l10n.translate('theme_advanced_settings')),
-                    leading: IconButton(
-                      icon: const iconoir.ArrowLeft(width: 22, height: 22),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          backgroundColor: _theme.palette.background,
-          appBar: AppBar(
-            backgroundColor: _theme.palette.appBarBackground,
-            foregroundColor: _theme.palette.appBarForeground,
-            elevation: 0,
-            leading: IconButton(
-              icon: iconoir.ArrowLeft(width: 22, height: 22, color: _theme.palette.appBarForeground),
-              onPressed: () => Navigator.pop(context),
-            ),
-            title: Text(
-              l10n.translate('theme_advanced_settings'),
-              style: TextStyle(
-                color: _theme.palette.appBarForeground,
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-              ),
-            ),
-          ),
-          body: bodyList,
-        );
-      },
-    );
+        ),
+      );
   }
 
   Widget _buildSectionCard({

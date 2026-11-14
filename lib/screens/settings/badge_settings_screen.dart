@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/notification_settings_provider.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
@@ -15,17 +14,18 @@ class BadgeSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     const title = 'Значок на иконке';
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
+    return SettingsFloatingScaffold(
+      title: title,
+      body: Consumer<NotificationSettingsProvider>(
+        builder: (context, provider, _) {
+          final s = provider.globalSettings;
 
-        final body = Consumer<NotificationSettingsProvider>(
-          builder: (context, provider, _) {
-            final s = provider.globalSettings;
-
-            return ListView(
-              physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 8),
+          return ListView(
+            physics: const ClampingScrollPhysics(),
+            padding: EdgeInsets.only(
+              top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+              bottom: 24,
+            ),
               children: [
                 SettingsGroup(
                   title: 'Значок приложения',
@@ -93,42 +93,7 @@ class BadgeSettingsScreen extends StatelessWidget {
               ],
             );
           },
-        );
-
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: body,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: const Text(title),
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text(title),
-            centerTitle: true,
-          ),
-          body: body,
-        );
-      },
-    );
+        ),
+      );
   }
 }

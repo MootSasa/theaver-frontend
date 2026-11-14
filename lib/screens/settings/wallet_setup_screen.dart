@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/wallet_security_provider.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 
 class WalletSetupScreen extends StatefulWidget {
   const WalletSetupScreen({super.key});
@@ -32,31 +33,28 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
       return _buildTypeSelection();
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_isConfirming ? 'Confirm Password' : 'Set Password'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            if (_isConfirming) {
-              setState(() {
-                _isConfirming = false;
-                _numericConfirm = '';
-                _confirmController.clear();
-              });
-            } else {
-              setState(() => _selectedType = null);
-            }
-          },
-        ),
-      ),
+    return SettingsFloatingScaffold(
+      title: _isConfirming ? 'Confirm Password' : 'Set Password',
+      padBodyTop: true,
+      onBack: () {
+        if (_isConfirming) {
+          setState(() {
+            _isConfirming = false;
+            _numericConfirm = '';
+            _confirmController.clear();
+          });
+        } else {
+          setState(() => _selectedType = null);
+        }
+      },
       body: _buildPasswordInput(),
     );
   }
 
   Widget _buildTypeSelection() {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Wallet Security')),
+    return SettingsFloatingScaffold(
+      title: 'Wallet Security',
+      padBodyTop: true,
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(

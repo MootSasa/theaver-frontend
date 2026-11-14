@@ -20,6 +20,7 @@ import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../config/app_config.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../utils/swipe_back_route.dart';
 import '../auth/login_screen.dart';
@@ -525,18 +526,17 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
+    final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('devices_title')),
-        actions: [
-          IconButton(
-            icon: Refresh(width: 22, height: 22, color: theme.colorScheme.onSurface),
-            onPressed: _loadData,
-            tooltip: l10n.translate('devices_refresh'),
-          ),
-        ],
-      ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('devices_title'),
+      actions: [
+        SettingsHeaderAction(
+          icon: Refresh(width: 22, height: 22, color: headerFg),
+          onTap: _loadData,
+          tooltip: l10n.translate('devices_refresh'),
+        ),
+      ],
       body: _buildBody(theme, l10n),
     );
   }
@@ -566,7 +566,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final otherSessions = _sessions.where((s) => !s.isCurrent).toList();
 
     return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      padding: EdgeInsets.only(
+        top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+        bottom: 24,
+      ),
       children: [
         // Current Device Group
         if (currentSession != null) ...[

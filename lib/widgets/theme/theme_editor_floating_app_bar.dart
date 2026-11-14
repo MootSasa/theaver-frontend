@@ -1,30 +1,17 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
-import '../../models/theav_theme.dart';
-import '../../services/liquid_glass_provider.dart';
-import '../../utils/haptic_utils.dart';
+import '../settings/settings_floating_header.dart';
 
-const double _kAppBarHeight = 44.0;
-const double _kAppBarBorderRadius = 22.0;
-const double _kAppBarHorizontalPadding = 8.0;
-const double _kAppBarVerticalPadding = 8.0;
-const double _kPillSpacing = 8.0;
-const double _kBackPillWidth = 44.0;
-const double _kRightPillWidth = 88.0;
-
-/// Total height of the floating app bar including vertical padding
-const double kThemeEditorAppBarTotalHeight = _kAppBarHeight + (_kAppBarVerticalPadding * 2);
+/// Total height of the floating app bar including vertical spacing.
+const double kThemeEditorAppBarTotalHeight =
+    SettingsFloatingHeader.topClearanceOffset;
 
 /// Floating AppBar for the Theme Editor featuring 3 distinct pills:
-/// 1. Left pill: Back button (44x44 circular pill)
-/// 2. Center capsule: "Редактировать" / Title
-/// 3. Right capsule: Two buttons - Share & Apply (Checkmark)
-///
-/// Supports both Liquid Glass and Matte modes.
-class ThemeEditorFloatingAppBar extends StatelessWidget implements PreferredSizeWidget {
+/// 1. Left pill: Back button (`44x44` circular pill)
+/// 2. Center capsule: tightly hugging title oval
+/// 3. Right capsule: Share & Apply actions
+class ThemeEditorFloatingAppBar extends StatelessWidget
+    implements PreferredSizeWidget {
   final String title;
   final VoidCallback onBack;
   final VoidCallback onShare;
@@ -32,231 +19,53 @@ class ThemeEditorFloatingAppBar extends StatelessWidget implements PreferredSize
   final bool isSaving;
 
   const ThemeEditorFloatingAppBar({
-    Key? key,
+    super.key,
     required this.title,
     required this.onBack,
     required this.onShare,
     required this.onApply,
     this.isSaving = false,
-  }) : super(key: key);
+  });
 
   @override
-  Size get preferredSize => const Size.fromHeight(kThemeEditorAppBarTotalHeight);
+  Size get preferredSize =>
+      const Size.fromHeight(kThemeEditorAppBarTotalHeight);
 
   @override
   Widget build(BuildContext context) {
-    final glassProvider = Provider.of<LiquidGlassProvider>(context);
-    final isGlassEnabled = glassProvider.enabled;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final foregroundColor = themeExt?.palette.appBarForeground ??
-        (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final foregroundColor = SettingsFloatingHeader.foregroundColorOf(context);
 
-    final morphStyle = glassProvider.createStyle(
-      context: context,
-      cornerRadius: _kAppBarBorderRadius,
-      refractionIndex: 1.1,
-      refractionWidth: 24,
-    );
-
-    return SafeArea(
-      bottom: false,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: _kAppBarHorizontalPadding,
-          vertical: _kAppBarVerticalPadding,
-        ),
-        child: SizedBox(
-          height: _kAppBarHeight,
-          child: Row(
-            children: [
-              // 1. Left Pill: Circular Back Button (44x44)
-              SizedBox(
-                width: _kBackPillWidth,
-                height: _kAppBarHeight,
-                child: _buildPill(
-                  context: context,
-                  isGlassEnabled: isGlassEnabled,
-                  morphStyle: morphStyle,
-                  isDark: isDark,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
-                      onTap: () {
-                        HapticUtils.tap();
-                        onBack();
-                      },
-                      child: Center(
-                        child: iconoir.NavArrowLeft(
-                          width: 22.0,
-                          height: 22.0,
-                          color: foregroundColor,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: _kPillSpacing),
-
-              // 2. Center Pill: Title Capsule
-              Expanded(
-                child: SizedBox(
-                  height: _kAppBarHeight,
-                  child: _buildPill(
-                    context: context,
-                    isGlassEnabled: isGlassEnabled,
-                    morphStyle: morphStyle,
-                    isDark: isDark,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14.0),
-                      child: Center(
-                        child: Text(
-                          title,
-                          style: TextStyle(
-                            fontSize: 16.0,
-                            fontWeight: FontWeight.w600,
-                            color: foregroundColor,
-                            fontFamily: theme.textTheme.bodyMedium?.fontFamily,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: _kPillSpacing),
-
-              // 3. Right Pill: Share & Apply Actions
-              SizedBox(
-                width: _kRightPillWidth,
-                height: _kAppBarHeight,
-                child: _buildPill(
-                  context: context,
-                  isGlassEnabled: isGlassEnabled,
-                  morphStyle: morphStyle,
-                  isDark: isDark,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      // Share Button
-                      Expanded(
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: const BorderRadius.horizontal(
-                              left: Radius.circular(_kAppBarBorderRadius),
-                            ),
-                            onTap: () {
-                              HapticUtils.tap();
-                              onShare();
-                            },
-                            child: Center(
-                              child: iconoir.ShareAndroid(
-                                width: 20.0,
-                                height: 20.0,
-                                color: foregroundColor,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // Subtle divider
-                      Container(
-                        width: 0.5,
-                        height: 20.0,
-                        color: foregroundColor.withValues(alpha: 0.15),
-                      ),
-
-                      // Apply (Checkmark) Button
-                      Expanded(
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: const BorderRadius.horizontal(
-                              right: Radius.circular(_kAppBarBorderRadius),
-                            ),
-                            onTap: isSaving
-                                ? null
-                                : () {
-                                    HapticUtils.tap();
-                                    onApply();
-                                  },
-                            child: Center(
-                              child: isSaving
-                                  ? SizedBox(
-                                      width: 18.0,
-                                      height: 18.0,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2.0,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          foregroundColor,
-                                        ),
-                                      ),
-                                    )
-                                  : iconoir.Check(
-                                      width: 22.0,
-                                      height: 22.0,
-                                      color: foregroundColor,
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+    return SettingsFloatingHeader(
+      title: title,
+      onBack: onBack,
+      actions: [
+        SettingsHeaderAction(
+          onTap: onShare,
+          icon: iconoir.ShareAndroid(
+            width: 20.0,
+            height: 20.0,
+            color: foregroundColor,
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildPill({
-    required BuildContext context,
-    required bool isGlassEnabled,
-    required LiquidGlassStyle morphStyle,
-    required bool isDark,
-    required Widget child,
-  }) {
-    if (isGlassEnabled) {
-      return LiquidGlassLens(
-        style: morphStyle,
-        child: child,
-      );
-    }
-
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final defaultBg = isDark
-        ? Colors.black.withValues(alpha: 0.65)
-        : Colors.white.withValues(alpha: 0.65);
-    final pillBg = themeExt?.palette.appBarBackground ?? defaultBg;
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Container(
-          decoration: BoxDecoration(
-            color: pillBg,
-            borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
-            border: Border.all(
-              color: isDark ? Colors.white10 : Colors.black12,
-              width: 0.5,
-            ),
-          ),
-          child: child,
+        SettingsHeaderAction(
+          enabled: !isSaving,
+          onTap: isSaving ? null : onApply,
+          child: isSaving
+              ? SizedBox(
+                  width: 18.0,
+                  height: 18.0,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.0,
+                    valueColor: AlwaysStoppedAnimation<Color>(foregroundColor),
+                  ),
+                )
+              : iconoir.Check(
+                  width: 22.0,
+                  height: 22.0,
+                  color: foregroundColor,
+                ),
         ),
-      ),
+      ],
     );
   }
 }

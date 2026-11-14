@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
+import '../../theme/theav_theme.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import 'privacy_detail_screen.dart';
@@ -15,8 +18,8 @@ class PrivacyScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.translate('privacy_title'))),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('privacy_title'),
       body: Consumer<PrivacySettingsProvider>(
         builder: (context, provider, _) {
           if (provider.isLoading) {
@@ -24,7 +27,10 @@ class PrivacyScreen extends StatelessWidget {
           }
           final p = provider.privacy;
           return ListView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: EdgeInsets.only(
+              top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+              bottom: 24,
+            ),
             children: [
               // Секция «Кто видит»
               SettingsGroup(
@@ -87,7 +93,11 @@ class PrivacyScreen extends StatelessWidget {
                 title: l10n.translate('security_title'),
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.security),
+                    leading: iconoir.ShieldCheck(
+                      width: 22,
+                      height: 22,
+                      color: TheavTheme.of(context).accent,
+                    ),
                     title: Text(l10n.translate('security_title')),
                     onTap: () => Navigator.push(
                         context,

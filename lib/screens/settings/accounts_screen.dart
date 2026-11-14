@@ -11,6 +11,7 @@ import '../../services/websocket_service.dart';
 import '../../services/database/app_database.dart';
 import '../auth/login_screen.dart';
 import '../../widgets/tiling/tiling_workspace_scaffold.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../utils/swipe_back_route.dart';
 
 enum _TokenStatus { valid, offline, expired }
@@ -231,10 +232,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final l10n = context.l10n;
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('accounts_title')),
-      ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('accounts_title'),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _buildBody(theme, l10n),

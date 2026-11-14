@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/banking_cards_provider.dart';
@@ -45,8 +47,8 @@ class _WalletsScreenState extends State<WalletsScreen> {
     final security = context.watch<WalletSecurityProvider>();
     
     if (!security.isUnlocked) {
-      return Scaffold(
-        appBar: AppBar(title: Text(l10n.translate('settings_wallets_cards'))),
+      return SettingsFloatingScaffold(
+        title: l10n.translate('settings_wallets_cards'),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -65,18 +67,16 @@ class _WalletsScreenState extends State<WalletsScreen> {
       );
     }
     
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('settings_wallets_cards')),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.lock_outline),
-            onPressed: () => security.lock(),
-            tooltip: 'Lock Wallet',
-          ),
-        ],
-      ),
+    final headerFg = Theme.of(context).colorScheme.onSurface;
+    return SettingsFloatingScaffold(
+      title: l10n.translate('settings_wallets_cards'),
+      actions: [
+        SettingsHeaderAction(
+          icon: iconoir.Lock(width: 21, height: 21, color: headerFg),
+          onTap: () => security.lock(),
+          tooltip: 'Lock Wallet',
+        ),
+      ],
       body: Consumer<BankingCardsProvider>(
         builder: (context, provider, child) {
           if (provider.isLoading) {
@@ -100,7 +100,12 @@ class _WalletsScreenState extends State<WalletsScreen> {
           }
 
           return ListView.builder(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              SettingsFloatingHeader.topClearanceOf(context) + 12,
+              16,
+              88,
+            ),
             itemCount: provider.cards.length,
             itemBuilder: (context, index) {
               final card = provider.cards[index];

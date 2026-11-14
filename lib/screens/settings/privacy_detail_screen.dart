@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/privacy_settings_provider.dart';
@@ -58,8 +59,8 @@ class _PrivacyDetailScreenState extends State<PrivacyDetailScreen> {
     final l10n = context.l10n;
     final currentValue = _currentValue();
 
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+    return SettingsFloatingScaffold(
+      title: widget.title,
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(children: [

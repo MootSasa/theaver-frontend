@@ -1,29 +1,32 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/deep_link_service.dart';
-import '../../services/liquid_glass_provider.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/update_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/common/adaptive_switch.dart';
-import '../../widgets/settings/settings_group.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'service_menu_screen.dart';
 import 'widgets/update_dialog.dart';
 
+/// "About Theaver" settings screen modeled after clean grouped translucent cards
+/// with Iconoir outline icons, floating pill header, update channel controls,
+/// and 5-tap hidden debug menu activation.
 class AboutTheaverScreen extends StatefulWidget {
-  const AboutTheaverScreen({super.key});
-
   static const String debugMenuUnlockedKey = 'debug_menu_unlocked';
+
+  const AboutTheaverScreen({super.key});
 
   @override
   State<AboutTheaverScreen> createState() => _AboutTheaverScreenState();
@@ -31,122 +34,103 @@ class AboutTheaverScreen extends StatefulWidget {
 
 class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
   bool _debugUnlocked = false;
-  bool _autoCheck = true;
-  String _updateChannel = 'stable';
+  bool _autoCheckEnabled = true;
+  String _selectedChannel = 'beta';
   bool _isChecking = false;
 
-  int _versionTapCount = 0;
+  int _tapCount = 0;
   DateTime? _lastTapTime;
 
   @override
   void initState() {
     super.initState();
     unawaited(AppUpdateService.instance.init());
-    _loadPreferences();
+    unawaited(_loadPrefs());
   }
 
-  Future<void> _loadPreferences() async {
+  Future<void> _loadPrefs() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final unlocked =
           prefs.getBool(AboutTheaverScreen.debugMenuUnlockedKey) ?? false;
       final autoCheck = await AppUpdateService.instance.isAutoCheckEnabled();
       final channel = await AppUpdateService.instance.getChannel();
-      if (kIsWeb) {
-        await AppConfig.syncWebVersionFromServer(channel: channel);
-      }
+      final effectiveChannel =
+          kIsWeb ? (AppConfig.webDomainChannel ?? channel) : channel;
       if (!mounted) return;
       setState(() {
         _debugUnlocked = unlocked;
-        _autoCheck = autoCheck;
-        _updateChannel = channel;
+        _autoCheckEnabled = autoCheck;
+        _selectedChannel = effectiveChannel;
       });
     } catch (e) {
       debugPrint('[AboutTheaverScreen] Failed to load prefs: $e');
     }
   }
 
-  Future<void> _onVersionHeaderTap() async {
+  Future<void> _handleInfoTap() async {
+    HapticUtils.tap();
     final now = DateTime.now();
-    if (_lastTapTime != null &&
+    if (_lastTapTime == null ||
         now.difference(_lastTapTime!) > const Duration(seconds: 2)) {
-      _versionTapCount = 0;
+      _tapCount = 0;
     }
     _lastTapTime = now;
-    _versionTapCount++;
-    HapticUtils.tap();
+    _tapCount++;
 
-    if (_versionTapCount < 5) return;
-    _versionTapCount = 0;
+    if (_tapCount < 5) return;
+    _tapCount = 0;
 
-    final l10n = context.l10n;
     if (!_debugUnlocked) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(AboutTheaverScreen.debugMenuUnlockedKey, true);
+      final l10n = context.l10n;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(AboutTheaverScreen.debugMenuUnlockedKey, true);
+      } catch (e) {
+        debugPrint('[AboutTheaverScreen] Failed to persist debug unlock: $e');
+      }
       if (!mounted) return;
       setState(() => _debugUnlocked = true);
+      GlassToastService().show(
+        context,
+        l10n.translate('about_debug_unlocked'),
+      );
+    } else {
+      await _openServiceMenu();
     }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(l10n.translate('about_debug_unlocked')),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
-  Future<void> _hideDebugMenu() async {
+  Future<void> _openServiceMenu() async {
     HapticUtils.tap();
-    final l10n = context.l10n;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(AboutTheaverScreen.debugMenuUnlockedKey, false);
-    if (!mounted) return;
-    setState(() => _debugUnlocked = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(l10n.translate('about_debug_hidden')),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
+    await Navigator.of(context).push(
+      SwipeBackPageRoute(
+        builder: (_) => const ServiceMenuScreen(),
       ),
     );
+    await _loadPrefs();
   }
 
-  Future<void> _handleManualUpdateCheck() async {
+  Future<void> _checkForUpdates() async {
     if (_isChecking) return;
     HapticUtils.tap();
     final l10n = context.l10n;
     setState(() => _isChecking = true);
-
     try {
-      if (kIsWeb) {
-        await AppConfig.syncWebVersionFromServer(channel: _updateChannel);
-      }
-      final info =
-          await AppUpdateService.instance.checkForUpdate(silent: false);
+      final info = await AppUpdateService.instance.checkForUpdate(silent: false);
       if (!mounted) return;
-
       if (info.hasUpdate) {
         await UpdateDialog.show(context, info, isManual: true);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(l10n.translate('update_up_to_date')),
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
+        GlassToastService().show(
+          context,
+          l10n.translate('update_up_to_date'),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            l10n.translate('update_check_error', {'error': e.toString()}),
-          ),
-          duration: const Duration(seconds: 3),
-          behavior: SnackBarBehavior.floating,
-        ),
+      GlassToastService().show(
+        context,
+        l10n.translate('update_check_error', {'error': e.toString()}),
       );
     } finally {
       if (mounted) {
@@ -159,276 +143,324 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
     HapticUtils.tap();
     final uri = Uri.tryParse(rawUrl.trim());
     if (uri == null) return;
-
     if (DeepLinkService.parseUri(uri) != null) {
       await DeepLinkService().handleLink(uri);
       return;
     }
-
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    await _openExternalUri(uri);
   }
 
-  Future<void> _openSourceCode() async {
+  Future<void> _openExternalUri(Uri uri) async {
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      debugPrint('[AboutTheaverScreen] Failed to open $uri: $e');
+    }
+  }
+
+  Future<void> _openSourceCommit() async {
+    HapticUtils.tap();
     final commit = AppConfig.gitCommit.trim();
     final url = commit.isNotEmpty
         ? '${AppConfig.sourceCodeUrl}/commit/$commit'
         : AppConfig.sourceCodeUrl;
-    await _openLink(url);
+    final uri = Uri.tryParse(url);
+    if (uri != null) {
+      await _openExternalUri(uri);
+    }
   }
 
-  void _showPrivacyPolicySheet() {
+  void _showPrivacySheet() {
     HapticUtils.tap();
-    final theav = TheavTheme.of(context);
     final l10n = context.l10n;
-    final theme = Theme.of(context);
 
     showModalBottomSheet<void>(
       context: context,
-      useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetCtx) => Align(
-        alignment: Alignment.bottomCenter,
-        heightFactor: 1.0,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500),
-          child: Material(
-            color: theav.secondaryBg,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(24)),
-            clipBehavior: Clip.antiAlias,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+      useSafeArea: false,
+      builder: (sheetCtx) {
+        final theav = TheavTheme.of(sheetCtx);
+        final accent = theav.accent;
+        final textPrimary = theav.textPrimary;
+        final textSecondary = theav.textSecondary;
+        final hairline = theav.dividerColor;
+
+        return SettingsAttachedSheet(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
                 children: [
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        color: theav.dividerColor.withValues(alpha: 0.45),
-                        borderRadius: BorderRadius.circular(2),
+                  iconoir.ShieldCheck(
+                    width: 24,
+                    height: 24,
+                    color: accent,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      l10n.translate('about_privacy_policy'),
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
+                        color: textPrimary,
                       ),
                     ),
                   ),
-                  Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: theav.accent.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          Icons.verified_user_outlined,
-                          color: theav.accent,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          l10n.translate('about_privacy_policy'),
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: theav.textPrimary,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    l10n.translate('about_privacy_summary'),
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theav.textSecondary,
-                      height: 1.45,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  FilledButton.icon(
-                    onPressed: () {
-                      Navigator.of(sheetCtx).pop();
-                      _openLink(AppConfig.privacyPolicyUrl);
-                    },
-                    icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                    label: Text(l10n.translate('about_open_in_browser')),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: theav.accent,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
+                  _SheetCloseButton(
+                    iconColor: textSecondary,
+                    borderColor: hairline,
+                    onTap: () => Navigator.of(sheetCtx).maybePop(),
                   ),
                 ],
               ),
-            ),
+              const SizedBox(height: 14),
+              Text(
+                l10n.translate('about_privacy_summary'),
+                style: TextStyle(
+                  fontSize: 14.5,
+                  height: 1.48,
+                  color: textPrimary.withValues(alpha: 0.88),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Material(
+                color: accent,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () async {
+                    HapticUtils.tap();
+                    Navigator.of(sheetCtx).maybePop();
+                    final uri = Uri.tryParse(AppConfig.privacyPolicyUrl);
+                    if (uri != null) {
+                      await _openExternalUri(uri);
+                    }
+                  },
+                  child: SizedBox(
+                    height: 48,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const iconoir.OpenNewWindow(
+                          width: 18,
+                          height: 18,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          l10n.translate('about_open_in_browser'),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
   void _showUpdateSettingsSheet() {
     HapticUtils.tap();
-    final hasGlassProvider = _maybeGlassProvider(context) != null;
+    final hasGlassProvider = maybeLiquidGlassProvider(context, listen: false) != null;
 
     showModalBottomSheet<void>(
       context: context,
-      useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      useSafeArea: false,
       builder: (sheetCtx) {
-        final theav = TheavTheme.of(sheetCtx);
         final l10n = sheetCtx.l10n;
-        final theme = Theme.of(sheetCtx);
+        final theav = TheavTheme.of(sheetCtx);
+        final isDark = Theme.of(sheetCtx).brightness == Brightness.dark;
+        final accent = theav.accent;
+        final textPrimary = theav.textPrimary;
+        final textSecondary = theav.textSecondary;
+        final hairline = theav.dividerColor;
+        final cardBg = (isDark ? Colors.white : Colors.black)
+            .withValues(alpha: isDark ? 0.06 : 0.04);
 
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             Future<void> selectChannel(String channel) async {
-              if (channel == _updateChannel) return;
               HapticUtils.tap();
-              await AppUpdateService.instance.setChannel(channel);
               if (kIsWeb && AppConfig.webDomainChannel != null) {
                 final targetUrl = AppConfig.getWebChannelUrl(channel);
-                if (sheetCtx.mounted) Navigator.of(sheetCtx).pop();
-                await launchUrl(
-                  Uri.parse(targetUrl),
-                  webOnlyWindowName: '_self',
-                );
-                return;
+                final uri = Uri.tryParse(targetUrl);
+                if (uri != null) {
+                  Navigator.of(sheetCtx).maybePop();
+                  await _openExternalUri(uri);
+                  return;
+                }
               }
-              if (kIsWeb) {
-                await AppConfig.syncWebVersionFromServer(channel: channel);
-              }
+              await AppUpdateService.instance.setChannel(channel);
               if (mounted) {
-                setState(() => _updateChannel = channel);
+                setState(() => _selectedChannel = channel);
               }
               setSheetState(() {});
             }
 
-            final autoCheckTile = hasGlassProvider
-                ? AdaptiveSwitchListTile(
-                    title: Text(l10n.translate('about_auto_check_updates')),
-                    subtitle: Text(
-                      l10n.translate('about_auto_check_updates_desc'),
-                    ),
-                    value: _autoCheck,
-                    onChanged: (value) async {
-                      HapticUtils.tap();
-                      await AppUpdateService.instance
-                          .setAutoCheckEnabled(value);
-                      if (mounted) {
-                        setState(() => _autoCheck = value);
-                      }
-                      setSheetState(() {});
-                    },
-                  )
-                : SwitchListTile(
-                    title: Text(l10n.translate('about_auto_check_updates')),
-                    subtitle: Text(
-                      l10n.translate('about_auto_check_updates_desc'),
-                    ),
-                    value: _autoCheck,
-                    onChanged: (value) async {
-                      HapticUtils.tap();
-                      await AppUpdateService.instance
-                          .setAutoCheckEnabled(value);
-                      if (mounted) {
-                        setState(() => _autoCheck = value);
-                      }
-                      setSheetState(() {});
-                    },
-                  );
+            Future<void> toggleAutoCheck(bool value) async {
+              HapticUtils.tap();
+              await AppUpdateService.instance.setAutoCheckEnabled(value);
+              if (mounted) {
+                setState(() => _autoCheckEnabled = value);
+              }
+              setSheetState(() {});
+            }
 
-            return Align(
-              alignment: Alignment.bottomCenter,
-              heightFactor: 1.0,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 500),
-                child: Material(
-                  color: theav.secondaryBg,
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(24)),
-                  clipBehavior: Clip.antiAlias,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+            return SettingsAttachedSheet(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
                       children: [
-                        Center(
-                          child: Container(
-                            width: 36,
-                            height: 4,
-                            margin: const EdgeInsets.only(bottom: 12),
-                            decoration: BoxDecoration(
-                              color: theav.dividerColor.withValues(alpha: 0.45),
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
+                        iconoir.ControlSlider(
+                          width: 22,
+                          height: 22,
+                          color: accent,
                         ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                        const SizedBox(width: 12),
+                        Expanded(
                           child: Text(
                             l10n.translate('about_update_settings'),
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: theav.textPrimary,
+                            style: TextStyle(
+                              fontSize: 18,
                               fontWeight: FontWeight.w700,
+                              letterSpacing: -0.3,
+                              color: textPrimary,
                             ),
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        autoCheckTile,
-                        Divider(
-                          color: theav.dividerColor.withValues(alpha: 0.25),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                          child: Text(
-                            l10n.translate('about_update_channel'),
-                            style: theme.textTheme.labelLarge?.copyWith(
-                              color: theav.accent,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        _ChannelOptionTile(
-                          title: kIsWeb
-                              ? 'Stable — theaver.app'
-                              : 'Stable',
-                          subtitle:
-                              l10n.translate('about_channel_stable_desc'),
-                          selected: _updateChannel == 'stable',
-                          accent: theav.accent,
-                          onTap: () => selectChannel('stable'),
-                        ),
-                        _ChannelOptionTile(
-                          title: kIsWeb
-                              ? 'Beta — beta.theaver.app'
-                              : 'Beta',
-                          subtitle: l10n.translate('about_channel_beta_desc'),
-                          selected: _updateChannel == 'beta',
-                          accent: theav.accent,
-                          onTap: () => selectChannel('beta'),
-                        ),
-                        _ChannelOptionTile(
-                          title: kIsWeb
-                              ? 'Alpha — alpha.theaver.app'
-                              : 'Alpha / Dev',
-                          subtitle: l10n.translate('about_channel_alpha_desc'),
-                          selected: _updateChannel == 'alpha',
-                          accent: theav.accent,
-                          onTap: () => selectChannel('alpha'),
+                        _SheetCloseButton(
+                          iconColor: textSecondary,
+                          borderColor: hairline,
+                          onTap: () => Navigator.of(sheetCtx).maybePop(),
                         ),
                       ],
                     ),
-                  ),
+                    const SizedBox(height: 16),
+
+                    // Auto-check toggle card (hidden switch only if fixed; matches previous behavior)
+                    if (!kIsWeb) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: cardBg,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: hairline, width: 0.7),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    l10n.translate('about_auto_check_updates'),
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    l10n.translate(
+                                      'about_auto_check_updates_desc',
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      height: 1.35,
+                                      color: textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            if (hasGlassProvider)
+                              AdaptiveSwitch(
+                                value: _autoCheckEnabled,
+                                onChanged: toggleAutoCheck,
+                              )
+                            else
+                              Switch.adaptive(
+                                value: _autoCheckEnabled,
+                                onChanged: toggleAutoCheck,
+                                activeTrackColor: accent,
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                    ],
+
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4, bottom: 8),
+                      child: Text(
+                        l10n.translate('about_update_channel'),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: accent,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ),
+
+                    _ChannelOptionTile(
+                      title: kIsWeb ? 'Stable (theaver.app)' : 'Stable',
+                      subtitle: l10n.translate('about_channel_stable_desc'),
+                      selected: _selectedChannel == 'stable',
+                      accent: accent,
+                      cardBg: cardBg,
+                      hairline: hairline,
+                      textPrimary: textPrimary,
+                      textSecondary: textSecondary,
+                      onTap: () => selectChannel('stable'),
+                    ),
+                    const SizedBox(height: 8),
+                    _ChannelOptionTile(
+                      title: kIsWeb ? 'Beta (beta.theaver.app)' : 'Beta',
+                      subtitle: l10n.translate('about_channel_beta_desc'),
+                      selected: _selectedChannel == 'beta',
+                      accent: accent,
+                      cardBg: cardBg,
+                      hairline: hairline,
+                      textPrimary: textPrimary,
+                      textSecondary: textSecondary,
+                      onTap: () => selectChannel('beta'),
+                    ),
+                    const SizedBox(height: 8),
+                    _ChannelOptionTile(
+                      title: kIsWeb ? 'Alpha (alpha.theaver.app)' : 'Alpha',
+                      subtitle: l10n.translate('about_channel_alpha_desc'),
+                      selected: _selectedChannel == 'alpha',
+                      accent: accent,
+                      cardBg: cardBg,
+                      hairline: hairline,
+                      textPrimary: textPrimary,
+                      textSecondary: textSecondary,
+                      onTap: () => selectChannel('alpha'),
+                    ),
+                  ],
                 ),
               ),
             );
@@ -454,266 +486,455 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
     });
   }
 
-  LiquidGlassProvider? _maybeGlassProvider(BuildContext context) {
-    try {
-      return Provider.of<LiquidGlassProvider>(context);
-    } catch (_) {
-      return null;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final theme = Theme.of(context);
     final theav = TheavTheme.of(context);
-    final glassProvider = _maybeGlassProvider(context);
-    final glassEnabled = glassProvider?.enabled ?? false;
+    final accent = theav.accent;
+    final textPrimary = theav.textPrimary;
+    final textSecondary = theav.textSecondary;
+    final topClearance = SettingsFloatingHeader.topClearanceOf(context);
+    final bottomPadding =
+        math.max(32.0, MediaQuery.paddingOf(context).bottom + 24.0);
 
-    final listView = ListView(
-      physics: const ClampingScrollPhysics(),
-      padding: EdgeInsets.only(
-        top: glassEnabled
-            ? MediaQuery.of(context).padding.top + kToolbarHeight + 8
-            : 8,
-        bottom: MediaQuery.of(context).padding.bottom + 24,
-      ),
-      children: [
-        // 1. Информация
-        SettingsGroup(
-          title: l10n.translate('about_info_section'),
-          children: [
-            InkWell(
-              onTap: _onVersionHeaderTap,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Theaver ${AppConfig.currentVersion} (${AppConfig.currentBuildNumber})',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        color: theav.textPrimary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      l10n.translate('about_app_description'),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theav.textSecondary,
-                        height: 1.38,
-                      ),
-                    ),
-                  ],
+    final versionTitle =
+        'Theaver ${AppConfig.currentVersion}${AppConfig.currentBuildNumber > 0 ? ' (${AppConfig.currentBuildNumber})' : ''}';
+
+    return SettingsFloatingScaffold(
+      title: l10n.translate('about_title'),
+      body: ListView(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          topClearance + 8,
+          16,
+          bottomPadding,
+        ),
+        children: [
+          // 1. Information + Updates + Debug // W.I.P
+          _AboutCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _AboutSectionHeader(
+                  title: l10n.translate('about_info_section'),
+                  accent: accent,
                 ),
-              ),
-            ),
-            ValueListenableBuilder<AppUpdateDownloadState>(
-              valueListenable: AppUpdateService.instance.stateNotifier,
-              builder: (context, state, _) {
-                final checking =
-                    _isChecking || state.status == AppUpdateStatus.checking;
-                final update = state.availableUpdate;
-                final hasUpdate = state.hasAvailableUpdate && update != null;
-
-                return ListTile(
-                  leading: Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF34C759),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: checking
-                        ? const Padding(
-                            padding: EdgeInsets.all(10),
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(
-                            Icons.sync_rounded,
-                            color: Colors.white,
-                            size: 22,
+                GestureDetector(
+                  onTap: _handleInfoTap,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          versionTitle,
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.3,
+                            color: textPrimary,
                           ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          l10n.translate('about_app_description'),
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            height: 1.4,
+                            color: textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  title: Text(l10n.translate('about_updates_title')),
-                  subtitle: Text(
-                    hasUpdate
+                ),
+                _CardHairline(color: theav.dividerColor),
+                ValueListenableBuilder<AppUpdateDownloadState>(
+                  valueListenable: AppUpdateService.instance.stateNotifier,
+                  builder: (context, state, _) {
+                    final checking =
+                        _isChecking || state.status == AppUpdateStatus.checking;
+                    final update = state.availableUpdate;
+                    final hasUpdate = state.hasAvailableUpdate && update != null;
+                    final subtitleText = hasUpdate
                         ? l10n.translate('about_update_available_sub', {
                             'version': update.latestVersion,
                             'build': update.latestBuild.toString(),
                           })
-                        : _formatLastChecked(l10n, state.lastCheckedAt),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: hasUpdate ? theav.accent : theav.textSecondary,
-                      fontWeight: hasUpdate ? FontWeight.w600 : null,
+                        : _formatLastChecked(l10n, state.lastCheckedAt);
+
+                    return _AboutRow(
+                      leading: checking
+                          ? SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.0,
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(accent),
+                              ),
+                            )
+                          : iconoir.RefreshDouble(
+                              width: 22,
+                              height: 22,
+                              color: accent,
+                            ),
+                      title: l10n.translate('about_updates_title'),
+                      subtitle: subtitleText,
+                      subtitleColor: hasUpdate ? accent : textSecondary,
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (hasUpdate)
+                            Container(
+                              width: 8,
+                              height: 8,
+                              margin: const EdgeInsets.only(right: 6),
+                              decoration: BoxDecoration(
+                                color: accent,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          Tooltip(
+                            message: l10n.translate('about_update_settings'),
+                            child: GestureDetector(
+                              onTap: _showUpdateSettingsSheet,
+                              behavior: HitTestBehavior.opaque,
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: iconoir.ControlSlider(
+                                  width: 20,
+                                  height: 20,
+                                  color: accent,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      onTap: _checkForUpdates,
+                    );
+                  },
+                ),
+                if (_debugUnlocked) ...[
+                  _CardHairline(color: theav.dividerColor),
+                  _AboutRow(
+                    leading: iconoir.Flask(
+                      width: 22,
+                      height: 22,
+                      color: accent,
+                    ),
+                    title: 'Debug // W.I.P',
+                    subtitle: l10n.translate('about_debug_subtitle'),
+                    subtitleColor: textSecondary,
+                    trailing: iconoir.NavArrowRight(
+                      width: 18,
+                      height: 18,
+                      color: textSecondary,
+                    ),
+                    onTap: _openServiceMenu,
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // 2. Channels ("Ссылки")
+          _AboutCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _AboutSectionHeader(
+                  title: l10n.translate('about_links_section'),
+                  accent: accent,
+                ),
+                _AboutRow(
+                  leading: iconoir.Megaphone(
+                    width: 22,
+                    height: 22,
+                    color: accent,
+                  ),
+                  title: l10n.translate('about_news_channel'),
+                  onTap: () => _openLink(AppConfig.newsChannelUrl),
+                ),
+                _CardHairline(color: theav.dividerColor),
+                _AboutRow(
+                  leading: iconoir.Megaphone(
+                    width: 22,
+                    height: 22,
+                    color: accent,
+                  ),
+                  title: l10n.translate('about_beta_channel'),
+                  onTap: () => _openLink(AppConfig.betaChannelUrl),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // 3. Community Chats
+          _AboutCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _AboutRow(
+                  leading: iconoir.Community(
+                    width: 22,
+                    height: 22,
+                    color: accent,
+                  ),
+                  title: l10n.translate('about_official_chat'),
+                  onTap: () => _openLink(AppConfig.officialChatUrl),
+                ),
+                _CardHairline(color: theav.dividerColor),
+                _AboutRow(
+                  leading: iconoir.ChatBubble(
+                    width: 22,
+                    height: 22,
+                    color: accent,
+                  ),
+                  title: l10n.translate('about_discussion_chat'),
+                  onTap: () => _openLink(AppConfig.floodChatUrl),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // 4. Source Code & Privacy Policy
+          _AboutCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _AboutRow(
+                  leading: iconoir.Github(
+                    width: 22,
+                    height: 22,
+                    color: accent,
+                  ),
+                  title: l10n.translate('about_source_code'),
+                  trailing: Text(
+                    'commit ${AppConfig.shortGitCommit}',
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: accent,
                     ),
                   ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (hasUpdate)
-                        Container(
-                          width: 8,
-                          height: 8,
-                          margin: const EdgeInsets.only(right: 4),
-                          decoration: BoxDecoration(
-                            color: theav.accent,
-                            shape: BoxShape.circle,
-                          ),
+                  onTap: _openSourceCommit,
+                ),
+                _CardHairline(color: theav.dividerColor),
+                _AboutRow(
+                  leading: iconoir.ShieldCheck(
+                    width: 22,
+                    height: 22,
+                    color: accent,
+                  ),
+                  title: l10n.translate('about_privacy_policy'),
+                  trailing: iconoir.NavArrowRight(
+                    width: 18,
+                    height: 18,
+                    color: textSecondary,
+                  ),
+                  onTap: _showPrivacySheet,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AboutCard extends StatelessWidget {
+  final Widget child;
+
+  const _AboutCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final theav = TheavTheme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cardColor = theme.cardColor;
+    final borderColor = theav.dividerColor.withValues(
+      alpha: isDark ? 0.55 : 0.70,
+    );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: borderColor, width: 0.6),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.16 : 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
+    );
+  }
+}
+
+class _AboutSectionHeader extends StatelessWidget {
+  final String title;
+  final Color accent;
+
+  const _AboutSectionHeader({
+    required this.title,
+    required this.accent,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: 13.5,
+          fontWeight: FontWeight.w700,
+          color: accent,
+          letterSpacing: 0.1,
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutRow extends StatelessWidget {
+  final Widget leading;
+  final String title;
+  final String? subtitle;
+  final Color? subtitleColor;
+  final Widget? trailing;
+  final VoidCallback onTap;
+
+  const _AboutRow({
+    required this.leading,
+    required this.title,
+    this.subtitle,
+    this.subtitleColor,
+    this.trailing,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theav = TheavTheme.of(context);
+    final textPrimary = theav.textPrimary;
+
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: Center(child: leading),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w500,
+                        color: textPrimary,
+                      ),
+                    ),
+                    if (subtitle != null && subtitle!.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle!,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: subtitleColor ?? theav.textSecondary,
                         ),
-                      IconButton(
-                        icon: Icon(
-                          Icons.tune_rounded,
-                          color: theav.textSecondary,
-                        ),
-                        tooltip: l10n.translate('about_update_settings'),
-                        onPressed: _showUpdateSettingsSheet,
                       ),
                     ],
-                  ),
-                  onTap: _handleManualUpdateCheck,
-                  onLongPress: _showUpdateSettingsSheet,
-                );
-              },
-            ),
-            if (_debugUnlocked)
-              ListTile(
-                leading: Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFAF52DE),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.science_rounded,
-                    color: Colors.white,
-                    size: 22,
-                  ),
-                ),
-                title: const Text('Debug // W.I.P'),
-                subtitle: Text(l10n.translate('about_debug_subtitle')),
-                onTap: () async {
-                  HapticUtils.tap();
-                  await Navigator.push(
-                    context,
-                    SwipeBackPageRoute(
-                      builder: (_) => const ServiceMenuScreen(),
-                    ),
-                  );
-                  await _loadPreferences();
-                },
-                onLongPress: _hideDebugMenu,
-              ),
-          ],
-        ),
-
-        const SizedBox(height: 8),
-
-        // 2. Ссылки
-        SettingsGroup(
-          title: l10n.translate('about_links_section'),
-          children: [
-            ListTile(
-              leading: Icon(Icons.campaign_outlined, color: theav.accent),
-              title: Text(l10n.translate('about_news_channel')),
-              onTap: () => _openLink(AppConfig.newsChannelUrl),
-            ),
-            ListTile(
-              leading: Icon(Icons.campaign_outlined, color: theav.accent),
-              title: Text(l10n.translate('about_beta_channel')),
-              onTap: () => _openLink(AppConfig.betaChannelUrl),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 8),
-
-        // 3. Сообщество
-        SettingsGroup(
-          children: [
-            ListTile(
-              leading: Icon(Icons.forum_outlined, color: theav.accent),
-              title: Text(l10n.translate('about_official_chat')),
-              onTap: () => _openLink(AppConfig.officialChatUrl),
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.chat_bubble_outline_rounded,
-                color: theav.accent,
-              ),
-              title: Text(l10n.translate('about_discussion_chat')),
-              onTap: () => _openLink(AppConfig.floodChatUrl),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 8),
-
-        // 4. Исходный код и политика
-        SettingsGroup(
-          children: [
-            ListTile(
-              leading: Icon(Icons.code_rounded, color: theav.accent),
-              title: Text(l10n.translate('about_source_code')),
-              trailing: Text(
-                'commit ${AppConfig.shortGitCommit}',
-                style: TextStyle(
-                  color: theav.accent,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 13,
+                  ],
                 ),
               ),
-              onTap: _openSourceCode,
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.verified_user_outlined,
-                color: theav.accent,
-              ),
-              title: Text(l10n.translate('about_privacy_policy')),
-              onTap: _showPrivacyPolicySheet,
-            ),
-          ],
+              if (trailing != null) ...[
+                const SizedBox(width: 8),
+                trailing!,
+              ],
+            ],
+          ),
         ),
-      ],
-    );
-
-    final titleWidget = Text(
-      l10n.translate('about_title'),
-      style: const TextStyle(fontWeight: FontWeight.w700),
-    );
-
-    if (glassEnabled && glassProvider != null) {
-      return Scaffold(
-        body: Stack(
-          children: [
-            Positioned.fill(child: listView),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: LiquidGlassAppBar(
-                title: titleWidget,
-                centerTitle: true,
-                isLite: glassProvider.isLite,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: titleWidget,
-        centerTitle: true,
       ),
-      body: listView,
+    );
+  }
+}
+
+class _CardHairline extends StatelessWidget {
+  final Color color;
+
+  const _CardHairline({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 0.5,
+      margin: const EdgeInsets.only(left: 58),
+      color: color.withValues(alpha: 0.55),
+    );
+  }
+}
+
+class _SheetCloseButton extends StatelessWidget {
+  final Color iconColor;
+  final Color borderColor;
+  final VoidCallback onTap;
+
+  const _SheetCloseButton({
+    required this.iconColor,
+    required this.borderColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        HapticUtils.tap();
+        onTap();
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: borderColor, width: 0.7),
+        ),
+        child: Center(
+          child: iconoir.Xmark(
+            width: 17,
+            height: 17,
+            color: iconColor,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -723,6 +944,10 @@ class _ChannelOptionTile extends StatelessWidget {
   final String subtitle;
   final bool selected;
   final Color accent;
+  final Color cardBg;
+  final Color hairline;
+  final Color textPrimary;
+  final Color textSecondary;
   final VoidCallback onTap;
 
   const _ChannelOptionTile({
@@ -730,22 +955,68 @@ class _ChannelOptionTile extends StatelessWidget {
     required this.subtitle,
     required this.selected,
     required this.accent,
+    required this.cardBg,
+    required this.hairline,
+    required this.textPrimary,
+    required this.textSecondary,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(
-        selected ? Icons.radio_button_checked : Icons.radio_button_off,
-        color: selected ? accent : Theme.of(context).colorScheme.onSurfaceVariant,
+    return Material(
+      color: selected ? accent.withValues(alpha: 0.12) : cardBg,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? accent : hairline,
+              width: selected ? 1.1 : 0.7,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: selected ? accent : textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              if (selected)
+                iconoir.Check(
+                  width: 20,
+                  height: 20,
+                  color: accent,
+                )
+              else
+                const SizedBox(width: 20, height: 20),
+            ],
+          ),
+        ),
       ),
-      title: Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(subtitle),
-      onTap: onTap,
     );
   }
 }

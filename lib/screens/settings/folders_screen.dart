@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../models/chat_folder.dart';
@@ -231,10 +232,9 @@ class _FoldersScreenState extends State<FoldersScreen> {
     final l10n = context.l10n;
     final folders = _folderService.folders;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('folders_title')),
-      ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('folders_title'),
+      padBodyTop: true,
       body: folders.isEmpty
           ? Center(
               child: Text(

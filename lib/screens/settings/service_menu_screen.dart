@@ -1,15 +1,20 @@
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/websocket_service.dart';
+import '../../theme/theav_theme.dart';
 import '../auth/login_screen.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'about_theaver_screen.dart';
 
 /// Экран сервисного меню (скрытый раздел для отладки и сервисных функций).
@@ -338,11 +343,13 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('service_menu_title')),
-      ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('service_menu_title'),
       body: ListView(
+        padding: EdgeInsets.only(
+          top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+          bottom: math.max(24.0, MediaQuery.paddingOf(context).bottom + 16.0),
+        ),
         children: [
           if (_currentUserToken == 'test_token_offline_mode')
             Container(
@@ -476,9 +483,10 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
           ),
           const Divider(),
           ListTile(
-            leading: const Icon(
-              Icons.visibility_off_outlined,
-              color: Color(0xFFAF52DE),
+            leading: iconoir.EyeClosed(
+              width: 22,
+              height: 22,
+              color: TheavTheme.of(context).accent,
             ),
             title: const Text('Скрыть Debug // W.I.P в «О Theaver»'),
             subtitle: const Text(
@@ -488,12 +496,10 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
               final prefs = await SharedPreferences.getInstance();
               await prefs.setBool(AboutTheaverScreen.debugMenuUnlockedKey, false);
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Пункт Debug // W.I.P скрыт'),
-                  duration: Duration(seconds: 2),
-                  behavior: SnackBarBehavior.floating,
-                ),
+              GlassToastService().show(
+                context,
+                'Пункт Debug // W.I.P скрыт',
+                duration: const Duration(seconds: 2),
               );
               Navigator.of(context).pop();
             },

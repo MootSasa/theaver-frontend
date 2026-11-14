@@ -15,6 +15,7 @@ import 'package:iconoir_flutter/regular/nav_arrow_right.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import 'passcode_screen.dart';
@@ -43,15 +44,18 @@ class _SecurityScreenState extends State<SecurityScreen> {
     final l10n = context.l10n;
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.translate('security_title'))),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('security_title'),
       body: Consumer<PrivacySettingsProvider>(
         builder: (context, provider, _) {
           final tfa = provider.twoFactor;
           final lock = provider.appLock;
 
           return ListView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: EdgeInsets.only(
+              top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+              bottom: 24,
+            ),
             children: [
               // Two-Factor Authentication
               SettingsGroup(

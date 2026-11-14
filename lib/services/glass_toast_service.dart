@@ -39,6 +39,9 @@ class GlassToastService {
     _timer = Timer(duration, _hide);
   }
 
+  /// Hides the currently visible toast overlay, if any.
+  void hide() => _hide();
+
   void _hide() {
     _overlayEntry?.remove();
     _overlayEntry = null;
@@ -89,14 +92,22 @@ class _GlassToastWidgetState extends State<_GlassToastWidget> with SingleTickerP
     super.dispose();
   }
 
+  LiquidGlassProvider? _maybeGlassProvider(BuildContext context) {
+    try {
+      return Provider.of<LiquidGlassProvider>(context, listen: false);
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    
+
     // We use context.read because we don't expect the mode to change while the toast is visible
-    final glassProvider = Provider.of<LiquidGlassProvider>(context, listen: false);
-    final isGlassEnabled = glassProvider.enabled;
+    final glassProvider = _maybeGlassProvider(context);
+    final isGlassEnabled = glassProvider?.enabled ?? false;
 
     return SafeArea(
       child: Align(
@@ -115,8 +126,8 @@ class _GlassToastWidgetState extends State<_GlassToastWidget> with SingleTickerP
               color: Colors.transparent,
               child: IntrinsicWidth(
                 child: IntrinsicHeight(
-                  child: isGlassEnabled 
-                    ? _buildMatteGlass(isDark, theme, glassProvider) 
+                  child: (isGlassEnabled && glassProvider != null)
+                    ? _buildMatteGlass(isDark, theme, glassProvider)
                     : _buildClassicBlur(isDark, theme),
                 ),
               ),

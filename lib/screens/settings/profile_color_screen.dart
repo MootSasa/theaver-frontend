@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:ios_color_picker/show_ios_color_picker.dart';
 import 'package:provider/provider.dart';
 
@@ -15,6 +16,7 @@ import '../../widgets/profile/color_palette_picker.dart';
 import '../../widgets/profile/name_color_picker.dart';
 import '../../widgets/profile/profile_segmented_control.dart';
 import '../../widgets/profile/reply_message_preview_card.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 
 /// Экран изменения цвета профиля в стиле Telegram.
 class ProfileColorScreen extends StatefulWidget {
@@ -522,11 +524,13 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
         // Верхняя панель с кнопкой "Назад" и сегментом
         final topBarRow = Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 24),
-              onPressed: () {
-                _applyAndSave();
-              },
+            SettingsFloatingCircleButton(
+              onTap: _applyAndSave,
+              icon: const iconoir.NavArrowLeft(
+                width: 22,
+                height: 22,
+                color: Colors.white,
+              ),
             ),
             Expanded(
               child: Padding(
@@ -534,7 +538,7 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
                 child: segmentedControl,
               ),
             ),
-            const SizedBox(width: 40),
+            const SizedBox(width: 44),
           ],
         );
 

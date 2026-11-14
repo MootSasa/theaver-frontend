@@ -185,8 +185,8 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     final topPadding = statusBarHeight + kThemeEditorAppBarTotalHeight;
 
     final listView = ListView(
-      padding: const EdgeInsets.only(
-        top: 12,
+      padding: EdgeInsets.only(
+        top: topPadding + 4,
         bottom: 40,
       ),
       children: [
@@ -633,10 +633,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: Padding(
-              padding: EdgeInsets.only(top: topPadding),
-              child: listView,
-            ),
+            child: listView,
           ),
           Positioned(
             top: 0,
