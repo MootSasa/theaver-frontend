@@ -158,6 +158,10 @@ class AppDatabase extends _$AppDatabase {
 
   AppDatabase._internal(this.userId) : super(_openConnection(userId));
 
+  @visibleForTesting
+  AppDatabase.forTesting(QueryExecutor executor, {this.userId = 'test'})
+      : super(executor);
+
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
@@ -494,8 +498,15 @@ class AppDatabase extends _$AppDatabase {
   /// Обновить статус архивирования чата
   Future<void> setChatArchived(String chatId, bool archived) async {
     await ensureInitialized();
+    final existing = await getChat(chatId);
+    final companion = (existing != null && existing.isArchived == archived)
+        ? ChatsCompanion(isArchived: Value(archived))
+        : ChatsCompanion(
+            isArchived: Value(archived),
+            isPinned: const Value(false),
+          );
     await (update(chats)..where((t) => t.chatId.equals(chatId)))
-        .write(ChatsCompanion(isArchived: Value(archived)));
+        .write(companion);
   }
 
   /// Получить чат по server chatId
@@ -551,6 +562,26 @@ class AppDatabase extends _$AppDatabase {
     await ensureInitialized();
     await (update(chats)..where((t) => t.chatId.isIn(chatIds)))
         .write(const ChatsCompanion(unreadCount: Value(0)));
+  }
+
+  /// Пакетное перемещение чатов в архив или из архива со сбросом закрепа
+  Future<void> batchSetArchived(List<String> chatIds, bool archived) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds))).write(
+      ChatsCompanion(
+        isArchived: Value(archived),
+        isPinned: const Value(false),
+      ),
+    );
+  }
+
+  /// Пакетная отметка чатов как непрочитанные
+  Future<void> batchMarkAsUnread(List<String> chatIds) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds)))
+        .write(const ChatsCompanion(unreadCount: Value(-1)));
   }
 
   /// Пакетное удаление чатов и их сообщений

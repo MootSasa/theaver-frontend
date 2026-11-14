@@ -19,6 +19,7 @@ class SwipeableChatTile extends StatefulWidget {
       onCreateDragPayload;
   final GestureTapUpCallback? onSecondaryTapUp;
   final bool enabled;
+  final ChatSwipeAction? overrideAction;
 
   const SwipeableChatTile({
     super.key,
@@ -28,6 +29,7 @@ class SwipeableChatTile extends StatefulWidget {
     this.onCreateDragPayload,
     this.onSecondaryTapUp,
     this.enabled = true,
+    this.overrideAction,
   });
 
   @override
@@ -204,7 +206,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
 
     if (shouldTrigger) {
       HapticUtils.impact();
-      final action = ChatSwipeService().action;
+      final action = widget.overrideAction ?? ChatSwipeService().action;
       widget.onAction(action);
     }
   }
@@ -230,7 +232,9 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
             ? iconoir.Check(color: color, width: size, height: size)
             : iconoir.ChatBubble(color: color, width: size, height: size);
       case ChatSwipeAction.archive:
-        return iconoir.Archive(color: color, width: size, height: size);
+        return widget.chat.isArchived
+            ? Icon(Icons.unarchive_outlined, color: color, size: size)
+            : iconoir.Archive(color: color, width: size, height: size);
       case ChatSwipeAction.mute:
         return iconoir.BellOff(color: color, width: size, height: size);
       case ChatSwipeAction.delete:
@@ -244,7 +248,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
       return widget.child;
     }
 
-    final action = ChatSwipeService().action;
+    final action = widget.overrideAction ?? ChatSwipeService().action;
     final isDragging = _dragOffset != 0.0;
     final isRight = _dragOffset > 0;
     final progress = (_dragOffset.abs() / _threshold).clamp(0.0, 1.0);
