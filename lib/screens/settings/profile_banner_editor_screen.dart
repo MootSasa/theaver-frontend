@@ -31,7 +31,7 @@ class ProfileBannerEditorScreen extends StatefulWidget {
   final String? initialFilePath;
   final Uint8List? initialBytes;
   final String? initialFileName;
-  final ProfileBannerLayout initialLayout;
+  final ProfileBannerLayout? _initialLayout;
   final String displayName;
   final String? avatarUrl;
   final String? userId;
@@ -42,18 +42,22 @@ class ProfileBannerEditorScreen extends StatefulWidget {
     String? fileName,
   })? onSaveOverride;
 
+  /// Hot-Reload-safe getter for [initialLayout].
+  ProfileBannerLayout get initialLayout =>
+      _initialLayout ?? const ProfileBannerLayout();
+
   const ProfileBannerEditorScreen({
     super.key,
     this.initialBannerUrl,
     this.initialFilePath,
     this.initialBytes,
     this.initialFileName,
-    this.initialLayout = const ProfileBannerLayout(),
+    ProfileBannerLayout? initialLayout,
     required this.displayName,
     this.avatarUrl,
     this.userId,
     this.onSaveOverride,
-  });
+  }) : _initialLayout = initialLayout;
 
   @override
   State<ProfileBannerEditorScreen> createState() =>
@@ -63,7 +67,9 @@ class ProfileBannerEditorScreen extends StatefulWidget {
 class _ProfileBannerEditorScreenState extends State<ProfileBannerEditorScreen> {
   static const int _maxBannerBytes = 15 * 1024 * 1024;
 
-  late ProfileBannerLayout _layout;
+  ProfileBannerLayout? _layoutState;
+  ProfileBannerLayout get _layout => _layoutState ?? widget.initialLayout;
+  set _layout(ProfileBannerLayout value) => _layoutState = value;
   String? _bannerUrl;
   String? _localFilePath;
   Uint8List? _localBytes;

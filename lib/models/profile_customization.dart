@@ -577,7 +577,12 @@ class PeerCustomization {
   final UserBadge? badge;
   final bool badgeIsDisplayed;
   final String? profileBannerUrl;
-  final ProfileBannerLayout bannerLayout;
+  final ProfileBannerLayout? _bannerLayout;
+
+  /// Hot-Reload-safe getter: existing instances instantiated before adding
+  /// [_bannerLayout] get `null` in the new slot and fall back to default.
+  ProfileBannerLayout get bannerLayout =>
+      _bannerLayout ?? const ProfileBannerLayout();
 
   const PeerCustomization({
     this.nameColorPresetId,
@@ -588,8 +593,8 @@ class PeerCustomization {
     this.badge,
     this.badgeIsDisplayed = true,
     this.profileBannerUrl,
-    this.bannerLayout = const ProfileBannerLayout(),
-  });
+    ProfileBannerLayout? bannerLayout,
+  }) : _bannerLayout = bannerLayout;
 
   EmojiStatusData? get activeEmojiStatus => emojiStatus?.activeOrNull;
 

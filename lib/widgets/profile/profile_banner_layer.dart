@@ -14,19 +14,22 @@ class ProfileBannerLayer extends StatelessWidget {
   final String? bannerUrl;
   final Uint8List? localBytes;
   final String? localFilePath;
-  final ProfileBannerLayout layout;
+  final ProfileBannerLayout? _layout;
   final bool animate;
   final FilterQuality filterQuality;
+
+  /// Hot-Reload-safe getter for [layout].
+  ProfileBannerLayout get layout => _layout ?? const ProfileBannerLayout();
 
   const ProfileBannerLayer({
     super.key,
     this.bannerUrl,
     this.localBytes,
     this.localFilePath,
-    this.layout = const ProfileBannerLayout(),
+    ProfileBannerLayout? layout,
     this.animate = true,
     this.filterQuality = FilterQuality.medium,
-  });
+  }) : _layout = layout;
 
   bool get hasMedia =>
       localBytes != null ||

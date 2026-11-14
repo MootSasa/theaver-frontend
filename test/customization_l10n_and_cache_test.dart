@@ -316,4 +316,18 @@ void main() {
       expect(cached?.bannerLayout, custom.bannerLayout);
     },
   );
+
+  test(
+    'PeerCustomization bannerLayout getter falls back to default when backing field is null',
+    () {
+      const emptyDefault = PeerCustomization();
+      const explicitNull = PeerCustomization(bannerLayout: null);
+      const expected = ProfileBannerLayout();
+
+      expect(emptyDefault.bannerLayout, expected);
+      expect(emptyDefault.bannerLayout.isDefault, isTrue);
+      expect(explicitNull.bannerLayout, expected);
+      expect(explicitNull.isEmpty, isTrue);
+    },
+  );
 }
