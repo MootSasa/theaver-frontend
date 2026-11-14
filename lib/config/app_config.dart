@@ -94,19 +94,18 @@ class AppConfig {
         final info = await PackageInfo.fromPlatform();
         if (hasEnvAppVersion && appVersion.isNotEmpty) {
           _currentVersion = appVersion;
-        } else if (info.version.isNotEmpty && appVersion == '1.0.0') {
+        } else if (info.version.isNotEmpty) {
           _currentVersion = info.version;
         }
-        if (hasEnvBuildNumber && appBuildNumber > 1) {
+        if (hasEnvBuildNumber && appBuildNumber > 0) {
           _currentBuildNumber = appBuildNumber;
         } else {
           final b = int.tryParse(info.buildNumber);
           if (b != null && b > 0) {
-            // Normalize Flutter --split-per-abi versionCode (abiPrefix * 1000 + buildNumber)
-            final normalized = (b >= 1000 && b < 10000) ? (b % 1000) : b;
-            if (normalized > _currentBuildNumber) {
-              _currentBuildNumber = normalized;
-            }
+            _currentBuildNumber =
+                (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+                    ? normalizeAndroidBuildNumber(b, version: info.version)
+                    : b;
           }
         }
       } catch (_) {}
@@ -471,6 +470,66 @@ class AppConfig {
   /// Compile-time / default build date
   static const String _defaultBuildDate = '08.08.2026';
   static const String _envBuildDate = String.fromEnvironment('BUILD_DATE');
+
+  /// Short Git commit hash injected during release builds (`--dart-define=GIT_COMMIT=...`)
+  static const String gitCommit = String.fromEnvironment('GIT_COMMIT', defaultValue: '');
+
+  static String get shortGitCommit {
+    final trimmed = gitCommit.trim();
+    if (trimmed.isEmpty) return 'dev';
+    return trimmed.length > 8 ? trimmed.substring(0, 8) : trimmed;
+  }
+
+  /// Official links displayed on the "About Theaver" screen
+  static const String newsChannelUrl = String.fromEnvironment(
+    'NEWS_CHANNEL_URL',
+    defaultValue: 'https://theaver.ru/c/theaver_news',
+  );
+  static const String betaChannelUrl = String.fromEnvironment(
+    'BETA_CHANNEL_URL',
+    defaultValue: 'https://theaver.ru/c/theaver_beta',
+  );
+  static const String officialChatUrl = String.fromEnvironment(
+    'OFFICIAL_CHAT_URL',
+    defaultValue: 'https://theaver.ru/c/theaver_chat',
+  );
+  static const String floodChatUrl = String.fromEnvironment(
+    'FLOOD_CHAT_URL',
+    defaultValue: 'https://theaver.ru/c/theaver_offtop',
+  );
+  static const String sourceCodeUrl = String.fromEnvironment(
+    'SOURCE_CODE_URL',
+    defaultValue: 'https://github.com/mootsasa/Theaver',
+  );
+  static const String privacyPolicyUrl = String.fromEnvironment(
+    'PRIVACY_POLICY_URL',
+    defaultValue: 'https://theaver.ru/privacy',
+  );
+
+  /// Strips the ABI prefix (`1000`, `2000`, `4000`) added by Flutter `--split-per-abi`
+  /// when `--dart-define=APP_BUILD_NUMBER` was not explicitly compiled in.
+  static int normalizeAndroidBuildNumber(int rawBuild, {String? version}) {
+    if (version != null && version.isNotEmpty) {
+      final dashIdx = version.indexOf('-');
+      if (dashIdx != -1) {
+        final pre = version.substring(dashIdx + 1);
+        final match = RegExp(r'(\d+)$').firstMatch(pre);
+        final versionBuild = match != null ? int.tryParse(match.group(1)!) : null;
+        if (versionBuild != null && versionBuild > 0) {
+          if (rawBuild == versionBuild) return rawBuild;
+          for (final prefix in [4000, 2000, 1000]) {
+            if (rawBuild - prefix == versionBuild) {
+              return versionBuild;
+            }
+          }
+        }
+      }
+    }
+    if (rawBuild >= 1000 && rawBuild < 10000) {
+      return rawBuild % 1000;
+    }
+    return rawBuild;
+  }
 
   // Runtime values loaded dynamically from PackageInfo (pubspec.yaml / platform) or backend on Web
   static String _currentVersion = appVersion;

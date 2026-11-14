@@ -72,6 +72,7 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onResume() {
         super.onResume()
         currentActivityRef = WeakReference(this)
+        ApkInstallerHandler.onActivityResume(applicationContext)
         val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
         dm?.registerDisplayListener(displayListener, mainHandler)
         applyHighRefreshRate()
@@ -113,6 +114,7 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
         PushDetectorHandler.register(flutterEngine, applicationContext)
         NativeNotificationsChannel.register(flutterEngine, applicationContext)
+        ApkInstallerHandler.register(flutterEngine, applicationContext)
     }
 
     /**

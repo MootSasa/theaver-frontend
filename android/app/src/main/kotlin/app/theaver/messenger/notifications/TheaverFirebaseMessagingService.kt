@@ -11,7 +11,9 @@ import io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService
  */
 class TheaverFirebaseMessagingService : FlutterFirebaseMessagingService() {
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
-        ChatNotificationRenderer.handlePush(applicationContext, remoteMessage.data)
+        if (ChatNotificationRenderer.handlePush(applicationContext, remoteMessage.data)) {
+            return
+        }
         super.onMessageReceived(remoteMessage)
     }
 }

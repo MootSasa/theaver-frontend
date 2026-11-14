@@ -1,8 +1,7 @@
-import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'about_theaver_screen.dart';
 import 'profile_screen.dart';
 import 'notifications_screen.dart';
 import 'privacy_screen.dart';
@@ -14,7 +13,6 @@ import 'language_screen.dart';
 import 'chat_settings_screen.dart';
 import 'accounts_screen.dart';
 import 'wallets_screen.dart';
-import 'service_menu_screen.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
@@ -38,8 +36,6 @@ import '../../services/notification_service.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../services/update_service.dart';
 import '../../services/tiling_layout_controller.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'widgets/update_dialog.dart';
 
 /// Экран настроек.
 ///
@@ -60,301 +56,31 @@ class _SettingsScreenState extends State<SettingsScreen>
   final AccountManager _accountManager = AccountManager();
   Account? _currentAccount;
 
-  int _versionTapCount = 0;
-  DateTime? _lastTapTime;
-  bool _isCheckingUpdate = false;
-
-  Future<void> _checkAppUpdates(BuildContext context) async {
-    if (_isCheckingUpdate) return;
-    setState(() => _isCheckingUpdate = true);
+  void _openAboutTheaver() {
     HapticUtils.tap();
-
-    try {
-      if (kIsWeb) {
-        await AppConfig.syncWebVersionFromServer(channel: _updateChannel);
-        if (mounted) setState(() {});
-      }
-      final update = await AppUpdateService.instance.checkForUpdate(silent: false);
-      if (!mounted) return;
-
-      if (update.hasUpdate) {
-        UpdateDialog.show(context, update, isManual: true);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('У вас установлена последняя версия Theaver'),
-            duration: Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Не удалось проверить обновления: $e'),
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isCheckingUpdate = false);
-      }
-    }
-  }
-
-  String _getSystemAbi() {
-    if (kIsWeb) return 'web';
-    try {
-      return Platform.operatingSystem;
-    } catch (_) {
-      return defaultTargetPlatform.name;
-    }
-  }
-
-  void _handleVersionTap() {
-    final now = DateTime.now();
-    if (_lastTapTime != null &&
-        now.difference(_lastTapTime!) > const Duration(seconds: 2)) {
-      _versionTapCount = 0;
-    }
-    _lastTapTime = now;
-    _versionTapCount++;
-
-    HapticUtils.tap();
-
-    if (_versionTapCount >= 5) {
-      _versionTapCount = 0;
-      Navigator.push(
-        context,
-        SwipeBackPageRoute(
-          builder: (_) => const ServiceMenuScreen(),
-        ),
-      );
-    }
-  }
-
-  String _updateChannel = 'stable';
-
-  Future<void> _loadUpdateChannel() async {
-    final ch = await AppUpdateService.instance.getChannel();
-    if (kIsWeb) {
-      await AppConfig.syncWebVersionFromServer(channel: ch);
-    }
-    if (mounted) {
-      setState(() => _updateChannel = ch);
-    }
-  }
-
-  Future<void> _selectUpdateChannel(BuildContext context) async {
-    final selected = await showDialog<String>(
-      context: context,
-      builder: (dialogCtx) => SimpleDialog(
-        title: const Text('Канал обновлений'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(dialogCtx, 'stable'),
-            child: Row(
-              children: [
-                Icon(
-                  _updateChannel == 'stable' ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: Theme.of(dialogCtx).colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      kIsWeb ? 'Stable — theaver.app' : 'Stable (Стабильный)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text('Рекомендуется для всех пользователей', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const Divider(),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(dialogCtx, 'beta'),
-            child: Row(
-              children: [
-                Icon(
-                  _updateChannel == 'beta' ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: Theme.of(dialogCtx).colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      kIsWeb ? 'Beta — beta.theaver.app' : 'Beta (Бета-тестирование)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text('Новые функции до официального релиза', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const Divider(),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(dialogCtx, 'alpha'),
-            child: Row(
-              children: [
-                Icon(
-                  _updateChannel == 'alpha' ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: Theme.of(dialogCtx).colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      kIsWeb ? 'Alpha — alpha.theaver.app' : 'Alpha / Dev (Разработка)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text('Ранние сборки для тестирования', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(builder: (_) => const AboutTheaverScreen()),
     );
-
-    if (selected != null && selected != _updateChannel) {
-      await AppUpdateService.instance.setChannel(selected);
-      if (kIsWeb) {
-        if (AppConfig.webDomainChannel != null) {
-          final targetUrl = AppConfig.getWebChannelUrl(selected);
-          await launchUrl(Uri.parse(targetUrl), webOnlyWindowName: '_self');
-          return;
-        }
-        await AppConfig.syncWebVersionFromServer(channel: selected);
-      }
-      if (mounted) {
-        setState(() => _updateChannel = selected);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Выбран канал обновлений: ${_getChannelTitle(selected)}'),
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
   }
 
-  String _getChannelTitle(String ch) {
-    switch (ch) {
-      case 'beta':
-        return 'Beta';
-      case 'alpha':
-        return 'Alpha';
-      default:
-        return 'Stable';
-    }
-  }
-
-  Widget _buildVersionInfoSection(ThemeData theme, AppLocalizations l10n) {
-    final systemAbi = _getSystemAbi();
-    final buildDate = AppConfig.buildDate;
+  Widget _buildVersionInfoSection(ThemeData theme) {
     final appVersion = AppConfig.currentVersion;
     final appBuild = AppConfig.currentBuildNumber;
 
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 24.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _handleVersionTap,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Theaver v$appVersion (#$appBuild) ($systemAbi)',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    l10n.translate('build_date').replaceAll('{date}', buildDate),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _openAboutTheaver,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 20.0),
+          child: Text(
+            'Theaver v$appVersion ($appBuild)',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.65),
             ),
-            const SizedBox(height: 10),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                TextButton.icon(
-                  onPressed: _isCheckingUpdate ? null : () => _checkAppUpdates(context),
-                  icon: _isCheckingUpdate
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh_rounded, size: 16),
-                  label: Text(
-                    _isCheckingUpdate ? 'Проверка...' : 'Проверить обновления',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.08),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: () => _selectUpdateChannel(context),
-                  icon: Icon(
-                    _updateChannel == 'beta'
-                        ? Icons.science_outlined
-                        : (_updateChannel == 'alpha'
-                            ? Icons.developer_mode_outlined
-                            : Icons.verified_outlined),
-                    size: 16,
-                  ),
-                  label: Text(
-                    'Канал: ${_getChannelTitle(_updateChannel)}',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    backgroundColor: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.08),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                  ),
-                ),
-              ],
-            ),
-          ],
+            textAlign: TextAlign.center,
+          ),
         ),
       ),
     );
@@ -368,7 +94,6 @@ class _SettingsScreenState extends State<SettingsScreen>
     super.initState();
     _currentAccount = _accountManager.currentAccount;
     _accountManager.addListener(_onAccountChanged);
-    _loadUpdateChannel();
     ProfileInstantCache.instance.warmupSelf();
   }
 
@@ -649,11 +374,41 @@ class _SettingsScreenState extends State<SettingsScreen>
               );
             },
           ),
+
+          // About Theaver Section
+          ListTile(
+            leading: const Icon(Icons.info_outline_rounded, color: Color(0xFF0088CC)),
+            title: Text(l10n.translate('settings_about_theaver')),
+            trailing: ValueListenableBuilder<AppUpdateDownloadState>(
+              valueListenable: AppUpdateService.instance.stateNotifier,
+              builder: (context, state, _) {
+                final update = state.availableUpdate;
+                if (!state.hasAvailableUpdate || update == null) {
+                  return const SizedBox.shrink();
+                }
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'v${update.latestVersion}',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                );
+              },
+            ),
+            onTap: _openAboutTheaver,
+          ),
         ],
       ),
 
       const SizedBox(height: 24),
-      _buildVersionInfoSection(theme, l10n),
+      _buildVersionInfoSection(theme),
       const SizedBox(height: 24),
     ];
 

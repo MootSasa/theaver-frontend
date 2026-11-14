@@ -301,6 +301,7 @@ def main():
     parser.add_argument("--channel", default="stable", choices=["stable", "beta", "alpha"], help="Release channel.")
     parser.add_argument("--release-notes-file", default=None, help="Path to changelog / release notes file.")
     parser.add_argument("--force-update", action="store_true", help="Mark release as mandatory force update.")
+    parser.add_argument("--no-notify", action="store_true", help="Do not send push/WebSocket update notifications after deployment.")
     parser.add_argument("--strict", action="store_true", help="Fail if secrets are missing.")
 
     args = parser.parse_args()
@@ -353,6 +354,7 @@ def main():
 
     success_count = 0
     fail_count = 0
+    notifiable_targets = set()
 
     # Deploy web bundle first (smallest and updates live web frontend immediately), then sort remaining files
     ordered_files = sorted(
@@ -385,7 +387,7 @@ def main():
             print(f"[Deploy] ✅ Uploaded successfully: {download_url}", flush=True)
             print(f"[Deploy] Metadata: Platform={platform}, Arch={arch}, Channel={args.channel}, Size={size_bytes}", flush=True)
 
-            # 2. Register release in DB
+            # 2. Register release in DB (defer push/WS dispatch until all ABIs are registered)
             version_endpoint = f"{api_url}/api/admin/version"
             version_payload = {
                 "platform": platform,
@@ -398,7 +400,8 @@ def main():
                 "download_url": download_url,
                 "apk_size_bytes": size_bytes,
                 "sha256": sha256,
-                "release_notes": release_notes
+                "release_notes": release_notes,
+                "notify_users": False,
             }
 
             ver_res, ver_status = post_json(version_endpoint, version_payload, headers)
@@ -409,6 +412,24 @@ def main():
 
             print(f"[Deploy] ✅ Registered in database successfully!", flush=True)
             success_count += 1
+            notifiable_targets.add((platform, args.channel))
+
+        if not args.no_notify and notifiable_targets:
+            notify_endpoint = f"{api_url}/api/admin/version/notify"
+            for plat, ch in sorted(notifiable_targets):
+                print(f"\n[Deploy] Dispatching update notification for {plat}/{ch}...", flush=True)
+                try:
+                    n_res, n_status = post_json(notify_endpoint, {"platform": plat, "channel": ch}, headers)
+                    if n_status == 200 and n_res.get("success"):
+                        print(
+                            f"[Deploy] 🔔 Notified {plat}/{ch}: targeted={n_res.get('targeted_devices', 0)}, "
+                            f"push_sent={n_res.get('push_sent', 0)}, ws_sent={n_res.get('ws_sent', 0)}",
+                            flush=True,
+                        )
+                    else:
+                        print(f"[Deploy] ⚠️ Notification dispatch warning ({plat}/{ch}, status={n_status}): {n_res}", flush=True)
+                except Exception as exc:
+                    print(f"[Deploy] ⚠️ Notification dispatch failed ({plat}/{ch}): {exc}", flush=True)
     finally:
         _cleanup_all_conns()
 

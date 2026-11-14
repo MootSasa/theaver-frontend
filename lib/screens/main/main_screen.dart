@@ -411,6 +411,7 @@ class _MainScreenState extends State<MainScreen>
     ProximityAudioService.instance.registerListeners();
 
     // 4. Проверка обновлений в фоне + периодический таймер
+    unawaited(AppUpdateService.instance.init());
     _checkForUpdates();
     _updateCheckTimer?.cancel();
     _updateCheckTimer = Timer.periodic(
@@ -431,16 +432,13 @@ class _MainScreenState extends State<MainScreen>
     await HuaweiAutoStartPrompt.maybeShow(context);
   }
 
-  Future<void> _checkForUpdates({
-    bool fromBackgroundTimer = false,
-    bool forceDeviceNotify = false,
-  }) async {
+  Future<void> _checkForUpdates({bool fromBackgroundTimer = false}) async {
     try {
       final isAutoCheck = await AppUpdateService.instance.isAutoCheckEnabled();
       if (!isAutoCheck) return;
 
-      if (!fromBackgroundTimer && !forceDeviceNotify) {
-        // Небольшая задержка, чтобы не забивать сеть в момент первичной отрисовки UI
+      if (!fromBackgroundTimer) {
+        // Небольшая задержка, чтобы не забивать сеть в момент первичной отричной отрисовки UI
         await Future.delayed(const Duration(seconds: 2));
       }
       if (!mounted) return;
@@ -450,13 +448,13 @@ class _MainScreenState extends State<MainScreen>
       if (!mounted) return;
 
       if (update.hasUpdate) {
-        final shouldNotify = forceDeviceNotify ||
-            await AppUpdateService.instance.shouldNotifyDevice(update);
+        final shouldNotify = await AppUpdateService.instance.shouldNotifyDevice(update);
         if (shouldNotify) {
           await NotificationService().showAppUpdateNotification(update);
           await AppUpdateService.instance.markDeviceNotified(update.latestBuild);
         }
-        if (!fromBackgroundTimer && mounted) {
+        final shouldPrompt = await AppUpdateService.instance.shouldPromptInApp(update);
+        if (!fromBackgroundTimer && shouldPrompt && mounted) {
           UpdateDialog.show(context, update, isManual: false);
         }
       }
@@ -468,7 +466,7 @@ class _MainScreenState extends State<MainScreen>
   void _onAppUpdateAvailable(WebSocketEvent event) {
     debugPrint('MainScreen: app_update_available WS event received: ${event.data}');
     if (!mounted) return;
-    _checkForUpdates(fromBackgroundTimer: false, forceDeviceNotify: true);
+    _checkForUpdates(fromBackgroundTimer: false);
   }
 
   Future<void> _initOfflineFirst() async {

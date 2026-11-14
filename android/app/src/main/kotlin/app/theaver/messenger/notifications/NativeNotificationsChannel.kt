@@ -40,7 +40,20 @@ object NativeNotificationsChannel {
                     call.argument<String>("storage_url")?.let { store.storageUrl = it }
                     store.authToken = call.argument<String>("token") ?: ""
                     store.userId = call.argument<String>("user_id") ?: ""
+                    val build = call.argument<Number>("app_build")?.toInt() ?: 0
+                    if (build > 0) store.appBuild = build
                     result.success(null)
+                }
+                "showAppUpdateNotification" -> {
+                    val args = call.arguments as? Map<*, *>
+                    if (args == null) {
+                        result.success(false)
+                    } else {
+                        val data = HashMap<String, String>()
+                        args.forEach { (k, v) -> if (k != null && v != null) data[k.toString()] = v.toString() }
+                        ChatNotificationRenderer.showAppUpdateFromApp(appContext, data)
+                        result.success(true)
+                    }
                 }
                 "setState" -> {
                     store.appInForeground = call.argument<Boolean>("foreground") ?: false

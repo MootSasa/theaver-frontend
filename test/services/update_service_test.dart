@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:theaver/config/app_config.dart';
 import 'package:theaver/services/update_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   group('AppUpdateInfo Model Tests', () {
     test('parses complete JSON correctly', () {
       final json = {
@@ -52,6 +57,109 @@ void main() {
       expect(info.latestVersion, isEmpty);
       expect(info.latestBuild, equals(0));
       expect(info.formattedSize, isEmpty);
+    });
+  });
+
+  group('AppConfig.normalizeAndroidBuildNumber Tests', () {
+    test('strips split-per-abi prefixes accurately', () {
+      expect(AppConfig.normalizeAndroidBuildNumber(2401), equals(401));
+      expect(AppConfig.normalizeAndroidBuildNumber(4401), equals(401));
+      expect(AppConfig.normalizeAndroidBuildNumber(1401), equals(401));
+      expect(AppConfig.normalizeAndroidBuildNumber(401), equals(401));
+      expect(
+        AppConfig.normalizeAndroidBuildNumber(
+          3205,
+          version: '1.20.0-beta.1205',
+        ),
+        equals(1205),
+      );
+      expect(
+        AppConfig.normalizeAndroidBuildNumber(
+          5205,
+          version: '1.20.0-beta.1205',
+        ),
+        equals(1205),
+      );
+    });
+  });
+
+  group('AppUpdateService Policy & Persistence Tests', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      AppUpdateService.instance.resetForTesting();
+    });
+
+    AppUpdateInfo buildSampleUpdate({
+      int latestBuild = 500,
+      bool forceUpdate = false,
+    }) {
+      return AppUpdateInfo(
+        hasUpdate: true,
+        latestVersion: '1.20.0',
+        latestBuild: latestBuild,
+        minSupportedBuild: 100,
+        forceUpdate: forceUpdate,
+        downloadUrl: 'https://storage.theaver.app/releases/theaver.apk',
+        apkSizeBytes: 10485760,
+        sha256: 'deadbeefdeadbeef',
+        releaseNotes: '- Bug fixes',
+      );
+    }
+
+    test('snoozeUpdate suppresses prompt temporarily without ignoring permanently', () async {
+      final update500 = buildSampleUpdate(latestBuild: 500);
+
+      expect(await AppUpdateService.instance.shouldPromptInApp(update500), isTrue);
+
+      await AppUpdateService.instance.snoozeUpdate(500);
+      expect(await AppUpdateService.instance.shouldPromptInApp(update500), isFalse);
+
+      // Expired snooze allows prompting again
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+        AppUpdateService.prefSnoozedUntilMsKey,
+        DateTime.now().subtract(const Duration(minutes: 5)).millisecondsSinceEpoch,
+      );
+      expect(await AppUpdateService.instance.shouldPromptInApp(update500), isTrue);
+
+      // ignoreBuild suppresses only up to ignored build, not newer builds
+      await AppUpdateService.instance.ignoreBuild(500);
+      expect(await AppUpdateService.instance.shouldPromptInApp(update500), isFalse);
+
+      final update501 = buildSampleUpdate(latestBuild: 501);
+      expect(await AppUpdateService.instance.shouldPromptInApp(update501), isTrue);
+
+      // forceUpdate overrides both snooze and ignoreBuild
+      await AppUpdateService.instance.snoozeUpdate(500);
+      final forced500 = buildSampleUpdate(latestBuild: 500, forceUpdate: true);
+      expect(await AppUpdateService.instance.shouldPromptInApp(forced500), isTrue);
+    });
+
+    test('shouldNotifyDevice deduplicates notified builds', () async {
+      final update500 = buildSampleUpdate(latestBuild: 500);
+      expect(await AppUpdateService.instance.shouldNotifyDevice(update500), isTrue);
+
+      await AppUpdateService.instance.markDeviceNotified(500);
+      expect(await AppUpdateService.instance.shouldNotifyDevice(update500), isFalse);
+
+      final update501 = buildSampleUpdate(latestBuild: 501);
+      expect(await AppUpdateService.instance.shouldNotifyDevice(update501), isTrue);
+    });
+
+    test('init restores lastCheckedAt and cached AppUpdateInfo', () async {
+      final expectedMs = DateTime(2026, 11, 14, 9, 30).millisecondsSinceEpoch;
+      final cachedUpdate = buildSampleUpdate(latestBuild: 9999);
+      SharedPreferences.setMockInitialValues({
+        AppUpdateService.prefLastCheckedMsKey: expectedMs,
+        AppUpdateService.prefCachedUpdateJsonKey: jsonEncode(cachedUpdate.toJson()),
+      });
+
+      await AppUpdateService.instance.init();
+
+      final state = AppUpdateService.instance.stateNotifier.value;
+      expect(state.lastCheckedAt?.millisecondsSinceEpoch, equals(expectedMs));
+      expect(state.availableUpdate?.latestBuild, equals(9999));
+      expect(state.status, equals(AppUpdateStatus.available));
     });
   });
 }

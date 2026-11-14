@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
@@ -9,6 +10,7 @@ import '../../services/deep_link_service.dart';
 import '../../services/websocket_service.dart';
 import '../auth/login_screen.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import 'about_theaver_screen.dart';
 
 /// Экран сервисного меню (скрытый раздел для отладки и сервисных функций).
 class ServiceMenuScreen extends StatefulWidget {
@@ -471,6 +473,30 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
             title: const Text('Полная информация об экране'),
             subtitle: const Text('Вывести размеры, отступы и вырезы в консоль'),
             onTap: () => _printScreenInfo(context),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(
+              Icons.visibility_off_outlined,
+              color: Color(0xFFAF52DE),
+            ),
+            title: const Text('Скрыть Debug // W.I.P в «О Theaver»'),
+            subtitle: const Text(
+              'Снова открыть можно 5 нажатиями на версию в «О Theaver»',
+            ),
+            onTap: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool(AboutTheaverScreen.debugMenuUnlockedKey, false);
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Пункт Debug // W.I.P скрыт'),
+                  duration: Duration(seconds: 2),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+              Navigator.of(context).pop();
+            },
           ),
         ],
       ),

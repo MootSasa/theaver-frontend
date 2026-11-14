@@ -1,15 +1,20 @@
-import 'dart:io';
-import 'package:archive/archive.dart';
-import 'package:crypto/crypto.dart';
-import 'package:device_info_plus/device_info_plus.dart';
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:open_file/open_file.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../config/app_config.dart';
+import 'account_manager.dart';
+import 'auth_service.dart';
+import 'update_platform_stub.dart'
+    if (dart.library.io) 'update_platform_io.dart'
+    if (dart.library.js_interop) 'update_platform_web.dart';
+import 'update_platform_types.dart';
+
+export 'update_platform_types.dart' show UpdateInstallResult, UpdateInstallStatus;
 
 /// Модель данных о доступном обновлении
 class AppUpdateInfo {
@@ -96,7 +101,73 @@ class AppUpdateInfo {
       };
 }
 
-/// Сервис проверки, загрузки и запуска установки обновлений
+enum AppUpdateStatus {
+  idle,
+  checking,
+  available,
+  downloading,
+  readyToInstall,
+  installing,
+  upToDate,
+  error,
+}
+
+class AppUpdateDownloadState {
+  final AppUpdateStatus status;
+  final AppUpdateInfo? availableUpdate;
+  final double progress;
+  final int downloadedBytes;
+  final int totalBytes;
+  final double speedBytesPerSec;
+  final String? downloadedFilePath;
+  final String? errorMessage;
+  final DateTime? lastCheckedAt;
+
+  const AppUpdateDownloadState({
+    this.status = AppUpdateStatus.idle,
+    this.availableUpdate,
+    this.progress = 0.0,
+    this.downloadedBytes = 0,
+    this.totalBytes = 0,
+    this.speedBytesPerSec = 0.0,
+    this.downloadedFilePath,
+    this.errorMessage,
+    this.lastCheckedAt,
+  });
+
+  bool get hasAvailableUpdate =>
+      availableUpdate != null && availableUpdate!.hasUpdate;
+
+  AppUpdateDownloadState copyWith({
+    AppUpdateStatus? status,
+    AppUpdateInfo? availableUpdate,
+    bool clearUpdate = false,
+    double? progress,
+    int? downloadedBytes,
+    int? totalBytes,
+    double? speedBytesPerSec,
+    String? downloadedFilePath,
+    bool clearFile = false,
+    String? errorMessage,
+    bool clearError = false,
+    DateTime? lastCheckedAt,
+  }) {
+    return AppUpdateDownloadState(
+      status: status ?? this.status,
+      availableUpdate: clearUpdate ? null : (availableUpdate ?? this.availableUpdate),
+      progress: progress ?? this.progress,
+      downloadedBytes: downloadedBytes ?? this.downloadedBytes,
+      totalBytes: totalBytes ?? this.totalBytes,
+      speedBytesPerSec: speedBytesPerSec ?? this.speedBytesPerSec,
+      downloadedFilePath:
+          clearFile ? null : (downloadedFilePath ?? this.downloadedFilePath),
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      lastCheckedAt: lastCheckedAt ?? this.lastCheckedAt,
+    );
+  }
+}
+
+/// Сервис проверки, фоновой загрузки и установки обновлений Theaver.
 class AppUpdateService {
   AppUpdateService._();
   static final AppUpdateService instance = AppUpdateService._();
@@ -106,6 +177,15 @@ class AppUpdateService {
   static const String prefNotifiedBuildKey = 'notified_update_build';
   static const String prefNotifiedTimestampKey = 'notified_update_timestamp_ms';
   static const String prefChannelKey = 'update_channel';
+  static const String prefLastCheckedMsKey = 'update_last_checked_ms';
+  static const String prefCachedUpdateJsonKey = 'update_cached_info_json';
+  static const String prefSnoozedUntilMsKey = 'update_snoozed_until_ms';
+  static const String prefSnoozedBuildKey = 'update_snoozed_build';
+
+  final ValueNotifier<AppUpdateDownloadState> stateNotifier =
+      ValueNotifier<AppUpdateDownloadState>(const AppUpdateDownloadState());
+
+  final UpdatePlatformAdapter _platform = createUpdatePlatformAdapter();
 
   final Dio _dio = Dio(
     BaseOptions(
@@ -114,7 +194,72 @@ class AppUpdateService {
     ),
   );
 
-  /// Включена ли авто-проверка обновлений
+  CancelToken? _activeCancelToken;
+  bool _initialized = false;
+
+  @visibleForTesting
+  void resetForTesting() {
+    _activeCancelToken?.cancel();
+    _activeCancelToken = null;
+    _initialized = false;
+    stateNotifier.value = const AppUpdateDownloadState();
+  }
+
+  /// Инициализация состояния обновлений из SharedPreferences + синк настроек с сервером.
+  Future<void> init() async {
+    if (_initialized) return;
+    _initialized = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastMs = prefs.getInt(prefLastCheckedMsKey);
+      final lastChecked = lastMs != null && lastMs > 0
+          ? DateTime.fromMillisecondsSinceEpoch(lastMs)
+          : null;
+
+      AppUpdateInfo? cachedUpdate;
+      String? readyPath;
+      final cachedRaw = prefs.getString(prefCachedUpdateJsonKey);
+      if (cachedRaw != null && cachedRaw.isNotEmpty) {
+        try {
+          final map = jsonDecode(cachedRaw) as Map<String, dynamic>;
+          final parsed = AppUpdateInfo.fromJson(map);
+          final currentBuild = await getCurrentBuildNumber();
+          if (parsed.hasUpdate && parsed.latestBuild > currentBuild) {
+            cachedUpdate = parsed;
+            if (!kIsWeb && parsed.downloadUrl.isNotEmpty) {
+              final candidatePath = await _platform.resolveUpdateSavePath(
+                parsed.downloadUrl,
+                parsed.latestBuild,
+              );
+              if (candidatePath != null &&
+                  await _platform.fileExistsAndMatchesSha256(
+                    candidatePath,
+                    parsed.sha256,
+                  )) {
+                readyPath = candidatePath;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: readyPath != null
+            ? AppUpdateStatus.readyToInstall
+            : (cachedUpdate != null ? AppUpdateStatus.available : AppUpdateStatus.idle),
+        availableUpdate: cachedUpdate,
+        downloadedFilePath: readyPath,
+        progress: readyPath != null ? 1.0 : 0.0,
+        lastCheckedAt: lastChecked,
+      );
+    } catch (e) {
+      debugPrint('[AppUpdateService] init error: $e');
+    }
+
+    unawaited(syncUpdatePreferencesWithServer());
+  }
+
   Future<bool> isAutoCheckEnabled() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -124,7 +269,6 @@ class AppUpdateService {
     }
   }
 
-  /// Сохранить настройку авто-проверки
   Future<void> setAutoCheckEnabled(bool enabled) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -132,6 +276,7 @@ class AppUpdateService {
     } catch (e) {
       debugPrint('[AppUpdateService] Error saving auto check: $e');
     }
+    unawaited(syncUpdatePreferencesWithServer());
   }
 
   /// Получить выбранный канал обновлений ('stable', 'beta', 'alpha')
@@ -150,14 +295,15 @@ class AppUpdateService {
       if (currentVer.contains('alpha') || currentVer.contains('dev')) {
         return 'alpha';
       }
-      // Default to 'beta' so users receive both beta and stable updates
-      return 'beta';
+      if (currentVer.contains('beta') || currentVer.contains('rc')) {
+        return 'beta';
+      }
+      return 'stable';
     } catch (_) {
-      return 'beta';
+      return 'stable';
     }
   }
 
-  /// Установить выбранный канал обновлений
   Future<void> setChannel(String channel) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -165,123 +311,101 @@ class AppUpdateService {
     } catch (e) {
       debugPrint('[AppUpdateService] Error saving update channel: $e');
     }
+    unawaited(syncUpdatePreferencesWithServer());
   }
 
-  /// Текущий номер сборки приложения
+  /// Текущий номер сборки приложения (с нормализацией ABI-префиксов на Android)
   Future<int> getCurrentBuildNumber() async {
-    if (AppConfig.appBuildNumber > 1) {
+    if (AppConfig.hasEnvBuildNumber && AppConfig.appBuildNumber > 0) {
       return AppConfig.appBuildNumber;
     }
     try {
       final info = await PackageInfo.fromPlatform();
-      final rawBuild = int.tryParse(info.buildNumber) ?? AppConfig.currentBuildNumber;
-      // Flutter --split-per-abi prefixes versionCode with 1000 / 2000 / 4000
-      if (!kIsWeb && Platform.isAndroid && rawBuild >= 1000 && rawBuild < 10000) {
-        return rawBuild % 1000;
+      final rawBuild = int.tryParse(info.buildNumber);
+      if (rawBuild != null && rawBuild > 0) {
+        return getPlatform() == 'android'
+            ? AppConfig.normalizeAndroidBuildNumber(rawBuild, version: info.version)
+            : rawBuild;
       }
-      return rawBuild;
-    } catch (_) {
-      return AppConfig.currentBuildNumber;
-    }
+    } catch (_) {}
+    return AppConfig.currentBuildNumber;
   }
 
-  /// Текущая версия приложения (например, 1.4.0-beta.270)
+  /// Текущая версия приложения (например, 1.19.0-beta.401)
   Future<String> getCurrentVersion() async {
-    if (AppConfig.appVersion != '1.0.0' && AppConfig.appVersion.isNotEmpty) {
+    if (AppConfig.hasEnvAppVersion && AppConfig.appVersion.isNotEmpty) {
       return AppConfig.appVersion;
     }
     try {
       final info = await PackageInfo.fromPlatform();
-      return info.version.isNotEmpty ? info.version : AppConfig.currentVersion;
-    } catch (_) {
-      return AppConfig.currentVersion;
-    }
-  }
-
-  /// Текущая платформа для запроса обновлений
-  String getPlatform() {
-    if (kIsWeb) return 'web';
-    try {
-      if (Platform.isAndroid) return 'android';
-      if (Platform.isIOS) return 'ios';
-      if (Platform.isWindows) return 'windows';
-      if (Platform.isMacOS) return 'macos';
-      if (Platform.isLinux) return 'linux';
-    } catch (_) {}
-    return defaultTargetPlatform.name.toLowerCase();
-  }
-
-  /// Определение аппаратной архитектуры процессора устройства
-  Future<String> getArchitecture() async {
-    if (kIsWeb) return 'universal';
-
-    try {
-      if (Platform.isAndroid) {
-        final deviceInfo = DeviceInfoPlugin();
-        final androidInfo = await deviceInfo.androidInfo;
-        final abis = androidInfo.supportedAbis;
-        if (abis.isNotEmpty) {
-          final primary = abis.first.toLowerCase();
-          if (primary.contains('arm64') || primary.contains('aarch64') || primary.contains('v8a')) {
-            return 'arm64-v8a';
-          } else if (primary.contains('armeabi-v7a') || primary.contains('armv7')) {
-            return 'armeabi-v7a';
-          } else if (primary.contains('x86_64') || primary.contains('amd64')) {
-            return 'x86_64';
-          } else if (primary.contains('x86')) {
-            return 'x86';
-          }
-          return primary;
-        }
-      } else if (Platform.isWindows) {
-        final archEnv = Platform.environment['PROCESSOR_ARCHITECTURE']?.toLowerCase() ?? '';
-        final archW6432 = Platform.environment['PROCESSOR_ARCHITEW6432']?.toLowerCase() ?? '';
-        String winArch = 'x64';
-        if (archEnv.contains('arm64') || archW6432.contains('arm64')) {
-          winArch = 'arm64';
-        } else if (archEnv.contains('amd64') || archEnv.contains('x64') || archW6432.contains('amd64')) {
-          winArch = 'x64';
-        } else if (archEnv.contains('x86')) {
-          winArch = 'x86';
-        }
-        try {
-          final appDir = File(Platform.resolvedExecutable).parent.path;
-          final hasUninstaller = File('$appDir\\unins000.exe').existsSync() ||
-              File('$appDir\\unins001.exe').existsSync();
-          if (hasUninstaller) {
-            return '$winArch-installer';
-          }
-        } catch (_) {}
-        return winArch;
-      } else if (Platform.isMacOS) {
-        final v = Platform.version.toLowerCase();
-        if (v.contains('arm64') || v.contains('aarch64')) return 'arm64';
-        if (v.contains('x64') || v.contains('x86_64')) return 'x86_64';
-      } else if (Platform.isLinux) {
-        final v = Platform.version.toLowerCase();
-        if (v.contains('arm64') || v.contains('aarch64')) return 'arm64';
-        if (v.contains('x64') || v.contains('x86_64') || v.contains('amd64')) return 'x86_64';
-        if (v.contains('arm')) return 'armv7l';
-      } else if (Platform.isIOS) {
-        return 'arm64';
+      if (info.version.isNotEmpty) {
+        return info.version;
       }
-    } catch (e) {
-      debugPrint('[AppUpdateService] Failed to detect architecture: $e');
-    }
-
-    // Fallback based on Platform.version
-    try {
-      final v = Platform.version.toLowerCase();
-      if (v.contains('arm64') || v.contains('aarch64')) return 'arm64';
-      if (v.contains('x64') || v.contains('x86_64') || v.contains('amd64')) return 'x86_64';
     } catch (_) {}
+    return AppConfig.currentVersion;
+  }
 
-    return 'universal';
+  String getPlatform() => kIsWeb ? 'web' : _platform.platformName;
+
+  Future<String> getArchitecture() =>
+      kIsWeb ? Future.value('universal') : _platform.detectArchitecture();
+
+  Future<String> getDeviceArchitecture() => getArchitecture();
+
+  /// Синхронизирует текущую версию, архитектуру, канал и флаг автопроверки с сервером
+  /// (работает и на Desktop/Web без push-токена).
+  Future<void> syncUpdatePreferencesWithServer() async {
+    try {
+      final authToken = await AuthService.getToken();
+      if (authToken == null || authToken.isEmpty) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final deviceId = AccountManager().currentDeviceId ??
+          prefs.getString('current_device_id') ??
+          prefs.getString('device_id') ??
+          '';
+      if (deviceId.isEmpty) return;
+
+      final platform = getPlatform();
+      final arch = await getArchitecture();
+      final appVersion = await getCurrentVersion();
+      final appBuild = await getCurrentBuildNumber();
+      final channel = await getChannel();
+      final autoCheck = await isAutoCheckEnabled();
+
+      await _dio.put(
+        '${AppConfig.baseUrl}/api/notifications/update-settings',
+        data: <String, dynamic>{
+          'device_id': deviceId,
+          'platform': platform,
+          'app_version': appVersion,
+          'app_build': appBuild,
+          'architecture': arch,
+          'update_channel': channel,
+          'auto_check_updates': autoCheck,
+        },
+        options: Options(
+          headers: <String, String>{
+            'Authorization': 'Bearer $authToken',
+            'Content-Type': 'application/json',
+          },
+        ),
+      );
+    } catch (_) {
+      // Best effort: server might be unreachable or an older version without this route
+    }
   }
 
   /// Запросить информацию о наличии обновления на сервере
   Future<AppUpdateInfo> checkForUpdate({bool silent = false, String? channel}) async {
-    if (kIsWeb) return AppUpdateInfo.noUpdate();
+    final wasDownloading =
+        stateNotifier.value.status == AppUpdateStatus.downloading;
+    if (!silent && !wasDownloading) {
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: AppUpdateStatus.checking,
+        clearError: true,
+      );
+    }
 
     try {
       final platform = getPlatform();
@@ -290,11 +414,52 @@ class AppUpdateService {
       final currentVer = await getCurrentVersion();
       final ch = channel ?? await getChannel();
 
-      final baseUrl = AppConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
-      final url = '$baseUrl/api/app/check-update';
+      if (kIsWeb) {
+        final beforeBuild = AppConfig.currentBuildNumber;
+        await AppConfig.syncWebVersionFromServer(channel: ch);
+        final now = DateTime.now();
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(prefLastCheckedMsKey, now.millisecondsSinceEpoch);
 
+        final baseUrl = AppConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
+        final response = await _dio.get(
+          '$baseUrl/api/app/check-update',
+          queryParameters: {
+            'platform': 'web',
+            'arch': 'universal',
+            'channel': ch,
+            'build_number': beforeBuild,
+            'version': currentVer,
+          },
+        );
+        if (response.statusCode == 200 && response.data != null) {
+          final map = response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : Map<String, dynamic>.from(response.data as Map);
+          final info = AppUpdateInfo.fromJson(map);
+          if (info.hasUpdate) {
+            await prefs.setString(prefCachedUpdateJsonKey, jsonEncode(info.toJson()));
+            stateNotifier.value = stateNotifier.value.copyWith(
+              status: AppUpdateStatus.available,
+              availableUpdate: info,
+              lastCheckedAt: now,
+              clearError: true,
+            );
+            return info;
+          }
+        }
+        stateNotifier.value = stateNotifier.value.copyWith(
+          status: AppUpdateStatus.upToDate,
+          clearUpdate: true,
+          lastCheckedAt: now,
+          clearError: true,
+        );
+        return AppUpdateInfo.noUpdate();
+      }
+
+      final baseUrl = AppConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
       final response = await _dio.get(
-        url,
+        '$baseUrl/api/app/check-update',
         queryParameters: {
           'platform': platform,
           'arch': arch,
@@ -304,6 +469,10 @@ class AppUpdateService {
         },
       );
 
+      final now = DateTime.now();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(prefLastCheckedMsKey, now.millisecondsSinceEpoch);
+
       if (response.statusCode == 200 && response.data != null) {
         final data = response.data is Map<String, dynamic>
             ? response.data as Map<String, dynamic>
@@ -311,25 +480,84 @@ class AppUpdateService {
 
         final updateInfo = AppUpdateInfo.fromJson(data);
 
-        // Если это тихая проверка при запуске, проверяем не скрыл ли пользователь этот билд
-        if (silent && !updateInfo.forceUpdate) {
-          final prefs = await SharedPreferences.getInstance();
-          final ignoredBuild = prefs.getInt(prefIgnoredBuildKey) ?? 0;
-          if (ignoredBuild >= updateInfo.latestBuild) {
-            return AppUpdateInfo.noUpdate();
+        if (updateInfo.hasUpdate) {
+          await prefs.setString(prefCachedUpdateJsonKey, jsonEncode(updateInfo.toJson()));
+
+          String? readyPath;
+          if (updateInfo.downloadUrl.isNotEmpty) {
+            final candidate = await _platform.resolveUpdateSavePath(
+              updateInfo.downloadUrl,
+              updateInfo.latestBuild,
+            );
+            if (candidate != null &&
+                await _platform.fileExistsAndMatchesSha256(
+                  candidate,
+                  updateInfo.sha256,
+                )) {
+              readyPath = candidate;
+            }
           }
+
+          if (!wasDownloading) {
+            stateNotifier.value = stateNotifier.value.copyWith(
+              status: readyPath != null
+                  ? AppUpdateStatus.readyToInstall
+                  : AppUpdateStatus.available,
+              availableUpdate: updateInfo,
+              downloadedFilePath: readyPath,
+              clearFile: readyPath == null,
+              progress: readyPath != null ? 1.0 : 0.0,
+              lastCheckedAt: now,
+              clearError: true,
+            );
+          }
+
+          if (silent && !await shouldPromptInApp(updateInfo)) {
+            return updateInfo;
+          }
+          return updateInfo;
         }
 
-        return updateInfo;
+        await prefs.remove(prefCachedUpdateJsonKey);
+        if (!wasDownloading) {
+          stateNotifier.value = stateNotifier.value.copyWith(
+            status: AppUpdateStatus.upToDate,
+            clearUpdate: true,
+            clearFile: true,
+            progress: 0.0,
+            lastCheckedAt: now,
+            clearError: true,
+          );
+        }
+        return AppUpdateInfo.noUpdate();
       }
     } catch (e) {
       debugPrint('[AppUpdateService] Check for update failed: $e');
+      if (!wasDownloading) {
+        stateNotifier.value = stateNotifier.value.copyWith(
+          status: AppUpdateStatus.error,
+          errorMessage: e.toString(),
+        );
+      }
     }
 
     return AppUpdateInfo.noUpdate();
   }
 
-  /// Пропустить / игнорировать этот номер сборки при авто-проверках
+  /// Отложить напоминание об обновлении (кнопка «Напомнить позже», 24 часа).
+  Future<void> snoozeUpdate(
+    int buildNumber, {
+    Duration duration = const Duration(hours: 24),
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final untilMs = DateTime.now().add(duration).millisecondsSinceEpoch;
+      await prefs.setInt(prefSnoozedBuildKey, buildNumber);
+      await prefs.setInt(prefSnoozedUntilMsKey, untilMs);
+    } catch (_) {}
+  }
+
+  /// Навсегда пропустить конкретную сборку (кнопка «Пропустить сборку»).
   Future<void> ignoreBuild(int buildNumber) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -337,7 +565,28 @@ class AppUpdateService {
     } catch (_) {}
   }
 
-  /// Нужно ли отправлять системное уведомление на устройство об этой сборке
+  /// Нужно ли автоматически показывать диалог обновления в приложении.
+  Future<bool> shouldPromptInApp(AppUpdateInfo update) async {
+    if (!update.hasUpdate) return false;
+    if (update.forceUpdate) return true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ignoredBuild = prefs.getInt(prefIgnoredBuildKey) ?? 0;
+      if (ignoredBuild >= update.latestBuild) return false;
+
+      final snoozedBuild = prefs.getInt(prefSnoozedBuildKey) ?? 0;
+      final snoozedUntilMs = prefs.getInt(prefSnoozedUntilMsKey) ?? 0;
+      if (snoozedBuild == update.latestBuild &&
+          DateTime.now().millisecondsSinceEpoch < snoozedUntilMs) {
+        return false;
+      }
+      return true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Нужно ли отправлять системное уведомление на устройство об этой сборке.
   Future<bool> shouldNotifyDevice(AppUpdateInfo update) async {
     if (!update.hasUpdate || update.latestBuild <= 0) return false;
     try {
@@ -359,7 +608,6 @@ class AppUpdateService {
     }
   }
 
-  /// Пометить сборку как уже отправленную в системные уведомления устройства
   Future<void> markDeviceNotified(int buildNumber) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -371,303 +619,180 @@ class AppUpdateService {
     } catch (_) {}
   }
 
-  /// Скачать файл обновления во временную директорию с проверкой SHA-256
-  Future<File?> downloadApk({
-    required String downloadUrl,
-    required void Function(int received, int total) onProgress,
-    String? expectedSha256,
-    CancelToken? cancelToken,
-  }) async {
-    if (kIsWeb) return null;
+  /// Фоновая загрузка обновления в кэш с вычислением скорости и проверкой SHA-256.
+  /// Продолжается даже после закрытия модального окна.
+  Future<String?> downloadUpdate(AppUpdateInfo update) async {
+    if (kIsWeb) {
+      applyWebUpdate();
+      return null;
+    }
+    if (update.downloadUrl.isEmpty) {
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: AppUpdateStatus.error,
+        availableUpdate: update,
+        errorMessage: 'Ссылка для скачивания отсутствует',
+      );
+      return null;
+    }
+    if (stateNotifier.value.status == AppUpdateStatus.downloading) {
+      return null;
+    }
 
     try {
-      Directory targetDir;
-      try {
-        targetDir = await getTemporaryDirectory();
-      } catch (_) {
-        if (Platform.isAndroid) {
-          final extDirs = await getExternalCacheDirectories();
-          if (extDirs != null && extDirs.isNotEmpty) {
-            targetDir = extDirs.first;
-          } else {
-            rethrow;
-          }
-        } else {
-          rethrow;
-        }
+      final savePath = await _platform.resolveUpdateSavePath(
+        update.downloadUrl,
+        update.latestBuild,
+      );
+      if (savePath == null) {
+        throw Exception('Не удалось определить путь для сохранения файла');
       }
 
-      final resolvedUrl = AppConfig.resolveMediaUrl(downloadUrl) ?? downloadUrl;
-      String fileName = 'theaver_update.apk';
-      try {
-        final uri = Uri.parse(resolvedUrl);
-        if (uri.pathSegments.isNotEmpty && uri.pathSegments.last.isNotEmpty) {
-          fileName = uri.pathSegments.last;
-        }
-      } catch (_) {}
-
-      final savePath = '${targetDir.path}/$fileName';
-      final file = File(savePath);
-      if (await file.exists()) {
-        try {
-          await file.delete();
-        } catch (_) {}
+      if (await _platform.fileExistsAndMatchesSha256(savePath, update.sha256)) {
+        stateNotifier.value = stateNotifier.value.copyWith(
+          status: AppUpdateStatus.readyToInstall,
+          availableUpdate: update,
+          downloadedFilePath: savePath,
+          progress: 1.0,
+          downloadedBytes: update.apkSizeBytes,
+          totalBytes: update.apkSizeBytes,
+          speedBytesPerSec: 0.0,
+          clearError: true,
+        );
+        return savePath;
       }
+
+      await _platform.deleteFileIfExists(savePath);
+
+      _activeCancelToken = CancelToken();
+      final resolvedUrl =
+          AppConfig.resolveMediaUrl(update.downloadUrl) ?? update.downloadUrl;
+
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: AppUpdateStatus.downloading,
+        availableUpdate: update,
+        progress: 0.0,
+        downloadedBytes: 0,
+        totalBytes: update.apkSizeBytes,
+        speedBytesPerSec: 0.0,
+        clearFile: true,
+        clearError: true,
+      );
+
+      int lastSampleBytes = 0;
+      DateTime lastSampleAt = DateTime.now();
+      double currentSpeed = 0.0;
 
       await _dio.download(
         resolvedUrl,
         savePath,
-        onReceiveProgress: onProgress,
-        cancelToken: cancelToken,
+        cancelToken: _activeCancelToken,
         deleteOnError: true,
-        options: Options(
-          followRedirects: true,
-        ),
+        options: Options(followRedirects: true),
+        onReceiveProgress: (received, total) {
+          final now = DateTime.now();
+          final elapsedMs = now.difference(lastSampleAt).inMilliseconds;
+          if (elapsedMs >= 300) {
+            final deltaBytes = received - lastSampleBytes;
+            if (deltaBytes >= 0) {
+              currentSpeed = (deltaBytes * 1000.0) / elapsedMs;
+            }
+            lastSampleAt = now;
+            lastSampleBytes = received;
+          } else if (received < total) {
+            // Throttle UI rebuilds during rapid socket reads unless nearing end
+            return;
+          }
+          final effectiveTotal = total > 0 ? total : update.apkSizeBytes;
+          final pct = effectiveTotal > 0
+              ? (received / effectiveTotal).clamp(0.0, 1.0)
+              : 0.0;
+          stateNotifier.value = stateNotifier.value.copyWith(
+            status: AppUpdateStatus.downloading,
+            availableUpdate: update,
+            progress: pct,
+            downloadedBytes: received,
+            totalBytes: effectiveTotal,
+            speedBytesPerSec: currentSpeed,
+          );
+        },
       );
 
-      if (await file.exists()) {
-        final length = await file.length();
-        if (length <= 0) {
-          await file.delete();
-          throw Exception('Скачанный файл пуст');
-        }
+      await _platform.verifyDownloadedFile(savePath, update.sha256);
 
-        if (expectedSha256 != null && expectedSha256.trim().isNotEmpty) {
-          final digest = await sha256.bind(file.openRead()).first;
-          final actualHex = digest.toString().toLowerCase();
-          final expectedHex = expectedSha256.trim().toLowerCase();
-          if (actualHex != expectedHex) {
-            await file.delete();
-            throw Exception('Контрольная сумма SHA-256 не совпала (файл повреждён при загрузке)');
-          }
-        }
-
-        return file;
-      }
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: AppUpdateStatus.readyToInstall,
+        availableUpdate: update,
+        downloadedFilePath: savePath,
+        progress: 1.0,
+        speedBytesPerSec: 0.0,
+        clearError: true,
+      );
+      return savePath;
     } catch (e) {
+      if (e is DioException && CancelToken.isCancel(e)) {
+        stateNotifier.value = stateNotifier.value.copyWith(
+          status: AppUpdateStatus.available,
+          availableUpdate: update,
+          progress: 0.0,
+          downloadedBytes: 0,
+          speedBytesPerSec: 0.0,
+          clearError: true,
+        );
+        return null;
+      }
       debugPrint('[AppUpdateService] Update download failed: $e');
-      rethrow;
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: AppUpdateStatus.error,
+        availableUpdate: update,
+        speedBytesPerSec: 0.0,
+        errorMessage: 'Ошибка загрузки: $e',
+      );
+      return null;
+    } finally {
+      _activeCancelToken = null;
     }
-    return null;
   }
 
-  /// Запустить установщик пакета (Android APK или автообновление на Windows/Desktop)
-  Future<OpenResult> installApk(String filePath) async {
-    if (kIsWeb) {
-      return OpenResult(type: ResultType.error, message: 'Not supported on Web');
-    }
+  void cancelDownload() {
+    _activeCancelToken?.cancel('Cancelled by user');
+  }
 
-    if (Platform.isAndroid) {
-      try {
-        const channel = MethodChannel('app.theaver.messenger/installer');
-        final res = await channel.invokeMethod<String>('installApk', {
-          'filePath': filePath,
-        });
-        if (res == 'done' || res == 'settings_opened') {
-          return OpenResult(type: ResultType.done, message: res ?? 'done');
-        }
-      } catch (e) {
-        debugPrint('[AppUpdateService] Native installApk channel failed, falling back to OpenFile: $e');
-      }
-      return await OpenFile.open(
-        filePath,
-        type: 'application/vnd.android.package-archive',
+  Future<UpdateInstallResult> downloadAndInstall(AppUpdateInfo update) async {
+    final path = await downloadUpdate(update);
+    if (path == null) {
+      return UpdateInstallResult(
+        UpdateInstallStatus.failed,
+        stateNotifier.value.errorMessage ?? 'Загрузка отменена',
       );
     }
+    return installApk(path);
+  }
 
-    final lowerPath = filePath.toLowerCase();
-
-    // Windows Installer (.exe)
-    if (Platform.isWindows && lowerPath.endsWith('.exe')) {
-      try {
-        final currentPid = pid;
-        final exeFile = File(Platform.resolvedExecutable);
-        final appDir = exeFile.parent.path;
-        final exeName = exeFile.uri.pathSegments.last;
-        final tempDir = await getTemporaryDirectory();
-        final scriptFile = File('${tempDir.path}\\theaver_apply_installer.bat');
-        final scriptContent = '''@echo off
-chcp 65001 >nul
-ping 127.0.0.1 -n 2 >nul
-taskkill /F /PID $currentPid >nul 2>&1
-ping 127.0.0.1 -n 2 >nul
-"$filePath" /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /DIR="$appDir"
-if exist "$appDir\\$exeName" (
-  start "" /D "$appDir" "$appDir\\$exeName"
-)
-del /F /Q "$filePath" >nul 2>&1
-del "%~f0"
-''';
-        await scriptFile.writeAsString(scriptContent);
-        await Process.start(
-          'cmd.exe',
-          ['/c', scriptFile.path],
-          mode: ProcessStartMode.detached,
-        );
-        exit(0);
-      } catch (e) {
-        debugPrint('[AppUpdateService] Windows installer auto-update fallback: $e');
-        return await OpenFile.open(filePath);
-      }
+  Future<UpdateInstallResult> installApk(String filePath) async {
+    if (kIsWeb) {
+      applyWebUpdate();
+      return const UpdateInstallResult(UpdateInstallStatus.reloadedWeb, 'Web reload');
     }
-
-    // Windows Portable (.zip)
-    if (Platform.isWindows && lowerPath.endsWith('.zip')) {
-      try {
-        final currentPid = pid;
-        final bytes = await File(filePath).readAsBytes();
-        final archive = ZipDecoder().decodeBytes(bytes);
-        final tempDir = await getTemporaryDirectory();
-        final stagingDir = Directory('${tempDir.path}\\theaver_update_staging');
-        if (await stagingDir.exists()) {
-          await stagingDir.delete(recursive: true);
-        }
-        await stagingDir.create(recursive: true);
-
-        for (final file in archive) {
-          final filename = file.name.replaceAll('/', '\\');
-          if (filename.isEmpty) continue;
-          if (file.isFile) {
-            final data = file.content as List<int>;
-            final outFile = File('${stagingDir.path}\\$filename');
-            await outFile.parent.create(recursive: true);
-            await outFile.writeAsBytes(data);
-          } else {
-            await Directory('${stagingDir.path}\\$filename').create(recursive: true);
-          }
-        }
-
-        // If the ZIP had a single root folder, unwrap it so its contents copy directly into appDir
-        String sourceDir = stagingDir.path;
-        final entries = await stagingDir.list().toList();
-        if (entries.length == 1 && entries.first is Directory) {
-          sourceDir = entries.first.path;
-        }
-
-        final exeFile = File(Platform.resolvedExecutable);
-        final appDir = exeFile.parent.path;
-        final exeName = exeFile.uri.pathSegments.last;
-        final scriptFile = File('${tempDir.path}\\theaver_apply_update.bat');
-        final scriptContent = '''@echo off
-chcp 65001 >nul
-ping 127.0.0.1 -n 2 >nul
-taskkill /F /PID $currentPid >nul 2>&1
-ping 127.0.0.1 -n 2 >nul
-robocopy "$sourceDir" "$appDir" /E /IS /IT /IM /R:15 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul
-if %ERRORLEVEL% GEQ 8 (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/c robocopy \\"$sourceDir\\" \\"$appDir\\" /E /IS /IT /IM /R:10 /W:1' -Verb RunAs -Wait"
-)
-rmdir /S /Q "${stagingDir.path}" >nul 2>&1
-del /F /Q "$filePath" >nul 2>&1
-start "" /D "$appDir" "$appDir\\$exeName"
-del "%~f0"
-''';
-        await scriptFile.writeAsString(scriptContent);
-        await Process.start(
-          'cmd.exe',
-          ['/c', scriptFile.path],
-          mode: ProcessStartMode.detached,
-        );
-        exit(0);
-      } catch (e) {
-        debugPrint('[AppUpdateService] Windows auto-update fallback: $e');
-        return await OpenFile.open(filePath);
-      }
+    stateNotifier.value = stateNotifier.value.copyWith(
+      status: AppUpdateStatus.installing,
+      clearError: true,
+    );
+    final res = await _platform.installDownloadedPackage(filePath);
+    if (!res.isSuccess) {
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: AppUpdateStatus.readyToInstall,
+        errorMessage: 'Не удалось запустить установщик: ${res.message}',
+      );
+    } else {
+      stateNotifier.value = stateNotifier.value.copyWith(
+        status: AppUpdateStatus.readyToInstall,
+        clearError: true,
+      );
     }
+    return res;
+  }
 
-    // Linux (.tar.gz / .tgz)
-    if (Platform.isLinux && (lowerPath.endsWith('.tar.gz') || lowerPath.endsWith('.tgz'))) {
-      try {
-        final currentPid = pid;
-        final tempDir = await getTemporaryDirectory();
-        final stagingDir = Directory('${tempDir.path}/theaver_update_staging');
-        if (await stagingDir.exists()) {
-          await stagingDir.delete(recursive: true);
-        }
-        await stagingDir.create(recursive: true);
-
-        final tarResult = await Process.run('tar', ['-xzf', filePath, '-C', stagingDir.path]);
-        if (tarResult.exitCode == 0) {
-          final exeFile = File(Platform.resolvedExecutable);
-          final appDir = exeFile.parent.path;
-          final exeName = exeFile.uri.pathSegments.last;
-          final scriptFile = File('${tempDir.path}/theaver_apply_update.sh');
-          final scriptContent = '''#!/bin/sh
-sleep 1
-kill -9 $currentPid 2>/dev/null || true
-sleep 1
-cp -rf "${stagingDir.path}/." "$appDir/"
-chmod +x "$appDir/$exeName"
-rm -rf "${stagingDir.path}" "$filePath"
-cd "$appDir" && "./$exeName" >/dev/null 2>&1 &
-rm -f "\$0"
-''';
-          await scriptFile.writeAsString(scriptContent);
-          await Process.run('chmod', ['+x', scriptFile.path]);
-          await Process.start(
-            '/bin/sh',
-            [scriptFile.path],
-            mode: ProcessStartMode.detached,
-          );
-          exit(0);
-        }
-      } catch (e) {
-        debugPrint('[AppUpdateService] Linux auto-update fallback: $e');
-      }
-    }
-
-    // macOS (.zip)
-    if (Platform.isMacOS && lowerPath.endsWith('.zip')) {
-      try {
-        final currentPid = pid;
-        final tempDir = await getTemporaryDirectory();
-        final stagingDir = Directory('${tempDir.path}/theaver_update_staging');
-        if (await stagingDir.exists()) {
-          await stagingDir.delete(recursive: true);
-        }
-        await stagingDir.create(recursive: true);
-
-        final dittoRes = await Process.run('ditto', ['-x', '-k', filePath, stagingDir.path]);
-        if (dittoRes.exitCode == 0) {
-          final entries = await stagingDir.list().toList();
-          Directory? newAppBundle;
-          for (final entry in entries) {
-            if (entry is Directory && entry.path.endsWith('.app')) {
-              newAppBundle = entry;
-              break;
-            }
-          }
-          final exeFile = File(Platform.resolvedExecutable);
-          // .../Theaver.app/Contents/MacOS/theaver -> .../Theaver.app
-          final currentAppBundle = exeFile.parent.parent.parent;
-          if (newAppBundle != null && currentAppBundle.path.endsWith('.app')) {
-            final scriptFile = File('${tempDir.path}/theaver_apply_update.sh');
-            final scriptContent = '''#!/bin/sh
-sleep 1
-kill -9 $currentPid 2>/dev/null || true
-sleep 1
-rm -rf "${currentAppBundle.path}"
-mv "${newAppBundle.path}" "${currentAppBundle.path}"
-xattr -cr "${currentAppBundle.path}" 2>/dev/null || true
-rm -rf "${stagingDir.path}" "$filePath"
-open "${currentAppBundle.path}"
-rm -f "\$0"
-''';
-            await scriptFile.writeAsString(scriptContent);
-            await Process.run('chmod', ['+x', scriptFile.path]);
-            await Process.start(
-              '/bin/sh',
-              [scriptFile.path],
-              mode: ProcessStartMode.detached,
-            );
-            exit(0);
-          }
-        }
-      } catch (e) {
-        debugPrint('[AppUpdateService] macOS auto-update fallback: $e');
-      }
-    }
-
-    return await OpenFile.open(filePath);
+  void applyWebUpdate() {
+    _platform.reloadWebPage();
   }
 }

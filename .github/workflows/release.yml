@@ -214,7 +214,8 @@ jobs:
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           CH="${{ needs.prepare-release.outputs.channel }}"
           BDATE="$(date +'%d.%m.%Y')"
-          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE"
+          GIT_COMMIT="${GITHUB_SHA:0:8}"
+          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=$GIT_COMMIT"
           
           echo "Building Universal APK (v$VER #$BUILD)..."
           flutter build apk --release --build-name="$VER" --build-number="$BUILD" $DEFINES
@@ -293,7 +294,8 @@ jobs:
           $ver = "${{ needs.prepare-release.outputs.version }}"
           $build = "${{ needs.prepare-release.outputs.build_number }}"
           $bdate = (Get-Date -Format "dd.MM.yyyy")
-          flutter build windows --release --dart-define="APP_VERSION=$ver" --dart-define="APP_BUILD_NUMBER=$build" --dart-define="BUILD_DATE=$bdate"
+          $sha = if ($env:GITHUB_SHA -and $env:GITHUB_SHA.Length -ge 8) { $env:GITHUB_SHA.Substring(0, 8) } else { "$env:GITHUB_SHA" }
+          flutter build windows --release --dart-define="APP_VERSION=$ver" --dart-define="APP_BUILD_NUMBER=$build" --dart-define="BUILD_DATE=$bdate" --dart-define="GIT_COMMIT=$sha"
 
       - name: Package Windows Portable ZIP & Setup Installer
         shell: pwsh
@@ -405,7 +407,7 @@ jobs:
           VER="${{ needs.prepare-release.outputs.version }}"
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           BDATE="$(date +'%d.%m.%Y')"
-          flutter build linux --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE"
+          flutter build linux --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE" --dart-define=GIT_COMMIT="${GITHUB_SHA:0:8}"
 
       - name: Package & Sign Linux Bundle into tar.gz
         env:
@@ -461,7 +463,7 @@ jobs:
           VER="${{ needs.prepare-release.outputs.version }}"
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           BDATE="$(date +'%d.%m.%Y')"
-          flutter build macos --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE"
+          flutter build macos --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE" --dart-define=GIT_COMMIT="${GITHUB_SHA:0:8}"
 
       - name: Package Universal and Sliced macOS Bundles
         run: |
@@ -584,10 +586,12 @@ jobs:
 
             # 4. Build iOS Release Application
             echo "📱 Building iOS application (v$VER #$BUILD)..."
+            BDATE="$(date +'%d.%m.%Y')"
+            DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=${GITHUB_SHA:0:8}"
             flutter pub get
-            flutter build ios --release --build-name="$VER" --build-number="$BUILD" || {
+            flutter build ios --release --build-name="$VER" --build-number="$BUILD" $DEFINES || {
               echo "⚠️ Signed build failed, trying with --no-codesign..."
-              flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD"
+              flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD" $DEFINES
             }
 
             if [ -d "build/ios/iphoneos/Runner.app" ]; then
@@ -599,8 +603,10 @@ jobs:
             fi
           else
             echo "ℹ️ No Apple signing secrets provided. Building unsigned IPA for sideloading..."
+            BDATE="$(date +'%d.%m.%Y')"
+            DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=${GITHUB_SHA:0:8}"
             flutter pub get
-            flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD"
+            flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD" $DEFINES
 
             if [ -d "build/ios/iphoneos/Runner.app" ]; then
               mkdir -p Payload
@@ -655,7 +661,8 @@ jobs:
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           CH="${{ needs.prepare-release.outputs.channel }}"
           BDATE="$(date +'%d.%m.%Y')"
-          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE"
+          GIT_COMMIT="${GITHUB_SHA:0:8}"
+          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=$GIT_COMMIT"
 
           echo "🌐 Building Flutter Web bundle (v$VER #$BUILD, channel: $CH)..."
           flutter build web --release --no-web-resources-cdn $DEFINES

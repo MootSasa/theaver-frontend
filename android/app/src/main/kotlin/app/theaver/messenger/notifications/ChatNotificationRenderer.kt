@@ -88,6 +88,10 @@ object ChatNotificationRenderer {
                 if (chatId.isNotEmpty()) cancelChat(context, chatId)
                 true
             }
+            "app_update" -> {
+                runBlockingIfPossible { showAppUpdate(context, data, fromPush = true) }
+                true
+            }
             else -> false
         }
     }
@@ -95,6 +99,11 @@ object ChatNotificationRenderer {
     /** Called from Flutter for WebSocket messages (decision already made in Dart). */
     fun showFromApp(context: Context, data: Map<String, String>) {
         executor.execute { show(context, data, fromPush = false) }
+    }
+
+    /** Called from Flutter so foreground/WS/timer update alerts match background push UI and dedup. */
+    fun showAppUpdateFromApp(context: Context, data: Map<String, String>) {
+        executor.execute { showAppUpdate(context, data, fromPush = false) }
     }
 
     /**
@@ -458,6 +467,98 @@ object ChatNotificationRenderer {
     private const val CHANNEL_CHANNELS = "channels"
     private const val CHANNEL_MENTIONS = "mentions"
     private const val CHANNEL_SILENT = "messages_silent"
+    private const val CHANNEL_APP_UPDATES = "app_updates"
+    private const val APP_UPDATE_TAG = "app_update"
+    private const val APP_UPDATE_ID = 9402
+
+    @SuppressLint("MissingPermission")
+    private fun showAppUpdate(context: Context, data: Map<String, String>, fromPush: Boolean) {
+        try {
+            val latestBuild = data["latest_build"]?.trim()?.toIntOrNull() ?: 0
+            val store = NotificationStore(context)
+
+            // Guard against stale pushes or older notifications after the user already updated.
+            val rawLocal = store.appBuild
+            val normalizedLocal = if (rawLocal in 1000..9999 && latestBuild in 1..999) {
+                rawLocal % 1000
+            } else if (rawLocal > latestBuild && latestBuild >= 1000) {
+                listOf(4000, 2000, 1000)
+                    .map { rawLocal - it }
+                    .firstOrNull { it in 1..latestBuild }
+                    ?: rawLocal
+            } else {
+                rawLocal
+            }
+            if (latestBuild > 0 && normalizedLocal > 0 && normalizedLocal >= latestBuild) {
+                return
+            }
+
+            if (latestBuild > 0) {
+                if (fromPush && store.notifiedUpdateBuild >= latestBuild) {
+                    return
+                }
+                if (store.checkAndMarkShown("app_update_$latestBuild", ttlMs = 2 * 60 * 1000L)) {
+                    return
+                }
+                if (latestBuild > store.notifiedUpdateBuild) {
+                    store.notifiedUpdateBuild = latestBuild
+                }
+            }
+
+            ensureBaseChannel(context, CHANNEL_APP_UPDATES)
+
+            val version = data["latest_version"]?.trim().orEmpty()
+            val title = if (version.isNotEmpty()) "Доступна версия $version" else "Доступно обновление Theaver"
+            val rawNotes = data["release_notes"]?.trim().orEmpty()
+                .replace(Regex("(?m)^#{1,6}\\s*"), "")
+                .replace("**", "")
+                .replace("__", "")
+                .replace("`", "")
+                .trim()
+            val body = if (rawNotes.isNotEmpty()) {
+                rawNotes
+            } else {
+                "Нажмите, чтобы загрузить и установить обновление"
+            }
+
+            val payloadObj = JSONObject().apply {
+                data.forEach { (k, v) -> put(k, v) }
+                put("type", "app_update")
+            }
+            val tapIntent = Intent(context, MainActivity::class.java).apply {
+                action = "app.theaver.messenger.OPEN_APP_UPDATE"
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_TAP_PAYLOAD, payloadObj.toString())
+            }
+            val pi = PendingIntent.getActivity(
+                context,
+                requestCode("app_update", latestBuild),
+                tapIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val nm = NotificationManagerCompat.from(context)
+            val builder = NotificationCompat.Builder(context, CHANNEL_APP_UPDATES)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setColor(ACCENT)
+                .setContentTitle(title)
+                .setContentText(body.lineSequence().firstOrNull().orEmpty())
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setContentIntent(pi)
+                .addAction(0, "Обновить", pi)
+
+            try {
+                nm.notify(APP_UPDATE_TAG, APP_UPDATE_ID, builder.build())
+            } catch (_: SecurityException) {
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "showAppUpdate failed", e)
+        }
+    }
 
     private fun resolveChannel(
         context: Context,
@@ -502,6 +603,7 @@ object ChatNotificationRenderer {
             CHANNEL_CHANNELS -> "Каналы" to NotificationManager.IMPORTANCE_DEFAULT
             CHANNEL_MENTIONS -> "Упоминания" to NotificationManager.IMPORTANCE_HIGH
             CHANNEL_SILENT -> "Беззвучные сообщения" to NotificationManager.IMPORTANCE_HIGH
+            CHANNEL_APP_UPDATES -> "Обновления приложения" to NotificationManager.IMPORTANCE_HIGH
             else -> "Личные чаты" to NotificationManager.IMPORTANCE_HIGH
         }
         val channel = NotificationChannel(id, name, importance)

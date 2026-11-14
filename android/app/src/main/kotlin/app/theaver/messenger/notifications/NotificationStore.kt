@@ -33,6 +33,14 @@ internal class NotificationStore(context: Context) {
         get() = prefs.getString(KEY_USER_ID, "") ?: ""
         set(v) = prefs.edit().putString(KEY_USER_ID, v).apply()
 
+    var appBuild: Int
+        get() = prefs.getInt(KEY_APP_BUILD, 0)
+        set(v) = prefs.edit().putInt(KEY_APP_BUILD, v).apply()
+
+    var notifiedUpdateBuild: Int
+        get() = prefs.getInt(KEY_NOTIFIED_UPDATE_BUILD, 0)
+        set(v) = prefs.edit().putInt(KEY_NOTIFIED_UPDATE_BUILD, v).apply()
+
     // ---------------- app state (written by Flutter) ----------------
 
     var appInForeground: Boolean
@@ -205,6 +213,8 @@ internal class NotificationStore(context: Context) {
         private const val KEY_STORAGE_URL = "storage_url"
         private const val KEY_TOKEN = "auth_token"
         private const val KEY_USER_ID = "user_id"
+        private const val KEY_APP_BUILD = "app_build"
+        private const val KEY_NOTIFIED_UPDATE_BUILD = "notified_update_build"
         private const val KEY_FOREGROUND = "app_foreground"
         private const val KEY_FOREGROUND_ENABLED = "foreground_enabled"
         private const val KEY_ACTIVE_CHATS = "active_chats"

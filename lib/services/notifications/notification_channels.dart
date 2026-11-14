@@ -121,7 +121,7 @@ class NotificationChannels {
       appUpdates,
       'Обновления приложения',
       description: 'Выход новых версий Theaver',
-      importance: Importance.defaultImportance,
+      importance: Importance.high,
     ),
   ];
 

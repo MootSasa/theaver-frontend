@@ -76,12 +76,14 @@ void hmsMessagingBackgroundHandler(hms.RemoteMessage message) async {
 Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
   final msgType = data['type']?.toString() ?? '';
 
-  // On Android chat messages and read receipts are rendered/cancelled by the native
-  // TheaverFirebaseMessagingService / TheaverHmsMessageService (single renderer for
-  // all notifications); rendering them here would duplicate them.
+  // On Android chat messages, read receipts, and app updates are rendered/cancelled
+  // by the native TheaverFirebaseMessagingService / TheaverHmsMessageService (single renderer
+  // for all notifications); rendering them here would duplicate them.
   if (!kIsWeb &&
       Platform.isAndroid &&
-      (msgType == 'new_message' || msgType == 'read_status_updated')) {
+      (msgType == 'new_message' ||
+          msgType == 'read_status_updated' ||
+          msgType == 'app_update')) {
     return;
   }
 
@@ -135,6 +137,38 @@ Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
           kind: 'msg', chatId: m.chatId, messageId: m.messageId, fallbackText: m.text);
       if (await NotificationDedupStore().checkAndMark(key)) return;
       await MessageNotificationPresenter(plugin).present(m);
+      return;
+    case 'app_update':
+      final latestVersion = data['latest_version']?.toString().trim() ?? '';
+      final latestBuild = data['latest_build']?.toString().trim() ?? '';
+      final dedupKey = 'app_update_${latestBuild.isNotEmpty ? latestBuild : latestVersion}';
+      if (await NotificationDedupStore().checkAndMark(dedupKey)) return;
+      final title = latestVersion.isNotEmpty
+          ? 'Доступна версия $latestVersion'
+          : 'Доступно обновление Theaver';
+      final rawNotes = data['release_notes']?.toString().trim() ?? '';
+      final body = rawNotes.isNotEmpty
+          ? rawNotes
+          : 'Нажмите, чтобы загрузить и установить обновление';
+      await plugin.show(
+        9402,
+        title,
+        body,
+        const NotificationDetails(
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            categoryIdentifier: 'app_update',
+          ),
+          macOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        ),
+        payload: jsonEncode(<String, dynamic>{...data, 'type': 'app_update'}),
+      );
       return;
     default:
       return;

@@ -223,6 +223,7 @@ class NotificationService with WidgetsBindingObserver {
         'storage_url': AppConfig.storageUrl,
         'token': await AuthService.getToken() ?? '',
         'user_id': await AuthService.getUserId() ?? '',
+        'app_build': AppConfig.currentBuildNumber,
       });
     } catch (e) {
       debugPrint('NotificationService: native configure failed: $e');
@@ -480,6 +481,7 @@ class NotificationService with WidgetsBindingObserver {
           prefs.getString('current_device_id') ??
           prefs.getString('device_id') ??
           'unknown';
+      final updateService = AppUpdateService.instance;
       final payload = <String, dynamic>{
         'token': token,
         'push_token': token,
@@ -487,6 +489,12 @@ class NotificationService with WidgetsBindingObserver {
         'service_type': type,
         'type': type,
         'device_id': deviceId,
+        'platform': updateService.getPlatform(),
+        'app_version': await updateService.getCurrentVersion(),
+        'app_build': await updateService.getCurrentBuildNumber(),
+        'architecture': await updateService.getDeviceArchitecture(),
+        'update_channel': await updateService.getChannel(),
+        'auto_check_updates': await updateService.isAutoCheckEnabled(),
         // Android renders chat pushes natively (data messages): avatar, history,
         // reply/read actions — the same look as foreground notifications.
         if (_isAndroid) 'push_render': 'native',
@@ -582,6 +590,9 @@ class NotificationService with WidgetsBindingObserver {
             final m = ChatMessageNotification.fromWebSocket(data);
             if (m == null || m.messageType == 'call') return;
             await _onChatMessage(m, NotificationSource.websocket);
+            return;
+          case WebSocketEventType.appUpdateAvailable:
+            await _handleAppUpdatePush();
             return;
           default:
             return;
@@ -1001,8 +1012,11 @@ class NotificationService with WidgetsBindingObserver {
 
   Future<void> _handleAppUpdatePush() async {
     try {
+      final isAutoCheck = await AppUpdateService.instance.isAutoCheckEnabled();
+      if (!isAutoCheck) return;
       final update = await AppUpdateService.instance.checkForUpdate(silent: true);
-      if (update.hasUpdate) {
+      if (update.hasUpdate &&
+          await AppUpdateService.instance.shouldNotifyDevice(update)) {
         await showAppUpdateNotification(update);
         await AppUpdateService.instance.markDeviceNotified(update.latestBuild);
       }
@@ -1032,6 +1046,26 @@ class NotificationService with WidgetsBindingObserver {
         onTap: () => _navigateFromNotificationData(payload),
       );
       return;
+    }
+    if (_isAndroid) {
+      try {
+        await _nativeNotifications.invokeMethod('showAppUpdateNotification', <String, String>{
+          'type': 'app_update',
+          'latest_version': update.latestVersion,
+          'latest_build': update.latestBuild.toString(),
+          'min_supported_build': update.minSupportedBuild.toString(),
+          'force_update': update.forceUpdate.toString(),
+          'download_url': update.downloadUrl,
+          'apk_size_bytes': update.apkSizeBytes.toString(),
+          'sha256': update.sha256,
+          'release_notes': update.releaseNotes,
+          'architecture': update.architecture,
+          'channel': update.channel,
+        });
+        return;
+      } catch (e) {
+        debugPrint('NotificationService: native app_update failed, falling back: $e');
+      }
     }
     if (_usesLocalNotifier) {
       try {
@@ -1067,8 +1101,8 @@ class NotificationService with WidgetsBindingObserver {
             NotificationChannels.appUpdates,
             NotificationChannels.label(NotificationChannels.appUpdates),
             channelDescription: NotificationChannels.description(NotificationChannels.appUpdates),
-            importance: Importance.defaultImportance,
-            priority: Priority.defaultPriority,
+            importance: Importance.high,
+            priority: Priority.high,
             icon: '@drawable/ic_notification',
             color: const Color(0xFF5B7FFF),
             autoCancel: true,
@@ -1411,12 +1445,17 @@ class NotificationService with WidgetsBindingObserver {
       });
       return;
     }
+    // Re-query the server for this device's exact ABI, SHA-256, and full release notes.
+    final verified = await AppUpdateService.instance.checkForUpdate(silent: false);
     final AppUpdateInfo update;
-    if (data['download_url']?.toString().isNotEmpty == true &&
+    if (verified.hasUpdate) {
+      update = verified;
+    } else if (AppUpdateService.instance.stateNotifier.value.status == AppUpdateStatus.error &&
+        data['download_url']?.toString().isNotEmpty == true &&
         data['latest_version']?.toString().isNotEmpty == true) {
       update = AppUpdateInfo.fromJson(data);
     } else {
-      update = await AppUpdateService.instance.checkForUpdate(silent: false);
+      update = verified;
     }
     if (update.hasUpdate && context.mounted) {
       UpdateDialog.show(context, update, isManual: true);
