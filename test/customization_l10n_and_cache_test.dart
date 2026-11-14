@@ -106,6 +106,9 @@ void main() {
     'customizationThirdColor',
     'customizationChatPreviewQuote',
     'customizationChatPreviewMessage',
+    'customizationReplyEmoji',
+    'customizationReplyEmojiEmptyTitle',
+    'customizationReplyEmojiEmptyHint',
   ];
 
   test('All 10 l10n locale files include every customization/badge/channel key and follow copy constraints', () {
@@ -385,6 +388,51 @@ void main() {
 
       expect(ProfileBannerHeightMode.snapToPixelGrid(175.4, 0), 175.0);
       expect(ProfileBannerHeightMode.snapToPixelGrid(175.4, double.nan), 175.0);
+    },
+  );
+
+  test(
+    'ReplyEmojiData & PeerCustomization.mergeAppearanceMap round-trip set and explicit null clear',
+    () {
+      const emojiJson = <String, dynamic>{
+        'sticker_id': 77,
+        'sticker_url': '/uploads/stickers/hello.webp',
+        'thumbnail_url': '/uploads/stickers/hello_thumb.webp',
+        'sticker_format': 'webp',
+      };
+      final cust = PeerCustomization.fromJson(<String, dynamic>{
+        'name_color_preset_id': 'name_blue',
+        'reply_strip_style': 'gradient',
+        'reply_emoji': emojiJson,
+      });
+
+      expect(cust.replyEmoji, isNotNull);
+      expect(cust.replyEmoji!.stickerId, 77);
+      expect(cust.replyEmoji!.stickerUrl, '/uploads/stickers/hello.webp');
+      expect(cust.replyEmoji!.thumbnailUrl, '/uploads/stickers/hello_thumb.webp');
+      expect(cust.replyEmoji!.stickerFormat, 'webp');
+
+      final roundtrip = PeerCustomization.fromJson(cust.toJson());
+      expect(roundtrip.replyEmoji, equals(cust.replyEmoji));
+
+      const emptyBaseline = PeerCustomization();
+      final mergedWithEmoji = emptyBaseline.mergeAppearanceMap(<String, dynamic>{
+        'reply_emoji': emojiJson,
+      });
+      expect(mergedWithEmoji.replyEmoji?.stickerId, 77);
+      expect(mergedWithEmoji.isEmpty, isFalse);
+
+      final mergedPreserved = mergedWithEmoji.mergeAppearanceMap(<String, dynamic>{
+        'name_color_preset_id': 'name_green',
+      });
+      expect(mergedPreserved.replyEmoji?.stickerId, 77);
+      expect(mergedPreserved.nameColorPresetId, 'name_green');
+
+      final cleared = mergedPreserved.mergeAppearanceMap(<String, dynamic>{
+        'reply_emoji': null,
+      });
+      expect(cleared.replyEmoji, isNull);
+      expect(cleared.nameColorPresetId, 'name_green');
     },
   );
 }

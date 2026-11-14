@@ -10,6 +10,7 @@ import 'account_manager.dart';
 import 'auth_service.dart';
 import 'peer_customization_cache.dart';
 import 'profile_instant_cache.dart';
+import 'sticker_service.dart';
 
 /// Модель палитры фона профиля
 class ProfileColorPreset {
@@ -288,6 +289,7 @@ class ProfileThemeProvider extends ChangeNotifier {
   PeerCustomization get ownCustomization => _ownCustomization;
   AvatarDecorationPreset? get currentAvatarDecoration => _ownCustomization.avatarDecoration;
   EmojiStatusData? get currentEmojiStatus => _ownCustomization.activeEmojiStatus;
+  ReplyEmojiData? get currentReplyEmoji => _ownCustomization.replyEmoji;
   String? get currentBannerUrl => _ownCustomization.profileBannerUrl;
   ProfileBannerLayout get currentBannerLayout => _ownCustomization.bannerLayout;
   UserBadge? get currentOwnBadge => _ownCustomization.badge;
@@ -504,6 +506,9 @@ class ProfileThemeProvider extends ChangeNotifier {
     String? profileColorPresetId,
     String? nameColorPresetId,
     String? replyStripStyle,
+    int? replyEmojiStickerId,
+    ReplyEmojiData? optimisticReplyEmoji,
+    bool clearReplyEmoji = false,
   }) async {
     final previous = _ownCustomization;
 
@@ -564,6 +569,29 @@ class ProfileThemeProvider extends ChangeNotifier {
       ).activeOrNull;
     }
 
+    ReplyEmojiData? nextReplyEmoji = previous.replyEmoji;
+    if (clearReplyEmoji) {
+      nextReplyEmoji = null;
+    } else if (optimisticReplyEmoji != null) {
+      nextReplyEmoji = optimisticReplyEmoji;
+    } else if (replyEmojiStickerId != null && replyEmojiStickerId > 0) {
+      final cached = StickerService.instance.getStickerByIdSync(replyEmojiStickerId);
+      nextReplyEmoji = cached != null
+          ? ReplyEmojiData.fromStickerItem(cached)
+          : ReplyEmojiData(
+              stickerId: replyEmojiStickerId,
+              stickerUrl: nextReplyEmoji?.stickerId == replyEmojiStickerId
+                  ? nextReplyEmoji?.stickerUrl
+                  : null,
+              thumbnailUrl: nextReplyEmoji?.stickerId == replyEmojiStickerId
+                  ? nextReplyEmoji?.thumbnailUrl
+                  : null,
+              stickerFormat: nextReplyEmoji?.stickerId == replyEmojiStickerId
+                  ? (nextReplyEmoji?.stickerFormat ?? 'webp')
+                  : 'webp',
+            );
+    }
+
     final next = PeerCustomization(
       nameColorPresetId: nameColorPresetId ?? previous.nameColorPresetId,
       replyStripStyle: replyStripStyle ?? previous.replyStripStyle,
@@ -577,6 +605,7 @@ class ProfileThemeProvider extends ChangeNotifier {
       bannerLayout: clearProfileBanner
           ? const ProfileBannerLayout()
           : (bannerLayout ?? previous.bannerLayout),
+      replyEmoji: nextReplyEmoji,
     );
 
     _ownCustomization = next;
@@ -626,6 +655,13 @@ class ProfileThemeProvider extends ChangeNotifier {
       if (profileColorPresetId != null) body['profile_color_preset_id'] = profileColorPresetId;
       if (nameColorPresetId != null) body['name_color_preset_id'] = nameColorPresetId;
       if (replyStripStyle != null) body['reply_strip_style'] = replyStripStyle;
+      if (clearReplyEmoji) {
+        body['clear_reply_emoji'] = true;
+      } else if (replyEmojiStickerId != null && replyEmojiStickerId > 0) {
+        body['reply_emoji_sticker_id'] = replyEmojiStickerId;
+      } else if (optimisticReplyEmoji != null && optimisticReplyEmoji.stickerId > 0) {
+        body['reply_emoji_sticker_id'] = optimisticReplyEmoji.stickerId;
+      }
 
       final response = await http.put(
         Uri.parse('${AppConfig.baseUrl}/api/user/appearance'),
@@ -872,9 +908,22 @@ class ProfileThemeProvider extends ChangeNotifier {
         ProfileInstantCache.instance.getUserColorPresetSync(userId);
   }
 
+  Future<bool> setReplyBackgroundEmoji(StickerItem? sticker) {
+    if (sticker == null) {
+      return updateCustomization(clearReplyEmoji: true);
+    }
+    return updateCustomization(
+      replyEmojiStickerId: sticker.id,
+      optimisticReplyEmoji: ReplyEmojiData.fromStickerItem(sticker),
+    );
+  }
+
   Future<void> resetToDefault() async {
     await setPreset(ProfileColorPresets.blue);
     await setNameColorAndStyle(NameColorPresets.red, ReplyStripStyle.solid);
+    if (_ownCustomization.replyEmoji != null) {
+      await updateCustomization(clearReplyEmoji: true);
+    }
   }
 
   @override

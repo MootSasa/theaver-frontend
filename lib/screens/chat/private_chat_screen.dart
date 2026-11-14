@@ -942,6 +942,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final replyStripStyle = event.data['reply_strip_style']?.toString();
     if (userId == null || !mounted) return;
     PeerCustomizationCache.instance.mergeFromJson(userId, event.data);
+    final updatedCust = PeerCustomizationCache.instance.getSync(userId);
 
     setState(() {
       for (int i = 0; i < _messages.length; i++) {
@@ -961,6 +962,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           newReplyInfo = m.replyInfo!.copyWith(
             nameColorPresetId: nameColorPresetId ?? m.replyInfo!.nameColorPresetId,
             replyStripStyle: replyStripStyle ?? m.replyInfo!.replyStripStyle,
+            replyEmoji: updatedCust?.replyEmoji,
+            clearReplyEmoji: updatedCust != null && updatedCust.replyEmoji == null,
           );
           changed = true;
         }
@@ -974,7 +977,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         }
       }
 
-      final updatedCust = PeerCustomizationCache.instance.getSync(userId);
       if (updatedCust != null) {
         for (int i = 0; i < _messages.length; i++) {
           if (_messages[i].senderId == userId) {
@@ -3730,6 +3732,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
                   : (replyTo.senderReplyStripStyle ?? 'solid'),
+              replyEmoji: isReplyToMe
+                  ? profileTheme.currentReplyEmoji
+                  : PeerCustomizationCache.instance
+                      .getSync(replyTo.senderId)
+                      ?.replyEmoji,
             ),
           );
         }
@@ -5327,6 +5334,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
                   : (replyTo.senderReplyStripStyle ?? 'solid'),
+              replyEmoji: isReplyToMe
+                  ? profileTheme.currentReplyEmoji
+                  : PeerCustomizationCache.instance
+                      .getSync(replyTo.senderId)
+                      ?.replyEmoji,
             ),
           );
         }
@@ -5518,6 +5530,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
                   : (replyTo.senderReplyStripStyle ?? 'solid'),
+              replyEmoji: isReplyToMe
+                  ? profileTheme.currentReplyEmoji
+                  : PeerCustomizationCache.instance
+                      .getSync(replyTo.senderId)
+                      ?.replyEmoji,
             ),
           );
         }

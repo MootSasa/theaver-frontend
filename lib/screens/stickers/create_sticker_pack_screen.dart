@@ -241,6 +241,7 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
         title: title,
         shortName: slug,
         packType: _packType,
+        isAdaptiveTextColor: _packType == 'custom_emoji' && _isAdaptiveColor,
       );
       if (pack == null) {
         if (mounted) {

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../services/sticker_service.dart';
 
 /// Height preset for profile cover banners across customization & full profile views.
 enum ProfileBannerHeightMode {
@@ -465,6 +466,72 @@ class EmojiStatusData {
   int get hashCode => Object.hash(type, emoji, stickerId, note, expiresAt);
 }
 
+/// Monotone adaptive custom emoji rendered in reply/quote card watermarks.
+class ReplyEmojiData {
+  final int stickerId;
+  final String? stickerUrl;
+  final String? thumbnailUrl;
+  final String stickerFormat;
+
+  const ReplyEmojiData({
+    required this.stickerId,
+    this.stickerUrl,
+    this.thumbnailUrl,
+    this.stickerFormat = 'webp',
+  });
+
+  factory ReplyEmojiData.fromStickerItem(StickerItem item) {
+    return ReplyEmojiData(
+      stickerId: item.id,
+      stickerUrl: item.fileUrl.isNotEmpty ? item.fileUrl : null,
+      thumbnailUrl: item.thumbnailUrl.isNotEmpty ? item.thumbnailUrl : null,
+      stickerFormat: item.format.isNotEmpty ? item.format : 'webp',
+    );
+  }
+
+  static ReplyEmojiData? fromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final json = raw is Map<String, dynamic>
+        ? raw
+        : Map<String, dynamic>.from(raw);
+    final stickerId = _tryParseInt(json['sticker_id']);
+    if (stickerId == null || stickerId <= 0) return null;
+    final url = json['sticker_url']?.toString();
+    final thumb = json['thumbnail_url']?.toString();
+    final fmt = json['sticker_format']?.toString();
+    return ReplyEmojiData(
+      stickerId: stickerId,
+      stickerUrl: (url != null && url.isNotEmpty) ? url : null,
+      thumbnailUrl: (thumb != null && thumb.isNotEmpty) ? thumb : null,
+      stickerFormat: (fmt != null && fmt.isNotEmpty) ? fmt : 'webp',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'type': 'sticker',
+        'sticker_id': stickerId,
+        if (stickerUrl != null && stickerUrl!.isNotEmpty)
+          'sticker_url': stickerUrl,
+        if (thumbnailUrl != null && thumbnailUrl!.isNotEmpty)
+          'thumbnail_url': thumbnailUrl,
+        if (stickerFormat.isNotEmpty) 'sticker_format': stickerFormat,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReplyEmojiData &&
+          runtimeType == other.runtimeType &&
+          stickerId == other.stickerId &&
+          stickerUrl == other.stickerUrl &&
+          thumbnailUrl == other.thumbnailUrl &&
+          stickerFormat == other.stickerFormat;
+
+  @override
+  int get hashCode =>
+      Object.hash(stickerId, stickerUrl, thumbnailUrl, stickerFormat);
+}
+
 /// Single role/achievement badge rendered as a short capsule (`CREATOR`, `DEV`, etc.).
 class UserBadge {
   final String id;
@@ -600,6 +667,7 @@ class PeerCustomization {
   final bool badgeIsDisplayed;
   final String? profileBannerUrl;
   final ProfileBannerLayout? _bannerLayout;
+  final ReplyEmojiData? replyEmoji;
 
   /// Hot-Reload-safe getter: existing instances instantiated before adding
   /// [_bannerLayout] get `null` in the new slot and fall back to default.
@@ -616,6 +684,7 @@ class PeerCustomization {
     this.badgeIsDisplayed = true,
     this.profileBannerUrl,
     ProfileBannerLayout? bannerLayout,
+    this.replyEmoji,
   }) : _bannerLayout = bannerLayout;
 
   EmojiStatusData? get activeEmojiStatus => emojiStatus?.activeOrNull;
@@ -630,6 +699,7 @@ class PeerCustomization {
       avatarDecoration == null &&
       activeEmojiStatus == null &&
       badge == null &&
+      replyEmoji == null &&
       (profileBannerUrl == null || profileBannerUrl!.isEmpty) &&
       bannerLayout.isDefault;
 
@@ -675,6 +745,7 @@ class PeerCustomization {
           json['badge_is_displayed'] == null ? true : json['badge_is_displayed'] == true,
       profileBannerUrl: (banner != null && banner.isNotEmpty) ? banner : null,
       bannerLayout: ProfileBannerLayout.fromAppearanceMap(json),
+      replyEmoji: ReplyEmojiData.fromJson(json['reply_emoji']),
     );
   }
 
@@ -740,6 +811,11 @@ class PeerCustomization {
               : null)
           : profileBannerUrl,
       bannerLayout: nextBannerLayout,
+      replyEmoji: map.containsKey('reply_emoji')
+          ? (map['reply_emoji'] == null
+              ? null
+              : ReplyEmojiData.fromJson(map['reply_emoji']))
+          : replyEmoji,
     );
   }
 
@@ -754,6 +830,7 @@ class PeerCustomization {
         'emoji_status': activeEmojiStatus?.toJson(),
         'badge': badge?.toJson(),
         'badge_is_displayed': badgeIsDisplayed,
+        if (replyEmoji != null) 'reply_emoji': replyEmoji!.toJson(),
         if (profileBannerUrl != null && profileBannerUrl!.isNotEmpty)
           'profile_banner_url': profileBannerUrl,
         if ((profileBannerUrl != null && profileBannerUrl!.isNotEmpty) ||

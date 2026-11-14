@@ -1450,12 +1450,35 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     setState(() {
       for (int i = 0; i < _messages.length; i++) {
-        if (_messages[i].senderId == userId) {
-          _messages[i] = _messages[i].copyWith(
-            senderNameColorId: nameColorPresetId ?? _messages[i].senderNameColorId,
-            senderReplyStripStyle:
-                replyStripStyle ?? _messages[i].senderReplyStripStyle,
-            senderCustomization: updatedCust ?? _messages[i].senderCustomization,
+        final m = _messages[i];
+        bool changed = false;
+        String? newSenderColor = m.senderNameColorId;
+        String? newSenderStrip = m.senderReplyStripStyle;
+        PeerCustomization? newSenderCust = m.senderCustomization;
+        ReplyInfo? newReplyInfo = m.replyInfo;
+
+        if (m.senderId == userId) {
+          if (nameColorPresetId != null) newSenderColor = nameColorPresetId;
+          if (replyStripStyle != null) newSenderStrip = replyStripStyle;
+          if (updatedCust != null) newSenderCust = updatedCust;
+          changed = true;
+        }
+        if (m.replyInfo != null && m.replyInfo!.senderId == userId) {
+          newReplyInfo = m.replyInfo!.copyWith(
+            nameColorPresetId:
+                nameColorPresetId ?? m.replyInfo!.nameColorPresetId,
+            replyStripStyle: replyStripStyle ?? m.replyInfo!.replyStripStyle,
+            replyEmoji: updatedCust?.replyEmoji,
+            clearReplyEmoji: updatedCust != null && updatedCust.replyEmoji == null,
+          );
+          changed = true;
+        }
+        if (changed) {
+          _messages[i] = m.copyWith(
+            senderNameColorId: newSenderColor,
+            senderReplyStripStyle: newSenderStrip,
+            senderCustomization: newSenderCust,
+            replyInfo: newReplyInfo,
           );
         }
       }
@@ -2683,6 +2706,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
                   : (replyTo.senderReplyStripStyle ?? 'solid'),
+              replyEmoji: isReplyToMe
+                  ? profileTheme.currentReplyEmoji
+                  : PeerCustomizationCache.instance
+                      .getSync(replyTo.senderId)
+                      ?.replyEmoji,
             ),
           );
         }
@@ -5572,6 +5600,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
                   : (replyTo.senderReplyStripStyle ?? 'solid'),
+              replyEmoji: isReplyToMe
+                  ? profileTheme.currentReplyEmoji
+                  : PeerCustomizationCache.instance
+                      .getSync(replyTo.senderId)
+                      ?.replyEmoji,
             ),
           );
         }
@@ -5763,6 +5796,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
                   : (replyTo.senderReplyStripStyle ?? 'solid'),
+              replyEmoji: isReplyToMe
+                  ? profileTheme.currentReplyEmoji
+                  : PeerCustomizationCache.instance
+                      .getSync(replyTo.senderId)
+                      ?.replyEmoji,
             ),
           );
         }

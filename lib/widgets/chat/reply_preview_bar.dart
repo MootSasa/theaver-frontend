@@ -4,11 +4,14 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
+import '../profile/reply_background_emoji_layer.dart';
 import '../profile/reply_strip_painter.dart';
 import 'message_reply_info.dart';
 
@@ -174,6 +177,16 @@ class ReplyPreviewBar extends StatelessWidget {
     }
 
     final accentColor = authorPreset.primaryColor;
+    final ReplyEmojiData? authorReplyEmoji;
+    if (isSenderMe) {
+      authorReplyEmoji = profileTheme.currentReplyEmoji;
+    } else {
+      final cachedPeer = replyToMessage.senderId.isNotEmpty
+          ? PeerCustomizationCache.instance.getSync(replyToMessage.senderId)
+          : null;
+      authorReplyEmoji =
+          cachedPeer?.replyEmoji ?? replyToMessage.senderCustomization?.replyEmoji;
+    }
 
     final isDark = theme.brightness == Brightness.dark;
     final basePreviewStyle = TextStyle(
@@ -250,7 +263,7 @@ class ReplyPreviewBar extends StatelessWidget {
       );
     }
 
-    return Padding(
+    final paddedRow = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -368,6 +381,25 @@ class ReplyPreviewBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+    if (authorReplyEmoji == null) {
+      return paddedRow;
+    }
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: ReplyBackgroundEmojiLayer(
+              emoji: authorReplyEmoji,
+              color: accentColor,
+              maxSlots: 5,
+              opacityScale: 0.85,
+            ),
+          ),
+        ),
+        paddedRow,
+      ],
     );
   }
 }

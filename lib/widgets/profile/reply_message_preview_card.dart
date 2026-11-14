@@ -6,6 +6,7 @@ import '../common/glass_modal_sheet.dart';
 import '../common/peer_badges_widget.dart';
 import '../user/avatar_with_status.dart';
 import '../user/emoji_status_badge.dart';
+import 'reply_background_emoji_layer.dart';
 import 'reply_strip_painter.dart';
 
 /// Реалистичная карточка предпросмотра сообщения в групповом чате Theaver
@@ -13,6 +14,7 @@ import 'reply_strip_painter.dart';
 class ReplyMessagePreviewCard extends StatelessWidget {
   final NameColorPreset preset;
   final ReplyStripStyle stripStyle;
+  final ReplyEmojiData? replyEmoji;
   final String userName;
   final String? avatarUrl;
   final String? userId;
@@ -27,6 +29,7 @@ class ReplyMessagePreviewCard extends StatelessWidget {
     Key? key,
     required this.preset,
     required this.stripStyle,
+    this.replyEmoji,
     required this.userName,
     this.avatarUrl,
     this.userId,
@@ -142,56 +145,72 @@ class ReplyMessagePreviewCard extends StatelessWidget {
 
                 // Блок цитаты ответа (Reply Quote)
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     color: preset.getOpaqueCardBackgroundColor(isDarkCanvas),
                     borderRadius: BorderRadius.circular(7),
                   ),
-                  child: IntrinsicHeight(
-                    child: Row(
-                      children: [
-                        ReplyStripWidget(
-                          preset: preset,
-                          style: stripStyle,
-                          width: 3.5,
-                          borderRadius: 2,
+                  child: Stack(
+                    children: [
+                      if (replyEmoji != null)
+                        Positioned.fill(
+                          child: ReplyBackgroundEmojiLayer(
+                            emoji: replyEmoji,
+                            color: preset.primaryColor,
+                          ),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 5,
+                        ),
+                        child: IntrinsicHeight(
+                          child: Row(
                             children: [
-                              Text(
-                                userName,
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w600,
-                                  color: preset.primaryColor,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              ReplyStripWidget(
+                                preset: preset,
+                                style: stripStyle,
+                                width: 3.5,
+                                borderRadius: 2,
                               ),
-                              const SizedBox(height: 1.5),
-                              Text(
-                                translateOrFallback(
-                                  context,
-                                  'customizationChatPreviewQuote',
-                                  'Updated profile design in Theaver',
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      userName,
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: preset.primaryColor,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 1.5),
+                                    Text(
+                                      translateOrFallback(
+                                        context,
+                                        'customizationChatPreviewQuote',
+                                        'Updated profile design in Theaver',
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: quoteBodyColor,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
                                 ),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: quoteBodyColor,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 7),

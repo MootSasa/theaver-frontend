@@ -1395,5 +1395,8 @@
   "customizationThirdColor": "세 번째 색상",
   "customizationChatPreviewQuote": "Theaver 프로필 디자인을 업데이트했어요",
   "customizationChatPreviewMessage": "그룹 채팅에서 이름, 배지, 답장 인용구가 이렇게 표시됩니다.",
-  "emojiStatusSelectHint": "이모지 선택"
+  "emojiStatusSelectHint": "이모지 선택",
+  "customizationReplyEmoji": "배경 이모지",
+  "customizationReplyEmojiEmptyTitle": "단색 이모지가 없습니다",
+  "customizationReplyEmojiEmptyHint": "적응형 커스텀 이모지 팩을 설치하거나 만들어 답장 배경에 사용해 보세요."
 }

@@ -4,12 +4,15 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/image_utils.dart';
+import '../profile/reply_background_emoji_layer.dart';
 import '../profile/reply_strip_painter.dart';
 
 /// Displays a compact reply/quote preview above a message bubble.
@@ -542,17 +545,42 @@ class MessageReplyInfo extends StatelessWidget {
       title = youTitle;
     }
 
+    final ReplyEmojiData? effectiveReplyEmoji;
+    if (!isDeleted && replyInfo != null) {
+      if (isReplyingToMe) {
+        effectiveReplyEmoji = profileTheme.currentReplyEmoji;
+      } else {
+        final cachedPeer = replyInfo!.senderId.isNotEmpty
+            ? PeerCustomizationCache.instance.getSync(replyInfo!.senderId)
+            : null;
+        effectiveReplyEmoji = cachedPeer?.replyEmoji ?? replyInfo!.replyEmoji;
+      }
+    } else {
+      effectiveReplyEmoji = null;
+    }
+
     return GestureDetector(
       onTap: isDeleted ? null : onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: bgColor,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Stack(
           children: [
+            if (effectiveReplyEmoji != null)
+              Positioned.fill(
+                child: ReplyBackgroundEmojiLayer(
+                  emoji: effectiveReplyEmoji,
+                  color: accentColor,
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Stack(
+                children: [
             Positioned(
               top: 0,
               bottom: 0,
@@ -643,6 +671,9 @@ class MessageReplyInfo extends StatelessWidget {
                       ),
                 ],
               ),
+            ),
+          ],
+        ),
             ),
           ],
         ),

@@ -1395,5 +1395,8 @@
   "customizationThirdColor": "Третий цвет",
   "customizationChatPreviewQuote": "Обновили дизайн профиля в Theaver",
   "customizationChatPreviewMessage": "Так ваше имя, бейдж и цитата выглядят в групповых чатах.",
-  "emojiStatusSelectHint": "Выбрать эмодзи"
+  "emojiStatusSelectHint": "Выбрать эмодзи",
+  "customizationReplyEmoji": "Фоновый эмодзи",
+  "customizationReplyEmojiEmptyTitle": "Нет монотонных эмодзи",
+  "customizationReplyEmojiEmptyHint": "Установите или создайте адаптивный набор эмодзи, чтобы использовать его в фоне ответа."
 }

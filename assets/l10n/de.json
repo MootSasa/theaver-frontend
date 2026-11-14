@@ -1395,5 +1395,8 @@
   "customizationThirdColor": "Dritte Farbe",
   "customizationChatPreviewQuote": "Profildesign in Theaver aktualisiert",
   "customizationChatPreviewMessage": "So sehen Ihr Name, Abzeichen und Zitat in Gruppenchats aus.",
-  "emojiStatusSelectHint": "Emoji auswählen"
+  "emojiStatusSelectHint": "Emoji auswählen",
+  "customizationReplyEmoji": "Hintergrund-Emoji",
+  "customizationReplyEmojiEmptyTitle": "Keine monotonen Emojis",
+  "customizationReplyEmojiEmptyHint": "Installiere oder erstelle ein adaptives Emoji-Paket, um es als Antwort-Hintergrund zu nutzen."
 }

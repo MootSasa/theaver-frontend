@@ -1395,5 +1395,8 @@
   "customizationThirdColor": "3色目",
   "customizationChatPreviewQuote": "Theaverのプロフィールデザインを更新しました",
   "customizationChatPreviewMessage": "グループチャットでの名前・バッジ・引用の表示イメージです。",
-  "emojiStatusSelectHint": "絵文字を選択"
+  "emojiStatusSelectHint": "絵文字を選択",
+  "customizationReplyEmoji": "背景絵文字",
+  "customizationReplyEmojiEmptyTitle": "モノトーン絵文字がありません",
+  "customizationReplyEmojiEmptyHint": "アダプティブ絵文字パックをインストールまたは作成すると、返信の背景に設定できます。"
 }

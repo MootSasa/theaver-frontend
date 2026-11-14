@@ -26,9 +26,11 @@ import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/profile/color_palette_picker.dart';
 import '../../widgets/profile/floating_emoji_status_menu.dart';
+import '../../widgets/profile/floating_reply_emoji_menu.dart';
 import '../../widgets/profile/name_color_picker.dart';
 import '../../widgets/profile/profile_banner_layer.dart';
 import '../../widgets/profile/profile_floating_top_switcher.dart';
+import '../../widgets/profile/reply_background_emoji_layer.dart';
 import '../../widgets/profile/reply_message_preview_card.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/user/avatar_with_status.dart';
@@ -70,6 +72,7 @@ class _ProfileCustomizationScreenState
   final GlobalKey _heroNameRowAnchorKey = GlobalKey();
   final GlobalKey _heroEmojiStatusAnchorKey = GlobalKey();
   final GlobalKey _emojiStatusRowAnchorKey = GlobalKey();
+  final GlobalKey _replyEmojiAnchorKey = GlobalKey();
 
   ProfileColorPreset? _draftCoverPreset;
   NameColorPreset? _draftNamePreset;
@@ -423,6 +426,28 @@ class _ProfileCustomizationScreenState
 
   void _resetNameColor() {
     _applyNameColorImmediate(NameColorPresets.red, ReplyStripStyle.solid);
+    final provider = context.read<ProfileThemeProvider>();
+    if (provider.currentReplyEmoji != null) {
+      unawaited(provider.setReplyBackgroundEmoji(null));
+    }
+  }
+
+  Future<void> _openReplyEmojiMenu(BuildContext context) async {
+    HapticUtils.tap();
+    final provider = context.read<ProfileThemeProvider>();
+    final namePreset = _effectiveNamePreset(provider);
+    await showFloatingReplyEmojiMenu(
+      context: context,
+      anchorKey: _replyEmojiAnchorKey,
+      selectedStickerId: provider.currentReplyEmoji?.stickerId,
+      accentColor: namePreset.primaryColor,
+      onEmojiSelected: (sticker) async {
+        await provider.setReplyBackgroundEmoji(sticker);
+      },
+      onClear: () async {
+        await provider.setReplyBackgroundEmoji(null);
+      },
+    );
   }
 
   Future<void> _pickCustomNameColor() async {
@@ -1365,8 +1390,10 @@ class _ProfileCustomizationScreenState
     final avatarUrl = _avatarUrl();
     final namePreset = _effectiveNamePreset(themeProvider);
     final stripStyle = _effectiveStripStyle(themeProvider);
+    final currentReplyEmoji = themeProvider.currentReplyEmoji;
     final isNonDefault = namePreset.id != NameColorPresets.red.id ||
-        stripStyle != ReplyStripStyle.solid;
+        stripStyle != ReplyStripStyle.solid ||
+        currentReplyEmoji != null;
     final secondaryForeground = isDarkBackdrop
         ? Colors.white.withValues(alpha: 0.62)
         : const Color(0xFF6C6C70);
@@ -1387,6 +1414,7 @@ class _ProfileCustomizationScreenState
           isDarkBackdropOverride: isDarkBackdrop,
           preset: namePreset,
           stripStyle: stripStyle,
+          replyEmoji: currentReplyEmoji,
           userName: displayName,
           avatarUrl: avatarUrl,
           userId: _userId,
@@ -1395,7 +1423,7 @@ class _ProfileCustomizationScreenState
           badge: themeProvider.currentVisibleBadge,
         ),
 
-        // 2. Единая аккуратная панель выбора цвета имени и стиля полоски цитирования
+        // 2. Единая аккуратная панель выбора цвета имени, стиля полоски и фонового эмодзи
         ProfileGlassSection(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           isDarkBackdrop: isDarkBackdrop,
@@ -1424,6 +1452,34 @@ class _ProfileCustomizationScreenState
                 onStyleSelected: (style) =>
                     _applyNameColorImmediate(namePreset, style),
               ),
+            ),
+            ListTile(
+              key: const ValueKey<String>('customization_reply_emoji_row'),
+              title: Text(
+                translateOrFallback(
+                  context,
+                  'customizationReplyEmoji',
+                  'Background Emoji',
+                ),
+                style: const TextStyle(fontSize: 15),
+              ),
+              trailing: KeyedSubtree(
+                key: _replyEmojiAnchorKey,
+                child: currentReplyEmoji != null
+                    ? ReplyEmojiGlyph(
+                        emoji: currentReplyEmoji,
+                        color: namePreset.primaryColor,
+                        size: 26,
+                        animate: true,
+                        repeat: true,
+                      )
+                    : iconoir.Emoji(
+                        width: 22,
+                        height: 22,
+                        color: secondaryForeground,
+                      ),
+              ),
+              onTap: () => _openReplyEmojiMenu(context),
             ),
             if (isNonDefault)
               ListTile(

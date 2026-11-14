@@ -1,27 +1,50 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/models/name_color_preset.dart';
 import 'package:theaver/models/profile_customization.dart';
 import 'package:theaver/screens/settings/profile_banner_editor_screen.dart';
 import 'package:theaver/screens/settings/profile_customization_screen.dart';
+import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/peer_customization_cache.dart';
 import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/common/glass_modal_sheet.dart';
+import 'package:theaver/widgets/chat/message_reply_info.dart';
 import 'package:theaver/widgets/profile/floating_emoji_status_menu.dart';
+import 'package:theaver/widgets/profile/floating_reply_emoji_menu.dart';
 import 'package:theaver/widgets/profile/name_color_picker.dart';
 import 'package:theaver/widgets/profile/profile_banner_layer.dart';
 import 'package:theaver/widgets/profile/profile_floating_top_switcher.dart';
+import 'package:theaver/widgets/profile/reply_background_emoji_layer.dart';
 import 'package:theaver/widgets/profile/reply_message_preview_card.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
+
+class _PreloadedAppLocalizationsDelegate
+    extends LocalizationsDelegate<AppLocalizations> {
+  final AppLocalizations instance;
+  const _PreloadedAppLocalizationsDelegate(this.instance);
+
+  @override
+  bool isSupported(Locale locale) => true;
+
+  @override
+  Future<AppLocalizations> load(Locale locale) =>
+      SynchronousFuture<AppLocalizations>(instance);
+
+  @override
+  bool shouldReload(_PreloadedAppLocalizationsDelegate old) => false;
+}
 
 Widget _buildTestHarness({
   required ProfileThemeProvider themeProvider,
@@ -774,6 +797,151 @@ void main() {
           );
         }
       }
+    },
+  );
+
+  testWidgets(
+    'Name tab renders Background Emoji row, previews ReplyBackgroundEmojiLayer watermark, and FloatingReplyEmojiMenu shows monotone-only clear/empty state',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final themeProvider = ProfileThemeProvider();
+      final glassProvider = LiquidGlassProvider();
+
+      await tester.pumpWidget(
+        _buildTestHarness(
+          themeProvider: themeProvider,
+          glassProvider: glassProvider,
+          initialTab: 1,
+        ),
+      );
+      await tester.pump();
+
+      final rowFinder = find.byKey(
+        const ValueKey<String>('customization_reply_emoji_row'),
+      );
+      expect(rowFinder, findsOneWidget);
+      expect(find.text('Background Emoji'), findsOneWidget);
+      expect(find.byType(ReplyBackgroundEmojiLayer), findsNothing);
+
+      themeProvider.seedOwnCustomizationForTest(
+        const PeerCustomization(
+          replyEmoji: ReplyEmojiData(
+            stickerId: 91,
+            stickerUrl: '/uploads/stickers/kitty.webp',
+            thumbnailUrl: '/uploads/stickers/kitty_thumb.webp',
+            stickerFormat: 'webp',
+          ),
+        ),
+        userId: 'u_self',
+      );
+      await tester.pump();
+
+      expect(find.byType(ReplyBackgroundEmojiLayer), findsOneWidget);
+      expect(find.byType(ReplyEmojiGlyph), findsWidgets);
+      expect(tester.takeException(), isNull);
+
+      await tester.ensureVisible(rowFinder);
+      await tester.pump();
+      await tester.tap(rowFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.byType(FloatingReplyEmojiMenu), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('floating_reply_emoji_clear')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
+
+  testWidgets(
+    'MessageReplyInfo.forwarded never renders ReplyBackgroundEmojiLayer while reply quotes with replyEmoji do',
+    (tester) async {
+      final themeProvider = ProfileThemeProvider();
+      final preloadedL10n = (await tester.runAsync(
+        () => AppLocalizations.delegate.load(const Locale('en')),
+      ))!;
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<ProfileThemeProvider>.value(
+              value: themeProvider,
+            ),
+            ChangeNotifierProvider<PeerCustomizationCache>.value(
+              value: PeerCustomizationCache.instance,
+            ),
+          ],
+          child: MaterialApp(
+            locale: const Locale('en'),
+            supportedLocales: const [Locale('en')],
+            localizationsDelegates: [
+              _PreloadedAppLocalizationsDelegate(preloadedL10n),
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: Scaffold(
+              body: SizedBox(
+                width: 320,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    MessageReplyInfo.forwarded(
+                      authorName: 'Alice',
+                      content: 'Forwarded text',
+                    ),
+                    const MessageReplyInfo(
+                      replyInfo: ReplyInfo(
+                        messageId: 'm1',
+                        senderId: 'u_bob',
+                        senderName: 'Bob',
+                        content: 'Original message quote preview',
+                        messageType: 'text',
+                        replyEmoji: ReplyEmojiData(
+                          stickerId: 55,
+                          stickerUrl: '/uploads/stickers/star.webp',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final forwardedFinder = find.byWidgetPredicate(
+        (w) => w is MessageReplyInfo && w.replyInfo == null,
+      );
+      final replyFinder = find.byWidgetPredicate(
+        (w) => w is MessageReplyInfo && w.replyInfo != null,
+      );
+
+      expect(forwardedFinder, findsOneWidget);
+      expect(replyFinder, findsOneWidget);
+
+      expect(
+        find.descendant(
+          of: forwardedFinder,
+          matching: find.byType(ReplyBackgroundEmojiLayer),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: replyFinder,
+          matching: find.byType(ReplyBackgroundEmojiLayer),
+        ),
+        findsOneWidget,
+      );
     },
   );
 }

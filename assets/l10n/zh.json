@@ -1395,5 +1395,8 @@
   "customizationThirdColor": "第三种颜色",
   "customizationChatPreviewQuote": "更新了 Theaver 的个人资料设计",
   "customizationChatPreviewMessage": "您的名称、徽章和引用回复在群聊中将如此显示。",
-  "emojiStatusSelectHint": "选择表情"
+  "emojiStatusSelectHint": "选择表情",
+  "customizationReplyEmoji": "背景表情",
+  "customizationReplyEmojiEmptyTitle": "暂无单色表情",
+  "customizationReplyEmojiEmptyHint": "安装或创建自适应自定义表情包后，即可将其用作回复背景。"
 }

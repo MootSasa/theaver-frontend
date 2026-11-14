@@ -231,12 +231,19 @@ class StickerPack {
   final String title;
   final bool isAnimated;
   final bool isCustomEmoji;
+  final bool? _isAdaptiveTextColor;
   final bool isOfficial;
   final bool isInstalled;
   final String thumbnailUrl;
   final int stickersCount;
   final int installedCount;
   final List<StickerItem> stickers;
+
+  /// Hot-Reload-safe getter: existing instances instantiated before adding
+  /// [_isAdaptiveTextColor] compute adaptive support from child stickers.
+  bool get isAdaptiveTextColor =>
+      _isAdaptiveTextColor ??
+      (isCustomEmoji && stickers.any((s) => s.isAdaptiveTextColor));
 
   const StickerPack({
     required this.id,
@@ -245,13 +252,14 @@ class StickerPack {
     required this.title,
     this.isAnimated = false,
     this.isCustomEmoji = false,
+    bool? isAdaptiveTextColor,
     this.isOfficial = false,
     this.isInstalled = false,
     this.thumbnailUrl = '',
     this.stickersCount = 0,
     this.installedCount = 0,
     this.stickers = const [],
-  });
+  }) : _isAdaptiveTextColor = isAdaptiveTextColor;
 
   List<StickerItem> get items => stickers;
   String get coverUrl => thumbnailUrl;
@@ -284,6 +292,7 @@ class StickerPack {
       title: json['title']?.toString() ?? '',
       isAnimated: json['is_animated'] == true,
       isCustomEmoji: json['is_custom_emoji'] == true,
+      isAdaptiveTextColor: json['is_adaptive_text_color'] == true,
       isOfficial: json['is_official'] == true,
       isInstalled: json['is_installed'] == true,
       thumbnailUrl: thumb,
@@ -294,8 +303,25 @@ class StickerPack {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        if (ownerId != null) 'owner_id': ownerId,
+        'short_name': shortName,
+        'title': title,
+        'is_animated': isAnimated,
+        'is_custom_emoji': isCustomEmoji,
+        'is_adaptive_text_color': isAdaptiveTextColor,
+        'is_official': isOfficial,
+        'is_installed': isInstalled,
+        'thumbnail_url': thumbnailUrl,
+        'stickers_count': stickersCount,
+        'installed_count': installedCount,
+        'stickers': stickers.map((s) => s.toMediaPayload()).toList(),
+      };
+
   StickerPack copyWith({
     bool? isInstalled,
+    bool? isAdaptiveTextColor,
     List<StickerItem>? stickers,
   }) {
     return StickerPack(
@@ -305,6 +331,7 @@ class StickerPack {
       title: title,
       isAnimated: isAnimated,
       isCustomEmoji: isCustomEmoji,
+      isAdaptiveTextColor: isAdaptiveTextColor ?? _isAdaptiveTextColor,
       isOfficial: isOfficial,
       isInstalled: isInstalled ?? this.isInstalled,
       thumbnailUrl: thumbnailUrl,
@@ -491,6 +518,54 @@ class StickerService extends ChangeNotifier {
   List<StickerPack> get featuredStickerPacks => _featuredStickerPacks;
   List<StickerPack> get installedEmojiPacks => _installedEmojiPacks;
   List<StickerPack> get featuredEmojiPacks => _featuredEmojiPacks;
+
+  /// Returns installed & featured custom emoji packs containing at least one
+  /// monotone (adaptive-color) custom emoji, with non-adaptive items filtered out.
+  List<StickerPack> get adaptiveEmojiPacks {
+    final seenIds = <int>{};
+    final result = <StickerPack>[];
+    for (final pack in [..._installedEmojiPacks, ..._featuredEmojiPacks]) {
+      if (!pack.isCustomEmoji || !seenIds.add(pack.id)) continue;
+      final packAdaptive = pack.isAdaptiveTextColor;
+      final adaptiveStickers = <StickerItem>[];
+      for (final st in pack.stickers) {
+        if (st.isAdaptiveTextColor) {
+          adaptiveStickers.add(st);
+        } else if (packAdaptive) {
+          adaptiveStickers.add(StickerItem(
+            id: st.id,
+            packId: st.packId,
+            packShortName: st.packShortName,
+            packTitle: st.packTitle,
+            fileUrl: st.fileUrl,
+            thumbnailUrl: st.thumbnailUrl,
+            emojiList: st.emojiList,
+            effectEmoji: st.effectEmoji,
+            effectAnimationUrl: st.effectAnimationUrl,
+            format: st.format,
+            width: st.width,
+            height: st.height,
+            fileSize: st.fileSize,
+            orderIndex: st.orderIndex,
+            hasAlpha: st.hasAlpha,
+            isAdaptiveTextColor: true,
+            ocrText: st.ocrText,
+            visualDescriptionRu: st.visualDescriptionRu,
+            visualDescriptionEn: st.visualDescriptionEn,
+            tags: st.tags,
+          ));
+        }
+      }
+      if (adaptiveStickers.isNotEmpty) {
+        result.add(pack.copyWith(
+          isAdaptiveTextColor: true,
+          stickers: adaptiveStickers,
+        ));
+      }
+    }
+    return result;
+  }
+
   List<StickerPack> get featuredPacks => [
         ..._featuredStickerPacks,
         ..._featuredEmojiPacks,
@@ -898,15 +973,17 @@ class StickerService extends ChangeNotifier {
     String query, {
     bool? isCustomEmoji,
     String? packType,
+    bool adaptiveOnly = false,
   }) async {
     final effectiveCustomEmoji =
-        isCustomEmoji ?? (packType == 'custom_emoji');
+        adaptiveOnly || (isCustomEmoji ?? (packType == 'custom_emoji'));
     final trimmed = query.trim();
     if (trimmed.isEmpty) return [];
 
-    // 1. Local matches from installed packs
-    final packs =
-        effectiveCustomEmoji ? _installedEmojiPacks : _installedStickerPacks;
+    // 1. Local matches from installed (or adaptive custom emoji) packs
+    final packs = adaptiveOnly
+        ? adaptiveEmojiPacks
+        : (effectiveCustomEmoji ? _installedEmojiPacks : _installedStickerPacks);
     final Map<int, StickerItem> merged = {};
     for (final p in packs) {
       for (final st in p.stickers) {
@@ -923,6 +1000,7 @@ class StickerService extends ChangeNotifier {
         queryParameters: {
           'q': trimmed,
           'custom_emoji': effectiveCustomEmoji ? 'true' : 'false',
+          if (adaptiveOnly) 'adaptive': 'true',
         },
       );
       final resp = await http.get(uri, headers: headers);
@@ -931,6 +1009,7 @@ class StickerService extends ChangeNotifier {
         if (d is Map && d['stickers'] is List) {
           for (final item in (d['stickers'] as List).whereType<Map>()) {
             final parsed = StickerItem.fromJson(Map<String, dynamic>.from(item));
+            if (adaptiveOnly && !parsed.isAdaptiveTextColor) continue;
             _stickerByIdCache[parsed.id] = parsed;
             merged[parsed.id] = parsed;
           }
@@ -1274,9 +1353,11 @@ class StickerService extends ChangeNotifier {
     required String shortName,
     bool? isCustomEmoji,
     String? packType,
+    bool isAdaptiveTextColor = false,
   }) async {
     final effectiveCustomEmoji =
         isCustomEmoji ?? (packType == 'custom_emoji');
+    final effectiveAdaptive = effectiveCustomEmoji && isAdaptiveTextColor;
     try {
       final headers = await _authHeaders();
       final resp = await http.post(
@@ -1286,6 +1367,7 @@ class StickerService extends ChangeNotifier {
           'title': title.trim(),
           'short_name': shortName.trim(),
           'is_custom_emoji': effectiveCustomEmoji,
+          'is_adaptive_text_color': effectiveAdaptive,
         }),
       );
       if (resp.statusCode == 201 || resp.statusCode == 200) {

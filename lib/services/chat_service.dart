@@ -355,6 +355,7 @@ class ReplyInfo {
   final String? chatId; // The chat ID where the original message resides
   final String? nameColorPresetId;
   final String? replyStripStyle;
+  final ReplyEmojiData? replyEmoji;
   final List<MessageEntity> entities;
 
   const ReplyInfo({
@@ -366,6 +367,7 @@ class ReplyInfo {
     this.chatId,
     this.nameColorPresetId,
     this.replyStripStyle,
+    this.replyEmoji,
     this.entities = const [],
   });
 
@@ -425,6 +427,9 @@ class ReplyInfo {
           json['reply_to_sender_name_color_id']?.toString(),
       replyStripStyle: json['reply_strip_style']?.toString() ??
           json['reply_to_sender_strip_style']?.toString(),
+      replyEmoji: ReplyEmojiData.fromJson(
+        json['reply_emoji'] ?? json['reply_to_sender_reply_emoji'],
+      ),
       entities: _parseEntities(json['entities'] ?? json['reply_to_entities']),
     );
   }
@@ -438,6 +443,7 @@ class ReplyInfo {
         if (chatId != null) 'chat_id': chatId,
         if (nameColorPresetId != null) 'name_color_preset_id': nameColorPresetId,
         if (replyStripStyle != null) 'reply_strip_style': replyStripStyle,
+        if (replyEmoji != null) 'reply_emoji': replyEmoji!.toJson(),
         if (entities.isNotEmpty)
           'entities': entities.map((e) => e.toJson()).toList(),
       };
@@ -451,6 +457,8 @@ class ReplyInfo {
     String? chatId,
     String? nameColorPresetId,
     String? replyStripStyle,
+    ReplyEmojiData? replyEmoji,
+    bool clearReplyEmoji = false,
     List<MessageEntity>? entities,
   }) {
     return ReplyInfo(
@@ -462,6 +470,7 @@ class ReplyInfo {
       chatId: chatId ?? this.chatId,
       nameColorPresetId: nameColorPresetId ?? this.nameColorPresetId,
       replyStripStyle: replyStripStyle ?? this.replyStripStyle,
+      replyEmoji: clearReplyEmoji ? null : (replyEmoji ?? this.replyEmoji),
       entities: entities ?? this.entities,
     );
   }
@@ -804,8 +813,9 @@ class Message {
     // Parse replyInfo from nested object or flat fields
     ReplyInfo? replyInfo;
     if (json['reply_info'] != null && json['reply_info'] is Map) {
-      replyInfo =
-          ReplyInfo.fromJson(json['reply_info'] as Map<String, dynamic>);
+      replyInfo = ReplyInfo.fromJson(
+        Map<String, dynamic>.from(json['reply_info'] as Map),
+      );
     } else if (json['reply_to_message_id'] != null) {
       // Fallback: build ReplyInfo from flat fields
       replyInfo = ReplyInfo(
@@ -818,8 +828,50 @@ class Message {
             json['reply_to_name_color_preset_id']?.toString(),
         replyStripStyle: json['reply_to_sender_strip_style']?.toString() ??
             json['reply_to_strip_style']?.toString(),
+        replyEmoji: ReplyEmojiData.fromJson(
+          json['reply_to_sender_reply_emoji'],
+        ),
         entities: ReplyInfo._parseEntities(json['reply_to_entities']),
       );
+    }
+
+    final replySenderIdStr =
+        json['reply_to_sender_id']?.toString() ?? replyInfo?.senderId ?? '';
+    final rawReplySenderCust = json['reply_to_sender_customization'];
+    PeerCustomization? parsedReplySenderCust;
+    if (rawReplySenderCust is Map) {
+      parsedReplySenderCust = PeerCustomization.fromJson(
+        Map<String, dynamic>.from(rawReplySenderCust),
+      );
+    } else if (rawReplySenderCust is String && rawReplySenderCust.isNotEmpty) {
+      parsedReplySenderCust =
+          PeerCustomization.tryParseJsonString(rawReplySenderCust);
+    }
+    if (replySenderIdStr.isNotEmpty && parsedReplySenderCust != null) {
+      PeerCustomizationCache.instance.put(
+        replySenderIdStr,
+        parsedReplySenderCust,
+        notify: false,
+      );
+    }
+    if (replyInfo != null) {
+      final resolvedReplyEmoji = replyInfo.replyEmoji ??
+          ReplyEmojiData.fromJson(
+            json['reply_to_sender_reply_emoji'] ??
+                (rawReplySenderCust is Map
+                    ? rawReplySenderCust['reply_emoji']
+                    : null),
+          ) ??
+          parsedReplySenderCust?.replyEmoji ??
+          (replySenderIdStr.isNotEmpty
+              ? PeerCustomizationCache.instance
+                  .getSync(replySenderIdStr)
+                  ?.replyEmoji
+              : null);
+      if (resolvedReplyEmoji != null &&
+          resolvedReplyEmoji != replyInfo.replyEmoji) {
+        replyInfo = replyInfo.copyWith(replyEmoji: resolvedReplyEmoji);
+      }
     }
 
     final Map<String, int> parsedReactions = {};
@@ -1040,12 +1092,16 @@ class Message {
     // Build ReplyInfo from cached fields
     ReplyInfo? replyInfo;
     if (model.replyToMessageId != null) {
+      final replySenderId = model.replyToSenderId ?? '';
       replyInfo = ReplyInfo(
         messageId: model.replyToMessageId!,
-        senderId: model.replyToSenderId ?? '',
+        senderId: replySenderId,
         senderName: model.replyToSenderName ?? '',
         content: model.replyToContent ?? '',
         messageType: model.replyToMessageType,
+        replyEmoji: replySenderId.isNotEmpty
+            ? PeerCustomizationCache.instance.getSync(replySenderId)?.replyEmoji
+            : null,
       );
     }
 

@@ -1,4 +1,5 @@
 import '../services/chat_service.dart';
+import '../services/peer_customization_cache.dart';
 
 /// Single item within a media album
 class MediaAlbumItem {
@@ -143,6 +144,10 @@ List<FeedItem> groupMessagesIntoFeedItems(
                     messageType: orig.messageType,
                     nameColorPresetId: orig.senderNameColorId,
                     replyStripStyle: orig.senderReplyStripStyle,
+                    replyEmoji: orig.senderCustomization?.replyEmoji ??
+                        PeerCustomizationCache.instance
+                            .getSync(orig.senderId)
+                            ?.replyEmoji,
                     entities: orig.entities,
                   ),
           );
