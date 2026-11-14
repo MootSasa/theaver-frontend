@@ -22,12 +22,12 @@ import '../../services/profile_theme_provider.dart';
 import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/haptic_utils.dart';
-import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/chat/sticker_item_widget.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/profile/color_palette_picker.dart';
+import '../../widgets/profile/floating_emoji_status_menu.dart';
 import '../../widgets/profile/name_color_picker.dart';
 import '../../widgets/profile/profile_floating_top_switcher.dart';
 import '../../widgets/profile/reply_message_preview_card.dart';
@@ -67,6 +67,9 @@ class _ProfileCustomizationScreenState
   final ScrollController _profileScrollController = ScrollController();
   final ScrollController _nameScrollController = ScrollController();
   final ValueNotifier<double> _bannerScrollOffset = ValueNotifier<double>(0.0);
+  final GlobalKey _heroNameRowAnchorKey = GlobalKey();
+  final GlobalKey _heroEmojiStatusAnchorKey = GlobalKey();
+  final GlobalKey _emojiStatusRowAnchorKey = GlobalKey();
 
   ProfileColorPreset? _draftCoverPreset;
   NameColorPreset? _draftNamePreset;
@@ -115,7 +118,10 @@ class _ProfileCustomizationScreenState
     if (widget.initialTab == 2) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          _openEmojiStatusSheet(context);
+          final targetKey = _heroEmojiStatusAnchorKey.currentContext != null
+              ? _heroEmojiStatusAnchorKey
+              : _heroNameRowAnchorKey;
+          _openEmojiStatusMenu(context, anchorKey: targetKey);
         }
       });
     }
@@ -719,216 +725,20 @@ class _ProfileCustomizationScreenState
     );
   }
 
-  Future<void> _openEmojiStatusSheet(BuildContext context) async {
+  Future<void> _openEmojiStatusMenu(
+    BuildContext context, {
+    GlobalKey? anchorKey,
+  }) async {
     HapticUtils.tap();
-    await showTheavGlassModalSheet<void>(
+    await showFloatingEmojiStatusMenu(
       context: context,
-      isScrollControlled: true,
-      builder: (sheetCtx) {
-        return StatefulBuilder(
-          builder: (ctx, setSheetState) {
-            return Consumer<ProfileThemeProvider>(
-              builder: (ctx, sheetThemeProvider, _) {
-                final mq = MediaQuery.of(ctx);
-                final kbBottom = mq.viewInsets.bottom;
-                final sheetHeight =
-                    (mq.size.height * 0.70 - kbBottom).clamp(240.0, 520.0);
-                final theme = Theme.of(ctx);
-                final theav = TheavTheme.of(ctx);
-                final activeStatus = sheetThemeProvider.currentEmojiStatus;
-
-                final durationOptions = <(Duration?, String)>[
-                  (
-                    null,
-                    translateOrFallback(
-                      ctx,
-                      'emojiStatusExpiryNever',
-                      'Forever',
-                    )
-                  ),
-                  (
-                    const Duration(hours: 1),
-                    translateOrFallback(ctx, 'emojiStatusExpiry1h', '1 hour')
-                  ),
-                  (
-                    const Duration(hours: 4),
-                    translateOrFallback(ctx, 'emojiStatusExpiry4h', '4 hours')
-                  ),
-                  (
-                    const Duration(hours: 24),
-                    translateOrFallback(ctx, 'emojiStatusExpiry24h', '24 hours')
-                  ),
-                  (
-                    const Duration(days: 7),
-                    translateOrFallback(ctx, 'emojiStatusExpiry7d', '7 days')
-                  ),
-                ];
-
-                int selectedDurationIdx = 0;
-                for (int i = 0; i < durationOptions.length; i++) {
-                  if (durationOptions[i].$1 == _selectedDuration) {
-                    selectedDurationIdx = i;
-                    break;
-                  }
-                }
-
-                return Padding(
-                  padding: EdgeInsets.only(bottom: kbBottom),
-                  child: SizedBox(
-                    height: sheetHeight,
-                    child: Column(
-                      children: [
-                        // Компактная строка заголовка и срока действия без лишней вложенной панели
-                        Padding(
-                          padding: const EdgeInsets.only(
-                            left: 4,
-                            right: 4,
-                            bottom: 10,
-                          ),
-                          child: Row(
-                            children: [
-                              if (activeStatus != null) ...[
-                                EmojiStatusBadge(
-                                  status: activeStatus,
-                                  size: 22,
-                                  animate: true,
-                                  interactive: false,
-                                  fallbackColor: theav.accent,
-                                ),
-                                const SizedBox(width: 8),
-                              ],
-                              Expanded(
-                                child: Text(
-                                  translateOrFallback(
-                                    ctx,
-                                    'emojiStatusTitle',
-                                    'Emoji Status',
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              PopupMenuButton<int>(
-                                onSelected: (idx) async {
-                                  await _onDurationSelected(
-                                    durationOptions[idx].$1,
-                                  );
-                                  if (ctx.mounted) {
-                                    setSheetState(() {});
-                                  }
-                                },
-                                itemBuilder: (menuCtx) => [
-                                  for (int i = 0;
-                                      i < durationOptions.length;
-                                      i++)
-                                    PopupMenuItem<int>(
-                                      value: i,
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(durationOptions[i].$2),
-                                          ),
-                                          if (i == selectedDurationIdx)
-                                            iconoir.Check(
-                                              width: 18,
-                                              height: 18,
-                                              color: theav.accent,
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                ],
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 6,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: theav.accent.withValues(alpha: 0.12),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      iconoir.Clock(
-                                        width: 15,
-                                        height: 15,
-                                        color: theav.accent,
-                                      ),
-                                      const SizedBox(width: 5),
-                                      Text(
-                                        durationOptions[selectedDurationIdx].$2,
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: theav.accent,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 3),
-                                      iconoir.NavArrowDown(
-                                        width: 14,
-                                        height: 14,
-                                        color: theav.accent,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              if (activeStatus != null) ...[
-                                const SizedBox(width: 4),
-                                IconButton(
-                                  visualDensity: VisualDensity.compact,
-                                  tooltip: translateOrFallback(
-                                    ctx,
-                                    'emojiStatusClear',
-                                    'Clear Status',
-                                  ),
-                                  onPressed: () async {
-                                    await _clearEmojiStatus();
-                                    if (ctx.mounted) {
-                                      setSheetState(() {});
-                                    }
-                                  },
-                                  icon: iconoir.Xmark(
-                                    width: 18,
-                                    height: 18,
-                                    color: theav.textSecondary,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: EmojiStickerPanel(
-                              emojiOnly: true,
-                              expandToAvailableHeight: true,
-                              selectedEmoji: activeStatus?.type == 'unicode'
-                                  ? activeStatus?.emoji
-                                  : null,
-                              selectedCustomEmojiId:
-                                  activeStatus?.type == 'sticker'
-                                      ? activeStatus?.stickerId
-                                      : null,
-                              onEmojiSelected: _selectUnicodeStatus,
-                              onCustomEmojiSelected: _selectCustomStickerStatus,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            );
-          },
-        );
-      },
+      anchorKey: anchorKey,
+      selectedDuration: _selectedDuration,
+      onEmojiSelected: _selectUnicodeStatus,
+      onCustomEmojiSelected: _selectCustomStickerStatus,
+      onDurationSelected: _onDurationSelected,
+      onClearStatus: _clearEmojiStatus,
+      accentColor: TheavTheme.of(context).accent,
     );
   }
 
@@ -1089,6 +899,7 @@ class _ProfileCustomizationScreenState
               ),
               const SizedBox(height: 12),
               Row(
+                key: _heroNameRowAnchorKey,
                 mainAxisAlignment: MainAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1108,12 +919,20 @@ class _ProfileCustomizationScreenState
                   ),
                   if (activeStatus != null) ...[
                     const SizedBox(width: 6),
-                    EmojiStatusBadge(
-                      status: activeStatus,
-                      size: 20,
-                      animate: true,
-                      interactive: false,
-                      fallbackColor: onCoverForeground,
+                    GestureDetector(
+                      key: _heroEmojiStatusAnchorKey,
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _openEmojiStatusMenu(
+                        context,
+                        anchorKey: _heroEmojiStatusAnchorKey,
+                      ),
+                      child: EmojiStatusBadge(
+                        status: activeStatus,
+                        size: 20,
+                        animate: true,
+                        interactive: false,
+                        fallbackColor: onCoverForeground,
+                      ),
                     ),
                   ],
                   if (themeProvider.currentVisibleBadge != null)
@@ -1224,7 +1043,7 @@ class _ProfileCustomizationScreenState
           ],
         ),
 
-        // 2. Эмодзи-статус (выбор на вкладке «Профиль» в стеклянной шторке)
+        // 2. Эмодзи-статус (плавающее меню выбора как в Telegram)
         ProfileGlassSection(
           title: translateOrFallback(
             context,
@@ -1279,6 +1098,23 @@ class _ProfileCustomizationScreenState
                         color: secondaryForeground,
                       ),
                     ),
+                  KeyedSubtree(
+                    key: _emojiStatusRowAnchorKey,
+                    child: activeStatus != null
+                        ? EmojiStatusBadge(
+                            status: activeStatus,
+                            size: 22,
+                            animate: true,
+                            interactive: false,
+                            fallbackColor: sectionAccent,
+                          )
+                        : iconoir.Emoji(
+                            width: 20,
+                            height: 20,
+                            color: secondaryForeground,
+                          ),
+                  ),
+                  const SizedBox(width: 4),
                   iconoir.NavArrowRight(
                     width: 18,
                     height: 18,
@@ -1286,7 +1122,10 @@ class _ProfileCustomizationScreenState
                   ),
                 ],
               ),
-              onTap: () => _openEmojiStatusSheet(context),
+              onTap: () => _openEmojiStatusMenu(
+                context,
+                anchorKey: _emojiStatusRowAnchorKey,
+              ),
             ),
           ],
         ),

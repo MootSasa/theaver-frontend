@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/models/name_color_preset.dart';
@@ -10,9 +9,9 @@ import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/peer_customization_cache.dart';
 import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/settings_service.dart';
-import 'package:theaver/widgets/chat/emoji_sticker_panel.dart';
 import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/common/glass_modal_sheet.dart';
+import 'package:theaver/widgets/profile/floating_emoji_status_menu.dart';
 import 'package:theaver/widgets/profile/name_color_picker.dart';
 import 'package:theaver/widgets/profile/profile_floating_top_switcher.dart';
 import 'package:theaver/widgets/profile/reply_message_preview_card.dart';
@@ -277,7 +276,7 @@ void main() {
       );
       await tester.pump();
 
-      // 1. Emoji Status row on Profile tab opens glass modal sheet WITHOUT any short-note input
+      // 1. Emoji Status row on Profile tab opens Telegram-style floating menu WITHOUT short-note input
       final statusRow = find.byKey(
         const ValueKey<String>('profile_emoji_status_row'),
       );
@@ -288,25 +287,42 @@ void main() {
       await tester.tap(statusRow);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
-      expect(find.byType(TheavGlassModalSheet), findsOneWidget);
-      expect(find.byType(EmojiStickerPanel), findsOneWidget);
+      expect(find.byType(FloatingEmojiStatusMenu), findsOneWidget);
+      expect(find.byType(TheavGlassModalSheet), findsNothing);
+      final menuRect = tester.getRect(find.byType(FloatingEmojiStatusMenu));
+      expect(menuRect.left, greaterThanOrEqualTo(8.0));
+      expect(menuRect.right, lessThanOrEqualTo(382.0));
+      expect(menuRect.top, greaterThanOrEqualTo(8.0));
+      expect(menuRect.bottom, lessThanOrEqualTo(834.0));
+      expect(menuRect.height, lessThanOrEqualTo(360.0));
       expect(find.text('Add a short note (up to 64 chars)'), findsNothing);
 
-      // Tap emoji inside modal sheet -> instant Frame-0 status update with empty note
-      await tester.tap(find.text('😀').first);
+      // Tap emoji inside floating menu -> instant Frame-0 status update with empty note and auto-close
+      await tester.tap(
+        find.descendant(
+          of: find.byType(FloatingEmojiStatusMenu),
+          matching: find.text('😀'),
+        ).first,
+      );
       await tester.pump();
       expect(themeProvider.currentEmojiStatus?.emoji, '😀');
       expect(themeProvider.currentEmojiStatus?.note, isEmpty);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(FloatingEmojiStatusMenu), findsNothing);
 
-      // Dismiss modal sheet -> clear inline via Xmark on the Profile tab row
-      Navigator.of(tester.element(find.byType(TheavGlassModalSheet))).pop();
+      // Re-open floating menu -> tap clear icon cell (⊝) -> clears status at Frame 0 and auto-closes
+      await tester.tap(statusRow);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
-      expect(find.byType(iconoir.Xmark), findsOneWidget);
+      expect(find.byType(FloatingEmojiStatusMenu), findsOneWidget);
 
-      await tester.tap(find.byType(iconoir.Xmark));
+      await tester.tap(
+        find.byKey(const ValueKey<String>('floating_emoji_status_clear')),
+      );
       await tester.pump();
       expect(themeProvider.currentEmojiStatus, isNull);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(FloatingEmojiStatusMenu), findsNothing);
 
       // 2. Tap an avatar decoration frame in the horizontal carousel -> instant apply
       final profileScrollable = find.descendant(
@@ -369,6 +385,44 @@ void main() {
       );
       await tester.pump();
       expect(themeProvider.currentStripStyle, ReplyStripStyle.dualColor);
+
+      // Flush PeerCustomizationCache 500ms persist debounce timer
+      await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
+
+  testWidgets(
+    'initialTab: 2 opens FloatingEmojiStatusMenu automatically on Profile tab',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final themeProvider = ProfileThemeProvider()
+        ..seedOwnCustomizationForTest(
+          const PeerCustomization(),
+          userId: 'u_test_init2',
+        );
+      final glassProvider = LiquidGlassProvider();
+
+      await tester.pumpWidget(
+        _buildTestHarness(
+          themeProvider: themeProvider,
+          glassProvider: glassProvider,
+          initialTab: 2,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(find.byType(FloatingEmojiStatusMenu), findsOneWidget);
+      expect(find.byType(TheavGlassModalSheet), findsNothing);
+
+      Navigator.of(
+        tester.element(find.byType(FloatingEmojiStatusMenu)),
+      ).pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(FloatingEmojiStatusMenu), findsNothing);
 
       // Flush PeerCustomizationCache 500ms persist debounce timer
       await tester.pump(const Duration(milliseconds: 600));
