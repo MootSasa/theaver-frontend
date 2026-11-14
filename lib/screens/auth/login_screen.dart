@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:pretty_qr_code/pretty_qr_code.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/privacy_settings_provider.dart';
@@ -36,23 +36,22 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _errorMessage;
   String? _suggestedLanguageCode;
 
-  // QR Login state (Web / Desktop)
+  // QR Login state
   bool _qrMode = false;
   bool _qrLoading = false;
   bool _qrExpired = false;
   bool _qrAwaiting2faHandled = false;
+  bool _qrClaiming = false;
   String? _qrToken;
   String? _qrSecret;
   String? _qrShortCode;
   String? _qrUrl;
   String? _qrError;
+  String? _qrClaimError;
   Timer? _qrPollTimer;
+  final _qrClaimCodeController = TextEditingController();
 
-  bool get _supportsQrLogin =>
-      kIsWeb ||
-      defaultTargetPlatform == TargetPlatform.windows ||
-      defaultTargetPlatform == TargetPlatform.macOS ||
-      defaultTargetPlatform == TargetPlatform.linux;
+  bool get _supportsQrLogin => true;
 
   @override
   void initState() {
@@ -95,9 +94,38 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void dispose() {
     _qrPollTimer?.cancel();
+    _qrClaimCodeController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  String _map2FAResetError(
+    AppLocalizations l10n,
+    Map<String, dynamic> res, {
+    required String fallbackKey,
+  }) {
+    final err = res['error']?.toString() ?? '';
+    switch (err) {
+      case 'email_not_configured':
+        return l10n.translate('email_error_not_configured');
+      case 'cooldown':
+      case 'rate_limited':
+        final wait = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
+        return l10n.translate('email_error_cooldown').replaceAll('{seconds}', '$wait');
+      case 'no_email':
+        return l10n.translate('email_add_hint');
+      case 'invalid_password':
+        return l10n.translate('email_error_invalid_password');
+      case 'invalid_code':
+      case 'code_expired':
+        return l10n.translate('email_error_invalid_code');
+      case 'too_many_attempts':
+        return l10n.translate('email_error_too_many_attempts');
+      default:
+        final msg = res['message']?.toString() ?? '';
+        return msg.isNotEmpty ? msg : l10n.translate(fallbackKey);
+    }
   }
 
   Future<void> _reloadUserScopedProviders(String? userId) async {
@@ -219,8 +247,11 @@ class _LoginScreenState extends State<LoginScreen> {
                             } else {
                               setDialogState(() {
                                 busy = false;
-                                dialogError = res['message']?.toString() ??
-                                    l10n.translate('common_error');
+                                dialogError = _map2FAResetError(
+                                  l10n,
+                                  res,
+                                  fallbackKey: 'common_error',
+                                );
                               });
                             }
                           } else {
@@ -239,8 +270,11 @@ class _LoginScreenState extends State<LoginScreen> {
                             } else {
                               setDialogState(() {
                                 busy = false;
-                                dialogError = res['message']?.toString() ??
-                                    l10n.translate('email_error_invalid_code');
+                                dialogError = _map2FAResetError(
+                                  l10n,
+                                  res,
+                                  fallbackKey: 'email_error_invalid_code',
+                                );
                               });
                             }
                           }
@@ -411,12 +445,18 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    final token = created['token']?.toString();
+    final rawUrl = created['qr_url']?.toString();
     setState(() {
       _qrLoading = false;
-      _qrToken = created['token']?.toString();
+      _qrToken = token;
       _qrSecret = created['qr_secret']?.toString();
       _qrShortCode = created['short_code']?.toString();
-      _qrUrl = created['qr_url']?.toString();
+      _qrUrl = (rawUrl != null && rawUrl.isNotEmpty)
+          ? rawUrl
+          : (token != null && token.isNotEmpty
+              ? 'theaver://qr-login?token=${Uri.encodeQueryComponent(token)}'
+              : null);
     });
 
     _qrPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -511,7 +551,90 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _qrMode = false;
       _qrError = null;
+      _qrClaimError = null;
     });
+  }
+
+  Future<void> _claimQrCode() async {
+    final l10n = context.l10n;
+    final raw = _qrClaimCodeController.text.trim();
+    if (raw.isEmpty || _qrClaiming) return;
+
+    setState(() {
+      _qrClaiming = true;
+      _qrClaimError = null;
+    });
+
+    String? token;
+    String? shortCode;
+    if (raw.contains('token=')) {
+      final uri = Uri.tryParse(raw);
+      token = uri?.queryParameters['token'];
+    }
+    if (token == null || token.isEmpty) {
+      shortCode = raw.replaceAll('-', '').replaceAll(' ', '').toUpperCase();
+    }
+
+    var res = await AuthService.claimQrGrantSession(
+      token: token,
+      shortCode: shortCode,
+    );
+    if (!mounted) return;
+
+    if (res['requires_2fa'] == true) {
+      final choice = await _promptTwoFactorDialog(allowEmailReset: false);
+      if (!mounted) return;
+      final val = choice?['value']?.toString().trim() ?? '';
+      if (val.isEmpty) {
+        setState(() => _qrClaiming = false);
+        return;
+      }
+      res = await AuthService.claimQrGrantSession(
+        token: token,
+        shortCode: shortCode,
+        twoFactorPassword: choice?['isRecoveryCode'] == true ? null : val,
+        recoveryCode: choice?['isRecoveryCode'] == true ? val : null,
+      );
+      if (!mounted) return;
+    }
+
+    setState(() => _qrClaiming = false);
+    if (res['success'] == true && res['auth_token'] != null) {
+      _qrPollTimer?.cancel();
+      final authToken = res['auth_token'].toString();
+      final userId = res['user_id']?.toString() ?? '';
+      final userMap = res['user'] is Map
+          ? Map<String, dynamic>.from(res['user'] as Map)
+          : null;
+      await AuthService.completeExternalLoginSession(
+        authToken: authToken,
+        userId: userId,
+        user: userMap,
+      );
+      if (mounted) {
+        await _navigateToWorkspace(userId);
+      }
+      return;
+    }
+
+    final err = res['error']?.toString() ?? '';
+    String mapped;
+    switch (err) {
+      case 'qr_expired_or_invalid':
+        mapped = l10n.translate('devices_link_error');
+        break;
+      case 'invalid_2fa_password':
+        mapped = l10n.translate('email_error_invalid_2fa');
+        break;
+      case 'too_many_attempts':
+        mapped = l10n.translate('email_error_too_many_attempts');
+        break;
+      default:
+        mapped = res['message']?.toString().isNotEmpty == true
+            ? res['message'].toString()
+            : l10n.translate('devices_link_error');
+    }
+    setState(() => _qrClaimError = mapped);
   }
 
   void _navigateToRecovery() {
@@ -874,24 +997,50 @@ class _LoginScreenState extends State<LoginScreen> {
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(16),
                                 ),
-                                child: PrettyQrView.data(
+                                child: QrImageView(
                                   data: _qrUrl!,
-                                  decoration: const PrettyQrDecoration(
-                                    shape: PrettyQrSmoothSymbol(
-                                      color: Colors.black,
-                                    ),
-                                  ),
+                                  version: QrVersions.auto,
+                                  size: 160,
+                                  backgroundColor: Colors.white,
                                 ),
                               ),
                               if (_qrShortCode != null && _qrShortCode!.isNotEmpty) ...[
                                 const SizedBox(height: 12),
-                                SelectableText(
-                                  '${l10n.translate('auth_qr_code_label')}: $_qrShortCode',
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 1.5,
+                                InkWell(
+                                  borderRadius: BorderRadius.circular(8),
+                                  onTap: () {
+                                    Clipboard.setData(
+                                      ClipboardData(text: _qrShortCode!),
+                                    );
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          l10n.translate('auth_qr_code_copied'),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 6,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          '${l10n.translate('auth_qr_code_label')}: $_qrShortCode',
+                                          style: const TextStyle(
+                                            fontFamily: 'monospace',
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: 1.5,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        const Icon(Icons.copy_rounded, size: 16),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ],
@@ -903,6 +1052,48 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ],
                             const SizedBox(height: 12),
+                            const Divider(height: 20),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _qrClaimCodeController,
+                                    textCapitalization: TextCapitalization.characters,
+                                    decoration: InputDecoration(
+                                      isDense: true,
+                                      hintText: l10n.translate('auth_qr_enter_code_hint'),
+                                      border: const OutlineInputBorder(),
+                                    ),
+                                    onSubmitted: (_) => _claimQrCode(),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                FilledButton(
+                                  onPressed: _qrClaiming ? null : _claimQrCode,
+                                  child: _qrClaiming
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : Text(l10n.translate('devices_link_confirm')),
+                                ),
+                              ],
+                            ),
+                            if (_qrClaimError != null) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                _qrClaimError!,
+                                style: const TextStyle(
+                                  color: Colors.red,
+                                  fontSize: 12,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                            const SizedBox(height: 8),
                             TextButton(
                               onPressed: _stopQrLogin,
                               child: Text(l10n.translate('auth_qr_back_password')),

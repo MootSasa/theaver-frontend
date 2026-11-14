@@ -1,13 +1,20 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import 'auth_service.dart';
 import 'chat_service.dart';
+import 'notification_settings_provider.dart';
+import 'privacy_settings_provider.dart';
 import 'search_service.dart';
+import 'settings_service.dart';
 import 'account_manager.dart';
 import 'tiling_layout_controller.dart';
+import 'websocket_service.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/profile/user_profile_popup.dart';
+import '../widgets/tiling/tiling_workspace_scaffold.dart';
 import '../screens/chat/private_chat_screen.dart';
 import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/channel_screen.dart';
@@ -20,6 +27,8 @@ enum DeepLinkType {
   groupInvite,
   channel,
   addTheme,
+  qrLogin,
+  qrGrant,
 }
 
 /// Parsed deep link metadata
@@ -50,31 +59,65 @@ class ParsedDeepLink {
 ///   `http://<ip-or-domain>[:port]/c/{channelName}`
 ///   `http://<ip-or-domain>[:port]/#/c/{channelName}`
 ///   `theaver://c/{channelName}`
-class DeepLinkService {
+class DeepLinkService with WidgetsBindingObserver {
   DeepLinkService._();
   static final DeepLinkService _instance = DeepLinkService._();
   factory DeepLinkService() => _instance;
 
   /// Global navigator key to access current context
   final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  bool _observerAdded = false;
 
-  /// Initializes deep link handling and processes initial link on Web.
+  /// Initializes deep link handling and processes initial link on Web & native platforms.
   Future<void> init() async {
     debugPrint('DeepLinkService: initialized');
-
-    if (kIsWeb) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        try {
-          final uri = Uri.base;
-          final parsed = parseUri(uri);
-          if (parsed != null) {
-            handleLink(uri);
-          }
-        } catch (e) {
-          debugPrint('DeepLinkService: web initial link error: $e');
-        }
-      });
+    if (!_observerAdded) {
+      WidgetsBinding.instance.addObserver(this);
+      _observerAdded = true;
     }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        Uri? initialUri;
+        if (kIsWeb) {
+          initialUri = Uri.base;
+        } else {
+          final route =
+              WidgetsBinding.instance.platformDispatcher.defaultRouteName;
+          if (route.isNotEmpty && route != '/') {
+            initialUri = Uri.tryParse(route);
+          }
+        }
+        if (initialUri != null && parseUri(initialUri) != null) {
+          handleLink(initialUri);
+        }
+      } catch (e) {
+        debugPrint('DeepLinkService: initial link error: $e');
+      }
+    });
+  }
+
+  @override
+  Future<bool> didPushRouteInformation(RouteInformation routeInformation) async {
+    final uri = routeInformation.uri;
+    if (parseUri(uri) != null) {
+      unawaited(handleLink(uri));
+      return true;
+    }
+    return false;
+  }
+
+  static ParsedDeepLink? _parseQrLink(
+    Map<String, String> query, {
+    String? fallbackSegment,
+  }) {
+    final tok = (query['token'] ?? fallbackSegment ?? '').trim();
+    if (tok.isEmpty) return null;
+    final mode = (query['mode'] ?? '').trim().toLowerCase();
+    return ParsedDeepLink(
+      mode == 'grant' ? DeepLinkType.qrGrant : DeepLinkType.qrLogin,
+      tok,
+    );
   }
 
   /// Parses an incoming URI into a structured ParsedDeepLink or null if unrecognized.
@@ -104,6 +147,10 @@ class DeepLinkService {
       } else if (host == 'addtheme' || host == 'theme') {
         final code = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : uri.queryParameters['code'];
         if (code != null && code.isNotEmpty) return ParsedDeepLink(DeepLinkType.addTheme, code);
+      } else if (host == 'qr-login' || host == 'qrlogin') {
+        final seg = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : null;
+        final qr = _parseQrLink(uri.queryParameters, fallbackSegment: seg);
+        if (qr != null) return qr;
       }
     }
 
@@ -131,6 +178,11 @@ class DeepLinkService {
       final code = segments[1].trim();
       if (code.isNotEmpty) return ParsedDeepLink(DeepLinkType.addTheme, code);
     }
+    if (first == 'qr-login' || first == 'qrlogin') {
+      final seg = segments.length >= 2 ? segments[1] : null;
+      final qr = _parseQrLink(query, fallbackSegment: seg);
+      if (qr != null) return qr;
+    }
 
     return null;
   }
@@ -157,6 +209,12 @@ class DeepLinkService {
         break;
       case DeepLinkType.addTheme:
         await _handleThemeLink(parsed.identifier);
+        break;
+      case DeepLinkType.qrLogin:
+        await _handleQrLogin(parsed.identifier);
+        break;
+      case DeepLinkType.qrGrant:
+        await _handleQrGrant(parsed.identifier);
         break;
     }
   }
@@ -464,6 +522,163 @@ class DeepLinkService {
           );
         }
       },
+    );
+  }
+
+  /// Confirms a pending QR login request scanned by an already authenticated device.
+  Future<void> _handleQrLogin(String token) async {
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+    final authToken = await AuthService.getToken();
+    if (!context.mounted) return;
+    final l10n = context.l10n;
+    if (authToken == null || authToken.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.translate('devices_link_error'))),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(l10n.translate('qr_confirm_dialog_title')),
+        content: Text(l10n.translate('qr_confirm_dialog_body')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.translate('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.translate('confirm')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final res = await AuthService.confirmQrLogin(token: token);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          res['success'] == true
+              ? (res['status'] == 'awaiting_2fa'
+                  ? l10n.translate('devices_link_awaiting_2fa')
+                  : l10n.translate('devices_link_success'))
+              : (res['message']?.toString().isNotEmpty == true &&
+                      res['error'] != 'qr_expired_or_invalid'
+                  ? res['message'].toString()
+                  : l10n.translate('devices_link_error')),
+        ),
+      ),
+    );
+  }
+
+  /// Claims a QR grant generated on an authenticated device (`mode=grant`).
+  Future<void> _handleQrGrant(String token) async {
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+    final l10n = context.l10n;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(l10n.translate('qr_confirm_dialog_title')),
+        content: Text(l10n.translate('qr_confirm_dialog_body')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.translate('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.translate('confirm')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    var res = await AuthService.claimQrGrantSession(token: token);
+    if (!context.mounted) return;
+
+    if (res['requires_2fa'] == true) {
+      final pwdCtrl = TextEditingController();
+      final pwd = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(l10n.translate('security_2fa')),
+          content: TextField(
+            controller: pwdCtrl,
+            obscureText: true,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: l10n.translate('email_2fa_password_label'),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(l10n.translate('cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, pwdCtrl.text.trim()),
+              child: Text(l10n.translate('confirm')),
+            ),
+          ],
+        ),
+      );
+      pwdCtrl.dispose();
+      if (!context.mounted || pwd == null || pwd.isEmpty) return;
+      res = await AuthService.claimQrGrantSession(
+        token: token,
+        twoFactorPassword: pwd,
+      );
+      if (!context.mounted) return;
+    }
+
+    if (res['success'] == true && res['auth_token'] != null) {
+      final authToken = res['auth_token'].toString();
+      final userId = res['user_id']?.toString() ?? '';
+      final userMap = res['user'] is Map
+          ? Map<String, dynamic>.from(res['user'] as Map)
+          : null;
+      await AuthService.completeExternalLoginSession(
+        authToken: authToken,
+        userId: userId,
+        user: userMap,
+      );
+      await SettingsService().reloadForUser(userId);
+      if (context.mounted) {
+        try {
+          await context.read<PrivacySettingsProvider>().reloadForUser();
+        } catch (_) {}
+      }
+      if (context.mounted) {
+        try {
+          await context.read<NotificationSettingsProvider>().reloadForUser();
+        } catch (_) {}
+      }
+      await WebSocketService().updateUserId(userId);
+      TilingLayoutController.instance.closeAllChats();
+      if (!context.mounted) return;
+      Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+        SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
+        (route) => false,
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          res['error'] == 'invalid_2fa_password'
+              ? l10n.translate('email_error_invalid_2fa')
+              : l10n.translate('devices_link_error'),
+        ),
+      ),
     );
   }
 }

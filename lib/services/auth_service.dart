@@ -38,15 +38,7 @@ class AuthService {
 
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/register'),
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Device-ID': deviceId,
-          'X-Device-Name': deviceInfo.deviceName,
-          'X-Device-Type': deviceInfo.deviceType.name,
-          'X-OS-Name': deviceInfo.os,
-          'X-OS-Version': deviceInfo.osVersion,
-          'X-App-Version': '1.0.0',
-        },
+        headers: await _buildDeviceHeaders(overrideDeviceId: deviceId),
         body: jsonEncode({
           'username': username,
           'email': email,
@@ -70,6 +62,8 @@ class AuthService {
             data['user_id'],
             username: username,
             displayName: displayName,
+            email: email.trim(),
+            emailVerified: false,
           );
           // Ensure Saved Messages chat exists locally
           try {
@@ -141,15 +135,7 @@ class AuthService {
 
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/login'),
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Device-ID': deviceId,
-          'X-Device-Name': deviceInfo.deviceName,
-          'X-Device-Type': deviceInfo.deviceType.name,
-          'X-OS-Name': deviceInfo.os,
-          'X-OS-Version': deviceInfo.osVersion,
-          'X-App-Version': '1.0.0',
-        },
+        headers: await _buildDeviceHeaders(overrideDeviceId: deviceId),
         body: jsonEncode(bodyMap),
       );
 
@@ -1432,6 +1418,22 @@ class AuthService {
     return {};
   }
 
+  /// Strips non-ASCII / control characters so `package:http` never throws
+  /// `FormatException` when OS or host device names contain smart quotes or UTF-8.
+  static String _sanitizeHeaderValue(String? value, {String fallback = ''}) {
+    if (value == null || value.isEmpty) return fallback;
+    final cleaned = value
+        .replaceAll('\u2019', "'")
+        .replaceAll('\u2018', "'")
+        .replaceAll('\u201C', '"')
+        .replaceAll('\u201D', '"')
+        .replaceAll('\r', ' ')
+        .replaceAll('\n', ' ')
+        .replaceAll(RegExp(r'[^\x20-\x7E]'), '')
+        .trim();
+    return cleaned.isEmpty ? fallback : cleaned;
+  }
+
   static Future<Map<String, String>> _buildDeviceHeaders({
     String? token,
     String? overrideDeviceId,
@@ -1442,16 +1444,36 @@ class AuthService {
     final deviceId = overrideDeviceId ??
         accountManager.currentDeviceId ??
         'device_${DateTime.now().millisecondsSinceEpoch}';
+    final locale = await _currentLocaleCode();
     return {
       'Content-Type': 'application/json',
       if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
-      'X-Device-ID': deviceId,
-      'X-Device-Name': deviceInfo.deviceName,
-      'X-Device-Type': deviceInfo.deviceType.name,
-      'X-OS-Name': deviceInfo.os,
-      'X-OS-Version': deviceInfo.osVersion,
+      'X-Device-ID': _sanitizeHeaderValue(deviceId, fallback: 'device_unknown'),
+      'X-Device-Name': _sanitizeHeaderValue(
+        deviceInfo.deviceName,
+        fallback: 'Theaver Device',
+      ),
+      'X-Device-Type': _sanitizeHeaderValue(
+        deviceInfo.deviceType.name,
+        fallback: 'unknown',
+      ),
+      'X-OS-Name': _sanitizeHeaderValue(deviceInfo.os, fallback: 'Unknown'),
+      'X-OS-Version': _sanitizeHeaderValue(deviceInfo.osVersion, fallback: '0'),
       'X-App-Version': '1.0.0',
+      'X-App-Locale': _sanitizeHeaderValue(locale, fallback: 'en'),
       if (extra != null) ...extra,
+    };
+  }
+
+  static Future<Map<String, String>> _buildDeviceBodyFields({String? locale}) async {
+    final deviceInfo = await AccountManager().getCurrentDeviceInfo();
+    return {
+      'device_name': deviceInfo.deviceName,
+      'device_type': deviceInfo.deviceType.name,
+      'os_name': deviceInfo.os,
+      'os_version': deviceInfo.osVersion,
+      'app_version': '1.0.0',
+      'locale': await _currentLocaleCode(locale),
     };
   }
 
@@ -1472,7 +1494,7 @@ class AuthService {
       final token = await getToken();
       if (token == null) return {'success': false, 'error': 'unauthorized'};
       final response = await http.post(
-        Uri.parse('${AppConfig.baseUrl}/api/user/email/send-verify-code'),
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/verify/send-code'),
         headers: await _buildDeviceHeaders(token: token),
         body: jsonEncode({'locale': await _currentLocaleCode(locale)}),
       );
@@ -1493,7 +1515,7 @@ class AuthService {
       final token = await getToken();
       if (token == null) return {'success': false, 'error': 'unauthorized'};
       final response = await http.post(
-        Uri.parse('${AppConfig.baseUrl}/api/user/email/confirm-verify'),
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/verify/confirm'),
         headers: await _buildDeviceHeaders(token: token),
         body: jsonEncode({'code': code.trim()}),
       );
@@ -1537,7 +1559,7 @@ class AuthService {
       final token = await getToken();
       if (token == null) return {'success': false, 'error': 'unauthorized'};
       final response = await http.post(
-        Uri.parse('${AppConfig.baseUrl}/api/user/email/request-change'),
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/change/request'),
         headers: await _buildDeviceHeaders(token: token),
         body: jsonEncode({
           'new_email': newEmail.trim(),
@@ -1568,7 +1590,7 @@ class AuthService {
       final token = await getToken();
       if (token == null) return {'success': false, 'error': 'unauthorized'};
       final response = await http.post(
-        Uri.parse('${AppConfig.baseUrl}/api/user/email/confirm-change'),
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/change/confirm'),
         headers: await _buildDeviceHeaders(token: token),
         body: jsonEncode({
           'new_email': newEmail.trim(),
@@ -1722,21 +1744,106 @@ class AuthService {
 
   // ============ QR Auth & External Session Completion ============
 
-  static Future<Map<String, dynamic>> createQrLoginSession() async {
+  static Future<Map<String, dynamic>> createQrLoginSession({String? locale}) async {
     try {
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/qr/create'),
         headers: await _buildDeviceHeaders(),
-        body: jsonEncode({}),
+        body: jsonEncode(await _buildDeviceBodyFields(locale: locale)),
+      );
+      final data = _tryDecodeMap(response.body);
+      final token = data['token']?.toString();
+      final rawUrl = data['qr_url']?.toString();
+      final qrUrl = (rawUrl != null && rawUrl.isNotEmpty)
+          ? rawUrl
+          : (token != null && token.isNotEmpty
+              ? 'theaver://qr-login?token=${Uri.encodeQueryComponent(token)}'
+              : null);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'token': token,
+        'short_code': data['short_code']?.toString(),
+        'qr_secret': data['qr_secret']?.toString(),
+        'qr_url': qrUrl,
+        'expires_at': data['expires_at']?.toString(),
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> createQrGrantSession({String? locale}) async {
+    try {
+      final authToken = await getToken();
+      if (authToken == null) return {'success': false, 'error': 'unauthorized'};
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/qr/grant'),
+        headers: await _buildDeviceHeaders(token: authToken),
+        body: jsonEncode({'locale': await _currentLocaleCode(locale)}),
+      );
+      final data = _tryDecodeMap(response.body);
+      final token = data['token']?.toString();
+      final rawUrl = data['qr_url']?.toString();
+      final qrUrl = (rawUrl != null && rawUrl.isNotEmpty)
+          ? rawUrl
+          : (token != null && token.isNotEmpty
+              ? 'theaver://qr-login?mode=grant&token=${Uri.encodeQueryComponent(token)}'
+              : null);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'mode': data['mode']?.toString() ?? 'grant',
+        'token': token,
+        'short_code': data['short_code']?.toString(),
+        'qr_secret': data['qr_secret']?.toString(),
+        'qr_url': qrUrl,
+        'expires_at': data['expires_at']?.toString(),
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static String _normalizeShortCodeArg(String raw) {
+    final t = raw.trim();
+    return (t.contains('://') || t.contains('token=')) ? t : t.toUpperCase();
+  }
+
+  static Future<Map<String, dynamic>> claimQrGrantSession({
+    String? token,
+    String? shortCode,
+    String? twoFactorPassword,
+    String? recoveryCode,
+    String? locale,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        ...await _buildDeviceBodyFields(locale: locale),
+        if (token != null && token.trim().isNotEmpty) 'token': token.trim(),
+        if (shortCode != null && shortCode.trim().isNotEmpty)
+          'short_code': _normalizeShortCodeArg(shortCode),
+        if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+          'two_factor_password': twoFactorPassword,
+        if (recoveryCode != null && recoveryCode.trim().isNotEmpty)
+          'recovery_code': recoveryCode.trim(),
+      };
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/qr/claim'),
+        headers: await _buildDeviceHeaders(),
+        body: jsonEncode(body),
       );
       final data = _tryDecodeMap(response.body);
       return {
         'success': response.statusCode == 200 && data['success'] == true,
-        'token': data['token']?.toString(),
-        'short_code': data['short_code']?.toString(),
-        'qr_secret': data['qr_secret']?.toString(),
-        'qr_url': data['qr_url']?.toString(),
-        'expires_at': data['expires_at']?.toString(),
+        'status': data['status']?.toString(),
+        'auth_token': data['auth_token']?.toString(),
+        'device_id': data['device_id']?.toString(),
+        'user_id': data['user_id']?.toString(),
+        'user': data['user'] is Map ? Map<String, dynamic>.from(data['user'] as Map) : null,
+        'requires_2fa': data['requires_2fa'] == true,
         'error': data['error'],
         'message': data['message']?.toString(),
       };
@@ -1761,6 +1868,8 @@ class AuthService {
         'auth_token': data['auth_token']?.toString(),
         'token': data['token']?.toString(),
         'device_id': data['device_id']?.toString(),
+        'device_name': data['device_name']?.toString(),
+        'device_type': data['device_type']?.toString(),
         'user_id': data['user_id']?.toString(),
         'user': data['user'] is Map ? Map<String, dynamic>.from(data['user'] as Map) : null,
         'error': data['error'],
@@ -1818,7 +1927,7 @@ class AuthService {
         body: jsonEncode({
           if (token != null && token.isNotEmpty) 'token': token.trim(),
           if (shortCode != null && shortCode.isNotEmpty)
-            'short_code': shortCode.trim().toUpperCase(),
+            'short_code': _normalizeShortCodeArg(shortCode),
         }),
       );
       final data = _tryDecodeMap(response.body);

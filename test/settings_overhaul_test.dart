@@ -1,15 +1,21 @@
+import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/models/chat_folder.dart';
+import 'package:theaver/screens/settings/about_theaver_screen.dart';
 import 'package:theaver/screens/settings/settings_search_index.dart';
 import 'package:theaver/services/app_lock_service.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/chat_swipe_service.dart';
+import 'package:theaver/services/deep_link_service.dart';
 import 'package:theaver/services/power_saving_provider.dart';
 import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/services/unread_count_provider.dart';
 import 'package:theaver/theme/theme_provider.dart';
+import 'package:theaver/widgets/settings/settings_group.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -454,4 +460,113 @@ void main() {
       );
     });
   });
+
+  group('DeepLinkService.parseUri QR links', () {
+    test('parses qrLogin and qrGrant across custom scheme, https, and hash', () {
+      final p1 = DeepLinkService.parseUri(
+        Uri.parse('theaver://qr-login?token=abc_123'),
+      );
+      expect(p1?.type, DeepLinkType.qrLogin);
+      expect(p1?.identifier, 'abc_123');
+
+      final p2 = DeepLinkService.parseUri(
+        Uri.parse('theaver://qr-login?mode=grant&token=grant_456'),
+      );
+      expect(p2?.type, DeepLinkType.qrGrant);
+      expect(p2?.identifier, 'grant_456');
+
+      final p3 = DeepLinkService.parseUri(
+        Uri.parse('https://theaver.app/qr-login?token=web_789'),
+      );
+      expect(p3?.type, DeepLinkType.qrLogin);
+      expect(p3?.identifier, 'web_789');
+
+      final p4 = DeepLinkService.parseUri(
+        Uri.parse('https://theaver.app/qr-login?mode=grant&token=web_grant_0'),
+      );
+      expect(p4?.type, DeepLinkType.qrGrant);
+      expect(p4?.identifier, 'web_grant_0');
+
+      final p5 = DeepLinkService.parseUri(
+        Uri.parse('https://theaver.app/#/qr-login?mode=grant&token=hash_tok'),
+      );
+      expect(p5?.type, DeepLinkType.qrGrant);
+      expect(p5?.identifier, 'hash_tok');
+    });
+  });
+
+  group('AboutTheaverScreen borderless SettingsGroup UI', () {
+    testWidgets(
+      'renders 4 borderless SettingsGroup sections and 5-tap unlocks Debug // W.I.P',
+      (WidgetTester tester) async {
+        tester.view.physicalSize = const Size(1080, 2400);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        final l10n = AppLocalizations(const Locale('ru'));
+        await tester.runAsync(() => l10n.load());
+
+        await tester.pumpWidget(
+          MaterialApp(
+            locale: const Locale('ru'),
+            localizationsDelegates: [
+              _PreloadedLocalizationsDelegate(l10n),
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            supportedLocales: const [Locale('ru'), Locale('en')],
+            home: const AboutTheaverScreen(),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final groupFinder = find.byType(SettingsGroup);
+        expect(groupFinder, findsNWidgets(4));
+
+        for (final groupElem in groupFinder.evaluate()) {
+          final containerFinder = find.descendant(
+            of: find.byWidget(groupElem.widget),
+            matching: find.byType(Container),
+          );
+          final outerCard = tester.widget<Container>(containerFinder.first);
+          final deco = outerCard.decoration as BoxDecoration?;
+          expect(deco?.border, isNull);
+          expect(deco?.borderRadius, BorderRadius.circular(16));
+        }
+
+        expect(find.text('Debug // W.I.P'), findsNothing);
+
+        final versionFinder = find.textContaining('Theaver ');
+        expect(versionFinder, findsWidgets);
+        for (int i = 0; i < 5; i++) {
+          await tester.tap(versionFinder.first);
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        await tester.pump(const Duration(seconds: 4));
+
+        expect(find.text('Debug // W.I.P'), findsOneWidget);
+      },
+    );
+  });
+}
+
+class _PreloadedLocalizationsDelegate
+    extends LocalizationsDelegate<AppLocalizations> {
+  final AppLocalizations localizations;
+  const _PreloadedLocalizationsDelegate(this.localizations);
+
+  @override
+  bool isSupported(Locale locale) => true;
+
+  @override
+  Future<AppLocalizations> load(Locale locale) =>
+      SynchronousFuture<AppLocalizations>(localizations);
+
+  @override
+  bool shouldReload(_PreloadedLocalizationsDelegate old) => false;
 }

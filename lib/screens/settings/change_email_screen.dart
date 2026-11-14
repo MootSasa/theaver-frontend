@@ -73,7 +73,10 @@ class _ChangeEmailScreenState extends State<ChangeEmailScreen> {
     final profile = SettingsService().userProfile;
     _currentEmail = (acc?.email?.isNotEmpty == true ? acc!.email! : profile?.email) ?? '';
     _emailVerified = acc?.emailVerified ?? false;
-    final tfaEnabled = context.read<PrivacySettingsProvider>().twoFactor.enabled;
+    var tfaEnabled = false;
+    try {
+      tfaEnabled = context.read<PrivacySettingsProvider>().twoFactor.enabled;
+    } catch (_) {}
     _requires2FA = _requires2FA || tfaEnabled;
   }
 
@@ -141,8 +144,15 @@ class _ChangeEmailScreenState extends State<ChangeEmailScreen> {
       case 'invalid_2fa_password':
         return l10n.translate('email_error_invalid_2fa');
       case 'cooldown':
+      case 'rate_limited':
         final wait = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
         return l10n.translate('email_error_cooldown').replaceAll('{seconds}', '$wait');
+      case 'same_email':
+        return l10n.translate('email_error_same_email');
+      case 'invalid_email':
+        return l10n.translate('email_error_invalid_format');
+      case 'no_email':
+        return l10n.translate('email_add_hint');
       case 'invalid_code':
       case 'code_expired':
         return l10n.translate('email_error_invalid_code');
@@ -169,7 +179,7 @@ class _ChangeEmailScreenState extends State<ChangeEmailScreen> {
       _startVerifyCooldown((res['cooldown_seconds'] as num?)?.toInt() ?? 60);
       _setStatus(l10n.translate('email_code_sent').replaceAll('{email}', _currentEmail));
     } else {
-      if (res['error'] == 'cooldown') {
+      if (res['error'] == 'cooldown' || res['error'] == 'rate_limited') {
         _startVerifyCooldown((res['cooldown_seconds'] as num?)?.toInt() ?? 60);
       }
       _setStatus(_mapBackendError(l10n, res), isError: true);
@@ -239,7 +249,7 @@ class _ChangeEmailScreenState extends State<ChangeEmailScreen> {
       if (res['requires_2fa'] == true) {
         setState(() => _requires2FA = true);
       }
-      if (res['error'] == 'cooldown') {
+      if (res['error'] == 'cooldown' || res['error'] == 'rate_limited') {
         _startChangeCooldown((res['cooldown_seconds'] as num?)?.toInt() ?? 60);
       }
       _setStatus(_mapBackendError(l10n, res), isError: true);

@@ -72,8 +72,15 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
       case 'email_not_configured':
         return l10n.translate('email_error_not_configured');
       case 'cooldown':
+      case 'rate_limited':
         final s = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
         return l10n.translate('email_error_cooldown').replaceAll('{seconds}', '$s');
+      case 'same_email':
+        return l10n.translate('email_error_same_email');
+      case 'invalid_email':
+        return l10n.translate('email_error_invalid_format');
+      case 'no_email':
+        return l10n.translate('email_add_hint');
       case 'invalid_code':
       case 'code_expired':
         return l10n.translate('email_error_invalid_code');
@@ -110,7 +117,7 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
       _startCooldown((res['cooldown_seconds'] as num?)?.toInt() ?? 60);
       setState(() => _step = 2);
     } else {
-      if (res['error'] == 'cooldown') {
+      if (res['error'] == 'cooldown' || res['error'] == 'rate_limited') {
         _startCooldown((res['cooldown_seconds'] as num?)?.toInt() ?? 60);
         setState(() => _step = 2);
       }
