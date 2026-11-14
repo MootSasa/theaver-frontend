@@ -417,10 +417,23 @@ class LiquidGlassTabBar extends StatelessWidget {
           bottom: pad.bottom + margin.bottom,
           child: Align(
             alignment: Alignment(alignment.x, 0),
-            child: Padding(
-              padding: EdgeInsets.only(left: margin.left, right: margin.right),
-              child: _buildPlainBar(context),
-            ),
+            child: () {
+              final double padLeft = margin.left > 0 ? margin.left : 0.0;
+              final double padRight = margin.right > 0 ? margin.right : 0.0;
+              final double dx = (margin.left < 0 ? margin.left : 0.0) -
+                  (margin.right < 0 ? margin.right : 0.0);
+              Widget child = Padding(
+                padding: EdgeInsets.only(left: padLeft, right: padRight),
+                child: _buildPlainBar(context),
+              );
+              if (dx != 0.0) {
+                child = Transform.translate(
+                  offset: Offset(dx, 0.0),
+                  child: child,
+                );
+              }
+              return child;
+            }(),
           ),
         ),
       ],

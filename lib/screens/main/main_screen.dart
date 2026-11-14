@@ -2255,10 +2255,11 @@ class _MainScreenState extends State<MainScreen>
 
   Widget _buildChatList(BuildContext context, {double topPadding = 8}) {
     final l10n = context.l10n;
+    final double safeTopPadding = math.max(0.0, topPadding);
 
     if (_isLoadingChats && _chats.isEmpty && _communities.isEmpty) {
       return Padding(
-        padding: EdgeInsets.only(top: topPadding),
+        padding: EdgeInsets.only(top: safeTopPadding),
         child: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -2282,7 +2283,7 @@ class _MainScreenState extends State<MainScreen>
     if (filteredChats.isEmpty && !showArchivedTile && !enablePullReveal) {
       if (_isLoadingChats && activeFolder.id != 'communities') {
         return Padding(
-          padding: EdgeInsets.only(top: topPadding),
+          padding: EdgeInsets.only(top: safeTopPadding),
           child: const Center(child: CircularProgressIndicator()),
         );
       }
@@ -2372,7 +2373,7 @@ class _MainScreenState extends State<MainScreen>
         parent: BouncingScrollPhysics(),
       ),
       padding: EdgeInsets.only(
-        top: topPadding,
+        top: safeTopPadding,
         bottom: 100,
       ),
       itemCount: filteredChats.length + (showArchivedTile ? 1 : 0),
@@ -2452,7 +2453,7 @@ class _MainScreenState extends State<MainScreen>
           Positioned.fill(child: scrollList),
           if (_archivePullExtent > 2.0)
             Positioned(
-              top: topPadding + 4,
+              top: safeTopPadding + 4,
               left: 16,
               right: 16,
               child: IgnorePointer(
@@ -3738,7 +3739,8 @@ class _MainScreenState extends State<MainScreen>
               const double bottomMargin = 12.0;
               const double maxGroupWidth = 560.0;
 
-              final double totalRequiredWidth = screen - edgePadding * 2;
+              final double totalRequiredWidth =
+                  math.max(0.0, screen - edgePadding * 2);
               final double leftMargin;
               final double actionMargin;
               final double barWidth;
@@ -3746,9 +3748,11 @@ class _MainScreenState extends State<MainScreen>
               if (totalRequiredWidth <= maxGroupWidth) {
                 leftMargin = edgePadding;
                 actionMargin = edgePadding;
-                barWidth = totalRequiredWidth - actionSize - spacing;
+                barWidth =
+                    math.max(120.0, totalRequiredWidth - actionSize - spacing);
               } else {
-                final double groupLeft = (screen - maxGroupWidth) / 2;
+                final double groupLeft =
+                    math.max(0.0, (screen - maxGroupWidth) / 2);
                 leftMargin = groupLeft;
                 actionMargin = groupLeft;
                 barWidth = maxGroupWidth - actionSize - spacing;
@@ -3775,9 +3779,12 @@ class _MainScreenState extends State<MainScreen>
               return AnimatedBuilder(
                 animation: _selectModeAnimation,
                 builder: (context, _) {
-                  final double hideProgress = _selectModeAnimation.value;
+                  final double hideProgress =
+                      _selectModeAnimation.value.clamp(0.0, 1.0);
+                  final double visibleBottomFromWindow =
+                      math.max(0.0, effectiveBottomMargin + safeBottom);
                   final double hideOffset =
-                      (barHeight + effectiveBottomMargin + safeBottom + 36.0) *
+                      (barHeight + visibleBottomFromWindow + 36.0) *
                           hideProgress;
                   final double actionOpacity =
                       (1.0 - hideProgress * 1.4).clamp(0.0, 1.0);

@@ -72,12 +72,19 @@ class LiquidGlassTabBarShell extends StatelessWidget {
       ),
     );
 
+    final double effBottom = layout.bottomMargin;
+    final double padBottom = effBottom > 0 ? effBottom : 0.0;
+    final double dy = effBottom < 0 ? -effBottom : 0.0;
+    Widget placed = Padding(
+      padding: EdgeInsets.only(bottom: padBottom),
+      child: innerStack,
+    );
+    if (dy != 0.0) {
+      placed = Transform.translate(offset: Offset(0.0, dy), child: placed);
+    }
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: layout.bottomMargin),
-        child: innerStack,
-      ),
+      child: placed,
     );
   }
 }

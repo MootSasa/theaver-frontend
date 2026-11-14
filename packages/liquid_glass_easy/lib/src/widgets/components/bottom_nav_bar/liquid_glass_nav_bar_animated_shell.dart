@@ -179,22 +179,34 @@ class LiquidGlassAnimatedBottomNavBarShell extends StatelessWidget {
     );
 
     final double effBottom = bottom ?? layout.bottomMargin;
+    final double padBottom = effBottom > 0 ? effBottom : 0.0;
+    final double dy = effBottom < 0 ? -effBottom : 0.0;
     if (left != null) {
+      final double padLeft = left! > 0 ? left! : 0.0;
+      final double dx = left! < 0 ? left! : 0.0;
+      Widget placed = Padding(
+        padding: EdgeInsets.only(left: padLeft, bottom: padBottom),
+        child: innerStack,
+      );
+      if (dx != 0.0 || dy != 0.0) {
+        placed = Transform.translate(offset: Offset(dx, dy), child: placed);
+      }
       // Absolute bottom-left placement (honors a custom bar position).
       return Align(
         alignment: Alignment.bottomLeft,
-        child: Padding(
-          padding: EdgeInsets.only(left: left!, bottom: effBottom),
-          child: innerStack,
-        ),
+        child: placed,
       );
+    }
+    Widget placed = Padding(
+      padding: EdgeInsets.only(bottom: padBottom),
+      child: innerStack,
+    );
+    if (dy != 0.0) {
+      placed = Transform.translate(offset: Offset(0.0, dy), child: placed);
     }
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: effBottom),
-        child: innerStack,
-      ),
+      child: placed,
     );
   }
 

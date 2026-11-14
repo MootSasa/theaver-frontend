@@ -860,9 +860,10 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
     NotificationSettingsProvider? notifProvider,
     double topPadding,
   ) {
+    final double safeTopPadding = topPadding > 0 ? topPadding : 0.0;
     if (snapshot.connectionState == ConnectionState.waiting && chats.isEmpty) {
       return Padding(
-        padding: EdgeInsets.only(top: topPadding),
+        padding: EdgeInsets.only(top: safeTopPadding),
         child: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -871,7 +872,7 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
       return Center(
         child: Padding(
           padding: EdgeInsets.only(
-            top: topPadding,
+            top: safeTopPadding,
             left: 32,
             right: 32,
             bottom: 32,
@@ -917,7 +918,7 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
         parent: BouncingScrollPhysics(),
       ),
       padding: EdgeInsets.only(
-        top: topPadding,
+        top: safeTopPadding,
         bottom: 24.0 + MediaQuery.paddingOf(context).bottom,
       ),
       itemCount: chats.length,

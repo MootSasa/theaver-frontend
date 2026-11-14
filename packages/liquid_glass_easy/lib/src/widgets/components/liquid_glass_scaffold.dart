@@ -662,16 +662,28 @@ class _LiquidGlassScaffoldState extends State<LiquidGlassScaffold> {
               right: 0,
               child: Align(
                 alignment: Alignment(navAlignment.x, 0),
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    left: navMargin.left,
-                    right: navMargin.right,
-                  ),
-                  // Its own read, never the chrome batch's.
-                  child: LiquidGlassBatch.exclude(
-                    child: widget.bottomNavigationBar!,
-                  ),
-                ),
+                child: () {
+                  final double padLeft = navMargin.left > 0 ? navMargin.left : 0.0;
+                  final double padRight =
+                      navMargin.right > 0 ? navMargin.right : 0.0;
+                  final double dx =
+                      (navMargin.left < 0 ? navMargin.left : 0.0) -
+                          (navMargin.right < 0 ? navMargin.right : 0.0);
+                  Widget child = Padding(
+                    padding: EdgeInsets.only(left: padLeft, right: padRight),
+                    // Its own read, never the chrome batch's.
+                    child: LiquidGlassBatch.exclude(
+                      child: widget.bottomNavigationBar!,
+                    ),
+                  );
+                  if (dx != 0.0) {
+                    child = Transform.translate(
+                      offset: Offset(dx, 0.0),
+                      child: child,
+                    );
+                  }
+                  return child;
+                }(),
               ),
             ),
           if (widget.bottomNavigationBarAction != null)

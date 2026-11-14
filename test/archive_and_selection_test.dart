@@ -410,6 +410,138 @@ void main() {
         }
       },
     );
+
+    testWidgets(
+      'slides LiquidGlassTabBar off-screen with negative bottom margin in selection mode without padding assertion',
+      (WidgetTester tester) async {
+        tester.view.physicalSize = const Size(900, 1600);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        final l10n = await _loadRuL10n(tester);
+        final glassProvider = LiquidGlassProvider();
+        await tester.runAsync(() => glassProvider.setMode(GlassMode.full));
+
+        double hideProgress = 0.0;
+        EdgeInsets viewInsets = EdgeInsets.zero;
+
+        Widget buildGlassHarness() {
+          const double barHeight = 60.0;
+          const double bottomMargin = 12.0;
+          const double safeBottom = 34.0;
+          final double keyboardHeight = viewInsets.bottom;
+          final double effectiveBottomMargin = keyboardHeight > 0
+              ? (bottomMargin + keyboardHeight - safeBottom)
+              : bottomMargin;
+          final double visibleBottom =
+              (effectiveBottomMargin + safeBottom) > 0
+                  ? (effectiveBottomMargin + safeBottom)
+                  : 0.0;
+          final double hideOffset =
+              (barHeight + visibleBottom + 36.0) * hideProgress;
+
+          return _wrapWithApp(
+            l10n: l10n,
+            glassProvider: glassProvider,
+            home: Builder(
+              builder: (context) => MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  padding: const EdgeInsets.only(top: 44, bottom: safeBottom),
+                  viewPadding:
+                      const EdgeInsets.only(top: 44, bottom: safeBottom),
+                  viewInsets: viewInsets,
+                ),
+                child: LiquidGlassScaffold(
+                  pixelRatio: 1.0,
+                  useSync: true,
+                  batch: false,
+                  appBar: ChatListAdaptiveTopBar(
+                    isSelectMode: hideProgress > 0.0,
+                    selectedCount: 2,
+                    onCancelSelection: () {},
+                    normalTitle: 'Чаты',
+                    normalTitleKey: 'nav_chats',
+                    selectionConfig: SelectionQuickActionsConfig(
+                      canPin: true,
+                      onPin: () {},
+                      canMute: true,
+                      onMute: () {},
+                      canArchive: true,
+                      onArchive: () {},
+                      canDelete: true,
+                      onDelete: () {},
+                      onOverflowAction: (_) {},
+                    ),
+                  ),
+                  appBarTopMargin: 8.0,
+                  bottomNavigationBarActionMargin: 16.0,
+                  bottomNavigationBar: LiquidGlassTabBar(
+                    items: const [
+                      LiquidGlassTabBarItem(icon: Icons.settings),
+                      LiquidGlassTabBarItem(icon: Icons.chat_bubble),
+                      LiquidGlassTabBarItem(icon: Icons.search),
+                    ],
+                    selectedIndex: 1,
+                    onChanged: (_) {},
+                    width: 300,
+                    height: barHeight,
+                    alignment: Alignment.bottomLeft,
+                    margin: EdgeInsets.only(
+                      left: 16.0,
+                      bottom: effectiveBottomMargin - hideOffset,
+                    ),
+                    itemPadding: 3,
+                    pillStyle: const LiquidGlassTabPillStyle(
+                      mode: LiquidGlassPillMode.both,
+                      show: true,
+                      animated: true,
+                    ),
+                  ),
+                  bottomNavigationBarAction: Opacity(
+                    opacity: (1.0 - hideProgress * 1.4).clamp(0.0, 1.0),
+                    child: const SizedBox(
+                      width: 60,
+                      height: 60,
+                      child: Icon(Icons.add),
+                    ),
+                  ),
+                  body: const Scaffold(
+                    backgroundColor: Colors.transparent,
+                    body: SizedBox.shrink(),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        try {
+          for (final step in <double>[0.0, 0.25, 0.6, 1.0, 0.35, 0.0]) {
+            hideProgress = step;
+            await tester.pumpWidget(buildGlassHarness());
+            await _pumpAnim(tester, const Duration(milliseconds: 50));
+            expect(tester.takeException(), isNull);
+          }
+
+          // Partial keyboard inset below safeBottom + bottomMargin produces
+          // negative effectiveBottomMargin while opening/closing the IME.
+          viewInsets = const EdgeInsets.only(bottom: 10);
+          for (final step in <double>[0.0, 0.5, 1.0]) {
+            hideProgress = step;
+            await tester.pumpWidget(buildGlassHarness());
+            await _pumpAnim(tester, const Duration(milliseconds: 50));
+            expect(tester.takeException(), isNull);
+          }
+        } finally {
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump();
+          await tester.runAsync(() => glassProvider.setMode(GlassMode.disabled));
+        }
+      },
+    );
   });
 
   group('ChatListTileItem', () {
