@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "CREATOR ロールはサーバー管理画面からのみ変更できます",
   "channelShowAuthorProfiles": "投稿者のアバターを表示",
   "channelShowAuthorProfilesDesc": "チャンネル投稿の横に送信者アバター・バッジ・ステータスを表示します",
-  "customizationUploadError": "バナーのアップロードに失敗しました"
+  "customizationUploadError": "バナーのアップロードに失敗しました",
+  "customizationSegmentProfile": "プロフィール",
+  "customizationSegmentName": "チャット名",
+  "customizationSegmentStatus": "ステータス",
+  "customizationSectionCoverBanner": "カバーとバナー",
+  "customizationSectionAvatarFrame": "アバターフレーム",
+  "customizationSectionBadge": "プロフィールバッジ",
+  "customizationAllBadges": "すべてのバッジ",
+  "customizationNameColorTitle": "名前の色",
+  "customizationReplyStripTitle": "返信ラインのスタイル",
+  "customizationResetCover": "カバー色をリセット",
+  "customizationResetNameColor": "名前の色をリセット",
+  "customizationGradientSheetTitle": "2色グラデーション",
+  "customizationFirstColor": "1色目",
+  "customizationSecondColor": "2色目",
+  "customizationThirdColor": "3色目",
+  "customizationChatPreviewQuote": "Theaverのプロフィールデザインを更新しました",
+  "customizationChatPreviewMessage": "グループチャットでの名前・バッジ・引用の表示イメージです。"
 }

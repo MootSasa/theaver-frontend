@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "The CREATOR role can only be changed via server admin",
   "channelShowAuthorProfiles": "Show Author Avatars",
   "channelShowAuthorProfilesDesc": "Display sender avatar, badge, and status next to channel posts",
-  "customizationUploadError": "Failed to upload banner"
+  "customizationUploadError": "Failed to upload banner",
+  "customizationSegmentProfile": "Profile",
+  "customizationSegmentName": "Chat Name",
+  "customizationSegmentStatus": "Status",
+  "customizationSectionCoverBanner": "Cover & Banner",
+  "customizationSectionAvatarFrame": "Avatar Frame",
+  "customizationSectionBadge": "Profile Badge",
+  "customizationAllBadges": "All Platform Badges",
+  "customizationNameColorTitle": "Name Color",
+  "customizationReplyStripTitle": "Reply Strip Style",
+  "customizationResetCover": "Reset Cover Color",
+  "customizationResetNameColor": "Reset Name Color",
+  "customizationGradientSheetTitle": "Two-Color Gradient",
+  "customizationFirstColor": "First color",
+  "customizationSecondColor": "Second color",
+  "customizationThirdColor": "Third color",
+  "customizationChatPreviewQuote": "Updated profile design in Theaver",
+  "customizationChatPreviewMessage": "This is how your name, badge, and reply quote look in group chats."
 }

@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 class SettingsGroup extends StatelessWidget {
   final List<Widget> children;
   final String? title;
+  final EdgeInsetsGeometry margin;
 
   const SettingsGroup({
     super.key,
     required this.children,
     this.title,
+    this.margin = const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
   });
 
   @override
@@ -29,7 +31,7 @@ class SettingsGroup extends StatelessWidget {
             ),
           ),
         Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          margin: margin,
           decoration: BoxDecoration(
             color: theme.cardColor,
             borderRadius: BorderRadius.circular(16),
@@ -58,7 +60,7 @@ class SettingsGroup extends StatelessWidget {
             height: 1,
             indent: 56, // Space for the icon in ListTile
             endIndent: 16,
-            color: Theme.of(context).dividerColor.withOpacity(0.1),
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
           ),
         );
       }

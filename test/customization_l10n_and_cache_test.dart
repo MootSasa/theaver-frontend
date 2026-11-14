@@ -76,6 +76,23 @@ void main() {
     'channelShowAuthorProfiles',
     'channelShowAuthorProfilesDesc',
     'customizationUploadError',
+    'customizationSegmentProfile',
+    'customizationSegmentName',
+    'customizationSegmentStatus',
+    'customizationSectionCoverBanner',
+    'customizationSectionAvatarFrame',
+    'customizationSectionBadge',
+    'customizationAllBadges',
+    'customizationNameColorTitle',
+    'customizationReplyStripTitle',
+    'customizationResetCover',
+    'customizationResetNameColor',
+    'customizationGradientSheetTitle',
+    'customizationFirstColor',
+    'customizationSecondColor',
+    'customizationThirdColor',
+    'customizationChatPreviewQuote',
+    'customizationChatPreviewMessage',
   ];
 
   test('All 10 l10n locale files include every customization/badge/channel key and follow copy constraints', () {

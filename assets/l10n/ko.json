@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "CREATOR 역할은 서버 관리자 패널에서만 변경할 수 있습니다",
   "channelShowAuthorProfiles": "작성자 아바타 표시",
   "channelShowAuthorProfilesDesc": "채널 게시물 옆에 작성자의 아바타, 배지 및 상태를 표시합니다",
-  "customizationUploadError": "배너 업로드에 실패했습니다"
+  "customizationUploadError": "배너 업로드에 실패했습니다",
+  "customizationSegmentProfile": "프로필",
+  "customizationSegmentName": "채팅 이름",
+  "customizationSegmentStatus": "상태",
+  "customizationSectionCoverBanner": "커버 및 배너",
+  "customizationSectionAvatarFrame": "아바타 프레임",
+  "customizationSectionBadge": "프로필 배지",
+  "customizationAllBadges": "모든 배지 보기",
+  "customizationNameColorTitle": "이름 색상",
+  "customizationReplyStripTitle": "답장 줄 스타일",
+  "customizationResetCover": "커버 색상 초기화",
+  "customizationResetNameColor": "이름 색상 초기화",
+  "customizationGradientSheetTitle": "2색 그라데이션 설정",
+  "customizationFirstColor": "첫 번째 색상",
+  "customizationSecondColor": "두 번째 색상",
+  "customizationThirdColor": "세 번째 색상",
+  "customizationChatPreviewQuote": "Theaver 프로필 디자인을 업데이트했어요",
+  "customizationChatPreviewMessage": "그룹 채팅에서 이름, 배지, 답장 인용구가 이렇게 표시됩니다."
 }

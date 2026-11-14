@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -16,19 +18,26 @@ import '../../services/name_color_sync_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/sticker_service.dart';
+import '../../theme/theav_theme.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/chat/sticker_item_widget.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/profile/color_palette_picker.dart';
 import '../../widgets/profile/name_color_picker.dart';
+import '../../widgets/profile/profile_segmented_control.dart';
 import '../../widgets/profile/reply_message_preview_card.dart';
+import '../../widgets/settings/settings_floating_header.dart';
+import '../../widgets/settings/settings_group.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
 
-/// Unified 5-tab Profile Customization Studio (Frame, Status, Banner, Badges, Colors)
-/// styled natively with Material 3 + Liquid Glass adaptivity.
+/// Экран «Оформление профиля» в едином стиле настроек Theaver:
+/// - Полноширинная живая обложка профиля под плавающим [SettingsFloatingHeader].
+/// - Скользящий 3-секционный [ProfileSegmentedControl] («Профиль», «Имя в чатах», «Статус»).
+/// - Карточки [SettingsGroup], [AdaptiveSwitch] и мгновенное применение изменений без нижних кнопок сохранения.
 class ProfileCustomizationScreen extends StatefulWidget {
   final int initialTab;
 
@@ -45,51 +54,38 @@ class ProfileCustomizationScreen extends StatefulWidget {
 class _ProfileCustomizationScreenState
     extends State<ProfileCustomizationScreen> {
   late int _activeTab;
-  int _statusSourceTab = 0; // 0 = unicode, 1 = custom emoji
-  String _selectedUnicode = '✨';
-  StickerItem? _selectedSticker;
-  Duration? _selectedDuration; // null = never
+  Duration? _selectedDuration; // null = forever
   final TextEditingController _noteController = TextEditingController();
   final IOSColorPickerController _colorPickerController =
       IOSColorPickerController();
 
-  late ProfileColorPreset _tempCoverPreset;
-  late NameColorPreset _tempNamePreset;
-  late ReplyStripStyle _tempStripStyle;
+  ProfileColorPreset? _draftCoverPreset;
+  NameColorPreset? _draftNamePreset;
+  ReplyStripStyle? _draftStripStyle;
 
-  bool _isSaving = false;
+  Timer? _coverDebounce;
+  Timer? _nameColorDebounce;
+  Timer? _noteDebounce;
+
   bool _isUploadingBanner = false;
   String? _userId;
+
+  static int _normalizeInitialTab(int raw) {
+    if (raw <= 0) return 0;
+    if (raw == 1) return 1;
+    if (raw == 2) return 2;
+    return 0;
+  }
 
   @override
   void initState() {
     super.initState();
-    _activeTab = widget.initialTab.clamp(0, 4);
+    _activeTab = _normalizeInitialTab(widget.initialTab);
 
     final themeProvider = context.read<ProfileThemeProvider>();
-    _tempCoverPreset = themeProvider.currentPreset ?? ProfileColorPresets.blue;
-    _tempNamePreset = themeProvider.currentNameColorPreset;
-    _tempStripStyle = themeProvider.currentStripStyle;
-
     final existingStatus = themeProvider.currentEmojiStatus;
     if (existingStatus != null) {
       _noteController.text = existingStatus.note;
-      if (existingStatus.type == 'sticker' && existingStatus.stickerId != null) {
-        _statusSourceTab = 1;
-        _selectedSticker = StickerService.instance
-                .getStickerByIdSync(existingStatus.stickerId) ??
-            StickerItem(
-              id: existingStatus.stickerId!,
-              packId: 0,
-              fileUrl: existingStatus.stickerUrl ?? '',
-              thumbnailUrl: existingStatus.thumbnailUrl ?? '',
-              format: existingStatus.stickerFormat ?? 'webp',
-            );
-      } else if (existingStatus.emoji != null &&
-          existingStatus.emoji!.isNotEmpty) {
-        _statusSourceTab = 0;
-        _selectedUnicode = existingStatus.emoji!;
-      }
     }
 
     _userId = AccountManager().currentAccount?.userId;
@@ -107,9 +103,37 @@ class _ProfileCustomizationScreenState
 
   @override
   void dispose() {
+    _flushPendingSync();
     _noteController.dispose();
     _colorPickerController.dispose();
     super.dispose();
+  }
+
+  void _flushPendingSync() {
+    if (_coverDebounce?.isActive == true) {
+      _coverDebounce!.cancel();
+      final pending = _draftCoverPreset;
+      if (pending != null) {
+        context.read<ProfileThemeProvider>().setPreset(pending);
+      }
+    }
+    if (_nameColorDebounce?.isActive == true) {
+      _nameColorDebounce!.cancel();
+      final preset = _draftNamePreset;
+      final style = _draftStripStyle;
+      if (preset != null && style != null) {
+        final provider = context.read<ProfileThemeProvider>();
+        provider.setNameColorAndStyle(preset, style);
+        NameColorSyncService().setNameColorAndStyle(
+          preset: preset,
+          style: style,
+        );
+      }
+    }
+    if (_noteDebounce?.isActive == true) {
+      _noteDebounce!.cancel();
+      _syncNoteForActiveStatus();
+    }
   }
 
   String _displayName() {
@@ -124,6 +148,15 @@ class _ProfileCustomizationScreenState
   }
 
   String? _avatarUrl() => AccountManager().currentAccount?.avatarUrl;
+
+  ProfileColorPreset _effectiveCoverPreset(ProfileThemeProvider provider) =>
+      _draftCoverPreset ?? provider.currentPreset ?? ProfileColorPresets.blue;
+
+  NameColorPreset _effectiveNamePreset(ProfileThemeProvider provider) =>
+      _draftNamePreset ?? provider.currentNameColorPreset;
+
+  ReplyStripStyle _effectiveStripStyle(ProfileThemeProvider provider) =>
+      _draftStripStyle ?? provider.currentStripStyle;
 
   void _showToast(String message, {bool isError = false}) {
     if (!mounted) return;
@@ -142,100 +175,80 @@ class _ProfileCustomizationScreenState
     }
   }
 
-  Future<void> _selectDecoration(AvatarDecorationPreset? preset) async {
-    if (_isSaving) return;
+  // ---------------------------------------------------------------------------
+  // Мгновенные действия: Обложка, Баннер, Рамка, Бейдж
+  // ---------------------------------------------------------------------------
+
+  void _onCoverPresetSelected(ProfileColorPreset preset) {
+    _coverDebounce?.cancel();
+    setState(() => _draftCoverPreset = null);
+    context.read<ProfileThemeProvider>().setPreset(preset);
+  }
+
+  void _onCoverPresetDragged(ProfileColorPreset preset) {
+    setState(() => _draftCoverPreset = preset);
+    _coverDebounce?.cancel();
+    _coverDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      final provider = context.read<ProfileThemeProvider>();
+      provider.setPreset(preset);
+      setState(() => _draftCoverPreset = null);
+    });
+  }
+
+  void _pickCustomCoverColor() {
     HapticUtils.selection();
-    setState(() => _isSaving = true);
     final provider = context.read<ProfileThemeProvider>();
+    final current = _effectiveCoverPreset(provider);
+    _colorPickerController.showIOSCustomColorPicker(
+      context: context,
+      startingColor: current.backgroundColor.withValues(alpha: 1.0),
+      onColorChanged: (c) {
+        if (!mounted) return;
+        _onCoverPresetDragged(
+          ProfileColorPreset.fromCustomColor(c.withValues(alpha: 1.0)),
+        );
+      },
+    );
+  }
+
+  void _resetCoverColor() {
+    HapticUtils.selection();
+    _coverDebounce?.cancel();
+    setState(() => _draftCoverPreset = null);
+    context.read<ProfileThemeProvider>().setPreset(ProfileColorPresets.blue);
+  }
+
+  Future<void> _selectDecoration(AvatarDecorationPreset? preset) async {
+    final provider = context.read<ProfileThemeProvider>();
+    final currentId = provider.currentAvatarDecoration?.id;
+    if ((preset == null && (currentId == null || currentId.isEmpty)) ||
+        (preset != null && currentId == preset.id)) {
+      return;
+    }
+    HapticUtils.selection();
     final ok = await provider.updateCustomization(
       avatarDecorationId: preset?.id,
+      optimisticDecoration: preset,
       clearAvatarDecoration: preset == null,
     );
-    if (!mounted) return;
-    setState(() => _isSaving = false);
-    if (ok) {
+    if (!ok && mounted) {
       _showToast(
-        translateOrFallback(
-          context,
-          'customizationSaved',
-          'Profile customization updated',
-        ),
+        translateOrFallback(context, 'error', 'Failed to update'),
+        isError: true,
       );
     }
   }
 
-  EmojiStatusData? _buildDraftEmojiStatus() {
-    final note = _noteController.text.trim();
-    final until = _selectedDuration != null
-        ? DateTime.now().toUtc().add(_selectedDuration!)
-        : null;
-    if (_statusSourceTab == 1 && _selectedSticker != null) {
-      return EmojiStatusData(
-        type: 'sticker',
-        stickerId: _selectedSticker!.id,
-        stickerUrl: _selectedSticker!.fileUrl,
-        thumbnailUrl: _selectedSticker!.thumbnailUrl,
-        stickerFormat: _selectedSticker!.format,
-        note: note,
-        expiresAt: until,
-      );
-    }
-    final unicode = _selectedUnicode.trim();
-    if (unicode.isEmpty) return null;
-    return EmojiStatusData(
-      type: 'unicode',
-      emoji: unicode,
-      note: note,
-      expiresAt: until,
-    );
-  }
-
-  Future<void> _saveEmojiStatus() async {
-    if (_isSaving) return;
-    final draft = _buildDraftEmojiStatus();
-    if (draft == null) return;
+  Future<void> _toggleBadgeDisplayed(bool value) async {
     HapticUtils.selection();
-    setState(() => _isSaving = true);
-    final provider = context.read<ProfileThemeProvider>();
-    final ok = await provider.updateCustomization(
-      emojiStatusUnicode: draft.type == 'unicode' ? draft.emoji : null,
-      emojiStatusStickerId: draft.type == 'sticker' ? draft.stickerId : null,
-      emojiStatusNote: draft.note,
-      emojiStatusUntil: draft.expiresAt,
-      clearEmojiStatusUntil: draft.expiresAt == null,
-    );
-    if (!mounted) return;
-    setState(() => _isSaving = false);
-    if (ok) {
-      _showToast(
-        translateOrFallback(
-          context,
-          'customizationSaved',
-          'Profile customization updated',
-        ),
-      );
-    }
-  }
-
-  Future<void> _clearEmojiStatus() async {
-    if (_isSaving) return;
-    HapticUtils.selection();
-    setState(() => _isSaving = true);
     final ok = await context.read<ProfileThemeProvider>().updateCustomization(
-          clearEmojiStatus: true,
+          badgeIsDisplayed: value,
         );
-    if (!mounted) return;
-    setState(() {
-      _isSaving = false;
-      _noteController.clear();
-    });
-    if (ok) {
+    if (!ok && mounted) {
       _showToast(
-        translateOrFallback(
-          context,
-          'customizationSaved',
-          'Profile customization updated',
-        ),
+        translateOrFallback(context, 'error', 'Failed to update'),
+        isError: true,
       );
     }
   }
@@ -274,15 +287,7 @@ class _ProfileCustomizationScreenState
     if (!mounted) return;
     setState(() => _isUploadingBanner = false);
 
-    if (uploadedUrl != null && uploadedUrl.isNotEmpty) {
-      _showToast(
-        translateOrFallback(
-          context,
-          'customizationSaved',
-          'Profile customization updated',
-        ),
-      );
-    } else {
+    if (uploadedUrl == null || uploadedUrl.isEmpty) {
       _showToast(
         translateOrFallback(
           context,
@@ -301,92 +306,77 @@ class _ProfileCustomizationScreenState
     final ok = await context.read<ProfileThemeProvider>().deleteBanner();
     if (!mounted) return;
     setState(() => _isUploadingBanner = false);
-    if (ok) {
+    if (!ok) {
       _showToast(
-        translateOrFallback(
-          context,
-          'customizationSaved',
-          'Profile customization updated',
-        ),
+        translateOrFallback(context, 'error', 'Failed to remove banner'),
+        isError: true,
       );
     }
   }
 
-  Future<void> _saveColors() async {
-    if (_isSaving) return;
-    HapticUtils.heavy();
-    setState(() => _isSaving = true);
-    final provider = context.read<ProfileThemeProvider>();
-    await provider.setPreset(_tempCoverPreset);
-    await provider.setNameColorAndStyle(_tempNamePreset, _tempStripStyle);
-    await NameColorSyncService().setNameColorAndStyle(
-      preset: _tempNamePreset,
-      style: _tempStripStyle,
-    );
-    if (!mounted) return;
-    setState(() => _isSaving = false);
-    _showToast(
-      translateOrFallback(
-        context,
-        'customizationSaved',
-        'Profile customization updated',
-      ),
-    );
-  }
+  // ---------------------------------------------------------------------------
+  // Мгновенные действия: Имя и полоска цитирования в чатах
+  // ---------------------------------------------------------------------------
 
-  Future<void> _resetColors() async {
-    if (_isSaving) return;
-    HapticUtils.impact();
-    setState(() => _isSaving = true);
-    await context.read<ProfileThemeProvider>().resetToDefault();
-    if (!mounted) return;
-    setState(() {
-      _isSaving = false;
-      _tempCoverPreset = ProfileColorPresets.blue;
-      _tempNamePreset = NameColorPresets.red;
-      _tempStripStyle = ReplyStripStyle.solid;
-    });
-    _showToast(
-      translateOrFallback(
-        context,
-        'profile_color_reset_success',
-        'Profile colors reset',
-      ),
-    );
-  }
-
-  Future<void> _pickCustomCoverColor() async {
+  void _applyNameColorImmediate(NameColorPreset preset, ReplyStripStyle style) {
     HapticUtils.selection();
-    _colorPickerController.showIOSCustomColorPicker(
-      context: context,
-      startingColor: _tempCoverPreset.backgroundColor,
-      onColorChanged: (c) {
-        if (!mounted) return;
-        setState(() {
-          _tempCoverPreset = ProfileColorPreset.fromCustomColor(
-            c.withValues(alpha: 1.0),
-          );
-        });
-      },
+    _nameColorDebounce?.cancel();
+    setState(() {
+      _draftNamePreset = null;
+      _draftStripStyle = null;
+    });
+    final provider = context.read<ProfileThemeProvider>();
+    provider.setNameColorAndStyle(preset, style);
+    NameColorSyncService().setNameColorAndStyle(
+      preset: preset,
+      style: style,
     );
+  }
+
+  void _applyNameColorDebounced(NameColorPreset preset, ReplyStripStyle style) {
+    setState(() {
+      _draftNamePreset = preset;
+      _draftStripStyle = style;
+    });
+    _nameColorDebounce?.cancel();
+    _nameColorDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      final provider = context.read<ProfileThemeProvider>();
+      provider.setNameColorAndStyle(preset, style);
+      NameColorSyncService().setNameColorAndStyle(
+        preset: preset,
+        style: style,
+      );
+      setState(() {
+        _draftNamePreset = null;
+        _draftStripStyle = null;
+      });
+    });
+  }
+
+  void _resetNameColor() {
+    _applyNameColorImmediate(NameColorPresets.red, ReplyStripStyle.solid);
   }
 
   Future<void> _pickCustomNameColor() async {
     HapticUtils.selection();
-    final c1 = _tempNamePreset.primaryColor;
-    final c2 = _tempNamePreset.effectiveSecondary;
-    final c3 = _tempNamePreset.effectiveTertiary;
-    if (_tempStripStyle == ReplyStripStyle.solid) {
+    final provider = context.read<ProfileThemeProvider>();
+    final currentPreset = _effectiveNamePreset(provider);
+    final currentStyle = _effectiveStripStyle(provider);
+    final c1 = currentPreset.primaryColor;
+    final c2 = currentPreset.effectiveSecondary;
+    final c3 = currentPreset.effectiveTertiary;
+
+    if (currentStyle == ReplyStripStyle.solid) {
       _colorPickerController.showIOSCustomColorPicker(
         context: context,
         startingColor: c1,
         onColorChanged: (c) {
           if (!mounted) return;
-          setState(() {
-            _tempNamePreset = NameColorPreset.fromCustomColor(
-              c.withValues(alpha: 1.0),
-            );
-          });
+          _applyNameColorDebounced(
+            NameColorPreset.fromCustomColor(c.withValues(alpha: 1.0)),
+            currentStyle,
+          );
         },
       );
       return;
@@ -397,82 +387,135 @@ class _ProfileCustomizationScreenState
     Color draft3 = c3;
     await showTheavGlassModalSheet<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (sheetCtx, setSheet) => Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _colorSwatchButton(sheetCtx, draft1, '1', () {
-                  _colorPickerController.showIOSCustomColorPicker(
-                    context: sheetCtx,
-                    startingColor: draft1,
-                    onColorChanged: (c) {
-                      final opaque = c.withValues(alpha: 1.0);
-                      setSheet(() => draft1 = opaque);
-                      setState(() {
-                        _tempNamePreset = _tempStripStyle ==
-                                ReplyStripStyle.candyCane
-                            ? NameColorPreset.fromCustomTriple(
-                                draft1, draft2, draft3)
-                            : NameColorPreset.fromCustomGradient(
-                                draft1, draft2);
-                      });
-                    },
-                  );
-                }),
-                _colorSwatchButton(sheetCtx, draft2, '2', () {
-                  _colorPickerController.showIOSCustomColorPicker(
-                    context: sheetCtx,
-                    startingColor: draft2,
-                    onColorChanged: (c) {
-                      final opaque = c.withValues(alpha: 1.0);
-                      setSheet(() => draft2 = opaque);
-                      setState(() {
-                        _tempNamePreset = _tempStripStyle ==
-                                ReplyStripStyle.candyCane
-                            ? NameColorPreset.fromCustomTriple(
-                                draft1, draft2, draft3)
-                            : NameColorPreset.fromCustomGradient(
-                                draft1, draft2);
-                      });
-                    },
-                  );
-                }),
-                if (_tempStripStyle == ReplyStripStyle.candyCane)
-                  _colorSwatchButton(sheetCtx, draft3, '3', () {
-                    _colorPickerController.showIOSCustomColorPicker(
-                      context: sheetCtx,
-                      startingColor: draft3,
-                      onColorChanged: (c) {
-                        final opaque = c.withValues(alpha: 1.0);
-                        setSheet(() => draft3 = opaque);
-                        setState(() {
-                          _tempNamePreset = NameColorPreset.fromCustomTriple(
-                            draft1,
-                            draft2,
-                            draft3,
-                          );
-                        });
-                      },
-                    );
-                  }),
-              ],
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () => Navigator.of(sheetCtx).pop(),
-                child: Text(
-                  translateOrFallback(sheetCtx, 'ok', 'OK'),
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return StatefulBuilder(
+          builder: (sheetCtx, setSheet) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                translateOrFallback(
+                  sheetCtx,
+                  'customizationNameColorTitle',
+                  'Name Color',
+                ),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _colorSwatchButton(
+                    sheetCtx,
+                    draft1,
+                    translateOrFallback(
+                      sheetCtx,
+                      'customizationFirstColor',
+                      'First color',
+                    ),
+                    () {
+                      _colorPickerController.showIOSCustomColorPicker(
+                        context: sheetCtx,
+                        startingColor: draft1,
+                        onColorChanged: (c) {
+                          final opaque = c.withValues(alpha: 1.0);
+                          setSheet(() => draft1 = opaque);
+                          final updated =
+                              currentStyle == ReplyStripStyle.candyCane
+                                  ? NameColorPreset.fromCustomTriple(
+                                      draft1, draft2, draft3)
+                                  : NameColorPreset.fromCustomGradient(
+                                      draft1, draft2);
+                          _applyNameColorDebounced(updated, currentStyle);
+                        },
+                      );
+                    },
+                  ),
+                  _colorSwatchButton(
+                    sheetCtx,
+                    draft2,
+                    translateOrFallback(
+                      sheetCtx,
+                      'customizationSecondColor',
+                      'Second color',
+                    ),
+                    () {
+                      _colorPickerController.showIOSCustomColorPicker(
+                        context: sheetCtx,
+                        startingColor: draft2,
+                        onColorChanged: (c) {
+                          final opaque = c.withValues(alpha: 1.0);
+                          setSheet(() => draft2 = opaque);
+                          final updated =
+                              currentStyle == ReplyStripStyle.candyCane
+                                  ? NameColorPreset.fromCustomTriple(
+                                      draft1, draft2, draft3)
+                                  : NameColorPreset.fromCustomGradient(
+                                      draft1, draft2);
+                          _applyNameColorDebounced(updated, currentStyle);
+                        },
+                      );
+                    },
+                  ),
+                  if (currentStyle == ReplyStripStyle.candyCane)
+                    _colorSwatchButton(
+                      sheetCtx,
+                      draft3,
+                      translateOrFallback(
+                        sheetCtx,
+                        'customizationThirdColor',
+                        'Third color',
+                      ),
+                      () {
+                        _colorPickerController.showIOSCustomColorPicker(
+                          context: sheetCtx,
+                          startingColor: draft3,
+                          onColorChanged: (c) {
+                            final opaque = c.withValues(alpha: 1.0);
+                            setSheet(() => draft3 = opaque);
+                            _applyNameColorDebounced(
+                              NameColorPreset.fromCustomTriple(
+                                draft1,
+                                draft2,
+                                draft3,
+                              ),
+                              currentStyle,
+                            );
+                          },
+                        );
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    backgroundColor:
+                        theme.colorScheme.primary.withValues(alpha: 0.12),
+                    foregroundColor: theme.colorScheme.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  onPressed: () => Navigator.of(sheetCtx).pop(),
+                  child: Text(
+                    translateOrFallback(sheetCtx, 'ok', 'OK'),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -482,81 +525,339 @@ class _ProfileCustomizationScreenState
     String label,
     VoidCallback onTap,
   ) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return GestureDetector(
       onTap: onTap,
       child: Column(
         children: [
           Container(
-            width: 44,
-            height: 44,
+            width: 46,
+            height: 46,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: color,
-              border: Border.all(color: Colors.white70, width: 2),
+              border: Border.all(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.38)
+                    : Colors.black.withValues(alpha: 0.16),
+                width: 2,
+              ),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildLivePreviewCard(
+  // ---------------------------------------------------------------------------
+  // Мгновенные действия: Эмодзи-статус, заметка и срок действия
+  // ---------------------------------------------------------------------------
+
+  DateTime? _computeExpiresAt() => _selectedDuration != null
+      ? DateTime.now().toUtc().add(_selectedDuration!)
+      : null;
+
+  Future<void> _selectUnicodeStatus(String emoji) async {
+    final trimmed = emoji.trim();
+    if (trimmed.isEmpty) return;
+    HapticUtils.selection();
+    _noteDebounce?.cancel();
+    final note = _noteController.text.trim();
+    final until = _computeExpiresAt();
+    final optimistic = EmojiStatusData(
+      type: 'unicode',
+      emoji: trimmed,
+      note: note,
+      expiresAt: until,
+    );
+    await context.read<ProfileThemeProvider>().updateCustomization(
+          emojiStatusUnicode: trimmed,
+          optimisticEmojiStatus: optimistic,
+          emojiStatusNote: note,
+          emojiStatusUntil: until,
+          clearEmojiStatusUntil: until == null,
+        );
+  }
+
+  Future<void> _selectCustomStickerStatus(StickerItem sticker) async {
+    HapticUtils.selection();
+    _noteDebounce?.cancel();
+    final note = _noteController.text.trim();
+    final until = _computeExpiresAt();
+    final optimistic = EmojiStatusData(
+      type: 'sticker',
+      stickerId: sticker.id,
+      stickerUrl: sticker.fileUrl,
+      thumbnailUrl: sticker.thumbnailUrl,
+      stickerFormat: sticker.format,
+      note: note,
+      expiresAt: until,
+    );
+    await context.read<ProfileThemeProvider>().updateCustomization(
+          emojiStatusStickerId: sticker.id,
+          optimisticEmojiStatus: optimistic,
+          emojiStatusNote: note,
+          emojiStatusUntil: until,
+          clearEmojiStatusUntil: until == null,
+        );
+  }
+
+  void _onStatusNoteChanged(String _) {
+    setState(() {});
+    _noteDebounce?.cancel();
+    _noteDebounce = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      _syncNoteForActiveStatus();
+    });
+  }
+
+  Future<void> _syncNoteForActiveStatus() async {
+    final provider = context.read<ProfileThemeProvider>();
+    final active = provider.currentEmojiStatus;
+    if (active == null) return;
+    final note = _noteController.text.trim();
+    if (active.note == note) return;
+    await provider.updateCustomization(
+      emojiStatusUnicode: active.type == 'unicode' ? active.emoji : null,
+      emojiStatusStickerId:
+          active.type == 'sticker' ? active.stickerId : null,
+      optimisticEmojiStatus: EmojiStatusData(
+        type: active.type,
+        emoji: active.emoji,
+        stickerId: active.stickerId,
+        stickerUrl: active.stickerUrl,
+        thumbnailUrl: active.thumbnailUrl,
+        stickerFormat: active.stickerFormat,
+        note: note,
+        expiresAt: active.expiresAt,
+      ),
+      emojiStatusNote: note,
+      emojiStatusUntil: active.expiresAt,
+      clearEmojiStatusUntil: active.expiresAt == null,
+    );
+  }
+
+  Future<void> _onDurationSelected(Duration? duration) async {
+    HapticUtils.selection();
+    setState(() => _selectedDuration = duration);
+    final provider = context.read<ProfileThemeProvider>();
+    final active = provider.currentEmojiStatus;
+    if (active == null) return;
+    final until = _computeExpiresAt();
+    await provider.updateCustomization(
+      emojiStatusUnicode: active.type == 'unicode' ? active.emoji : null,
+      emojiStatusStickerId:
+          active.type == 'sticker' ? active.stickerId : null,
+      optimisticEmojiStatus: EmojiStatusData(
+        type: active.type,
+        emoji: active.emoji,
+        stickerId: active.stickerId,
+        stickerUrl: active.stickerUrl,
+        thumbnailUrl: active.thumbnailUrl,
+        stickerFormat: active.stickerFormat,
+        note: _noteController.text.trim(),
+        expiresAt: until,
+      ),
+      emojiStatusNote: _noteController.text.trim(),
+      emojiStatusUntil: until,
+      clearEmojiStatusUntil: until == null,
+    );
+  }
+
+  Future<void> _clearEmojiStatus() async {
+    HapticUtils.selection();
+    _noteDebounce?.cancel();
+    setState(() => _noteController.clear());
+    await context.read<ProfileThemeProvider>().updateCustomization(
+          clearEmojiStatus: true,
+        );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Шторка «Все бейджи платформы»
+  // ---------------------------------------------------------------------------
+
+  Future<void> _showAllBadgesSheet(
+    BuildContext context,
+    UserBadge? ownBadge,
+    List<UserBadge> catalog,
+  ) async {
+    HapticUtils.tap();
+    await showTheavGlassModalSheet<void>(
+      context: context,
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final isDark = theme.brightness == Brightness.dark;
+        final theav = TheavTheme.of(sheetCtx);
+
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.72,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                translateOrFallback(
+                  sheetCtx,
+                  'customizationAllBadges',
+                  'All Platform Badges',
+                ),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                translateOrFallback(
+                  sheetCtx,
+                  'badgesSingleHint',
+                  'Only one badge can be active on a profile',
+                ),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theav.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: SettingsGroup(
+                    margin: EdgeInsets.zero,
+                    children: [
+                      for (final badge in catalog)
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 4,
+                          ),
+                          leading: PeerBadgesRow.buildCapsule(
+                            label: badge.shortTag,
+                            color: badge.accentColor,
+                            isDark: isDark,
+                          ),
+                          title: Text(
+                            translateOrFallback(
+                              sheetCtx,
+                              badge.nameKey,
+                              badge.shortTag,
+                            ),
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            translateOrFallback(sheetCtx, badge.descKey, ''),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theav.textSecondary,
+                            ),
+                          ),
+                          trailing: ownBadge?.id == badge.id
+                              ? iconoir.Check(
+                                  width: 20,
+                                  height: 20,
+                                  color: badge.accentColor,
+                                )
+                              : null,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Полноширинная живая шапка профиля (без рамок и без плашки «Live Preview»)
+  // ---------------------------------------------------------------------------
+
+  Widget _buildHeroSection(
     BuildContext context,
     ProfileThemeProvider themeProvider,
   ) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final topClearance = SettingsFloatingHeader.topClearanceOf(context);
+    final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 100;
+    if (isKeyboardOpen) {
+      return SizedBox(height: topClearance);
+    }
+
     final displayName = _displayName();
     final avatarUrl = _avatarUrl();
+
+    if (_activeTab == 1) {
+      return Padding(
+        padding: EdgeInsets.only(top: topClearance + 6, bottom: 4),
+        child: ReplyMessagePreviewCard(
+          preset: _effectiveNamePreset(themeProvider),
+          stripStyle: _effectiveStripStyle(themeProvider),
+          userName: displayName,
+          avatarUrl: avatarUrl,
+          userId: _userId,
+          avatarDecoration: themeProvider.currentAvatarDecoration,
+          emojiStatus: themeProvider.currentEmojiStatus,
+          badge: themeProvider.currentVisibleBadge,
+        ),
+      );
+    }
+
+    final coverPreset = _effectiveCoverPreset(themeProvider);
     final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
     final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
+    final activeStatus = themeProvider.currentEmojiStatus;
+    final draftNote = _noteController.text.trim();
+    final effectiveNote = _activeTab == 2 && activeStatus != null
+        ? draftNote
+        : (activeStatus?.note.trim() ?? '');
 
-    final coverPreset = _activeTab == 4
-        ? _tempCoverPreset
-        : (themeProvider.currentPreset ?? ProfileColorPresets.blue);
-    final previewStatus = _activeTab == 1
-        ? (_buildDraftEmojiStatus() ?? themeProvider.currentEmojiStatus)
-        : themeProvider.currentEmojiStatus;
-
-    final Decoration coverDecoration = coverPreset.isGradient
+    final BoxDecoration coverDecoration = coverPreset.isGradient &&
+            coverPreset.gradientColors != null
         ? BoxDecoration(
             gradient: LinearGradient(
               colors: coverPreset.gradientColors!,
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
             ),
           )
         : BoxDecoration(color: coverPreset.backgroundColor);
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.12),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: coverPreset.backgroundColor.withValues(alpha: 0.22),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      width: double.infinity,
+      decoration: coverDecoration,
       child: Stack(
         children: [
-          Positioned.fill(
-            child: Container(decoration: coverDecoration),
-          ),
           if (hasBanner)
             Positioned.fill(
-              child: ControlledAnimatedNetworkImage(
-                url: bannerUrl,
-                fit: BoxFit.cover,
-                animate: true,
+              child: ShaderMask(
+                shaderCallback: (rect) => const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white,
+                    Colors.white,
+                    Colors.transparent,
+                  ],
+                  stops: [0.0, 0.62, 1.0],
+                ).createShader(rect),
+                blendMode: BlendMode.dstIn,
+                child: ControlledAnimatedNetworkImage(
+                  url: bannerUrl,
+                  fit: BoxFit.cover,
+                  animate: true,
+                ),
               ),
             ),
           Positioned.fill(
@@ -566,101 +867,88 @@ class _ProfileCustomizationScreenState
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Colors.black.withValues(alpha: hasBanner ? 0.30 : 0.10),
-                    Colors.black.withValues(alpha: hasBanner ? 0.65 : 0.35),
+                    Colors.black.withValues(alpha: hasBanner ? 0.24 : 0.04),
+                    Colors.black.withValues(alpha: hasBanner ? 0.44 : 0.14),
                   ],
                 ),
               ),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.32),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      translateOrFallback(
-                        context,
-                        'customizationPreviewLabel',
-                        'Live Preview',
-                      ),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
+            padding: EdgeInsets.fromLTRB(20, topClearance + 8, 20, 22),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AvatarWithStatus(
+                    userId: _userId,
+                    avatarUrl: avatarUrl,
+                    name: displayName,
+                    radius: 42,
+                    isOnline: true,
+                    decorationOverride: themeProvider.currentAvatarDecoration,
+                    showDecoration: true,
+                    animateDecoration: true,
                   ),
-                ),
-                const SizedBox(height: 8),
-                AvatarWithStatus(
-                  userId: _userId,
-                  avatarUrl: avatarUrl,
-                  name: displayName,
-                  radius: 36,
-                  isOnline: true,
-                  decorationOverride: themeProvider.currentAvatarDecoration,
-                  showDecoration: true,
-                  animateDecoration: true,
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.3,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
-                    ),
-                    if (previewStatus?.activeOrNull != null) ...[
-                      const SizedBox(width: 6),
-                      EmojiStatusBadge(
-                        status: previewStatus,
-                        size: 20,
-                        animate: true,
-                        interactive: false,
-                        fallbackColor: Colors.white,
-                      ),
+                      if (activeStatus != null) ...[
+                        const SizedBox(width: 6),
+                        EmojiStatusBadge(
+                          status: activeStatus,
+                          size: 20,
+                          animate: true,
+                          interactive: false,
+                          fallbackColor: Colors.white,
+                        ),
+                      ],
+                      if (themeProvider.currentVisibleBadge != null)
+                        PeerBadgesRow(
+                          isBot: false,
+                          isVerified: false,
+                          badge: themeProvider.currentVisibleBadge,
+                          interactiveBadge: false,
+                          accentColor: Colors.white,
+                        ),
                     ],
-                    PeerBadgesRow(
-                      isBot: false,
-                      isVerified: false,
-                      badge: themeProvider.currentVisibleBadge,
-                      interactiveBadge: false,
-                      accentColor: Colors.white,
-                    ),
-                  ],
-                ),
-                if (previewStatus?.note.isNotEmpty == true) ...[
+                  ),
                   const SizedBox(height: 4),
                   Text(
-                    previewStatus!.note,
+                    effectiveNote.isNotEmpty
+                        ? effectiveNote
+                        : translateOrFallback(
+                            context,
+                            'profile_online',
+                            'online',
+                          ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 12.5,
-                      color: Colors.white.withValues(alpha: 0.88),
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w500,
+                      color: effectiveNote.isNotEmpty
+                          ? Colors.white.withValues(alpha: 0.88)
+                          : coverPreset.statusColor,
                     ),
                   ),
                 ],
-              ],
+              ),
             ),
           ),
         ],
@@ -668,164 +956,369 @@ class _ProfileCustomizationScreenState
     );
   }
 
-  Widget _buildTabBar(BuildContext context, bool glassEnabled) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final tabs = [
-      translateOrFallback(context, 'customizationTabFrame', 'Frame'),
-      translateOrFallback(context, 'customizationTabStatus', 'Status'),
-      translateOrFallback(context, 'customizationTabBanner', 'Banner'),
-      translateOrFallback(context, 'customizationTabBadges', 'Badges'),
-      translateOrFallback(context, 'customizationTabColors', 'Colors'),
-    ];
+  // ---------------------------------------------------------------------------
+  // Вкладка 0: Профиль (Обложка и баннер + Рамка аватара + Бейдж)
+  // ---------------------------------------------------------------------------
 
-    return SizedBox(
-      height: 42,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: tabs.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (ctx, idx) {
-          final selected = idx == _activeTab;
-          return GestureDetector(
-            onTap: () {
-              HapticUtils.selection();
-              setState(() => _activeTab = idx);
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-              decoration: BoxDecoration(
-                color: selected
-                    ? theme.colorScheme.primary
-                    : (glassEnabled
-                        ? (isDark
-                            ? Colors.white.withValues(alpha: 0.10)
-                            : Colors.black.withValues(alpha: 0.06))
-                        : theme.colorScheme.surfaceContainerHighest),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: selected
-                      ? theme.colorScheme.primary
-                      : (isDark
-                          ? Colors.white.withValues(alpha: 0.14)
-                          : Colors.black.withValues(alpha: 0.08)),
-                ),
-              ),
-              child: Center(
-                child: Text(
-                  tabs[idx],
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: selected
-                        ? theme.colorScheme.onPrimary
-                        : theme.colorScheme.onSurface,
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildFrameTab(
+  Widget _buildProfileTab(
     BuildContext context,
     ProfileThemeProvider themeProvider,
     PeerCustomizationCache cache,
   ) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final currentId = themeProvider.currentAvatarDecoration?.id;
-    final catalog = cache.decorationsCatalog;
+    final theav = TheavTheme.of(context);
+    final coverPreset = _effectiveCoverPreset(themeProvider);
+    final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
+    final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
+
+    final currentDecorationId = themeProvider.currentAvatarDecoration?.id;
+    final decorations = cache.decorationsCatalog;
     final displayName = _displayName();
     final avatarUrl = _avatarUrl();
+    final ownBadge = themeProvider.currentOwnBadge;
 
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 140,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 0.84,
-      ),
-      itemCount: catalog.length + 1,
-      itemBuilder: (ctx, index) {
-        final isNone = index == 0;
-        final preset = isNone ? null : catalog[index - 1];
-        final isSelected =
-            isNone ? (currentId == null || currentId.isEmpty) : currentId == preset!.id;
-        final title = isNone
-            ? translateOrFallback(ctx, 'decoNone', 'None')
-            : translateOrFallback(ctx, preset!.nameKey, preset.id);
-
-        return Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(18),
-            onTap: _isSaving ? null : () => _selectDecoration(preset),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? theme.colorScheme.primary.withValues(alpha: 0.14)
-                    : (isDark
-                        ? Colors.white.withValues(alpha: 0.05)
-                        : theme.colorScheme.surfaceContainerHighest
-                            .withValues(alpha: 0.55)),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: isSelected
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
-                  width: isSelected ? 1.8 : 1.0,
-                ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  AvatarWithStatus(
-                    avatarUrl: avatarUrl,
-                    name: displayName,
-                    radius: 26,
-                    decorationOverride: preset,
-                    showDecoration: preset != null,
-                    animateDecoration: isSelected,
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    title,
-                    maxLines: 2,
-                    textAlign: TextAlign.center,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontWeight:
-                          isSelected ? FontWeight.w700 : FontWeight.w500,
-                      color: isSelected
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.onSurface,
-                    ),
-                  ),
-                ],
+    return ListView(
+      padding: const EdgeInsets.only(top: 4, bottom: 32),
+      children: [
+        // 1. Обложка и баннер
+        SettingsGroup(
+          title: translateOrFallback(
+            context,
+            'customizationSectionCoverBanner',
+            'Cover & Banner',
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: ColorPalettePicker(
+                selectedPreset: coverPreset,
+                onSelect: _onCoverPresetSelected,
+                onPickCustomColor: _pickCustomCoverColor,
               ),
             ),
+            ListTile(
+              leading: iconoir.MediaImage(
+                width: 22,
+                height: 22,
+                color: theav.accent,
+              ),
+              title: Text(
+                translateOrFallback(context, 'bannerUpload', 'Upload Banner'),
+              ),
+              subtitle: Text(
+                translateOrFallback(
+                  context,
+                  'bannerHint',
+                  'Recommended 16:9 image, up to 15 MB',
+                ),
+                style: TextStyle(fontSize: 12.5, color: theav.textSecondary),
+              ),
+              trailing: _isUploadingBanner
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : iconoir.NavArrowRight(
+                      width: 18,
+                      height: 18,
+                      color: theav.textSecondary,
+                    ),
+              onTap: _isUploadingBanner ? null : _pickAndUploadBanner,
+            ),
+            if (hasBanner)
+              ListTile(
+                leading: iconoir.Trash(
+                  width: 22,
+                  height: 22,
+                  color: theav.palette.error,
+                ),
+                title: Text(
+                  translateOrFallback(context, 'bannerRemove', 'Remove Banner'),
+                  style: TextStyle(color: theav.palette.error),
+                ),
+                onTap: _isUploadingBanner ? null : _removeBanner,
+              ),
+            if (coverPreset.id != ProfileColorPresets.blue.id)
+              ListTile(
+                leading: iconoir.RefreshDouble(
+                  width: 22,
+                  height: 22,
+                  color: theav.textSecondary,
+                ),
+                title: Text(
+                  translateOrFallback(
+                    context,
+                    'customizationResetCover',
+                    'Reset Cover Color',
+                  ),
+                ),
+                onTap: _resetCoverColor,
+              ),
+          ],
+        ),
+
+        // 2. Рамка аватара (горизонтальная карусель внутри SettingsGroup)
+        SettingsGroup(
+          title: translateOrFallback(
+            context,
+            'customizationSectionAvatarFrame',
+            'Avatar Frame',
           ),
-        );
-      },
+          children: [
+            SizedBox(
+              height: 112,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                itemCount: decorations.length + 1,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                itemBuilder: (ctx, index) {
+                  final isNone = index == 0;
+                  final preset = isNone ? null : decorations[index - 1];
+                  final isSelected = isNone
+                      ? (currentDecorationId == null ||
+                          currentDecorationId.isEmpty)
+                      : currentDecorationId == preset!.id;
+                  final label = isNone
+                      ? translateOrFallback(ctx, 'decoNone', 'None')
+                      : translateOrFallback(ctx, preset!.nameKey, preset.id);
+
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => _selectDecoration(preset),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOutCubic,
+                        width: 82,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? theav.accent
+                                  .withValues(alpha: isDark ? 0.16 : 0.10)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            AvatarWithStatus(
+                              avatarUrl: avatarUrl,
+                              name: displayName,
+                              radius: 24,
+                              decorationOverride: preset,
+                              showDecoration: preset != null,
+                              animateDecoration: isSelected,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontSize: 12,
+                                fontWeight: isSelected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                                color: isSelected
+                                    ? theav.accent
+                                    : theav.textPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+
+        // 3. Бейдж профиля
+        SettingsGroup(
+          title: translateOrFallback(
+            context,
+            'customizationSectionBadge',
+            'Profile Badge',
+          ),
+          children: [
+            if (ownBadge != null)
+              ListTile(
+                leading: PeerBadgesRow.buildCapsule(
+                  label: ownBadge.shortTag,
+                  color: ownBadge.accentColor,
+                  isDark: isDark,
+                ),
+                title: Text(
+                  translateOrFallback(
+                    context,
+                    ownBadge.nameKey,
+                    ownBadge.shortTag,
+                  ),
+                ),
+                subtitle: Text(
+                  translateOrFallback(
+                    context,
+                    'badgesDisplaySwitch',
+                    'Show badge next to name',
+                  ),
+                  style: TextStyle(fontSize: 12.5, color: theav.textSecondary),
+                ),
+                trailing: AdaptiveSwitch(
+                  value: themeProvider.isBadgeDisplayed,
+                  onChanged: _toggleBadgeDisplayed,
+                ),
+                onTap: () =>
+                    _toggleBadgeDisplayed(!themeProvider.isBadgeDisplayed),
+              )
+            else
+              ListTile(
+                leading: iconoir.Medal(
+                  width: 22,
+                  height: 22,
+                  color: theav.textSecondary,
+                ),
+                title: Text(
+                  translateOrFallback(
+                    context,
+                    'badgesEmpty',
+                    "You don't have a badge assigned yet",
+                  ),
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    color: theav.textSecondary,
+                  ),
+                ),
+              ),
+            ListTile(
+              leading: iconoir.InfoCircle(
+                width: 22,
+                height: 22,
+                color: theav.accent,
+              ),
+              title: Text(
+                translateOrFallback(
+                  context,
+                  'customizationAllBadges',
+                  'All Platform Badges',
+                ),
+              ),
+              trailing: iconoir.NavArrowRight(
+                width: 18,
+                height: 18,
+                color: theav.textSecondary,
+              ),
+              onTap: () => _showAllBadgesSheet(
+                context,
+                ownBadge,
+                cache.badgesCatalog,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
+
+  // ---------------------------------------------------------------------------
+  // Вкладка 1: Имя в чатах
+  // ---------------------------------------------------------------------------
+
+  Widget _buildNameTab(
+    BuildContext context,
+    ProfileThemeProvider themeProvider,
+  ) {
+    final theav = TheavTheme.of(context);
+    final namePreset = _effectiveNamePreset(themeProvider);
+    final stripStyle = _effectiveStripStyle(themeProvider);
+    final isNonDefault = namePreset.id != NameColorPresets.red.id ||
+        stripStyle != ReplyStripStyle.solid;
+
+    return ListView(
+      padding: const EdgeInsets.only(top: 4, bottom: 32),
+      children: [
+        SettingsGroup(
+          title: translateOrFallback(
+            context,
+            'customizationNameColorTitle',
+            'Name Color',
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: NameColorPaletteRow(
+                selectedPreset: namePreset,
+                selectedStyle: stripStyle,
+                onPresetSelected: (preset) =>
+                    _applyNameColorImmediate(preset, stripStyle),
+                onPickCustomColor: _pickCustomNameColor,
+              ),
+            ),
+          ],
+        ),
+        SettingsGroup(
+          title: translateOrFallback(
+            context,
+            'customizationReplyStripTitle',
+            'Reply Strip Style',
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: ReplyStripStyleSelector(
+                selectedPreset: namePreset,
+                selectedStyle: stripStyle,
+                onStyleSelected: (style) =>
+                    _applyNameColorImmediate(namePreset, style),
+              ),
+            ),
+          ],
+        ),
+        if (isNonDefault)
+          SettingsGroup(
+            children: [
+              ListTile(
+                leading: iconoir.RefreshDouble(
+                  width: 22,
+                  height: 22,
+                  color: theav.textSecondary,
+                ),
+                title: Text(
+                  translateOrFallback(
+                    context,
+                    'customizationResetNameColor',
+                    'Reset Name Color',
+                  ),
+                ),
+                onTap: _resetNameColor,
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Вкладка 2: Эмодзи-статус
+  // ---------------------------------------------------------------------------
 
   Widget _buildStatusTab(
     BuildContext context,
     ProfileThemeProvider themeProvider,
   ) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final theav = TheavTheme.of(context);
+    final activeStatus = themeProvider.currentEmojiStatus;
 
     final durationOptions = <(Duration?, String)>[
       (null, translateOrFallback(context, 'emojiStatusExpiryNever', 'Forever')),
@@ -847,540 +1340,235 @@ class _ProfileCustomizationScreenState
       ),
     ];
 
+    int selectedDurationIdx = 0;
+    for (int i = 0; i < durationOptions.length; i++) {
+      if (durationOptions[i].$1 == _selectedDuration) {
+        selectedDurationIdx = i;
+        break;
+      }
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final showFooterControls = constraints.maxHeight >= 240.0;
+        final showMetaControls = constraints.maxHeight >= 220.0;
         return Column(
           children: [
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: (isDark ? Colors.white : Colors.black)
-                          .withValues(alpha: 0.08),
-                      width: 0.8,
+            if (showMetaControls)
+              SettingsGroup(
+                margin: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 2,
+                    ),
+                    child: Row(
+                      children: [
+                        if (activeStatus != null)
+                          EmojiStatusBadge(
+                            status: activeStatus,
+                            size: 22,
+                            animate: true,
+                            interactive: false,
+                            fallbackColor: theav.accent,
+                          )
+                        else
+                          iconoir.Emoji(
+                            width: 22,
+                            height: 22,
+                            color: theav.accent,
+                          ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: TextField(
+                            controller: _noteController,
+                            maxLength: 64,
+                            decoration: InputDecoration(
+                              counterText: '',
+                              border: InputBorder.none,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                              ),
+                              hintText: translateOrFallback(
+                                context,
+                                'emojiStatusNoteHint',
+                                'Add a short note (up to 64 chars)',
+                              ),
+                              hintStyle: TextStyle(
+                                color: theav.textSecondary,
+                                fontSize: 14.5,
+                              ),
+                            ),
+                            onChanged: _onStatusNoteChanged,
+                          ),
+                        ),
+                        if (activeStatus != null ||
+                            _noteController.text.isNotEmpty)
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: translateOrFallback(
+                              context,
+                              'emojiStatusClear',
+                              'Clear Status',
+                            ),
+                            onPressed: _clearEmojiStatus,
+                            icon: iconoir.Xmark(
+                              width: 18,
+                              height: 18,
+                              color: theav.textSecondary,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: EmojiStickerPanel(
-                      emojiOnly: true,
-                      expandToAvailableHeight: true,
-                      selectedEmoji:
-                          _statusSourceTab == 0 ? _selectedUnicode : null,
-                      selectedCustomEmojiId:
-                          _statusSourceTab == 1 ? _selectedSticker?.id : null,
-                      onEmojiSelected: (emoji) {
-                        HapticUtils.selection();
-                        setState(() {
-                          _statusSourceTab = 0;
-                          _selectedUnicode = emoji;
-                          _selectedSticker = null;
-                        });
-                      },
-                      onCustomEmojiSelected: (sticker) {
-                        HapticUtils.selection();
-                        setState(() {
-                          _statusSourceTab = 1;
-                          _selectedSticker = sticker;
-                        });
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            if (showFooterControls)
-              SafeArea(
-                top: false,
-                minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: _noteController,
-                      maxLength: 64,
-                      decoration: InputDecoration(
-                        counterText: '',
-                        hintText: translateOrFallback(
-                          context,
-                          'emojiStatusNoteHint',
-                          'Add a short note (up to 64 chars)',
+                  PopupMenuButton<int>(
+                    onSelected: (idx) =>
+                        _onDurationSelected(durationOptions[idx].$1),
+                    itemBuilder: (ctx) => [
+                      for (int i = 0; i < durationOptions.length; i++)
+                        PopupMenuItem<int>(
+                          value: i,
+                          child: Row(
+                            children: [
+                              Expanded(child: Text(durationOptions[i].$2)),
+                              if (i == selectedDurationIdx)
+                                iconoir.Check(
+                                  width: 18,
+                                  height: 18,
+                                  color: theav.accent,
+                                ),
+                            ],
+                          ),
                         ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        isDense: true,
+                    ],
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 11,
                       ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                    const SizedBox(height: 8),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8),
+                          iconoir.Clock(
+                            width: 21,
+                            height: 21,
+                            color: theav.accent,
+                          ),
+                          const SizedBox(width: 15),
+                          Expanded(
                             child: Text(
                               translateOrFallback(
                                 context,
                                 'emojiStatusExpiryLabel',
                                 'Duration',
                               ),
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
+                              style: theme.textTheme.bodyMedium,
                             ),
                           ),
-                          for (int i = 0; i < durationOptions.length; i++) ...[
-                            if (i > 0) const SizedBox(width: 6),
-                            ChoiceChip(
-                              label: Text(durationOptions[i].$2),
-                              selected:
-                                  _selectedDuration == durationOptions[i].$1,
-                              visualDensity: VisualDensity.compact,
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              onSelected: (_) {
-                                HapticUtils.selection();
-                                setState(() =>
-                                    _selectedDuration = durationOptions[i].$1);
-                              },
+                          Text(
+                            durationOptions[selectedDurationIdx].$2,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: theav.accent,
                             ),
-                          ],
+                          ),
+                          const SizedBox(width: 4),
+                          iconoir.NavArrowDown(
+                            width: 16,
+                            height: 16,
+                            color: theav.accent,
+                          ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: _isSaving ? null : _clearEmojiStatus,
-                            child: Text(
-                              translateOrFallback(
-                                context,
-                                'emojiStatusClear',
-                                'Clear Status',
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: FilledButton(
-                            onPressed: _isSaving ? null : _saveEmojiStatus,
-                            child: Text(
-                              translateOrFallback(
-                                context,
-                                'customizationSave',
-                                'Save Changes',
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                  ),
+                ],
+              ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: ColoredBox(
+                    color: theme.cardColor,
+                    child: EmojiStickerPanel(
+                      emojiOnly: true,
+                      expandToAvailableHeight: true,
+                      selectedEmoji: activeStatus?.type == 'unicode'
+                          ? activeStatus?.emoji
+                          : null,
+                      selectedCustomEmojiId: activeStatus?.type == 'sticker'
+                          ? activeStatus?.stickerId
+                          : null,
+                      onEmojiSelected: _selectUnicodeStatus,
+                      onCustomEmojiSelected: _selectCustomStickerStatus,
                     ),
-                  ],
+                  ),
                 ),
               ),
+            ),
           ],
         );
       },
     );
   }
 
-  Widget _buildBannerTab(
-    BuildContext context,
-    ProfileThemeProvider themeProvider,
-  ) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
-    final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      children: [
-        AspectRatio(
-          aspectRatio: 16 / 9,
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.06)
-                  : theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-              ),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: hasBanner
-                ? ControlledAnimatedNetworkImage(
-                    url: bannerUrl,
-                    fit: BoxFit.cover,
-                    animate: true,
-                  )
-                : Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      iconoir.MediaImage(
-                        width: 42,
-                        height: 42,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        translateOrFallback(
-                          context,
-                          'bannerTitle',
-                          'Profile Banner',
-                        ),
-                        style: theme.textTheme.titleSmall,
-                      ),
-                    ],
-                  ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          translateOrFallback(
-            context,
-            'bannerHint',
-            'Recommended 16:9 image, up to 15 MB',
-          ),
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 18),
-        FilledButton.icon(
-          onPressed: _isUploadingBanner ? null : _pickAndUploadBanner,
-          icon: _isUploadingBanner
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const iconoir.MediaImage(width: 18, height: 18),
-          label: Text(
-            translateOrFallback(context, 'bannerUpload', 'Upload Banner'),
-          ),
-        ),
-        if (hasBanner) ...[
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: _isUploadingBanner ? null : _removeBanner,
-            icon: const iconoir.Trash(width: 18, height: 18),
-            label: Text(
-              translateOrFallback(context, 'bannerRemove', 'Remove Banner'),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildBadgesTab(
-    BuildContext context,
-    ProfileThemeProvider themeProvider,
-    PeerCustomizationCache cache,
-  ) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final ownBadge = themeProvider.currentOwnBadge;
-    final catalog = cache.badgesCatalog;
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      children: [
-        if (ownBadge != null) ...[
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: ownBadge.accentColor.withValues(alpha: isDark ? 0.14 : 0.08),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: ownBadge.accentColor.withValues(alpha: 0.45),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    PeerBadgesRow.buildCapsule(
-                      label: ownBadge.shortTag,
-                      color: ownBadge.accentColor,
-                      isDark: isDark,
-                      scale: 1.25,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        translateOrFallback(
-                          context,
-                          ownBadge.nameKey,
-                          ownBadge.shortTag,
-                        ),
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  translateOrFallback(context, ownBadge.descKey, ''),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  value: themeProvider.isBadgeDisplayed,
-                  title: Text(
-                    translateOrFallback(
-                      context,
-                      'badgesDisplaySwitch',
-                      'Show badge next to name',
-                    ),
-                  ),
-                  onChanged: _isSaving
-                      ? null
-                      : (v) async {
-                          HapticUtils.selection();
-                          await themeProvider.updateCustomization(
-                            badgeIsDisplayed: v,
-                          );
-                        },
-                ),
-              ],
-            ),
-          ),
-        ] else ...[
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.05)
-                  : theme.colorScheme.surfaceContainerHighest
-                      .withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Text(
-              translateOrFallback(
-                context,
-                'badgesEmpty',
-                "You don't have a badge assigned yet",
-              ),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ],
-        const SizedBox(height: 16),
-        Text(
-          translateOrFallback(
-            context,
-            'badgesSingleHint',
-            'Only one badge can be active on a profile',
-          ),
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-        const SizedBox(height: 10),
-        ...catalog.map((badge) {
-          final isMine = ownBadge?.id == badge.id;
-          return Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.04)
-                  : theme.colorScheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isMine
-                    ? badge.accentColor.withValues(alpha: 0.65)
-                    : theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
-              ),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                PeerBadgesRow.buildCapsule(
-                  label: badge.shortTag,
-                  color: badge.accentColor,
-                  isDark: isDark,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        translateOrFallback(
-                          context,
-                          badge.nameKey,
-                          badge.shortTag,
-                        ),
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        translateOrFallback(context, badge.descKey, ''),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
-  Widget _buildColorsTab(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(0, 12, 0, 28),
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: ReplyMessagePreviewCard(
-            preset: _tempNamePreset,
-            stripStyle: _tempStripStyle,
-            userName: _displayName(),
-            avatarUrl: _avatarUrl(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        ColorPalettePicker(
-          selectedPreset: _tempCoverPreset,
-          onSelect: (preset) => setState(() => _tempCoverPreset = preset),
-          onPickCustomColor: _pickCustomCoverColor,
-        ),
-        const SizedBox(height: 20),
-        NameColorPicker(
-          selectedPreset: _tempNamePreset,
-          selectedStyle: _tempStripStyle,
-          onPresetSelected: (p) => setState(() => _tempNamePreset = p),
-          onStyleSelected: (s) => setState(() => _tempStripStyle = s),
-          onPickCustomColor: _pickCustomNameColor,
-        ),
-        const SizedBox(height: 20),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _isSaving ? null : _resetColors,
-                  child: Text(
-                    translateOrFallback(context, 'customizationReset', 'Reset'),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _isSaving ? null : _saveColors,
-                  child: Text(
-                    translateOrFallback(
-                      context,
-                      'customizationSave',
-                      'Save Changes',
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
+    final glassProvider = context.watch<LiquidGlassProvider>();
     final themeProvider = context.watch<ProfileThemeProvider>();
     final cache = context.watch<PeerCustomizationCache>();
-    final theme = Theme.of(context);
 
-    Widget activeBody;
-    switch (_activeTab) {
-      case 0:
-        activeBody = _buildFrameTab(context, themeProvider, cache);
-        break;
-      case 1:
-        activeBody = _buildStatusTab(context, themeProvider);
-        break;
-      case 2:
-        activeBody = _buildBannerTab(context, themeProvider);
-        break;
-      case 3:
-        activeBody = _buildBadgesTab(context, themeProvider, cache);
-        break;
-      case 4:
-      default:
-        activeBody = _buildColorsTab(context);
-        break;
-    }
+    final Widget activeBody = switch (_activeTab) {
+      1 => _buildNameTab(context, themeProvider),
+      2 => _buildStatusTab(context, themeProvider),
+      _ => _buildProfileTab(context, themeProvider, cache),
+    };
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        leading: IconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          icon: iconoir.NavArrowLeft(
-            width: 22,
-            height: 22,
-            color: theme.colorScheme.onSurface,
-          ),
-        ),
-        title: Text(
-          translateOrFallback(
-            context,
-            'customizationTitle',
-            'Profile Customization',
-          ),
-        ),
-        centerTitle: true,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+    return SettingsFloatingScaffold(
+      title: translateOrFallback(
+        context,
+        'customizationTitle',
+        'Profile Customization',
       ),
+      padBodyTop: false,
       body: Column(
         children: [
           AnimatedSize(
-            duration: const Duration(milliseconds: 200),
+            duration: const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
-            child: MediaQuery.viewInsetsOf(context).bottom > 100
-                ? const SizedBox.shrink()
-                : _buildLivePreviewCard(context, themeProvider),
+            alignment: Alignment.topCenter,
+            child: _buildHeroSection(context, themeProvider),
           ),
-          _buildTabBar(context, glassEnabled),
-          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+            child: ProfileSegmentedControl(
+              enabled: glassProvider.enabled,
+              isLite: glassProvider.isLite,
+              neutralSurface: true,
+              height: 36,
+              selectedIndex: _activeTab,
+              labels: [
+                translateOrFallback(
+                  context,
+                  'customizationSegmentProfile',
+                  'Profile',
+                ),
+                translateOrFallback(
+                  context,
+                  'customizationSegmentName',
+                  'Chat Name',
+                ),
+                translateOrFallback(
+                  context,
+                  'customizationSegmentStatus',
+                  'Status',
+                ),
+              ],
+              onTabChanged: (idx) => setState(() => _activeTab = idx),
+            ),
+          ),
           Expanded(child: activeBody),
         ],
       ),

@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "Роль CREATOR управляется только через админ-панель сервера",
   "channelShowAuthorProfiles": "Показывать аватарки авторов",
   "channelShowAuthorProfilesDesc": "Отображать аватар, бейдж и статус автора рядом с постами канала",
-  "customizationUploadError": "Не удалось загрузить баннер"
+  "customizationUploadError": "Не удалось загрузить баннер",
+  "customizationSegmentProfile": "Профиль",
+  "customizationSegmentName": "Имя в чатах",
+  "customizationSegmentStatus": "Статус",
+  "customizationSectionCoverBanner": "Обложка и баннер",
+  "customizationSectionAvatarFrame": "Рамка аватара",
+  "customizationSectionBadge": "Бейдж профиля",
+  "customizationAllBadges": "Все бейджи платформы",
+  "customizationNameColorTitle": "Цвет имени",
+  "customizationReplyStripTitle": "Стиль полоски ответа",
+  "customizationResetCover": "Сбросить цвет обложки",
+  "customizationResetNameColor": "Сбросить цвет имени",
+  "customizationGradientSheetTitle": "Настройка двухцветного градиента",
+  "customizationFirstColor": "Первый цвет",
+  "customizationSecondColor": "Второй цвет",
+  "customizationThirdColor": "Третий цвет",
+  "customizationChatPreviewQuote": "Обновили дизайн профиля в Theaver",
+  "customizationChatPreviewMessage": "Так ваше имя, бейдж и цитата выглядят в групповых чатах."
 }

@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "CREATOR 身份仅可在服务器管理面板中修改",
   "channelShowAuthorProfiles": "显示作者头像",
   "channelShowAuthorProfilesDesc": "在频道帖文旁显示发送者头像、徽章和状态",
-  "customizationUploadError": "上传横幅失败"
+  "customizationUploadError": "上传横幅失败",
+  "customizationSegmentProfile": "个人资料",
+  "customizationSegmentName": "聊天名称",
+  "customizationSegmentStatus": "状态",
+  "customizationSectionCoverBanner": "封面与横幅",
+  "customizationSectionAvatarFrame": "头像边框",
+  "customizationSectionBadge": "个人资料徽章",
+  "customizationAllBadges": "全部平台徽章",
+  "customizationNameColorTitle": "名称颜色",
+  "customizationReplyStripTitle": "回复竖条样式",
+  "customizationResetCover": "重置封面颜色",
+  "customizationResetNameColor": "重置名称颜色",
+  "customizationGradientSheetTitle": "双色渐变设置",
+  "customizationFirstColor": "第一种颜色",
+  "customizationSecondColor": "第二种颜色",
+  "customizationThirdColor": "第三种颜色",
+  "customizationChatPreviewQuote": "更新了 Theaver 的个人资料设计",
+  "customizationChatPreviewMessage": "您的名称、徽章和引用回复在群聊中将如此显示。"
 }

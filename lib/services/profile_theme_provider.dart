@@ -460,11 +460,39 @@ class ProfileThemeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  @visibleForTesting
+  void seedOwnCustomizationForTest(
+    PeerCustomization value, {
+    String? userId,
+  }) {
+    if (userId != null) {
+      _currentUserId = userId;
+    }
+    _ownCustomization = value;
+    final uid = _currentUserId;
+    if (uid != null && uid.isNotEmpty) {
+      PeerCustomizationCache.instance.put(uid, value);
+    }
+    notifyListeners();
+  }
+
+  AvatarDecorationPreset? _resolveDecorationById(String id) {
+    for (final preset in PeerCustomizationCache.instance.decorationsCatalog) {
+      if (preset.id == id) return preset;
+    }
+    for (final preset in AvatarDecorationPreset.builtInDefaults) {
+      if (preset.id == id) return preset;
+    }
+    return null;
+  }
+
   Future<bool> updateCustomization({
     String? avatarDecorationId,
+    AvatarDecorationPreset? optimisticDecoration,
     bool clearAvatarDecoration = false,
     String? emojiStatusUnicode,
     int? emojiStatusStickerId,
+    EmojiStatusData? optimisticEmojiStatus,
     String? emojiStatusNote,
     DateTime? emojiStatusUntil,
     bool clearEmojiStatus = false,
@@ -475,9 +503,94 @@ class ProfileThemeProvider extends ChangeNotifier {
     String? nameColorPresetId,
     String? replyStripStyle,
   }) async {
+    final previous = _ownCustomization;
+
+    final AvatarDecorationPreset? nextDecoration = clearAvatarDecoration
+        ? null
+        : (optimisticDecoration ??
+            (avatarDecorationId != null
+                ? _resolveDecorationById(avatarDecorationId)
+                : previous.avatarDecoration));
+
+    EmojiStatusData? nextStatus = previous.activeEmojiStatus;
+    if (clearEmojiStatus) {
+      nextStatus = null;
+    } else if (optimisticEmojiStatus != null) {
+      nextStatus = optimisticEmojiStatus.activeOrNull;
+    } else if (emojiStatusUnicode != null) {
+      nextStatus = EmojiStatusData(
+        type: 'unicode',
+        emoji: emojiStatusUnicode,
+        note: emojiStatusNote ?? nextStatus?.note ?? '',
+        expiresAt: clearEmojiStatusUntil
+            ? null
+            : (emojiStatusUntil ?? nextStatus?.expiresAt),
+      ).activeOrNull;
+    } else if (emojiStatusStickerId != null) {
+      nextStatus = EmojiStatusData(
+        type: 'sticker',
+        stickerId: emojiStatusStickerId,
+        stickerUrl: nextStatus?.stickerId == emojiStatusStickerId
+            ? nextStatus?.stickerUrl
+            : null,
+        thumbnailUrl: nextStatus?.stickerId == emojiStatusStickerId
+            ? nextStatus?.thumbnailUrl
+            : null,
+        stickerFormat: nextStatus?.stickerId == emojiStatusStickerId
+            ? nextStatus?.stickerFormat
+            : null,
+        note: emojiStatusNote ?? nextStatus?.note ?? '',
+        expiresAt: clearEmojiStatusUntil
+            ? null
+            : (emojiStatusUntil ?? nextStatus?.expiresAt),
+      ).activeOrNull;
+    } else if (nextStatus != null &&
+        (emojiStatusNote != null ||
+            emojiStatusUntil != null ||
+            clearEmojiStatusUntil)) {
+      nextStatus = EmojiStatusData(
+        type: nextStatus.type,
+        emoji: nextStatus.emoji,
+        stickerId: nextStatus.stickerId,
+        stickerUrl: nextStatus.stickerUrl,
+        thumbnailUrl: nextStatus.thumbnailUrl,
+        stickerFormat: nextStatus.stickerFormat,
+        note: emojiStatusNote ?? nextStatus.note,
+        expiresAt: clearEmojiStatusUntil
+            ? null
+            : (emojiStatusUntil ?? nextStatus.expiresAt),
+      ).activeOrNull;
+    }
+
+    final next = PeerCustomization(
+      nameColorPresetId: nameColorPresetId ?? previous.nameColorPresetId,
+      replyStripStyle: replyStripStyle ?? previous.replyStripStyle,
+      profileColorPresetId:
+          profileColorPresetId ?? previous.profileColorPresetId,
+      avatarDecoration: nextDecoration,
+      emojiStatus: nextStatus,
+      badge: previous.badge,
+      badgeIsDisplayed: badgeIsDisplayed ?? previous.badgeIsDisplayed,
+      profileBannerUrl: clearProfileBanner ? null : previous.profileBannerUrl,
+    );
+
+    _ownCustomization = next;
+    final uid = _currentUserId;
+    if (uid != null && uid.isNotEmpty) {
+      PeerCustomizationCache.instance.put(uid, next);
+    }
+    notifyListeners();
+
+    Future<void> persistLocal(PeerCustomization value) async {
+      if (uid == null || uid.isEmpty) return;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefCustomizationKey(uid), value.toJsonString());
+    }
+
     try {
-      final token = await _resolveTokenForUser(_currentUserId);
-      if (token == null) return false;
+      await persistLocal(next);
+      final token = await _resolveTokenForUser(uid);
+      if (token == null) return true;
 
       final body = <String, dynamic>{};
       if (clearAvatarDecoration) {
@@ -518,15 +631,31 @@ class ProfileThemeProvider extends ChangeNotifier {
         if (data is Map && data['appearance'] is Map) {
           await applyAppearanceUpdateMap(
             Map<String, dynamic>.from(data['appearance'] as Map),
-            targetUserId: _currentUserId,
+            targetUserId: uid,
           );
         }
         return true;
       }
       debugPrint('[ProfileThemeProvider] updateCustomization HTTP ${response.statusCode}: ${response.body}');
+      if (identical(_ownCustomization, next)) {
+        _ownCustomization = previous;
+        if (uid != null && uid.isNotEmpty) {
+          PeerCustomizationCache.instance.put(uid, previous);
+        }
+        await persistLocal(previous);
+        notifyListeners();
+      }
       return false;
     } catch (e) {
       debugPrint('[ProfileThemeProvider] updateCustomization failed: $e');
+      if (identical(_ownCustomization, next)) {
+        _ownCustomization = previous;
+        if (uid != null && uid.isNotEmpty) {
+          PeerCustomizationCache.instance.put(uid, previous);
+        }
+        await persistLocal(previous);
+        notifyListeners();
+      }
       return false;
     }
   }

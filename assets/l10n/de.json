@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "Die Rolle CREATOR kann nur über die Server-Administration geändert werden",
   "channelShowAuthorProfiles": "Autoren-Avatare anzeigen",
   "channelShowAuthorProfilesDesc": "Avatar, Abzeichen und Status des Autors bei Kanalbeiträgen anzeigen",
-  "customizationUploadError": "Banner-Upload fehlgeschlagen"
+  "customizationUploadError": "Banner-Upload fehlgeschlagen",
+  "customizationSegmentProfile": "Profil",
+  "customizationSegmentName": "Chat-Name",
+  "customizationSegmentStatus": "Status",
+  "customizationSectionCoverBanner": "Hintergrund & Banner",
+  "customizationSectionAvatarFrame": "Avatar-Rahmen",
+  "customizationSectionBadge": "Profil-Abzeichen",
+  "customizationAllBadges": "Alle Plattform-Abzeichen",
+  "customizationNameColorTitle": "Namensfarbe",
+  "customizationReplyStripTitle": "Antwortstreifen-Stil",
+  "customizationResetCover": "Hintergrundfarbe zurücksetzen",
+  "customizationResetNameColor": "Namensfarbe zurücksetzen",
+  "customizationGradientSheetTitle": "Zweifarbiger Verlauf",
+  "customizationFirstColor": "Erste Farbe",
+  "customizationSecondColor": "Zweite Farbe",
+  "customizationThirdColor": "Dritte Farbe",
+  "customizationChatPreviewQuote": "Profildesign in Theaver aktualisiert",
+  "customizationChatPreviewMessage": "So sehen Ihr Name, Abzeichen und Zitat in Gruppenchats aus."
 }

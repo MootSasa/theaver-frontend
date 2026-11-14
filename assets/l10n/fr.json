@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "Le rôle CREATOR ne peut être modifié que sur le serveur",
   "channelShowAuthorProfiles": "Afficher les avatars des auteurs",
   "channelShowAuthorProfilesDesc": "Afficher l'avatar, le badge et le statut de l'auteur sur les publications",
-  "customizationUploadError": "Échec de l'envoi de la bannière"
+  "customizationUploadError": "Échec de l'envoi de la bannière",
+  "customizationSegmentProfile": "Profil",
+  "customizationSegmentName": "Nom en discussion",
+  "customizationSegmentStatus": "Statut",
+  "customizationSectionCoverBanner": "Couverture et bannière",
+  "customizationSectionAvatarFrame": "Cadre d'avatar",
+  "customizationSectionBadge": "Badge de profil",
+  "customizationAllBadges": "Tous les badges",
+  "customizationNameColorTitle": "Couleur du nom",
+  "customizationReplyStripTitle": "Style de barre de réponse",
+  "customizationResetCover": "Réinitialiser la couleur",
+  "customizationResetNameColor": "Réinitialiser la couleur du nom",
+  "customizationGradientSheetTitle": "Dégradé bicolore",
+  "customizationFirstColor": "Première couleur",
+  "customizationSecondColor": "Deuxième couleur",
+  "customizationThirdColor": "Troisième couleur",
+  "customizationChatPreviewQuote": "Design du profil mis à jour dans Theaver",
+  "customizationChatPreviewMessage": "Voici à quoi ressemblent votre nom, badge et citation dans les groupes."
 }

@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "El rol CREATOR solo puede cambiarse desde el panel del servidor",
   "channelShowAuthorProfiles": "Mostrar avatares de autores",
   "channelShowAuthorProfilesDesc": "Mostrar avatar, insignia y estado del autor en publicaciones del canal",
-  "customizationUploadError": "Error al subir el banner"
+  "customizationUploadError": "Error al subir el banner",
+  "customizationSegmentProfile": "Perfil",
+  "customizationSegmentName": "Nombre en chats",
+  "customizationSegmentStatus": "Estado",
+  "customizationSectionCoverBanner": "Portada y banner",
+  "customizationSectionAvatarFrame": "Marco del avatar",
+  "customizationSectionBadge": "Insignia de perfil",
+  "customizationAllBadges": "Todas las insignias",
+  "customizationNameColorTitle": "Color del nombre",
+  "customizationReplyStripTitle": "Estilo de franja de respuesta",
+  "customizationResetCover": "Restablecer color de portada",
+  "customizationResetNameColor": "Restablecer color del nombre",
+  "customizationGradientSheetTitle": "Degradado de dos colores",
+  "customizationFirstColor": "Primer color",
+  "customizationSecondColor": "Segundo color",
+  "customizationThirdColor": "Tercer color",
+  "customizationChatPreviewQuote": "Diseño de perfil actualizado en Theaver",
+  "customizationChatPreviewMessage": "Así se ven tu nombre, insignia y cita en los chats grupales."
 }

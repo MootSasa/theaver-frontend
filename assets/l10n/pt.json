@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "O papel CREATOR só pode ser alterado pelo painel do servidor",
   "channelShowAuthorProfiles": "Mostrar avatares dos autores",
   "channelShowAuthorProfilesDesc": "Exibir avatar, selo e status do autor junto às postagens do canal",
-  "customizationUploadError": "Falha ao enviar o banner"
+  "customizationUploadError": "Falha ao enviar o banner",
+  "customizationSegmentProfile": "Perfil",
+  "customizationSegmentName": "Nome nos chats",
+  "customizationSegmentStatus": "Status",
+  "customizationSectionCoverBanner": "Capa e banner",
+  "customizationSectionAvatarFrame": "Moldura do avatar",
+  "customizationSectionBadge": "Insígnia do perfil",
+  "customizationAllBadges": "Todas as insígnias",
+  "customizationNameColorTitle": "Cor do nome",
+  "customizationReplyStripTitle": "Estilo da faixa de resposta",
+  "customizationResetCover": "Redefinir cor da capa",
+  "customizationResetNameColor": "Redefinir cor do nome",
+  "customizationGradientSheetTitle": "Gradiente de duas cores",
+  "customizationFirstColor": "Primeira cor",
+  "customizationSecondColor": "Segunda cor",
+  "customizationThirdColor": "Terceira cor",
+  "customizationChatPreviewQuote": "Design do perfil atualizado no Theaver",
+  "customizationChatPreviewMessage": "É assim que seu nome, insígnia e citação aparecem nos grupos."
 }

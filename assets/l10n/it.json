@@ -1365,5 +1365,22 @@
   "manageBadgeCreatorNote": "Il ruolo CREATOR può essere modificato solo dall'admin server",
   "channelShowAuthorProfiles": "Mostra avatar autori",
   "channelShowAuthorProfilesDesc": "Mostra avatar, badge e stato dell'autore accanto ai post del canale",
-  "customizationUploadError": "Caricamento del banner non riuscito"
+  "customizationUploadError": "Caricamento del banner non riuscito",
+  "customizationSegmentProfile": "Profilo",
+  "customizationSegmentName": "Nome nelle chat",
+  "customizationSegmentStatus": "Stato",
+  "customizationSectionCoverBanner": "Copertina e banner",
+  "customizationSectionAvatarFrame": "Cornice avatar",
+  "customizationSectionBadge": "Badge del profilo",
+  "customizationAllBadges": "Tutti i badge",
+  "customizationNameColorTitle": "Colore del nome",
+  "customizationReplyStripTitle": "Stile barra di risposta",
+  "customizationResetCover": "Ripristina colore copertina",
+  "customizationResetNameColor": "Ripristina colore nome",
+  "customizationGradientSheetTitle": "Sfumatura a due colori",
+  "customizationFirstColor": "Primo colore",
+  "customizationSecondColor": "Secondo colore",
+  "customizationThirdColor": "Terzo colore",
+  "customizationChatPreviewQuote": "Design del profilo aggiornato in Theaver",
+  "customizationChatPreviewMessage": "Ecco come appaiono nome, badge e citazione nelle chat di gruppo."
 }
