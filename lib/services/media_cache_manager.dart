@@ -216,26 +216,10 @@ class MediaCacheManager {
     final filenamesToCheck = {filename, resolvedFilename, legacySanitized};
 
     for (final fname in filenamesToCheck) {
-      // 1. Check primary application cache directory
+      // Check primary app-private cache directory
       try {
         final cacheDir = await getApplicationCacheDirectory();
         final targetPath = path.join(cacheDir.path, 'theaver_media', fname);
-        final f = File(targetPath);
-        if (await f.exists()) {
-          if (await f.length() > 0) {
-            _localPathCache[url] = targetPath;
-            _localPathCache[resolvedUrl] = targetPath;
-            return f;
-          } else {
-            await f.delete();
-          }
-        }
-      } catch (_) {}
-
-      // 2. Check legacy documents directory
-      try {
-        final docDir = await getApplicationDocumentsDirectory();
-        final targetPath = path.join(docDir.path, 'theaver_media', fname);
         final f = File(targetPath);
         if (await f.exists()) {
           if (await f.length() > 0) {
@@ -259,30 +243,27 @@ class MediaCacheManager {
     final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
     final filenamesToCheck = {filename, legacySanitized};
 
-    // Check primary cache directory first, then legacy documents directory
-    for (final dirGetter in [getApplicationCacheDirectory, getApplicationDocumentsDirectory]) {
-      for (final fname in filenamesToCheck) {
-        try {
-          final dir = await dirGetter();
-          final tempPath = path.join(dir.path, 'theaver_media', '$fname.tmp');
-          final tempFile = File(tempPath);
-          if (await tempFile.exists()) {
-            final len = await tempFile.length();
-            if (len > 0) {
-              final tot = totalSize ?? len;
-              final fraction = tot > 0 ? (len / tot).clamp(0.0, 1.0) : 0.0;
-              final prog = DownloadByteProgress(
-                receivedBytes: len,
-                totalBytes: tot,
-                fraction: fraction,
-              );
-              _byteProgressNotifiers[url]?.value = prog;
-              _progressNotifiers[url]?.value = fraction;
-              return prog;
-            }
+    for (final fname in filenamesToCheck) {
+      try {
+        final dir = await getApplicationCacheDirectory();
+        final tempPath = path.join(dir.path, 'theaver_media', '$fname.tmp');
+        final tempFile = File(tempPath);
+        if (await tempFile.exists()) {
+          final len = await tempFile.length();
+          if (len > 0) {
+            final tot = totalSize ?? len;
+            final fraction = tot > 0 ? (len / tot).clamp(0.0, 1.0) : 0.0;
+            final prog = DownloadByteProgress(
+              receivedBytes: len,
+              totalBytes: tot,
+              fraction: fraction,
+            );
+            _byteProgressNotifiers[url]?.value = prog;
+            _progressNotifiers[url]?.value = fraction;
+            return prog;
           }
-        } catch (_) {}
-      }
+        }
+      } catch (_) {}
     }
     return null;
   }
@@ -301,7 +282,7 @@ class MediaCacheManager {
     _userCancelledUrls.clear();
   }
 
-  /// Clears all downloaded media files from disk (both cache and legacy directories)
+  /// Clears all downloaded media files from the app-private cache directory
   Future<void> clearDiskCache() async {
     clearMemoryCache();
     if (kIsWeb) return;
@@ -313,16 +294,6 @@ class MediaCacheManager {
       }
     } catch (e) {
       debugPrint('Error clearing media cache dir: $e');
-    }
-
-    try {
-      final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(path.join(docDir.path, 'theaver_media'));
-      if (await legacyMediaDir.exists()) {
-        await legacyMediaDir.delete(recursive: true);
-      }
-    } catch (e) {
-      debugPrint('Error clearing legacy media dir: $e');
     }
   }
 
@@ -410,20 +381,6 @@ class MediaCacheManager {
           await tmp1.delete();
         }
       } catch (_) {}
-
-      try {
-        final docDir = await getApplicationDocumentsDirectory();
-        final f2 = File(path.join(docDir.path, 'theaver_media', name));
-        if (await f2.exists()) {
-          freedBytes += await f2.length();
-          await f2.delete();
-        }
-        final tmp2 = File(path.join(docDir.path, 'theaver_media', '$name.tmp'));
-        if (await tmp2.exists()) {
-          freedBytes += await tmp2.length();
-          await tmp2.delete();
-        }
-      } catch (_) {}
     }
     return freedBytes;
   }
@@ -440,18 +397,6 @@ class MediaCacheManager {
       final mediaCacheDir = Directory(path.join(cacheDir.path, 'theaver_media'));
       if (await mediaCacheDir.exists()) {
         await for (final entity in mediaCacheDir.list(recursive: true)) {
-          if (entity is File) {
-            total += await entity.length();
-          }
-        }
-      }
-    } catch (_) {}
-
-    try {
-      final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(path.join(docDir.path, 'theaver_media'));
-      if (await legacyMediaDir.exists()) {
-        await for (final entity in legacyMediaDir.list(recursive: true)) {
           if (entity is File) {
             total += await entity.length();
           }

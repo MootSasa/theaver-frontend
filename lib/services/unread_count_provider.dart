@@ -4,6 +4,7 @@ import 'database/app_database.dart';
 import 'websocket_service.dart';
 import 'chat_service.dart';
 import 'notification_service.dart';
+import 'settings_service.dart';
 
 /// Provider that manages unread message counts per chat.
 /// It is the single source of truth for unread counts on the client.
@@ -16,6 +17,9 @@ class UnreadCountProvider extends ChangeNotifier {
 
   /// Map of chatId -> unreadCount
   final Map<String, int> _counts = {};
+
+  /// Map of chatId -> chatType ('private', 'group', 'channel', ...)
+  final Map<String, String> _chatTypes = {};
 
   /// Set of chatIds that have received an explicit count update before full initial load
   final Set<String> _knownChatIds = {};
@@ -40,6 +44,9 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Get unread count for a specific chat
   int getCount(String chatId) => _counts[chatId] ?? 0;
 
+  /// Known chat type for [chatId] if loaded
+  String? getChatType(String chatId) => _chatTypes[chatId];
+
   /// Check whether a chat is currently open in any tile
   bool isChatOpen(String chatId) => (_openChatCounts[chatId] ?? 0) > 0;
 
@@ -54,6 +61,29 @@ class UnreadCountProvider extends ChangeNotifier {
         0,
         (sum, count) => sum + (count == -1 ? 1 : (count > 0 ? count : 0)),
       );
+
+  /// Compute badge count honoring badge visibility, messages vs chats mode, and muted chats.
+  int getBadgeCount({
+    required bool badgeEnabled,
+    required BadgeMode badgeMode,
+    required bool includeMutedChats,
+    bool Function(String chatId, String? chatType)? isMutedResolver,
+  }) {
+    if (!badgeEnabled) return 0;
+    int total = 0;
+    _counts.forEach((chatId, count) {
+      if (count <= 0 && count != -1) return;
+      if (!includeMutedChats && (isMutedResolver?.call(chatId, _chatTypes[chatId]) ?? false)) {
+        return;
+      }
+      if (badgeMode == BadgeMode.chats) {
+        total += 1;
+      } else {
+        total += (count == -1 ? 1 : count);
+      }
+    });
+    return total;
+  }
 
   /// Get number of chats with unread messages for a specific filter
   int getUnreadChatCountForFilter(bool Function(String chatId, String chatType) matchesFilter) {
@@ -111,14 +141,27 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Load counts from the server (getChats API returns unread_count per chat)
   void loadFromChats(List<Chat> chats) {
     _counts.clear();
+    _chatTypes.clear();
     _knownChatIds.clear();
     _hasLoadedInitialChats = true;
     for (final chat in chats) {
       _knownChatIds.add(chat.id);
+      _chatTypes[chat.id] = chat.chatType;
       if (chat.unreadCount > 0 || chat.unreadCount == -1) {
         _counts[chat.id] = chat.unreadCount;
       }
     }
+    notifyListeners();
+  }
+
+  /// Reset in-memory unread counts when switching accounts
+  void clearForAccountSwitch() {
+    _counts.clear();
+    _chatTypes.clear();
+    _knownChatIds.clear();
+    _hasLoadedInitialChats = false;
+    _openChatCounts.clear();
+    _lastSetOpenChatId = null;
     notifyListeners();
   }
 

@@ -104,6 +104,17 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
   }
 
   Future<void> _pickImage() async {
+    if (kIsWeb) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.l10n.translate('wallpaper_photo_web_unsupported')),
+          ),
+        );
+      }
+      return;
+    }
+
     final picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
@@ -156,10 +167,12 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
         await context.read<WallpaperProvider>().setWallpaper(_currentWallpaper.imagePath!);
       } else {
         await context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
-        try {
-          final appDir = await getApplicationDocumentsDirectory();
-          await _cleanupOldWallpaperFiles(Directory('${appDir.path}/wallpapers'));
-        } catch (_) {}
+        if (!kIsWeb) {
+          try {
+            final appDir = await getApplicationDocumentsDirectory();
+            await _cleanupOldWallpaperFiles(Directory('${appDir.path}/wallpapers'));
+          } catch (_) {}
+        }
       }
 
       if (mounted) {

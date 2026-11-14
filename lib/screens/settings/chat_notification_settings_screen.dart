@@ -4,10 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/notification_service.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/settings_service.dart';
+import '../../services/sound_preview_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
+import 'widgets/sound_picker_sheet.dart';
 
 /// Экран настроек уведомлений для конкретного чата.
 /// Доступен из профиля чата / информации о группе.
@@ -84,10 +86,18 @@ class _ChatNotificationSettingsScreenState
       BuildContext context, AppLocalizations l10n, ThemeData theme) {
     return Consumer<NotificationSettingsProvider>(
       builder: (context, provider, _) {
+        final chatType = widget.isChannel
+            ? 'channel'
+            : (widget.isGroup ? 'group' : 'private');
         final chatSettings = provider.getChatSettings(widget.chatId);
+        final effective = provider.getEffectiveSettings(
+          widget.chatId,
+          chatType: chatType,
+        );
         final muteState = chatSettings?.muteState ?? MuteState.notMuted;
         final muteUntil = chatSettings?.muteUntil;
-        final previewEnabled = chatSettings?.previewEnabled ?? true;
+        final previewEnabled =
+            chatSettings?.previewEnabled ?? effective.previewEnabled;
         final soundEnabled = chatSettings?.soundEnabled;
         final vibration = chatSettings?.vibration;
         final mentionsOnly = chatSettings?.mentionsOnly ?? false;
@@ -144,7 +154,7 @@ class _ChatNotificationSettingsScreenState
                     : soundEnabled == null
                         ? l10n.translate('chat_notif_use_global')
                         : soundEnabled
-                            ? 'По умолчанию'
+                            ? soundOptionLabel(chatSettings?.soundUri)
                             : 'Без звука',
               ),
               trailing: const Icon(Icons.chevron_right, color: Colors.grey),
@@ -647,66 +657,101 @@ class _ChatNotificationSettingsScreenState
     AppLocalizations l10n,
   ) {
     HapticUtils.tap();
+    final currentUri = provider.getChatSettings(widget.chatId)?.soundUri;
+    final selectedId = currentSound == null
+        ? null
+        : (currentSound == false ? kSilentSoundId : normalizeSoundId(currentUri));
 
     showModalBottomSheet(
       context: context,
-      builder: (context) {
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  l10n.translate('chat_notif_sound'),
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.bold),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 440),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    l10n.translate('chat_notif_sound'),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                title: Text(l10n.translate('chat_notif_use_global')),
-                trailing: currentSound == null
-                    ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                    : null,
-                onTap: () {
-                  _updateChatSetting(
-                    provider,
-                    (existing) =>
-                        existing.copyWith(clearSoundEnabled: true, soundUri: ''),
-                  );
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('По умолчанию'),
-                trailing: currentSound == true
-                    ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                    : null,
-                onTap: () {
-                  _updateChatSetting(
-                    provider,
-                    (existing) =>
-                        existing.copyWith(soundEnabled: true, soundUri: ''),
-                  );
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Без звука'),
-                trailing: currentSound == false
-                    ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                    : null,
-                onTap: () {
-                  _updateChatSetting(
-                    provider,
-                    (existing) =>
-                        existing.copyWith(soundEnabled: false, soundUri: ''),
-                  );
-                  Navigator.pop(context);
-                },
-              ),
-            ],
+                const Divider(height: 1),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      ListTile(
+                        title: Text(l10n.translate('chat_notif_use_global')),
+                        trailing: selectedId == null
+                            ? const Icon(Icons.check, color: Color(0xFF0088CC))
+                            : null,
+                        onTap: () {
+                          HapticUtils.selection();
+                          _updateChatSetting(
+                            provider,
+                            (existing) => existing.copyWith(
+                              clearSoundEnabled: true,
+                              clearSoundUri: true,
+                            ),
+                          );
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                      ...kAvailableNotificationSounds.map((opt) {
+                        final isSelected = selectedId == opt.id;
+                        return ListTile(
+                          title: Text(opt.title),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (opt.id != kSilentSoundId)
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.volume_up_outlined,
+                                    size: 20,
+                                  ),
+                                  tooltip: 'Прослушать',
+                                  onPressed: () {
+                                    HapticUtils.selection();
+                                    SoundPreviewService.instance.preview(opt.id);
+                                  },
+                                ),
+                              if (isSelected)
+                                const Icon(
+                                  Icons.check,
+                                  color: Color(0xFF0088CC),
+                                ),
+                            ],
+                          ),
+                          onTap: () {
+                            HapticUtils.selection();
+                            SoundPreviewService.instance.preview(opt.id);
+                            final enabled = opt.id != kSilentSoundId;
+                            _updateChatSetting(
+                              provider,
+                              (existing) => existing.copyWith(
+                                soundEnabled: enabled,
+                                soundUri: enabled ? opt.id : '',
+                              ),
+                            );
+                            Navigator.pop(ctx);
+                          },
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },

@@ -238,7 +238,10 @@ class AppTheme {
   }
 
   // === Dynamic TheavTheme application ===
-  static ThemeData fromTheavTheme(TheavTheme theme) {
+  static ThemeData fromTheavTheme(
+    TheavTheme theme, {
+    double messageFontSize = 16.0,
+  }) {
     final base = theme.isDark ? dark() : light();
     final p = theme.palette;
     final colorScheme = theme.isDark
@@ -350,6 +353,7 @@ class AppTheme {
           palette: p,
           wallpaper: theme.wallpaper,
           bubbleRadius: theme.bubbleRadius,
+          messageFontSize: messageFontSize,
         ),
       ],
     );

@@ -13,6 +13,8 @@ import 'theme/theme_provider.dart';
 import 'screens/auth/splash_screen.dart';
 import 'services/settings_service.dart';
 import 'services/account_manager.dart';
+import 'services/app_lock_service.dart';
+import 'widgets/security/app_lock_gate.dart';
 import 'services/chat_folder_service.dart';
 import 'services/chat_swipe_service.dart';
 import 'services/cache_service.dart';
@@ -26,6 +28,7 @@ import 'services/deep_link_service.dart';
 import 'services/notification_settings_provider.dart';
 import 'services/push_service_detector.dart';
 import 'services/privacy_settings_provider.dart';
+import 'services/power_saving_provider.dart';
 import 'services/banking_cards_provider.dart';
 import 'services/wallet_security_provider.dart';
 import 'services/wallpaper_provider.dart';
@@ -143,6 +146,7 @@ void main() async {
   // Initialize services
   await SettingsService().init();
   await AccountManager().init();
+  await AppLockService.instance.init();
   await ProfileInstantCache.instance.init();
   AppDatabase.setActiveUser(AccountManager().currentAccount?.userId);
   await ChatFolderService().init();
@@ -225,6 +229,10 @@ class TheaverApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => WallpaperProvider()..init()),
         ChangeNotifierProvider(create: (_) => ProfileThemeProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => WalletSecurityProvider()),
+        ChangeNotifierProvider.value(value: AppLockService.instance),
+        ChangeNotifierProvider<PowerSavingProvider>.value(
+          value: PowerSavingProvider.instance..init(),
+        ),
         ChangeNotifierProvider(create: (_) => CallStateProvider(), lazy: false),
         ChangeNotifierProvider.value(value: EmojiHapticService.instance),
         ChangeNotifierProxyProvider<WalletSecurityProvider, BankingCardsProvider>(
@@ -263,17 +271,19 @@ class TheaverApp extends StatelessWidget {
             navigatorObservers: [TilingBackGuardNavigatorObserver()],
             home: const SplashScreen(),
             builder: (context, child) {
-              return Stack(
-                children: [
-                  ActiveCallTopBanner(
-                    onRestoreCall: () => _restoreActiveCall(context),
-                    child: child ?? const SizedBox.shrink(),
-                  ),
-                  CallPipOverlay(
-                    onRestoreCall: () => _restoreActiveCall(context),
-                  ),
-                  const FloatingVideoNoteOverlay(),
-                ],
+              return AppLockGate(
+                child: Stack(
+                  children: [
+                    ActiveCallTopBanner(
+                      onRestoreCall: () => _restoreActiveCall(context),
+                      child: child ?? const SizedBox.shrink(),
+                    ),
+                    CallPipOverlay(
+                      onRestoreCall: () => _restoreActiveCall(context),
+                    ),
+                    const FloatingVideoNoteOverlay(),
+                  ],
+                ),
               );
             },
             onGenerateRoute: (settings) {

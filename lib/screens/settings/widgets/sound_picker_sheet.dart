@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../services/sound_preview_service.dart';
 import '../../../utils/haptic_utils.dart';
 
 class SoundOption {
@@ -11,22 +12,43 @@ class SoundOption {
 /// Id «без звука». Пустой id ('') — звук по умолчанию.
 const String kSilentSoundId = 'none';
 
-// Встроенных звуковых файлов в проекте нет, поэтому доступны только
-// «По умолчанию» и «Без звука». На Android конкретный звук чата выбирается
-// через системный выбор мелодии (см. NotificationService.pickChatSound).
+const Set<String> kValidSoundIds = {
+  '',
+  'crystal',
+  'aurora',
+  'pulse',
+  'bamboo',
+  'chime',
+  'ringtone_classic',
+  kSilentSoundId,
+};
+
 const List<SoundOption> kAvailableNotificationSounds = [
   SoundOption(id: '', title: 'По умолчанию'),
+  SoundOption(id: 'crystal', title: 'Кристалл (Crystal)'),
+  SoundOption(id: 'aurora', title: 'Аврора (Aurora)'),
+  SoundOption(id: 'pulse', title: 'Импульс (Pulse)'),
+  SoundOption(id: 'bamboo', title: 'Бамбук (Bamboo)'),
+  SoundOption(id: 'chime', title: 'Перезвон (Chime)'),
   SoundOption(id: kSilentSoundId, title: 'Без звука'),
 ];
 
 const List<SoundOption> kAvailableRingtones = [
   SoundOption(id: '', title: 'По умолчанию'),
+  SoundOption(id: 'ringtone_classic', title: 'Классический рингтон'),
+  SoundOption(id: 'crystal', title: 'Кристалл (Crystal)'),
+  SoundOption(id: 'aurora', title: 'Аврора (Aurora)'),
+  SoundOption(id: 'pulse', title: 'Импульс (Pulse)'),
+  SoundOption(id: 'bamboo', title: 'Бамбук (Bamboo)'),
+  SoundOption(id: 'chime', title: 'Перезвон (Chime)'),
   SoundOption(id: kSilentSoundId, title: 'Без мелодии'),
 ];
 
-/// Нормализует сохранённый id звука: всё, кроме [kSilentSoundId],
-/// (включая устаревшие id удалённых встроенных звуков) считается «по умолчанию».
-String normalizeSoundId(String? id) => id == kSilentSoundId ? kSilentSoundId : '';
+/// Нормализует сохранённый id звука: неизвестные id сбрасываются на «По умолчанию».
+String normalizeSoundId(String? id) {
+  if (id == null || id.isEmpty || id == 'default') return '';
+  return kValidSoundIds.contains(id) ? id : '';
+}
 
 /// Человекочитаемое название сохранённого звука.
 String soundOptionLabel(String? id, {bool isRingtone = false}) {
@@ -40,6 +62,7 @@ class SoundPickerSheet extends StatelessWidget {
   final List<SoundOption> options;
   final String title;
   final ValueChanged<String> onSelected;
+  final bool isRingtone;
 
   const SoundPickerSheet({
     Key? key,
@@ -47,6 +70,7 @@ class SoundPickerSheet extends StatelessWidget {
     required this.options,
     required this.title,
     required this.onSelected,
+    this.isRingtone = false,
   }) : super(key: key);
 
   static Future<void> show(
@@ -67,6 +91,7 @@ class SoundPickerSheet extends StatelessWidget {
         options: isRingtone ? kAvailableRingtones : kAvailableNotificationSounds,
         title: title,
         onSelected: onSelected,
+        isRingtone: isRingtone,
       ),
     );
   }
@@ -109,11 +134,31 @@ class SoundPickerSheet extends StatelessWidget {
 
                 return ListTile(
                   title: Text(opt.title),
-                  trailing: isSelected
-                      ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                      : null,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (opt.id != kSilentSoundId)
+                        IconButton(
+                          icon: const Icon(Icons.volume_up_outlined, size: 20),
+                          tooltip: 'Прослушать',
+                          onPressed: () {
+                            HapticUtils.selection();
+                            SoundPreviewService.instance.preview(
+                              opt.id,
+                              isRingtone: isRingtone,
+                            );
+                          },
+                        ),
+                      if (isSelected)
+                        const Icon(Icons.check, color: Color(0xFF0088CC)),
+                    ],
+                  ),
                   onTap: () {
                     HapticUtils.selection();
+                    SoundPreviewService.instance.preview(
+                      opt.id,
+                      isRingtone: isRingtone,
+                    );
                     onSelected(opt.id);
                     Navigator.pop(context);
                   },

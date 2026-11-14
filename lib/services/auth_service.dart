@@ -11,6 +11,7 @@ import 'database/app_database.dart';
 import 'deep_link_service.dart';
 import 'websocket_service.dart';
 import 'notification_service.dart';
+import 'settings_service.dart';
 import '../screens/auth/login_screen.dart';
 import '../utils/swipe_back_route.dart';
 import '../l10n/app_localizations.dart';
@@ -112,6 +113,7 @@ class AuthService {
     required String usernameOrEmail,
     required String password,
     String? twoFactorPassword,
+    String? recoveryCode,
   }) async {
     try {
       // Get device info for session tracking
@@ -133,6 +135,9 @@ class AuthService {
       if (twoFactorPassword != null && twoFactorPassword.isNotEmpty) {
         bodyMap['two_factor_password'] = twoFactorPassword;
       }
+      if (recoveryCode != null && recoveryCode.isNotEmpty) {
+        bodyMap['recovery_code'] = recoveryCode;
+      }
 
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/login'),
@@ -147,64 +152,63 @@ class AuthService {
         },
         body: jsonEncode(bodyMap),
       );
- 
-  	if (response.statusCode == 200) {
-  	final data = jsonDecode(response.body);
-  	if (data['success'] == true) {
-  		// Save to AccountManager
-  		await _saveToAccountManager(
-  		data['auth_token'],
-  		data['user_id'],
-  		username: data['user']?['username'],
-  		displayName: data['user']?['display_name'],
-  		avatarUrl: data['user']?['avatar_url'],
-  		name: data['user']?['name'],
-  		surname: data['user']?['surname'],
-  		email: data['user']?['email'],
-  		phone: data['user']?['phone'],
-  		);
-  		// Ensure Saved Messages chat exists locally
-  		try {
-  			await AppDatabase().ensureSavedChatExists(data['user_id']);
-  		} catch (e) {
-  			debugPrint('AuthService: Error creating saved chat: $e');
-  		}
-  		// Register push token for this new session
-  		await NotificationService().registerCurrentToken();
-  		return {
-  		'success': true,
-  		'authToken': data['auth_token'],
-  		'userId': data['user_id'],
-  		'message': data['message'] ?? 'Login successful',
-  		'user': data['user'],
-  		};
-  	} else {
-  		return {
-  		'success': false,
-  		'requires_2fa': data['requires_2fa'] == true,
-  		'temp_2fa_token': data['temp_2fa_token'],
-  		'message': data['message'] ?? 'Login failed',
-  		};
-  	}
-  	} else {
-  	// Handle different error codes
-  	final data = jsonDecode(response.body);
-  	return {
-  		'success': false,
-  		'requires_2fa': data['requires_2fa'] == true,
-  		'temp_2fa_token': data['temp_2fa_token'],
-  		'message': data['requires_2fa'] == true
-  		    ? (data['message'] ?? 'Two-factor authentication password required')
-  		    : _getErrorMessage(response.statusCode, data['message']),
-  	};
-  	}
-  } catch (e) {
-  	// Network error or other exception
-  	return {
-  	'success': false,
-  	'message': 'Network error: ${e.toString()}',
-  	};
-  }
+
+      final Map<String, dynamic> data = _tryDecodeMap(response.body);
+      if (response.statusCode == 200) {
+        if (data['success'] == true) {
+          await _saveToAccountManager(
+            data['auth_token'],
+            data['user_id'],
+            username: data['user']?['username'],
+            displayName: data['user']?['display_name'],
+            avatarUrl: data['user']?['avatar_url'],
+            name: data['user']?['name'],
+            surname: data['user']?['surname'],
+            email: data['user']?['email'],
+            emailVerified: data['user']?['email_verified'] == true,
+            phone: data['user']?['phone'],
+          );
+          try {
+            await AppDatabase().ensureSavedChatExists(data['user_id']);
+          } catch (e) {
+            debugPrint('AuthService: Error creating saved chat: $e');
+          }
+          await NotificationService().registerCurrentToken();
+          return {
+            'success': true,
+            'authToken': data['auth_token'],
+            'userId': data['user_id'],
+            'message': data['message'] ?? 'Login successful',
+            'user': data['user'],
+          };
+        } else {
+          return {
+            'success': false,
+            'requires_2fa': data['requires_2fa'] == true,
+            'temp_2fa_token': data['temp_2fa_token'],
+            'has_recovery_email': data['has_recovery_email'] == true,
+            'error': data['error'],
+            'message': data['message'] ?? 'Login failed',
+          };
+        }
+      } else {
+        return {
+          'success': false,
+          'requires_2fa': data['requires_2fa'] == true,
+          'temp_2fa_token': data['temp_2fa_token'],
+          'has_recovery_email': data['has_recovery_email'] == true,
+          'error': data['error'],
+          'message': data['requires_2fa'] == true
+              ? (data['message'] ?? 'Two-factor authentication password required')
+              : _getErrorMessage(response.statusCode, data['message']?.toString()),
+        };
+      }
+    } catch (e) {
+      return {
+        'success': false,
+        'message': 'Network error: ${e.toString()}',
+      };
+    }
   }
 
   /// Logs out the current user by invalidating the session and cleaning local data.
@@ -395,50 +399,85 @@ class AuthService {
 
   /// Logout from a specific device session.
   static Future<bool> logoutDevice(String deviceId) async {
+    final res = await logoutDeviceWithResult(deviceId);
+    return res['success'] == true;
+  }
+
+  /// Logout from a specific device session with structured status/error details.
+  static Future<Map<String, dynamic>> logoutDeviceWithResult(
+    String deviceId, {
+    String? sessionId,
+  }) async {
     try {
       final token = await getToken();
-      if (token == null) return false;
+      if (token == null) return {'success': false, 'error': 'unauthorized'};
 
+      final headers = await _buildDeviceHeaders(token: token);
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/logout-device'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'device_id': deviceId}),
+        headers: headers,
+        body: jsonEncode({
+          if (deviceId.isNotEmpty) 'device_id': deviceId,
+          if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
+        }),
       );
 
-      if (response.statusCode == 200) {
-        // Remove from local storage
-        await AccountManager().removeDeviceSession(deviceId);
-        return true;
+      final data = _tryDecodeMap(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        await AccountManager().removeDeviceSession(
+          deviceId.isNotEmpty ? deviceId : (sessionId ?? ''),
+        );
+        return {'success': true};
       }
-      return false;
+      return {
+        'success': false,
+        'statusCode': response.statusCode,
+        'error': data['error'],
+        'message': data['message']?.toString() ?? 'Failed to terminate session',
+      };
     } catch (e) {
       debugPrint('Logout device error: $e');
-      return false;
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
     }
   }
 
   /// Terminate all other sessions except the current device
   static Future<bool> terminateOtherSessions(String currentDeviceId) async {
+    final res = await terminateOtherSessionsWithResult(currentDeviceId);
+    return res['success'] == true;
+  }
+
+  /// Terminate all other sessions with structured quarantine/error details.
+  static Future<Map<String, dynamic>> terminateOtherSessionsWithResult(
+    String currentDeviceId,
+  ) async {
     try {
       final token = await getToken();
-      if (token == null) return false;
+      if (token == null) return {'success': false, 'error': 'unauthorized'};
 
+      final headers = await _buildDeviceHeaders(
+        token: token,
+        overrideDeviceId: currentDeviceId.isNotEmpty ? currentDeviceId : null,
+      );
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/terminate-others'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
+        headers: headers,
         body: jsonEncode({'current_device_id': currentDeviceId}),
       );
 
-      return response.statusCode == 200;
+      final data = _tryDecodeMap(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return {'success': true};
+      }
+      return {
+        'success': false,
+        'statusCode': response.statusCode,
+        'error': data['error'],
+        'message': data['message']?.toString() ?? 'Failed to terminate sessions',
+      };
     } catch (e) {
       debugPrint('Terminate others error: $e');
-      return false;
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
     }
   }
 
@@ -631,9 +670,13 @@ class AuthService {
               name: userJson?['name'],
               surname: userJson?['surname'],
               email: userJson?['email'],
+              emailVerified: userJson?['email_verified'] as bool?,
               phone: userJson?['phone'],
               bio: userJson?['bio'],
               birthday: parsedBirthday,
+              clearBirthday: userJson != null &&
+                  userJson.containsKey('birthday') &&
+                  parsedBirthday == null,
             );
           }
           return {
@@ -752,6 +795,39 @@ class AuthService {
 
   // Private helpers
 
+  /// Validates an arbitrary auth token without changing the active account.
+  /// Returns {'status': 'valid'|'expired'|'offline', 'user': ...}.
+  static Future<Map<String, dynamic>> verifyToken(String token) async {
+    if (token.isEmpty) {
+      return {'status': 'expired'};
+    }
+    if (token == 'test_token_offline_mode') {
+      return {'status': 'valid'};
+    }
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/user/profile'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 6));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['success'] == true) {
+          return {'status': 'valid', 'user': data['user']};
+        }
+      }
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        return {'status': 'expired'};
+      }
+      return {'status': 'offline'};
+    } catch (_) {
+      return {'status': 'offline'};
+    }
+  }
+
   static Future<void> _saveToAccountManager(
     String token,
     String userId, {
@@ -761,6 +837,7 @@ class AuthService {
     String? name,
     String? surname,
     String? email,
+    bool? emailVerified,
     String? phone,
   }) async {
     final accountManager = AccountManager();
@@ -777,6 +854,7 @@ class AuthService {
         name: name,
         surname: surname,
         email: email,
+        emailVerified: emailVerified,
         phone: phone,
       );
       await accountManager.setCurrentAccount(userId);
@@ -792,6 +870,7 @@ class AuthService {
         name: name,
         surname: surname,
         email: email,
+        emailVerified: emailVerified ?? false,
         phone: phone,
       );
       await accountManager.addAccount(account);
@@ -1084,6 +1163,7 @@ class AuthService {
             if (avatarUrl != null) 'avatar_url': avatarUrl,
             if (bio != null) 'bio': bio,
             if (birthdayIso != null) 'birthday': birthdayIso,
+            if (birthday == null) 'clear_birthday': true,
           }),
         ).timeout(const Duration(seconds: 5));
 
@@ -1103,6 +1183,8 @@ class AuthService {
                 phone: phone,
                 bio: bio,
                 birthday: birthday,
+                clearBirthday: birthday == null,
+                clearBio: bio != null && bio.isEmpty,
               );
             }
             await accountManager.clearPendingProfileSync();
@@ -1150,6 +1232,8 @@ class AuthService {
         phone: phone,
         bio: bio,
         birthday: birthday,
+        clearBirthday: birthday == null,
+        clearBio: bio != null && bio.isEmpty,
       );
     }
 
@@ -1164,6 +1248,7 @@ class AuthService {
           'phone': phone,
           if (bio != null) 'bio': bio,
           if (birthdayIso != null) 'birthday': birthdayIso,
+          if (birthday == null) 'clear_birthday': true,
         });
         return {
           'success': true,
@@ -1187,6 +1272,7 @@ class AuthService {
           if (avatarUrl != null) 'avatar_url': avatarUrl,
           if (bio != null) 'bio': bio,
           if (birthdayIso != null) 'birthday': birthdayIso,
+          if (birthday == null) 'clear_birthday': true,
         }),
       ).timeout(const Duration(seconds: 5));
 
@@ -1334,6 +1420,459 @@ class AuthService {
         'success': false,
         'message': 'Network error: ${e.toString()}',
       };
+    }
+  }
+
+  static Map<String, dynamic> _tryDecodeMap(String body) {
+    try {
+      if (body.trim().isEmpty) return {};
+      final decoded = jsonDecode(body);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return {};
+  }
+
+  static Future<Map<String, String>> _buildDeviceHeaders({
+    String? token,
+    String? overrideDeviceId,
+    Map<String, String>? extra,
+  }) async {
+    final accountManager = AccountManager();
+    final deviceInfo = await accountManager.getCurrentDeviceInfo();
+    final deviceId = overrideDeviceId ??
+        accountManager.currentDeviceId ??
+        'device_${DateTime.now().millisecondsSinceEpoch}';
+    return {
+      'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      'X-Device-ID': deviceId,
+      'X-Device-Name': deviceInfo.deviceName,
+      'X-Device-Type': deviceInfo.deviceType.name,
+      'X-OS-Name': deviceInfo.os,
+      'X-OS-Version': deviceInfo.osVersion,
+      'X-App-Version': '1.0.0',
+      if (extra != null) ...extra,
+    };
+  }
+
+  static Future<String> _currentLocaleCode([String? explicit]) async {
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('selected_language') ?? 'en';
+    } catch (_) {
+      return 'en';
+    }
+  }
+
+  // ============ Email OTP Verification & Change ============
+
+  static Future<Map<String, dynamic>> sendEmailVerifyCode({String? locale}) async {
+    try {
+      final token = await getToken();
+      if (token == null) return {'success': false, 'error': 'unauthorized'};
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/send-verify-code'),
+        headers: await _buildDeviceHeaders(token: token),
+        body: jsonEncode({'locale': await _currentLocaleCode(locale)}),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'cooldown_seconds': data['cooldown_seconds'] ?? data['retry_after'] ?? 0,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> confirmEmailVerify(String code) async {
+    try {
+      final token = await getToken();
+      if (token == null) return {'success': false, 'error': 'unauthorized'};
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/confirm-verify'),
+        headers: await _buildDeviceHeaders(token: token),
+        body: jsonEncode({'code': code.trim()}),
+      );
+      final data = _tryDecodeMap(response.body);
+      final ok = response.statusCode == 200 && data['success'] == true;
+      if (ok) {
+        final newEmail = data['email']?.toString();
+        final accountManager = AccountManager();
+        final cur = accountManager.currentAccount;
+        if (cur != null) {
+          await accountManager.updateAccountProfile(
+            cur.userId,
+            email: newEmail,
+            emailVerified: true,
+          );
+        }
+        final cached = SettingsService().userProfile;
+        if (cached != null && newEmail != null && newEmail.isNotEmpty) {
+          await SettingsService().saveUserProfile(cached.copyWith(email: newEmail));
+        }
+      }
+      return {
+        'success': ok,
+        'email': data['email']?.toString(),
+        'email_verified': data['email_verified'] == true,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> requestEmailChange({
+    required String newEmail,
+    required String currentPassword,
+    String? twoFactorPassword,
+    String? locale,
+  }) async {
+    try {
+      final token = await getToken();
+      if (token == null) return {'success': false, 'error': 'unauthorized'};
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/request-change'),
+        headers: await _buildDeviceHeaders(token: token),
+        body: jsonEncode({
+          'new_email': newEmail.trim(),
+          'current_password': currentPassword,
+          if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+            'two_factor_password': twoFactorPassword,
+          'locale': await _currentLocaleCode(locale),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'cooldown_seconds': data['cooldown_seconds'] ?? data['retry_after'] ?? 0,
+        'requires_2fa': data['requires_2fa'] == true,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> confirmEmailChange({
+    required String newEmail,
+    required String code,
+  }) async {
+    try {
+      final token = await getToken();
+      if (token == null) return {'success': false, 'error': 'unauthorized'};
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/user/email/confirm-change'),
+        headers: await _buildDeviceHeaders(token: token),
+        body: jsonEncode({
+          'new_email': newEmail.trim(),
+          'code': code.trim(),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      final ok = response.statusCode == 200 && data['success'] == true;
+      if (ok) {
+        final resolvedEmail = data['email']?.toString() ?? newEmail.trim();
+        final accountManager = AccountManager();
+        final cur = accountManager.currentAccount;
+        if (cur != null) {
+          await accountManager.updateAccountProfile(
+            cur.userId,
+            email: resolvedEmail,
+            emailVerified: true,
+          );
+        }
+        final cached = SettingsService().userProfile;
+        if (cached != null) {
+          await SettingsService()
+              .saveUserProfile(cached.copyWith(email: resolvedEmail));
+        }
+      }
+      return {
+        'success': ok,
+        'email': data['email']?.toString() ?? newEmail.trim(),
+        'email_verified': data['email_verified'] == true,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  // ============ Password & 2FA OTP Reset ============
+
+  static Future<Map<String, dynamic>> sendPasswordResetCode({
+    required String email,
+    String? locale,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/password/send-code'),
+        headers: await _buildDeviceHeaders(),
+        body: jsonEncode({
+          'email': email.trim(),
+          'locale': await _currentLocaleCode(locale),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'cooldown_seconds': data['cooldown_seconds'] ?? data['retry_after'] ?? 0,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> resetPasswordWithCode({
+    required String email,
+    required String code,
+    required String newPassword,
+    String? twoFactorPassword,
+    String? recoveryCode,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/password/reset'),
+        headers: await _buildDeviceHeaders(),
+        body: jsonEncode({
+          'email': email.trim(),
+          'code': code.trim(),
+          'new_password': newPassword,
+          if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+            'two_factor_password': twoFactorPassword,
+          if (recoveryCode != null && recoveryCode.isNotEmpty)
+            'recovery_code': recoveryCode.trim(),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'requires_2fa': data['requires_2fa'] == true,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> send2FAResetCode({
+    required String usernameOrEmail,
+    required String password,
+    String? locale,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/2fa/reset/send-code'),
+        headers: await _buildDeviceHeaders(),
+        body: jsonEncode({
+          'username_or_email': usernameOrEmail.trim(),
+          'password': password,
+          'locale': await _currentLocaleCode(locale),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'masked_email': data['masked_email']?.toString(),
+        'cooldown_seconds': data['cooldown_seconds'] ?? data['retry_after'] ?? 0,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> confirm2FAReset({
+    required String usernameOrEmail,
+    required String password,
+    required String code,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/2fa/reset/confirm'),
+        headers: await _buildDeviceHeaders(),
+        body: jsonEncode({
+          'username_or_email': usernameOrEmail.trim(),
+          'password': password,
+          'code': code.trim(),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  // ============ QR Auth & External Session Completion ============
+
+  static Future<Map<String, dynamic>> createQrLoginSession() async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/qr/create'),
+        headers: await _buildDeviceHeaders(),
+        body: jsonEncode({}),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'token': data['token']?.toString(),
+        'short_code': data['short_code']?.toString(),
+        'qr_secret': data['qr_secret']?.toString(),
+        'qr_url': data['qr_url']?.toString(),
+        'expires_at': data['expires_at']?.toString(),
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> pollQrLoginStatus({
+    required String token,
+    required String qrSecret,
+  }) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/qr/status/${Uri.encodeComponent(token)}'),
+        headers: await _buildDeviceHeaders(extra: {'X-QR-Secret': qrSecret}),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'statusCode': response.statusCode,
+        'status': data['status']?.toString() ?? 'expired',
+        'auth_token': data['auth_token']?.toString(),
+        'token': data['token']?.toString(),
+        'device_id': data['device_id']?.toString(),
+        'user_id': data['user_id']?.toString(),
+        'user': data['user'] is Map ? Map<String, dynamic>.from(data['user'] as Map) : null,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'status': 'error', 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> verifyQrLogin2FA({
+    required String token,
+    required String qrSecret,
+    String? twoFactorPassword,
+    String? recoveryCode,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/qr/verify-2fa'),
+        headers: await _buildDeviceHeaders(extra: {'X-QR-Secret': qrSecret}),
+        body: jsonEncode({
+          'token': token,
+          if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+            'two_factor_password': twoFactorPassword,
+          if (recoveryCode != null && recoveryCode.isNotEmpty)
+            'recovery_code': recoveryCode.trim(),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'status': data['status']?.toString(),
+        'auth_token': data['auth_token']?.toString(),
+        'device_id': data['device_id']?.toString(),
+        'user_id': data['user_id']?.toString(),
+        'user': data['user'] is Map ? Map<String, dynamic>.from(data['user'] as Map) : null,
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> confirmQrLogin({
+    String? token,
+    String? shortCode,
+  }) async {
+    try {
+      final authToken = await getToken();
+      if (authToken == null) return {'success': false, 'error': 'unauthorized'};
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/auth/qr/confirm'),
+        headers: await _buildDeviceHeaders(token: authToken),
+        body: jsonEncode({
+          if (token != null && token.isNotEmpty) 'token': token.trim(),
+          if (shortCode != null && shortCode.isNotEmpty)
+            'short_code': shortCode.trim().toUpperCase(),
+        }),
+      );
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'status': data['status']?.toString(),
+        'device_name': data['device_name']?.toString(),
+        'error': data['error'],
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'network_error', 'message': e.toString()};
+    }
+  }
+
+  static Future<void> completeExternalLoginSession({
+    required String authToken,
+    required String userId,
+    Map<String, dynamic>? user,
+  }) async {
+    await _saveToAccountManager(
+      authToken,
+      userId,
+      username: user?['username']?.toString(),
+      displayName: user?['display_name']?.toString(),
+      avatarUrl: user?['avatar_url']?.toString(),
+      name: user?['name']?.toString(),
+      surname: user?['surname']?.toString(),
+      email: user?['email']?.toString(),
+      emailVerified: user?['email_verified'] == true,
+      phone: user?['phone']?.toString(),
+    );
+    try {
+      await AppDatabase().ensureSavedChatExists(userId);
+    } catch (e) {
+      debugPrint('AuthService: Error creating saved chat: $e');
+    }
+    try {
+      await NotificationService().registerCurrentToken();
+    } catch (_) {}
+  }
+
+  /// Sync current app locale to active backend device session (for localized server emails/pushes).
+  static Future<void> syncSessionLocale(String locale) async {
+    try {
+      final token = await getToken();
+      if (token == null || token.isEmpty) return;
+      await http.put(
+        Uri.parse('${AppConfig.baseUrl}/api/sessions/locale'),
+        headers: await _buildDeviceHeaders(token: token),
+        body: jsonEncode({'locale': locale}),
+      );
+    } catch (e) {
+      debugPrint('AuthService: syncSessionLocale error: $e');
     }
   }
 

@@ -173,6 +173,16 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_verified" IN (0, 1))'),
       defaultValue: const Constant(false));
+  static const VerificationMeta _isArchivedMeta =
+      const VerificationMeta('isArchived');
+  @override
+  late final GeneratedColumn<bool> isArchived = GeneratedColumn<bool>(
+      'is_archived', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_archived" IN (0, 1))'),
+      defaultValue: const Constant(false));
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -198,6 +208,7 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         isPublic,
         isBot,
         isVerified,
+        isArchived
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -335,6 +346,12 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           isVerified.isAcceptableOrUnknown(
               data['is_verified']!, _isVerifiedMeta));
     }
+    if (data.containsKey('is_archived')) {
+      context.handle(
+          _isArchivedMeta,
+          isArchived.isAcceptableOrUnknown(
+              data['is_archived']!, _isArchivedMeta));
+    }
     return context;
   }
 
@@ -377,26 +394,24 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           data['${effectivePrefix}last_message_grouped_id']),
       otherUserId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}other_user_id']),
-      lastReadInboxMessageId: attachedDatabase.typeMapping.read(DriftSqlType.int,
-              data['${effectivePrefix}last_read_inbox_message_id']) ??
-          0,
+      lastReadInboxMessageId: attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}last_read_inbox_message_id'])!,
       lastReadOutboxMessageId: attachedDatabase.typeMapping.read(
-              DriftSqlType.int,
-              data['${effectivePrefix}last_read_outbox_message_id']) ??
-          0,
+          DriftSqlType.int,
+          data['${effectivePrefix}last_read_outbox_message_id'])!,
       pinnedMessageId: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}pinned_message_id']),
       username: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}username']),
       isPublic: attachedDatabase.typeMapping
-              .read(DriftSqlType.bool, data['${effectivePrefix}is_public']) ??
-          false,
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_public'])!,
       isBot: attachedDatabase.typeMapping
-              .read(DriftSqlType.bool, data['${effectivePrefix}is_bot']) ??
-          false,
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_bot'])!,
       isVerified: attachedDatabase.typeMapping
-              .read(DriftSqlType.bool, data['${effectivePrefix}is_verified']) ??
-          false,
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_verified'])!,
+      isArchived: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_archived'])!,
     );
   }
 
@@ -430,6 +445,7 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final bool isPublic;
   final bool isBot;
   final bool isVerified;
+  final bool isArchived;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -447,13 +463,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       this.lastMessageFileUrl,
       this.lastMessageGroupedId,
       this.otherUserId,
-      this.lastReadInboxMessageId = 0,
-      this.lastReadOutboxMessageId = 0,
+      required this.lastReadInboxMessageId,
+      required this.lastReadOutboxMessageId,
       this.pinnedMessageId,
       this.username,
-      this.isPublic = false,
-      this.isBot = false,
-      this.isVerified = false});
+      required this.isPublic,
+      required this.isBot,
+      required this.isVerified,
+      required this.isArchived});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -500,6 +517,7 @@ class DbChat extends DataClass implements Insertable<DbChat> {
     map['is_public'] = Variable<bool>(isPublic);
     map['is_bot'] = Variable<bool>(isBot);
     map['is_verified'] = Variable<bool>(isVerified);
+    map['is_archived'] = Variable<bool>(isArchived);
     return map;
   }
 
@@ -548,6 +566,7 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isPublic: Value(isPublic),
       isBot: Value(isBot),
       isVerified: Value(isVerified),
+      isArchived: Value(isArchived),
     );
   }
 
@@ -574,14 +593,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           serializer.fromJson<String?>(json['lastMessageGroupedId']),
       otherUserId: serializer.fromJson<String?>(json['otherUserId']),
       lastReadInboxMessageId:
-          serializer.fromJson<int?>(json['lastReadInboxMessageId']) ?? 0,
+          serializer.fromJson<int>(json['lastReadInboxMessageId']),
       lastReadOutboxMessageId:
-          serializer.fromJson<int?>(json['lastReadOutboxMessageId']) ?? 0,
+          serializer.fromJson<int>(json['lastReadOutboxMessageId']),
       pinnedMessageId: serializer.fromJson<int?>(json['pinnedMessageId']),
       username: serializer.fromJson<String?>(json['username']),
-      isPublic: serializer.fromJson<bool?>(json['isPublic']) ?? false,
-      isBot: serializer.fromJson<bool?>(json['isBot']) ?? false,
-      isVerified: serializer.fromJson<bool?>(json['isVerified']) ?? false,
+      isPublic: serializer.fromJson<bool>(json['isPublic']),
+      isBot: serializer.fromJson<bool>(json['isBot']),
+      isVerified: serializer.fromJson<bool>(json['isVerified']),
+      isArchived: serializer.fromJson<bool>(json['isArchived']),
     );
   }
   @override
@@ -612,6 +632,7 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'isPublic': serializer.toJson<bool>(isPublic),
       'isBot': serializer.toJson<bool>(isBot),
       'isVerified': serializer.toJson<bool>(isVerified),
+      'isArchived': serializer.toJson<bool>(isArchived),
     };
   }
 
@@ -638,7 +659,8 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           Value<String?> username = const Value.absent(),
           bool? isPublic,
           bool? isBot,
-          bool? isVerified}) =>
+          bool? isVerified,
+          bool? isArchived}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -668,12 +690,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
             lastReadInboxMessageId ?? this.lastReadInboxMessageId,
         lastReadOutboxMessageId:
             lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
-        pinnedMessageId:
-            pinnedMessageId.present ? pinnedMessageId.value : this.pinnedMessageId,
+        pinnedMessageId: pinnedMessageId.present
+            ? pinnedMessageId.value
+            : this.pinnedMessageId,
         username: username.present ? username.value : this.username,
         isPublic: isPublic ?? this.isPublic,
         isBot: isBot ?? this.isBot,
         isVerified: isVerified ?? this.isVerified,
+        isArchived: isArchived ?? this.isArchived,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -720,6 +744,8 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isBot: data.isBot.present ? data.isBot.value : this.isBot,
       isVerified:
           data.isVerified.present ? data.isVerified.value : this.isVerified,
+      isArchived:
+          data.isArchived.present ? data.isArchived.value : this.isArchived,
     );
   }
 
@@ -748,7 +774,8 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('username: $username, ')
           ..write('isPublic: $isPublic, ')
           ..write('isBot: $isBot, ')
-          ..write('isVerified: $isVerified')
+          ..write('isVerified: $isVerified, ')
+          ..write('isArchived: $isArchived')
           ..write(')'))
         .toString();
   }
@@ -778,6 +805,7 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         isPublic,
         isBot,
         isVerified,
+        isArchived
       ]);
   @override
   bool operator ==(Object other) =>
@@ -805,7 +833,8 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.username == this.username &&
           other.isPublic == this.isPublic &&
           other.isBot == this.isBot &&
-          other.isVerified == this.isVerified);
+          other.isVerified == this.isVerified &&
+          other.isArchived == this.isArchived);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -832,6 +861,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<bool> isPublic;
   final Value<bool> isBot;
   final Value<bool> isVerified;
+  final Value<bool> isArchived;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -857,6 +887,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isPublic = const Value.absent(),
     this.isBot = const Value.absent(),
     this.isVerified = const Value.absent(),
+    this.isArchived = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -883,6 +914,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isPublic = const Value.absent(),
     this.isBot = const Value.absent(),
     this.isVerified = const Value.absent(),
+    this.isArchived = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -912,6 +944,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<bool>? isPublic,
     Expression<bool>? isBot,
     Expression<bool>? isVerified,
+    Expression<bool>? isArchived,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -943,6 +976,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       if (isPublic != null) 'is_public': isPublic,
       if (isBot != null) 'is_bot': isBot,
       if (isVerified != null) 'is_verified': isVerified,
+      if (isArchived != null) 'is_archived': isArchived,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -971,6 +1005,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<bool>? isPublic,
       Value<bool>? isBot,
       Value<bool>? isVerified,
+      Value<bool>? isArchived,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -998,6 +1033,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       isPublic: isPublic ?? this.isPublic,
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
+      isArchived: isArchived ?? this.isArchived,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1077,6 +1113,9 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     if (isVerified.present) {
       map['is_verified'] = Variable<bool>(isVerified.value);
     }
+    if (isArchived.present) {
+      map['is_archived'] = Variable<bool>(isArchived.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1109,6 +1148,7 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('isPublic: $isPublic, ')
           ..write('isBot: $isBot, ')
           ..write('isVerified: $isVerified, ')
+          ..write('isArchived: $isArchived, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3330,6 +3370,7 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isPublic,
   Value<bool> isBot,
   Value<bool> isVerified,
+  Value<bool> isArchived,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -3356,6 +3397,7 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isPublic,
   Value<bool> isBot,
   Value<bool> isVerified,
+  Value<bool> isArchived,
   Value<int> rowid,
 });
 
@@ -3443,6 +3485,9 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<bool> get isVerified => $composableBuilder(
       column: $table.isVerified, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isArchived => $composableBuilder(
+      column: $table.isArchived, builder: (column) => ColumnFilters(column));
 }
 
 class $$ChatsTableOrderingComposer
@@ -3530,6 +3575,9 @@ class $$ChatsTableOrderingComposer
 
   ColumnOrderings<bool> get isVerified => $composableBuilder(
       column: $table.isVerified, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isArchived => $composableBuilder(
+      column: $table.isArchived, builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -3609,6 +3657,9 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<bool> get isVerified => $composableBuilder(
       column: $table.isVerified, builder: (column) => column);
+
+  GeneratedColumn<bool> get isArchived => $composableBuilder(
+      column: $table.isArchived, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -3657,6 +3708,7 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isPublic = const Value.absent(),
             Value<bool> isBot = const Value.absent(),
             Value<bool> isVerified = const Value.absent(),
+            Value<bool> isArchived = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -3683,6 +3735,7 @@ class $$ChatsTableTableManager extends RootTableManager<
             isPublic: isPublic,
             isBot: isBot,
             isVerified: isVerified,
+            isArchived: isArchived,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3709,6 +3762,7 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isPublic = const Value.absent(),
             Value<bool> isBot = const Value.absent(),
             Value<bool> isVerified = const Value.absent(),
+            Value<bool> isArchived = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -3735,6 +3789,7 @@ class $$ChatsTableTableManager extends RootTableManager<
             isPublic: isPublic,
             isBot: isBot,
             isVerified: isVerified,
+            isArchived: isArchived,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

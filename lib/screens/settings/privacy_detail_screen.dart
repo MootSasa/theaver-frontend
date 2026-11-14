@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/account_manager.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
+import '../../widgets/settings/user_search_picker_dialog.dart';
 
 /// Экран детальной настройки одного правила приватности.
 /// Выбор видимости + исключения (всегда/никогда для конкретных пользователей).
@@ -50,6 +52,7 @@ class _PrivacyDetailScreenState extends State<PrivacyDetailScreen> {
       case 'call_privacy': return p.callPrivacy;
       case 'groups_channels_privacy': return p.groupsChannelsPrivacy;
       case 'bio_visibility': return p.bioVisibility;
+      case 'birthday_visibility': return p.birthdayVisibility;
       default: return PrivacyVisibility.contacts;
     }
   }
@@ -140,10 +143,30 @@ class _PrivacyDetailScreenState extends State<PrivacyDetailScreen> {
     );
   }
 
-  void _addException(String type) {
-    // TODO: Show contact picker dialog
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Contact picker — coming soon')),
+  Future<void> _addException(String type) async {
+    final l10n = context.l10n;
+    final selfId = AccountManager().currentAccount?.userId;
+    final exclude = <String>{
+      if (selfId != null && selfId.isNotEmpty) selfId,
+      ..._alwaysExceptions.map((e) => e.targetUserId),
+      ..._neverExceptions.map((e) => e.targetUserId),
+    };
+    final picked = await showUserSearchPickerDialog(
+      context,
+      title: l10n.translate('privacy_add_exception'),
+      excludeUserIds: exclude,
     );
+    if (picked == null || !mounted) return;
+    final ok = await context
+        .read<PrivacySettingsProvider>()
+        .addException(widget.field, picked.id, type);
+    if (!mounted) return;
+    if (ok) {
+      await _loadExceptions();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.translate('common_error'))),
+      );
+    }
   }
 }

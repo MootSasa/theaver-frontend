@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
+import 'change_email_screen.dart';
+import 'privacy_detail_screen.dart';
 
 /// Экран редактирования профиля пользователя ("Аккаунт"),
 /// повторяющий цветовое решение главного экрана настроек (SettingsScreen).
@@ -38,6 +41,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   late TextEditingController _bioController;
 
   DateTime? _selectedBirthday;
+  late String _email;
+  bool _emailVerified = false;
   bool _isSaving = false;
 
   static const Color brandColor = Color(0xFF0088CC);
@@ -63,6 +68,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _bioController.addListener(_onBioChanged);
 
     _selectedBirthday = widget.initialBirthday;
+    final currentAcc = AccountManager().currentAccount;
+    _email = (currentAcc?.email?.isNotEmpty == true
+            ? currentAcc!.email!
+            : widget.initialEmail) ??
+        '';
+    _emailVerified = currentAcc?.emailVerified ?? false;
   }
 
   void _onBioChanged() {
@@ -88,10 +99,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Future<void> _saveProfile() async {
     if (_isSaving) return;
 
-    setState(() {
-      _isSaving = true;
-    });
-
     final name = _nameController.text.trim();
     final surname = _surnameController.text.trim();
 
@@ -100,8 +107,23 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       username = username.substring(1).trim();
     }
 
+    if (username.isNotEmpty && !RegExp(r'^[a-zA-Z0-9_]{3,32}$').hasMatch(username)) {
+      final l10n = AppLocalizations.of(context)!;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(l10n.translate('edit_profile_invalid_username')),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+    });
+
     final phone = _phoneController.text.trim();
-    final email = widget.initialEmail ?? '';
+    final email = _email;
 
     final result = await AuthService.updateProfile(
       name: name,
@@ -366,7 +388,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     TextSpan(text: '${l10n.translate('edit_profile_bio_visible_info')} '),
                     WidgetSpan(
                       child: GestureDetector(
-                        onTap: () {},
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => PrivacyDetailScreen(
+                                field: 'bio_visibility',
+                                title: l10n.translate('privacy_bio'),
+                              ),
+                            ),
+                          );
+                        },
                         child: Text(
                           l10n.translate('edit_profile_edit_link'),
                           style: const TextStyle(
@@ -547,6 +579,66 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         ),
                     ],
                   ),
+                  const SizedBox(height: 12),
+
+                  // Почта (просмотр и переход к смене/подтверждению)
+                  InkWell(
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ChangeEmailScreen(),
+                        ),
+                      );
+                      if (!mounted) return;
+                      final acc = AccountManager().currentAccount;
+                      setState(() {
+                        _email = acc?.email ?? _email;
+                        _emailVerified = acc?.emailVerified ?? _emailVerified;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.email_outlined, color: brandColor, size: 22),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _email.isNotEmpty
+                                    ? _email
+                                    : l10n.translate('security_not_set'),
+                                style: TextStyle(
+                                  color: _email.isNotEmpty
+                                      ? primaryTextColor
+                                      : mutedHintStyle.color,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _email.isNotEmpty
+                                    ? '${l10n.translate('auth_email')} • ${_emailVerified ? l10n.translate('email_status_verified') : l10n.translate('email_status_unverified')}'
+                                    : l10n.translate('auth_email'),
+                                style: TextStyle(
+                                  color: secondaryTextColor,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          color: secondaryTextColor,
+                          size: 20,
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -559,7 +651,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     TextSpan(text: l10n.translate('edit_profile_birthday_visibility_info_1')),
                     WidgetSpan(
                       child: GestureDetector(
-                        onTap: () {},
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => PrivacyDetailScreen(
+                                field: 'birthday_visibility',
+                                title: l10n.translate('privacy_birthday'),
+                              ),
+                            ),
+                          );
+                        },
                         child: Text(
                           l10n.translate('edit_profile_settings_link'),
                           style: const TextStyle(

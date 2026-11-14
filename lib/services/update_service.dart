@@ -207,6 +207,10 @@ class AppUpdateService {
 
   /// Инициализация состояния обновлений из SharedPreferences + синк настроек с сервером.
   Future<void> init() async {
+    if (kIsWeb) {
+      _initialized = true;
+      return;
+    }
     if (_initialized) return;
     _initialized = true;
 
@@ -355,6 +359,7 @@ class AppUpdateService {
   /// Синхронизирует текущую версию, архитектуру, канал и флаг автопроверки с сервером
   /// (работает и на Desktop/Web без push-токена).
   Future<void> syncUpdatePreferencesWithServer() async {
+    if (kIsWeb) return;
     try {
       final authToken = await AuthService.getToken();
       if (authToken == null || authToken.isEmpty) return;
@@ -398,6 +403,9 @@ class AppUpdateService {
 
   /// Запросить информацию о наличии обновления на сервере
   Future<AppUpdateInfo> checkForUpdate({bool silent = false, String? channel}) async {
+    if (kIsWeb) {
+      return AppUpdateInfo.noUpdate();
+    }
     final wasDownloading =
         stateNotifier.value.status == AppUpdateStatus.downloading;
     if (!silent && !wasDownloading) {

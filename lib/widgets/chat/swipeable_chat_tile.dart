@@ -254,7 +254,9 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
         ? (widget.chat.hasUnread ? 'Прочитать' : 'Не прочитано')
         : (action == ChatSwipeAction.pin
             ? (widget.chat.isPinned ? 'Открепить' : 'Закрепить')
-            : action.label);
+            : (action == ChatSwipeAction.archive
+                ? (widget.chat.isArchived ? 'Разархивировать' : action.label)
+                : action.label));
 
     return Stack(
       clipBehavior: Clip.hardEdge,

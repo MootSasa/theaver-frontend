@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'about_theaver_screen.dart';
 import 'profile_screen.dart';
@@ -12,6 +14,7 @@ import 'power_saving_screen.dart';
 import 'language_screen.dart';
 import 'chat_settings_screen.dart';
 import 'accounts_screen.dart';
+import 'settings_search_index.dart';
 import 'wallets_screen.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
@@ -36,6 +39,9 @@ import '../../services/notification_service.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../services/update_service.dart';
 import '../../services/tiling_layout_controller.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/power_saving_provider.dart';
+import '../../theme/theme_provider.dart';
 
 /// Экран настроек.
 ///
@@ -55,6 +61,10 @@ class _SettingsScreenState extends State<SettingsScreen>
     with AutomaticKeepAliveClientMixin {
   final AccountManager _accountManager = AccountManager();
   Account? _currentAccount;
+  final TextEditingController _searchController = TextEditingController();
+  final List<SettingsSearchEntry> _searchEntries =
+      SettingsSearchIndex.defaultEntries();
+  String _searchQuery = '';
 
   void _openAboutTheaver() {
     HapticUtils.tap();
@@ -108,7 +118,35 @@ class _SettingsScreenState extends State<SettingsScreen>
   @override
   void dispose() {
     _accountManager.removeListener(_onAccountChanged);
+    _searchController.dispose();
     super.dispose();
+  }
+
+  static String _languageNativeName(String code) {
+    const names = {
+      'en': 'English',
+      'ru': 'Русский',
+      'es': 'Español',
+      'fr': 'Français',
+      'de': 'Deutsch',
+      'it': 'Italiano',
+      'pt': 'Português',
+      'zh': '中文',
+      'ja': '日本語',
+      'ko': '한국어',
+    };
+    return names[code] ?? code.toUpperCase();
+  }
+
+  String _themeSubtitle(ThemeProvider themeProvider, AppLocalizations l10n) {
+    final modeLabel = themeProvider.scheduleEnabled
+        ? l10n.translate('theme_schedule_title')
+        : switch (themeProvider.themeMode) {
+            ThemeMode.light => l10n.translate('theme_light'),
+            ThemeMode.dark => l10n.translate('theme_dark'),
+            ThemeMode.system => l10n.translate('theme_system'),
+          };
+    return '${themeProvider.activeTheme.name} • $modeLabel';
   }
 
   @override
@@ -120,6 +158,19 @@ class _SettingsScreenState extends State<SettingsScreen>
     final accent = theav.accent;
     final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
     final currentAccount = _currentAccount;
+    final themeProvider = context.watch<ThemeProvider>();
+    final notifProvider = context.watch<NotificationSettingsProvider>();
+    final powerSaving = context.watch<PowerSavingProvider>();
+    final localeProvider = context.watch<LocaleProvider>();
+    final isSearching = _searchQuery.trim().isNotEmpty;
+    final searchResults = isSearching
+        ? SettingsSearchIndex.filter(
+            _searchEntries,
+            _searchQuery,
+            translate: l10n.translate,
+            isWeb: kIsWeb,
+          )
+        : const <SettingsSearchEntry>[];
 
     // Меню «три точки» — содержит «Выйти» и «Очистить данные»
     final popupMenuButton = PopupMenuButton<String>(
@@ -180,6 +231,76 @@ class _SettingsScreenState extends State<SettingsScreen>
 
     // Содержимое списка настроек (без обёртки ListView)
     final listChildren = <Widget>[
+      // Settings Search Bar
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+        child: TextField(
+          controller: _searchController,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search, size: 20),
+            hintText: l10n.translate('search_hint'),
+            filled: true,
+            fillColor: theme.cardColor,
+            isDense: true,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide.none,
+            ),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () {
+                      _searchController.clear();
+                      setState(() => _searchQuery = '');
+                    },
+                  )
+                : null,
+          ),
+          onChanged: (val) => setState(() => _searchQuery = val),
+        ),
+      ),
+
+      if (isSearching) ...[
+        if (searchResults.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+            child: Column(
+              children: [
+                Icon(Icons.search_off, size: 48, color: Colors.grey[500]),
+                const SizedBox(height: 12),
+                Text(
+                  l10n.translate('search_no_results'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey[500], fontSize: 15),
+                ),
+              ],
+            ),
+          )
+        else
+          SettingsGroup(
+            children: searchResults.map((entry) {
+              return ListTile(
+                leading: Icon(entry.icon, color: accent),
+                title: Text(entry.resolveTitle(l10n.translate)),
+                subtitle: Text(
+                  entry.resolveSection(l10n.translate),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
+                trailing: const iconoir.NavArrowRight(
+                  width: 18,
+                  height: 18,
+                  color: Colors.grey,
+                ),
+                onTap: () {
+                  HapticUtils.tap();
+                  entry.onSelect?.call(context);
+                },
+              );
+            }).toList(),
+          ),
+      ] else ...[
       // Current Account Section
       if (currentAccount != null) ...[
         _buildCurrentAccountSection(theme, l10n, currentAccount),
@@ -256,6 +377,10 @@ class _SettingsScreenState extends State<SettingsScreen>
           ListTile(
             leading: iconoir.ChatBubble(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_chat_settings')),
+            subtitle: Text(
+              _themeSubtitle(themeProvider, l10n),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -282,6 +407,12 @@ class _SettingsScreenState extends State<SettingsScreen>
           ListTile(
             leading: iconoir.Bell(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_notifications')),
+            subtitle: Text(
+              notifProvider.globalSettings.notificationsEnabled
+                  ? l10n.translate('settings_status_enabled')
+                  : l10n.translate('settings_status_muted'),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -359,6 +490,12 @@ class _SettingsScreenState extends State<SettingsScreen>
           ListTile(
             leading: iconoir.BatteryCharging(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_power_saving')),
+            subtitle: Text(
+              powerSaving.isActive
+                  ? l10n.translate('settings_status_enabled')
+                  : l10n.translate('settings_status_off'),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -372,6 +509,10 @@ class _SettingsScreenState extends State<SettingsScreen>
           ListTile(
             leading: iconoir.Language(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_language')),
+            subtitle: Text(
+              _languageNativeName(localeProvider.locale.languageCode),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -385,33 +526,38 @@ class _SettingsScreenState extends State<SettingsScreen>
           ListTile(
             leading: iconoir.InfoCircle(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_about_theaver')),
-            trailing: ValueListenableBuilder<AppUpdateDownloadState>(
-              valueListenable: AppUpdateService.instance.stateNotifier,
-              builder: (context, state, _) {
-                final update = state.availableUpdate;
-                if (!state.hasAvailableUpdate || update == null) {
-                  return const SizedBox.shrink();
-                }
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(12),
+            trailing: kIsWeb
+                ? null
+                : ValueListenableBuilder<AppUpdateDownloadState>(
+                    valueListenable: AppUpdateService.instance.stateNotifier,
+                    builder: (context, state, _) {
+                      final update = state.availableUpdate;
+                      if (!state.hasAvailableUpdate || update == null) {
+                        return const SizedBox.shrink();
+                      }
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary
+                              .withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'v${update.latestVersion}',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                  child: Text(
-                    'v${update.latestVersion}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                );
-              },
-            ),
             onTap: _openAboutTheaver,
           ),
         ],
       ),
+      ],
 
       const SizedBox(height: 24),
       _buildVersionInfoSection(theme),
@@ -582,7 +728,7 @@ class _SettingsScreenState extends State<SettingsScreen>
       ),
     );
 
-    if (confirmed == true) {
+    if (confirmed == true && context.mounted) {
       TilingLayoutController.instance.closeAllChats();
       // 1. Immediately kick user to LoginScreen using root navigator
       final nav = DeepLinkService().navigatorKey.currentState ??

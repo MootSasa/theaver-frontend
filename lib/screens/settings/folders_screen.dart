@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
-import '../../widgets/settings/settings_floating_header.dart';
-import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../models/chat_folder.dart';
 import '../../services/chat_folder_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
+import '../../widgets/settings/settings_floating_header.dart';
+import 'folder_edit_screen.dart';
 
-/// Screen allowing the user to view, reorder, create, rename, and delete
-/// custom chat folders. Folders sync across devices per account.
+/// Screen allowing the user to view, reorder, create, edit, and delete
+/// chat folders. Folders sync across devices per account.
 class FoldersScreen extends StatefulWidget {
   const FoldersScreen({Key? key}) : super(key: key);
 
@@ -34,165 +35,42 @@ class _FoldersScreenState extends State<FoldersScreen> {
     if (mounted) setState(() {});
   }
 
-  IconData _getFolderIcon(ChatFolder folder) {
-    switch (folder.id) {
-      case 'all':
-        return Icons.chat_bubble_outline;
-      case 'personal':
-        return Icons.person_outline;
-      case 'groups':
-        return Icons.group_outlined;
-      case 'channels':
-        return Icons.campaign_outlined;
-      default:
-        return Icons.folder_outlined;
-    }
-  }
+  IconData _getFolderIcon(ChatFolder folder) =>
+      FolderEditScreen.iconForName(folder.iconName, folderId: folder.id);
 
   String _getFolderDescription(BuildContext context, ChatFolder folder) {
+    final l10n = context.l10n;
     if (folder.id == 'all') {
-      return 'Все чаты и каналы';
+      return l10n.translate('folders_all_chats_desc');
     }
     final types = folder.includedTypes;
     final parts = <String>[];
-    if (types.contains('private') || types.contains('saved')) parts.add('Личные');
-    if (types.contains('group')) parts.add('Группы');
-    if (types.contains('channel')) parts.add('Каналы');
+    if (types.contains('private') || types.contains('saved')) {
+      parts.add(l10n.translate('folders_type_private'));
+    }
+    if (types.contains('group')) {
+      parts.add(l10n.translate('folders_type_groups'));
+    }
+    if (types.contains('channel')) {
+      parts.add(l10n.translate('folders_type_channels'));
+    }
+    if (folder.includedChatIds.isNotEmpty) {
+      parts.add('+${folder.includedChatIds.length}');
+    }
+    if (folder.excludedChatIds.isNotEmpty) {
+      parts.add('-${folder.excludedChatIds.length}');
+    }
     if (parts.isEmpty) {
-      return folder.includedChatIds.isNotEmpty
-          ? '${folder.includedChatIds.length} выбранных чатов'
-          : 'Пустая папка';
+      return l10n.translate('folders_empty');
     }
     return parts.join(', ');
   }
 
-  void _showAddFolderDialog() {
-    final l10n = context.l10n;
-    final nameController = TextEditingController();
-    bool includePrivate = true;
-    bool includeGroups = false;
-    bool includeChannels = false;
-
-    showDialog(
-      context: context,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(l10n.translate('folders_new_folder')),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: InputDecoration(
-                    labelText: l10n.translate('folders_folder_name'),
-                    hintText: 'Например, Работа или Учёба',
-                  ),
-                  autofocus: true,
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Включить типы чатов:',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                ),
-                CheckboxListTile(
-                  title: const Text('Личные чаты'),
-                  value: includePrivate,
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  onChanged: (val) =>
-                      setDialogState(() => includePrivate = val ?? false),
-                ),
-                CheckboxListTile(
-                  title: const Text('Группы'),
-                  value: includeGroups,
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  onChanged: (val) =>
-                      setDialogState(() => includeGroups = val ?? false),
-                ),
-                CheckboxListTile(
-                  title: const Text('Каналы'),
-                  value: includeChannels,
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  onChanged: (val) =>
-                      setDialogState(() => includeChannels = val ?? false),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogCtx).pop(),
-              child: Text(l10n.translate('folders_cancel')),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                final folderName = nameController.text.trim();
-                if (folderName.isEmpty) return;
-
-                final includedTypes = <String>[];
-                if (includePrivate) {
-                  includedTypes.add('private');
-                  includedTypes.add('saved');
-                }
-                if (includeGroups) includedTypes.add('group');
-                if (includeChannels) includedTypes.add('channel');
-
-                final newFolder = ChatFolder(
-                  id: 'folder_${DateTime.now().millisecondsSinceEpoch}',
-                  name: folderName,
-                  iconName: 'folder',
-                  includedTypes: includedTypes,
-                  order: _folderService.folders.length,
-                );
-
-                await _folderService.addFolder(newFolder);
-                if (context.mounted) {
-                  Navigator.of(dialogCtx).pop();
-                }
-              },
-              child: Text(l10n.translate('folders_add')),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showRenameFolderDialog(ChatFolder folder) {
-    final l10n = context.l10n;
-    final nameController = TextEditingController(text: folder.name);
-
-    showDialog(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: Text(l10n.translate('folders_rename_folder')),
-        content: TextField(
-          controller: nameController,
-          decoration: InputDecoration(
-            hintText: l10n.translate('folders_new_folder_name'),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(),
-            child: Text(l10n.translate('folders_cancel')),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final newName = nameController.text.trim();
-              if (newName.isNotEmpty && newName != folder.name) {
-                await _folderService.updateFolder(folder.copyWith(name: newName));
-              }
-              if (context.mounted) Navigator.of(dialogCtx).pop();
-            },
-            child: Text(l10n.translate('folders_rename')),
-          ),
-        ],
+  void _openFolderEditor([ChatFolder? existing]) {
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => FolderEditScreen(existingFolder: existing),
       ),
     );
   }
@@ -217,7 +95,7 @@ class _FoldersScreenState extends State<FoldersScreen> {
           ElevatedButton(
             onPressed: () async {
               await _folderService.removeFolder(folder.id);
-              if (context.mounted) Navigator.of(dialogCtx).pop();
+              if (dialogCtx.mounted) Navigator.of(dialogCtx).pop();
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: Text(l10n.translate('folders_delete')),
@@ -252,7 +130,7 @@ class _FoldersScreenState extends State<FoldersScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Зажмите и перетаскивайте папки, чтобы изменить их порядок на главном экране.',
+                          l10n.translate('folders_reorder_hint'),
                           style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                         ),
                       ),
@@ -285,6 +163,7 @@ class _FoldersScreenState extends State<FoldersScreen> {
                           _getFolderDescription(context, folder),
                           style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                         ),
+                        onTap: isSystemAll ? null : () => _openFolderEditor(folder),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -292,18 +171,18 @@ class _FoldersScreenState extends State<FoldersScreen> {
                               PopupMenuButton<String>(
                                 icon: const Icon(Icons.more_vert),
                                 onSelected: (val) {
-                                  if (val == 'rename') {
-                                    _showRenameFolderDialog(folder);
+                                  if (val == 'edit') {
+                                    _openFolderEditor(folder);
                                   } else if (val == 'delete') {
                                     _showDeleteFolderConfirmation(folder);
                                   }
                                 },
                                 itemBuilder: (context) => [
                                   PopupMenuItem(
-                                    value: 'rename',
+                                    value: 'edit',
                                     child: ListTile(
                                       leading: const Icon(Icons.edit),
-                                      title: Text(l10n.translate('folders_rename')),
+                                      title: Text(l10n.translate('folders_edit_title')),
                                     ),
                                   ),
                                   PopupMenuItem(
@@ -334,7 +213,7 @@ class _FoldersScreenState extends State<FoldersScreen> {
               ],
             ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _showAddFolderDialog,
+        onPressed: () => _openFolderEditor(),
         child: const Icon(Icons.add),
       ),
     );

@@ -50,6 +50,8 @@ class PrivacyScreen extends StatelessWidget {
                       p.groupsChannelsPrivacy, 'groups_channels_privacy'),
                   _privacyTile(context, l10n.translate('privacy_bio'),
                       p.bioVisibility, 'bio_visibility'),
+                  _privacyTile(context, l10n.translate('privacy_birthday'),
+                      p.birthdayVisibility, 'birthday_visibility'),
                 ],
               ),
 

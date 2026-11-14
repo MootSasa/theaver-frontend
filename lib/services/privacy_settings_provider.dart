@@ -70,6 +70,7 @@ class PrivacySettingsProvider extends ChangeNotifier {
       case 'call_privacy': return _privacy.copyWith(callPrivacy: value as PrivacyVisibility);
       case 'groups_channels_privacy': return _privacy.copyWith(groupsChannelsPrivacy: value as PrivacyVisibility);
       case 'bio_visibility': return _privacy.copyWith(bioVisibility: value as PrivacyVisibility);
+      case 'birthday_visibility': return _privacy.copyWith(birthdayVisibility: value as PrivacyVisibility);
       case 'forwarded_messages': return _privacy.copyWith(forwardedMessages: value as PrivacyVisibility);
       case 'show_online_status': return _privacy.copyWith(showOnlineStatus: value as bool);
       case 'show_read_receipts': return _privacy.copyWith(showReadReceipts: value as bool);
@@ -115,23 +116,98 @@ class PrivacySettingsProvider extends ChangeNotifier {
     } catch (e) { debugPrint('PrivacySettingsProvider: load2FA: $e'); }
   }
 
-  /// Включить 2FA
-  Future<bool> enable2FA(String passwordHash, String recoveryEmail) async {
+  /// Включить или сменить пароль 2FA
+  Future<Map<String, dynamic>> enable2FA(
+    String password,
+    String recoveryEmail, {
+    String? currentPassword,
+    String? current2faPassword,
+  }) async {
     try {
-      await _dio.post('${AppConfig.baseUrl}/api/security/2fa/enable',
-          data: {'password_hash': passwordHash, 'recovery_email': recoveryEmail},
-          options: Options(headers: await _h()));
-      await load2FA(); return true;
-    } catch (e) { debugPrint('PrivacySettingsProvider: enable2FA: $e'); return false; }
+      final body = <String, dynamic>{
+        'password': password,
+        'recovery_email': recoveryEmail,
+        if (currentPassword != null && currentPassword.isNotEmpty)
+          'current_password': currentPassword,
+        if (current2faPassword != null && current2faPassword.isNotEmpty)
+          'current_2fa_password': current2faPassword,
+      };
+      final r = await _dio.post(
+        '${AppConfig.baseUrl}/api/security/2fa/enable',
+        data: body,
+        options: Options(headers: await _h()),
+      );
+      await load2FA();
+      final data = r.data is Map ? Map<String, dynamic>.from(r.data as Map) : <String, dynamic>{};
+      final codes = (data['recovery_codes'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          <String>[];
+      return {
+        'success': true,
+        'recovery_codes': codes,
+      };
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final error = data is Map ? (data['error']?.toString() ?? 'unknown') : 'network_error';
+      debugPrint('PrivacySettingsProvider: enable2FA: $error ($e)');
+      return {'success': false, 'error': error, 'recovery_codes': <String>[]};
+    } catch (e) {
+      debugPrint('PrivacySettingsProvider: enable2FA: $e');
+      return {'success': false, 'error': 'unknown', 'recovery_codes': <String>[]};
+    }
   }
 
   /// Отключить 2FA
-  Future<bool> disable2FA() async {
+  Future<Map<String, dynamic>> disable2FA({String? password}) async {
     try {
-      await _dio.post('${AppConfig.baseUrl}/api/security/2fa/disable',
-          options: Options(headers: await _h()));
-      await load2FA(); return true;
-    } catch (e) { debugPrint('PrivacySettingsProvider: disable2FA: $e'); return false; }
+      await _dio.post(
+        '${AppConfig.baseUrl}/api/security/2fa/disable',
+        data: {
+          if (password != null && password.isNotEmpty) 'password': password,
+        },
+        options: Options(headers: await _h()),
+      );
+      await load2FA();
+      return {'success': true};
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final error = data is Map ? (data['error']?.toString() ?? 'unknown') : 'network_error';
+      debugPrint('PrivacySettingsProvider: disable2FA: $error ($e)');
+      return {'success': false, 'error': error};
+    } catch (e) {
+      debugPrint('PrivacySettingsProvider: disable2FA: $e');
+      return {'success': false, 'error': 'unknown'};
+    }
+  }
+
+  /// Перевыпустить резервные коды 2FA
+  Future<Map<String, dynamic>> regenerateRecoveryCodes(String password) async {
+    try {
+      final r = await _dio.post(
+        '${AppConfig.baseUrl}/api/security/2fa/recovery-codes/regenerate',
+        data: {'password': password},
+        options: Options(headers: await _h()),
+      );
+      await load2FA();
+      final data = r.data is Map ? Map<String, dynamic>.from(r.data as Map) : <String, dynamic>{};
+      final codes = (data['recovery_codes'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          <String>[];
+      return {
+        'success': true,
+        'recovery_codes': codes,
+      };
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final error = data is Map ? (data['error']?.toString() ?? 'unknown') : 'network_error';
+      debugPrint('PrivacySettingsProvider: regenerateRecoveryCodes: $error ($e)');
+      return {'success': false, 'error': error, 'recovery_codes': <String>[]};
+    } catch (e) {
+      debugPrint('PrivacySettingsProvider: regenerateRecoveryCodes: $e');
+      return {'success': false, 'error': 'unknown', 'recovery_codes': <String>[]};
+    }
   }
 
   /// Загрузить настройки блокировки приложения
@@ -214,5 +290,18 @@ class PrivacySettingsProvider extends ChangeNotifier {
   /// Загрузить все данные разом
   Future<void> loadAll() async {
     await Future.wait([loadPrivacySettings(), load2FA(), loadAppLock(), loadBlockedUsers(), loadAccountTTL()]);
+  }
+
+  /// Сбросить кэш в памяти и перезагрузить данные при смене аккаунта
+  Future<void> reloadForUser() async {
+    _privacy = const PrivacySettings();
+    _exceptions = [];
+    _twoFactor = const TwoFactorAuthSettings();
+    _appLock = const AppLockSettings();
+    _blockedUsers = [];
+    _accountTTLMonths = 6;
+    _error = null;
+    notifyListeners();
+    await loadAll();
   }
 }

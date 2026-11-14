@@ -971,7 +971,7 @@ class MessageBubble extends StatelessWidget {
         : bubbleColor;
 
     final TextStyle textStyle = TextStyle(
-      fontSize: 16.0,
+      fontSize: themeExt?.messageFontSize ?? 16.0,
       height: 1.12,
       leadingDistribution: TextLeadingDistribution.even,
       color: isBigEmoji

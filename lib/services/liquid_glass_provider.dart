@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'glass_mode.dart';
+import 'power_saving_provider.dart';
 import 'settings_service.dart';
 
 export 'glass_mode.dart';
@@ -43,15 +44,15 @@ class LiquidGlassProvider extends ChangeNotifier {
   double get manualLightAngle => _lightAngle;
 
   /// Степень размытия заднего плана (blur sigma)
-  double get blur => _blur;
+  double get blur => PowerSavingProvider.instance.allowBlur ? _blur : 0.0;
 
   /// Степень размытия заднего плана (blur sigma) для передачи в LiquidGlassLens
-  double get blurEffect => _blur;
+  double get blurEffect => PowerSavingProvider.instance.allowBlur ? _blur : 0.0;
 
   /// Вычисляет итоговый угол освещения для передачи в шейдеры/виджеты.
   /// Стабилен и не вызывает ненужных перерисовок.
   double getEffectiveLightAngle({bool reduceMotion = false}) {
-    if (reduceMotion) {
+    if (reduceMotion || !PowerSavingProvider.instance.allowAnimations) {
       return 62.0;
     }
     return _lightAngle;
@@ -79,14 +80,17 @@ class LiquidGlassProvider extends ChangeNotifier {
     bool? isDarkOverride,
     LiquidGlassAdaptivity? adaptivity,
   }) {
+    final powerSavingBlurDisabled = !PowerSavingProvider.instance.allowBlur;
+    final powerSavingAnimDisabled =
+        !PowerSavingProvider.instance.allowAnimations;
     final isDark = isDarkOverride ??
         (context != null
             ? Theme.of(context).brightness == Brightness.dark
             : true);
-    final reduceMotion =
-        context != null ? MediaQuery.disableAnimationsOf(context) : false;
+    final reduceMotion = powerSavingAnimDisabled ||
+        (context != null ? MediaQuery.disableAnimationsOf(context) : false);
     final angle = getEffectiveLightAngle(reduceMotion: reduceMotion);
-    final lite = isLiteOverride ?? isLite;
+    final lite = powerSavingBlurDisabled ? true : (isLiteOverride ?? isLite);
 
     final defaultColor = isDark
         ? const Color(0x33202025)
@@ -132,7 +136,7 @@ class LiquidGlassProvider extends ChangeNotifier {
     return LiquidGlassStyle(
       shape: effectiveShape,
       color: color ?? defaultColor,
-      blur: blur ?? _blur,
+      blur: powerSavingBlurDisabled ? 0.0 : (blur ?? _blur),
       shadow: shadow,
       specular: specular,
       glow: glow,

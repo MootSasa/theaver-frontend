@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb, Uint8List;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:ios_color_picker/show_ios_color_picker.dart';
@@ -102,13 +103,23 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     final l10n = context.l10n;
     try {
       final bytes = await TheavThemeService().exportThemePackage(_currentTheme);
-      final tempDir = await getTemporaryDirectory();
       final cleanName = TheavThemeService.sanitizeFileName(_currentTheme.name);
-      final file = File('${tempDir.path}/$cleanName.theavtheme');
-      await file.writeAsBytes(bytes);
+      final XFile exportFile;
+      if (kIsWeb) {
+        exportFile = XFile.fromData(
+          Uint8List.fromList(bytes),
+          name: '$cleanName.theavtheme',
+          mimeType: 'application/octet-stream',
+        );
+      } else {
+        final tempDir = await getTemporaryDirectory();
+        final file = File('${tempDir.path}/$cleanName.theavtheme');
+        await file.writeAsBytes(bytes);
+        exportFile = XFile(file.path, name: '$cleanName.theavtheme');
+      }
 
       await Share.shareXFiles(
-        [XFile(file.path, name: '$cleanName.theavtheme')],
+        [exportFile],
         text: 'Тема Theaver: ${_currentTheme.name}',
       );
     } catch (e) {

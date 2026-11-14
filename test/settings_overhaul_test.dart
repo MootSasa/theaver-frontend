@@ -1,0 +1,457 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:theaver/models/chat_folder.dart';
+import 'package:theaver/screens/settings/settings_search_index.dart';
+import 'package:theaver/services/app_lock_service.dart';
+import 'package:theaver/services/chat_service.dart';
+import 'package:theaver/services/chat_swipe_service.dart';
+import 'package:theaver/services/power_saving_provider.dart';
+import 'package:theaver/services/settings_service.dart';
+import 'package:theaver/services/unread_count_provider.dart';
+import 'package:theaver/theme/theme_provider.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  group('User-scoped SettingsService isolation', () {
+    test(
+        'isolates powerSavingSettings, notificationSettings, and per-chat rules across users',
+        () async {
+      final service = SettingsService();
+      await service.init();
+
+      await service.reloadForUser('alice');
+      await service.updatePowerSavingSettings(
+        powerSavingEnabled: true,
+        limitFrameRate: true,
+      );
+      await service.saveNotificationSettings(
+        GlobalNotificationSettings(
+          privateChatNotifications: false,
+          badgeMode: BadgeMode.chats,
+        ),
+      );
+      await service.saveChatNotificationSettings(
+        'chat-1',
+        const ChatNotificationSettings(
+          chatId: 'chat-1',
+          muteState: MuteState.muted,
+        ),
+      );
+
+      // Switch to Bob and verify defaults are intact and independent
+      await service.reloadForUser('bob');
+      expect(service.powerSavingSettings.powerSavingEnabled, isFalse);
+      expect(service.notificationSettings.privateChatNotifications, isTrue);
+      expect(service.notificationSettings.badgeMode, BadgeMode.messages);
+      expect(service.getChatNotificationSettings('chat-1'), isNull);
+
+      await service.updatePowerSavingSettings(powerSavingEnabled: false);
+      await service.saveNotificationSettings(
+        GlobalNotificationSettings(privateChatNotifications: true),
+      );
+
+      // Switch back to Alice and verify her persisted scoped values remain
+      await service.reloadForUser('alice');
+      expect(service.powerSavingSettings.powerSavingEnabled, isTrue);
+      expect(service.powerSavingSettings.limitFrameRate, isTrue);
+      expect(service.notificationSettings.privateChatNotifications, isFalse);
+      expect(service.notificationSettings.badgeMode, BadgeMode.chats);
+      expect(
+        service.getChatNotificationSettings('chat-1')?.muteState,
+        MuteState.muted,
+      );
+    });
+  });
+
+  group('AppLockService PBKDF2 & lockout', () {
+    test('hashes PIN with PBKDF2-SHA256, locks out on 5th failure, and disables cleanly',
+        () async {
+      final salt = List<int>.generate(16, (i) => i + 1);
+      final d1 = AppLockService.derivePbkdf2Sha256('2580', salt);
+      final d2 = AppLockService.derivePbkdf2Sha256('2580', salt);
+      final dWrong = AppLockService.derivePbkdf2Sha256('1234', salt);
+      expect(d1.length, 32);
+      expect(d1, equals(d2));
+      expect(d1, isNot(equals(dWrong)));
+
+      final lock = AppLockService.forTesting();
+      await lock.init();
+      expect(lock.hasPin, isFalse);
+
+      expect(await lock.setPin('2580'), isTrue);
+      expect(lock.hasPin, isTrue);
+      expect(await lock.verifyPin('2580'), isTrue);
+      expect(lock.failedAttempts, 0);
+
+      for (var i = 1; i <= 4; i++) {
+        expect(await lock.verifyPin('0000'), isFalse);
+        expect(lock.failedAttempts, i);
+        expect(lock.isLockedOut, isFalse);
+      }
+
+      // 5th consecutive failed attempt triggers lockout
+      expect(await lock.verifyPin('0000'), isFalse);
+      expect(lock.failedAttempts, 5);
+      expect(lock.isLockedOut, isTrue);
+      expect(lock.lockoutRemaining, greaterThan(Duration.zero));
+
+      // Even the correct PIN is rejected while locked out
+      expect(await lock.verifyPin('2580'), isFalse);
+
+      // Fresh unlocked instance with clean mock prefs can set & disable PIN
+      SharedPreferences.setMockInitialValues({});
+      final unlocked = AppLockService.forTesting();
+      await unlocked.init();
+      expect(await unlocked.setPin('2580'), isTrue);
+      expect(await unlocked.disablePin('9999'), isFalse);
+      expect(unlocked.hasPin, isTrue);
+      expect(await unlocked.disablePin('2580'), isTrue);
+      expect(unlocked.hasPin, isFalse);
+    });
+  });
+
+  group('EffectiveChatSettings & UnreadCountProvider badges', () {
+    test('inherits category defaults and honors expired vs active muteUntil',
+        () async {
+      final service = SettingsService();
+      await service.init();
+      await service.reloadForUser('notif_user');
+
+      await service.saveNotificationSettings(
+        GlobalNotificationSettings(
+          privateChatNotifications: false,
+          groupChatNotifications: true,
+        ),
+      );
+
+      final effPrivate =
+          service.getEffectiveChatSettings('p1', chatType: 'private');
+      final effGroup =
+          service.getEffectiveChatSettings('g1', chatType: 'group');
+      expect(effPrivate.muteState, MuteState.muted);
+      expect(effGroup.muteState, MuteState.notMuted);
+
+      await service.saveChatNotificationSettings(
+        'expired-chat',
+        ChatNotificationSettings(
+          chatId: 'expired-chat',
+          muteState: MuteState.mutedUntil,
+          muteUntil: DateTime.now().subtract(const Duration(minutes: 5)),
+        ),
+      );
+      await service.saveChatNotificationSettings(
+        'future-chat',
+        ChatNotificationSettings(
+          chatId: 'future-chat',
+          muteState: MuteState.mutedUntil,
+          muteUntil: DateTime.now().add(const Duration(hours: 2)),
+        ),
+      );
+
+      expect(
+        service.getEffectiveChatSettings('expired-chat').muteState,
+        MuteState.notMuted,
+      );
+      expect(
+        service.getEffectiveChatSettings('future-chat').muteState,
+        MuteState.mutedUntil,
+      );
+    });
+
+    test('computes badge counts for messages, chats, disabled, and muted filter',
+        () {
+      final provider = UnreadCountProvider();
+      provider.loadFromChats([
+        Chat(
+          id: 'c1',
+          chatType: 'private',
+          name: 'Alice',
+          updatedAt: '2026-01-01T00:00:00Z',
+          unreadCount: 5,
+        ),
+        Chat(
+          id: 'c2',
+          chatType: 'group',
+          name: 'Team',
+          updatedAt: '2026-01-01T00:00:00Z',
+          unreadCount: 3,
+        ),
+        Chat(
+          id: 'c3',
+          chatType: 'channel',
+          name: 'Marked',
+          updatedAt: '2026-01-01T00:00:00Z',
+          unreadCount: -1,
+        ),
+      ]);
+
+      expect(
+        provider.getBadgeCount(
+          badgeEnabled: false,
+          badgeMode: BadgeMode.messages,
+          includeMutedChats: true,
+        ),
+        0,
+      );
+
+      expect(
+        provider.getBadgeCount(
+          badgeEnabled: true,
+          badgeMode: BadgeMode.messages,
+          includeMutedChats: true,
+        ),
+        9,
+      );
+
+      expect(
+        provider.getBadgeCount(
+          badgeEnabled: true,
+          badgeMode: BadgeMode.chats,
+          includeMutedChats: true,
+        ),
+        3,
+      );
+
+      bool isMuted(String chatId, String? chatType) => chatId == 'c2';
+
+      expect(
+        provider.getBadgeCount(
+          badgeEnabled: true,
+          badgeMode: BadgeMode.messages,
+          includeMutedChats: false,
+          isMutedResolver: isMuted,
+        ),
+        6,
+      );
+
+      expect(
+        provider.getBadgeCount(
+          badgeEnabled: true,
+          badgeMode: BadgeMode.chats,
+          includeMutedChats: false,
+          isMutedResolver: isMuted,
+        ),
+        2,
+      );
+    });
+  });
+
+  group('PowerSavingProvider gating', () {
+    test('controls blur, animations, autoplay, and haptics flags', () {
+      addTearDown(
+        () => PowerSavingProvider.instance
+            .setSettingsForTest(PowerSavingSettings.defaults()),
+      );
+
+      PowerSavingProvider.instance
+          .setSettingsForTest(PowerSavingSettings.defaults());
+      expect(PowerSavingProvider.instance.isActive, isFalse);
+      expect(PowerSavingProvider.instance.allowBlur, isTrue);
+      expect(PowerSavingProvider.instance.allowAnimations, isTrue);
+      expect(PowerSavingProvider.instance.allowAutoplayGif, isTrue);
+      expect(PowerSavingProvider.instance.allowAutoplayVideo, isTrue);
+      expect(PowerSavingProvider.instance.allowHaptics, isTrue);
+
+      PowerSavingProvider.instance.setSettingsForTest(
+        PowerSavingSettings(
+          powerSavingEnabled: true,
+          batteryThreshold: 30,
+          reduceBackgroundActivity: true,
+          lowerScreenBrightness: false,
+          limitFrameRate: true,
+          disableVibrations: true,
+          disableLocationServices: true,
+        ),
+      );
+      expect(PowerSavingProvider.instance.isActive, isTrue);
+      expect(PowerSavingProvider.instance.allowBlur, isFalse);
+      expect(PowerSavingProvider.instance.allowAnimations, isFalse);
+      expect(PowerSavingProvider.instance.allowAutoplayGif, isFalse);
+      expect(PowerSavingProvider.instance.allowAutoplayVideo, isFalse);
+      expect(PowerSavingProvider.instance.allowHaptics, isFalse);
+
+      // Even if sub-flags are set, inactive master switch keeps media/animations enabled
+      PowerSavingProvider.instance.setSettingsForTest(
+        PowerSavingSettings(
+          powerSavingEnabled: false,
+          batteryThreshold: 20,
+          reduceBackgroundActivity: true,
+          lowerScreenBrightness: true,
+          limitFrameRate: true,
+          disableVibrations: true,
+          disableLocationServices: false,
+        ),
+      );
+      expect(PowerSavingProvider.instance.allowBlur, isTrue);
+      expect(PowerSavingProvider.instance.allowAutoplayVideo, isTrue);
+      expect(PowerSavingProvider.instance.allowHaptics, isTrue);
+    });
+  });
+
+  group('ChatSwipeAction & ChatFolder matching', () {
+    test('all swipe actions are implemented and folder filtering rules apply',
+        () {
+      for (final action in ChatSwipeAction.values) {
+        expect(action.isImplemented, isTrue);
+      }
+
+      const folder = ChatFolder(
+        id: 'work',
+        name: 'Work',
+        includedTypes: ['group'],
+        includedChatIds: ['vip-private'],
+        excludedChatIds: ['noisy-group'],
+      );
+
+      final vipPrivate = Chat(
+        id: 'vip-private',
+        chatType: 'private',
+        name: 'VIP',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+      final regularPrivate = Chat(
+        id: 'reg-private',
+        chatType: 'private',
+        name: 'Friend',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+      final normalGroup = Chat(
+        id: 'team-group',
+        chatType: 'group',
+        name: 'Engineering',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+      final noisyGroup = Chat(
+        id: 'noisy-group',
+        chatType: 'group',
+        name: 'Spam',
+        updatedAt: '2026-01-01T00:00:00Z',
+      );
+
+      expect(folder.matchesChat(vipPrivate), isTrue);
+      expect(folder.matchesChat(regularPrivate), isFalse);
+      expect(folder.matchesChat(normalGroup), isTrue);
+      expect(folder.matchesChat(noisyGroup), isFalse);
+    });
+  });
+
+  group('ThemeProvider.isTimeInDarkSchedule', () {
+    test('evaluates same-day and overnight windows accurately', () {
+      const sameDayStart = TimeOfDay(hour: 9, minute: 0);
+      const sameDayEnd = TimeOfDay(hour: 18, minute: 0);
+      expect(
+        ThemeProvider.isTimeInDarkSchedule(
+          DateTime(2026, 1, 1, 8, 59),
+          sameDayStart,
+          sameDayEnd,
+        ),
+        isFalse,
+      );
+      expect(
+        ThemeProvider.isTimeInDarkSchedule(
+          DateTime(2026, 1, 1, 9, 0),
+          sameDayStart,
+          sameDayEnd,
+        ),
+        isTrue,
+      );
+      expect(
+        ThemeProvider.isTimeInDarkSchedule(
+          DateTime(2026, 1, 1, 18, 0),
+          sameDayStart,
+          sameDayEnd,
+        ),
+        isFalse,
+      );
+
+      const overnightStart = TimeOfDay(hour: 22, minute: 0);
+      const overnightEnd = TimeOfDay(hour: 7, minute: 0);
+      expect(
+        ThemeProvider.isTimeInDarkSchedule(
+          DateTime(2026, 1, 1, 21, 59),
+          overnightStart,
+          overnightEnd,
+        ),
+        isFalse,
+      );
+      expect(
+        ThemeProvider.isTimeInDarkSchedule(
+          DateTime(2026, 1, 1, 22, 0),
+          overnightStart,
+          overnightEnd,
+        ),
+        isTrue,
+      );
+      expect(
+        ThemeProvider.isTimeInDarkSchedule(
+          DateTime(2026, 1, 1, 2, 30),
+          overnightStart,
+          overnightEnd,
+        ),
+        isTrue,
+      );
+      expect(
+        ThemeProvider.isTimeInDarkSchedule(
+          DateTime(2026, 1, 1, 7, 0),
+          overnightStart,
+          overnightEnd,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('SettingsSearchIndex filtering & exclusions', () {
+    test('hides app_updates on Web, matches keywords, and excludes Wallets', () {
+      final entries = SettingsSearchIndex.defaultEntries();
+
+      // Wallet/Cards must remain excluded
+      for (final e in entries) {
+        final combined =
+            '${e.id} ${e.titleKey} ${e.fallbackTitle}'.toLowerCase();
+        expect(combined.contains('wallet'), isFalse);
+        expect(combined.contains('кошел'), isFalse);
+        expect(combined.contains('banking'), isFalse);
+      }
+
+      final nonWebAll =
+          SettingsSearchIndex.filter(entries, '', isWeb: false);
+      final webAll = SettingsSearchIndex.filter(entries, '', isWeb: true);
+      expect(nonWebAll.any((e) => e.id == 'app_updates'), isTrue);
+      expect(webAll.any((e) => e.id == 'app_updates'), isFalse);
+
+      expect(
+        SettingsSearchIndex.filter(entries, 'update', isWeb: true)
+            .any((e) => e.id == 'app_updates'),
+        isFalse,
+      );
+      expect(
+        SettingsSearchIndex.filter(entries, 'update', isWeb: false)
+            .any((e) => e.id == 'app_updates'),
+        isTrue,
+      );
+
+      expect(
+        SettingsSearchIndex.filter(entries, '2fa', isWeb: false)
+            .any((e) => e.id == 'security_2fa'),
+        isTrue,
+      );
+      expect(
+        SettingsSearchIndex.filter(entries, 'почта', isWeb: false)
+            .any((e) => e.id == 'recovery_email'),
+        isTrue,
+      );
+      expect(
+        SettingsSearchIndex.filter(entries, 'шрифт', isWeb: false)
+            .any((e) => e.id == 'chat_settings'),
+        isTrue,
+      );
+    });
+  });
+}

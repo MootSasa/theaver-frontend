@@ -251,16 +251,27 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
       final scaffoldMessenger = ScaffoldMessenger.of(context);
       try {
-        final success = await AuthService.logoutDevice(deviceId);
+        final res = await AuthService.logoutDeviceWithResult(
+          deviceId,
+          sessionId: sessionId,
+        );
         if (!mounted) return;
-        if (success) {
+        if (res['success'] == true) {
           scaffoldMessenger.showSnackBar(
             SnackBar(content: Text(l10n.translate('devices_terminate_success'))),
           );
           await _loadSessions();
         } else {
+          final isQuarantine = res['error'] == 'session_too_new';
           scaffoldMessenger.showSnackBar(
-            SnackBar(content: Text(l10n.translate('devices_terminate_error')), backgroundColor: Colors.red),
+            SnackBar(
+              content: Text(
+                isQuarantine
+                    ? l10n.translate('devices_session_too_new')
+                    : l10n.translate('devices_terminate_error'),
+              ),
+              backgroundColor: Colors.red,
+            ),
           );
         }
       } catch (e) {
@@ -313,16 +324,24 @@ class _DevicesScreenState extends State<DevicesScreen> {
     if (confirmed == true && mounted) {
       final scaffoldMessenger = ScaffoldMessenger.of(context);
       try {
-        final success = await AuthService.terminateOtherSessions(currentDeviceId);
+        final res = await AuthService.terminateOtherSessionsWithResult(currentDeviceId);
         if (!mounted) return;
-        if (success) {
+        if (res['success'] == true) {
           scaffoldMessenger.showSnackBar(
             SnackBar(content: Text(l10n.translate('devices_terminate_all_success'))),
           );
           await _loadSessions();
         } else {
+          final isQuarantine = res['error'] == 'session_too_new';
           scaffoldMessenger.showSnackBar(
-            SnackBar(content: Text(l10n.translate('devices_terminate_error')), backgroundColor: Colors.red),
+            SnackBar(
+              content: Text(
+                isQuarantine
+                    ? l10n.translate('devices_session_too_new')
+                    : l10n.translate('devices_terminate_error'),
+              ),
+              backgroundColor: Colors.red,
+            ),
           );
         }
       } catch (e) {
@@ -448,14 +467,26 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     onTap: () async {
                       Navigator.pop(ctx);
                       HapticFeedback.lightImpact();
+                      final prevDays = _sessionsTTLDays;
                       setState(() {
                         _sessionsTTLDays = days;
                       });
                       final success = await AuthService.setSessionsTTL(days);
-                      if (mounted && success) {
+                      if (!mounted) return;
+                      if (success) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(l10n.translate('settings_saved')),
+                          ),
+                        );
+                      } else {
+                        setState(() {
+                          _sessionsTTLDays = prevDays;
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(l10n.translate('common_error')),
+                            backgroundColor: Colors.red,
                           ),
                         );
                       }
@@ -484,13 +515,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
       case 365:
         return l10n.translate('devices_ttl_1_year');
       default:
-        return '$days ${l10n.translate('devices_days_ago')}';
+        return '$days ${l10n.translate('devices_ttl_days')}';
     }
   }
 
   String _formatLastActive(DateTime lastActive) {
+    final local = lastActive.toLocal();
     final now = DateTime.now();
-    final difference = now.difference(lastActive);
+    final difference = now.difference(local);
     final l10n = context.l10n;
 
     if (difference.inMinutes < 1) {
@@ -502,8 +534,132 @@ class _DevicesScreenState extends State<DevicesScreen> {
     } else if (difference.inDays < 7) {
       return '${difference.inDays} ${l10n.translate('devices_days_ago')}';
     } else {
-      return '${lastActive.day.toString().padLeft(2, '0')}.${lastActive.month.toString().padLeft(2, '0')}.${lastActive.year}';
+      return '${local.day.toString().padLeft(2, '0')}.${local.month.toString().padLeft(2, '0')}.${local.year}';
     }
+  }
+
+  Future<void> _showLinkDeviceSheet() async {
+    final l10n = context.l10n;
+    final codeCtrl = TextEditingController();
+    String? sheetError;
+    bool submitting = false;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                l10n.translate('devices_link_desktop_title'),
+                style: Theme.of(ctx).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                l10n.translate('devices_link_desktop_hint'),
+                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: codeCtrl,
+                autofocus: true,
+                textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(
+                  labelText: l10n.translate('devices_link_code_label'),
+                  hintText: 'ABCD1234',
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.paste),
+                    onPressed: () async {
+                      final data = await Clipboard.getData(Clipboard.kTextPlain);
+                      if (data?.text != null) {
+                        codeCtrl.text = data!.text!.trim();
+                      }
+                    },
+                  ),
+                ),
+              ),
+              if (sheetError != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  sheetError!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: submitting
+                    ? null
+                    : () async {
+                        final raw = codeCtrl.text.trim();
+                        if (raw.isEmpty) return;
+                        setSheetState(() {
+                          submitting = true;
+                          sheetError = null;
+                        });
+                        String? token;
+                        String? shortCode;
+                        if (raw.contains('token=')) {
+                          final uri = Uri.tryParse(raw);
+                          token = uri?.queryParameters['token'];
+                        }
+                        if (token == null || token.isEmpty) {
+                          shortCode = raw.replaceAll('-', '').toUpperCase();
+                        }
+                        final res = await AuthService.confirmQrLogin(
+                          token: token,
+                          shortCode: shortCode,
+                        );
+                        if (!ctx.mounted) return;
+                        if (res['success'] == true) {
+                          Navigator.pop(ctx);
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                res['status'] == 'awaiting_2fa'
+                                    ? l10n.translate('devices_link_awaiting_2fa')
+                                    : l10n.translate('devices_link_success'),
+                              ),
+                            ),
+                          );
+                          await _loadSessions();
+                        } else {
+                          setSheetState(() {
+                            submitting = false;
+                            sheetError = res['message']?.toString().isNotEmpty == true
+                                ? res['message'].toString()
+                                : l10n.translate('devices_link_error');
+                          });
+                        }
+                      },
+                child: submitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(l10n.translate('devices_link_confirm')),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    codeCtrl.dispose();
   }
 
   Widget _buildDeviceIcon(DeviceType type, Color color) {
@@ -585,6 +741,37 @@ class _DevicesScreenState extends State<DevicesScreen> {
             ],
           ),
         ],
+
+        // Link Desktop / Web Device Group
+        SettingsGroup(
+          title: l10n.translate('devices_link_section'),
+          children: [
+            ListTile(
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.qr_code_2,
+                  size: 22,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              title: Text(l10n.translate('devices_link_desktop_title')),
+              subtitle: Text(l10n.translate('devices_link_desktop_subtitle')),
+              trailing: NavArrowRight(
+                width: 18,
+                height: 18,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              onTap: _showLinkDeviceSheet,
+            ),
+          ],
+        ),
 
         // Session Auto-Termination TTL Group
         SettingsGroup(

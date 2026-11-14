@@ -1,5 +1,6 @@
 import '../../utils/image_utils.dart';
 import '../../utils/emoji_utils.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -26,6 +27,7 @@ import '../../services/draft_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
+import '../../services/app_lock_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/cache_service.dart';
 import '../../services/profile_instant_cache.dart';
@@ -52,7 +54,10 @@ import '../../widgets/call/call_device_transfer_banner.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
 import '../../widgets/notifications/huawei_autostart_prompt.dart';
 import '../../services/notification_service.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/settings_service.dart';
 import '../../services/proximity_audio_service.dart';
+import '../chat/archived_chats_screen.dart';
 import '../../models/chat_folder.dart';
 import '../../services/chat_folder_service.dart';
 import '../../services/chat_swipe_service.dart';
@@ -114,9 +119,11 @@ class _MainScreenState extends State<MainScreen>
 
   // Chats list & Communities
   List<Chat> _chats = [];
+  List<Chat> _archivedChats = [];
   List<Community> _communities = [];
   bool _isLoadingChats = true;
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
+  StreamSubscription<List<DbChat>>? _archivedChatsStreamSubscription;
   String? _currentUserId;
   final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
   final Map<String, ({String action, String? userName, Timer timer})>
@@ -206,8 +213,20 @@ class _MainScreenState extends State<MainScreen>
 
   void _initChatsStream() {
     _chatsStreamSubscription?.cancel();
+    _archivedChatsStreamSubscription?.cancel();
     _currentUserId ??= _accountManager.currentAccount?.userId;
     final db = AppDatabase(_currentUserId);
+    _archivedChatsStreamSubscription = db.watchArchivedChats().listen((dbArchived) {
+      if (!mounted) return;
+      final archived = dbArchived
+          .where((c) =>
+              c.chatType != 'community' &&
+              c.chatType != 'community_channel' &&
+              !CommunityService.isCommunityChannelId(c.chatId))
+          .map(_dbChatToChat)
+          .toList();
+      setState(() => _archivedChats = archived);
+    });
     _chatsStreamSubscription = db.watchChats().listen((dbChats) async {
       if (!mounted) return;
       final mappedChats = <Chat>[];
@@ -433,6 +452,7 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _checkForUpdates({bool fromBackgroundTimer = false}) async {
+    if (kIsWeb) return;
     try {
       final isAutoCheck = await AppUpdateService.instance.isAutoCheckEnabled();
       if (!isAutoCheck) return;
@@ -464,6 +484,7 @@ class _MainScreenState extends State<MainScreen>
   }
 
   void _onAppUpdateAvailable(WebSocketEvent event) {
+    if (kIsWeb) return;
     debugPrint('MainScreen: app_update_available WS event received: ${event.data}');
     if (!mounted) return;
     _checkForUpdates(fromBackgroundTimer: false);
@@ -523,6 +544,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.subscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.subscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.subscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.subscribe(WebSocketEventType.chatArchiveUpdated, _onChatArchiveUpdated);
     _wsService.subscribe(WebSocketEventType.typing, _onChatTyping);
 
     // Now connect — the 'connected' event will be caught by our listeners
@@ -753,6 +775,15 @@ class _MainScreenState extends State<MainScreen>
         _loadChats(silent: true);
       }
     }
+  }
+
+  void _onChatArchiveUpdated(WebSocketEvent event) {
+    final chatId =
+        event.data['chat_id']?.toString() ?? event.data['id']?.toString();
+    if (chatId == null || chatId.isEmpty) return;
+    final isArchived =
+        event.data['is_archived'] == true || event.data['is_archived'] == 1;
+    unawaited(AppDatabase(_currentUserId).setChatArchived(chatId, isArchived));
   }
 
   void _onChatUpdate(WebSocketEvent event) {
@@ -1073,7 +1104,7 @@ class _MainScreenState extends State<MainScreen>
           // которых больше нет в списке чатов сервера
           try {
             final serverIds = serverChats.map((c) => c.id).toSet();
-            final staleIds = _chats
+            final staleIds = [..._chats, ..._archivedChats]
                 .where(
                   (c) =>
                       c.chatType != 'saved' &&
@@ -1241,6 +1272,7 @@ class _MainScreenState extends State<MainScreen>
       isPublic: model.isPublic,
       isBot: model.isBot,
       isVerified: model.isVerified,
+      isArchived: model.isArchived,
     );
   }
 
@@ -1274,6 +1306,7 @@ class _MainScreenState extends State<MainScreen>
       isPublic: Value(chat.isPublic),
       isBot: Value(chat.isBot),
       isVerified: Value(chat.isVerified),
+      isArchived: Value(chat.isArchived),
     );
   }
 
@@ -1314,6 +1347,7 @@ class _MainScreenState extends State<MainScreen>
     _connectionCheckTimer?.cancel();
     _updateCheckTimer?.cancel();
     _chatsStreamSubscription?.cancel();
+    _archivedChatsStreamSubscription?.cancel();
     // Don't disconnect WebSocket on dispose - it's a singleton and should stay connected
     // for the entire app lifecycle. Only unsubscribe OUR callbacks (not UnreadCountProvider's!).
     // Using unsubscribe() instead of unsubscribeAll() to avoid wiping other subscribers.
@@ -1328,6 +1362,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.unsubscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.unsubscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.unsubscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.unsubscribe(WebSocketEventType.chatArchiveUpdated, _onChatArchiveUpdated);
     _wsService.unsubscribe(WebSocketEventType.typing, _onChatTyping);
     for (final state in _chatTypingStates.values) {
       state.timer.cancel();
@@ -2022,6 +2057,44 @@ class _MainScreenState extends State<MainScreen>
       ),
     );
 
+    final bool showLockButton = context.watch<AppLockService>().hasPin;
+    final Widget? leftLockPositioned = showLockButton
+        ? Positioned(
+            key: const ValueKey<String>('main_top_lock_pos'),
+            top: 2,
+            left: 16,
+            child: SizedBox(
+              width: ctrlSize,
+              height: ctrlSize,
+              child: LiquidGlassMorph(
+                key: const ValueKey<String>('main_top_lock_morph'),
+                alignment: Alignment.topLeft,
+                motion: morphMotion,
+                smoothness: 28,
+                style: morphStyle,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticUtils.tap();
+                    AppLockService.instance.lockNow();
+                  },
+                  child: SizedBox(
+                    width: ctrlSize,
+                    height: ctrlSize,
+                    child: Center(
+                      child: iconoir.Lock(
+                        width: 20,
+                        height: 20,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : null;
+
     return SizedBox(
       width: double.infinity,
       height: barHeight,
@@ -2042,6 +2115,7 @@ class _MainScreenState extends State<MainScreen>
                   },
                 ),
               ),
+            if (leftLockPositioned != null) leftLockPositioned,
             if (_isFolderMenuOpen) ...[
               topMenuPositioned,
               folderPillPositioned,
@@ -2335,6 +2409,46 @@ class _MainScreenState extends State<MainScreen>
           ),
         );
 
+        final bool showLockButton = context.watch<AppLockService>().hasPin;
+        final Widget? leftLockWidget = showLockButton
+            ? Positioned(
+                top: 2,
+                left: 16,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticUtils.tap();
+                    AppLockService.instance.lockNow();
+                  },
+                  child: Container(
+                    width: ctrlSize,
+                    height: ctrlSize,
+                    decoration: BoxDecoration(
+                      color: barBackgroundColor,
+                      borderRadius: BorderRadius.circular(22.0),
+                      border: Border.all(color: borderColor, width: 0.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(
+                            alpha: (baseShadowAlpha * 0.6).clamp(0.0, 1.0),
+                          ),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: iconoir.Lock(
+                        width: 20,
+                        height: 20,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            : null;
+
         return SafeArea(
           bottom: false,
           child: Padding(
@@ -2344,9 +2458,12 @@ class _MainScreenState extends State<MainScreen>
               height: currentBarHeight,
               child: Stack(
                 clipBehavior: Clip.none,
-                children: folderProgress > 0
-                    ? [threeDotsWidget, folderPillWidget]
-                    : [folderPillWidget, threeDotsWidget],
+                children: [
+                  if (leftLockWidget != null) leftLockWidget,
+                  ...(folderProgress > 0
+                      ? [threeDotsWidget, folderPillWidget]
+                      : [folderPillWidget, threeDotsWidget]),
+                ],
               ),
             ),
           ),
@@ -2390,7 +2507,10 @@ class _MainScreenState extends State<MainScreen>
     List<Chat> filteredChats =
         allItems.where((chat) => activeFolder.matchesChat(chat)).toList();
 
-    if (filteredChats.isEmpty) {
+    final bool showArchivedTile =
+        activeFolder.id == 'all' && _archivedChats.isNotEmpty;
+
+    if (filteredChats.isEmpty && !showArchivedTile) {
       if (_isLoadingChats && activeFolder.id != 'communities') {
         return Padding(
           padding: EdgeInsets.only(top: topPadding),
@@ -2486,10 +2606,73 @@ class _MainScreenState extends State<MainScreen>
         top: topPadding,
         bottom: 100,
       ),
-      itemCount: filteredChats.length,
+      itemCount: filteredChats.length + (showArchivedTile ? 1 : 0),
       itemBuilder: (itemContext, index) {
-        final chat = filteredChats[index];
+        if (showArchivedTile && index == 0) {
+          return _buildArchivedChatsHeaderTile(itemContext);
+        }
+        final chat = filteredChats[showArchivedTile ? index - 1 : index];
         return _buildChatListItem(itemContext, chat);
+      },
+    );
+  }
+
+  Widget _buildArchivedChatsHeaderTile(BuildContext context) {
+    final l10n = context.l10n;
+    final previewNames = _archivedChats.take(3).map((c) => c.name).join(', ');
+    final totalUnread = _archivedChats.fold<int>(
+      0,
+      (sum, c) => sum + (c.unreadCount > 0 ? c.unreadCount : 0),
+    );
+    final badgeValue = totalUnread > 0 ? totalUnread : _archivedChats.length;
+    final isUnreadBadge = totalUnread > 0;
+
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      leading: CircleAvatar(
+        radius: 22,
+        backgroundColor: Colors.blueGrey.withValues(alpha: 0.85),
+        child: const iconoir.Archive(color: Colors.white, width: 22, height: 22),
+      ),
+      title: Text(
+        l10n.translate('archived_chats_title'),
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(
+        previewNames,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 13.5, color: Colors.grey[500]),
+      ),
+      trailing: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: isUnreadBadge
+              ? Theme.of(context).colorScheme.primary
+              : Colors.grey.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          '$badgeValue',
+          style: TextStyle(
+            color: isUnreadBadge ? Colors.white : Colors.grey[700],
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      onTap: () {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ArchivedChatsScreen(
+              onOpenChat: (chat) {
+                Navigator.pop(context);
+                _openChat(chat);
+              },
+            ),
+          ),
+        );
       },
     );
   }
@@ -2769,18 +2952,10 @@ class _MainScreenState extends State<MainScreen>
             }
             break;
           case ChatSwipeAction.archive:
-            if (mounted) {
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(content: Text('Архивация чатов скоро будет доступна')),
-              );
-            }
+            await _toggleArchiveChat(chat);
             break;
           case ChatSwipeAction.mute:
-            if (mounted) {
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(content: Text('Отключение уведомлений скоро будет доступно')),
-              );
-            }
+            await _toggleMuteChat(chat);
             break;
         }
       },
@@ -2904,6 +3079,42 @@ class _MainScreenState extends State<MainScreen>
             ],
           ),
         ),
+        if (chat.chatType != 'saved' && chat.chatType != 'community')
+          PopupMenuItem<String>(
+            value: 'archive',
+            child: Row(
+              children: [
+                iconoir.Archive(
+                  width: 18,
+                  height: 18,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+                const SizedBox(width: 10),
+                Text(chat.isArchived ? 'Разархивировать' : 'В архив'),
+              ],
+            ),
+          ),
+        if (chat.chatType != 'saved' && chat.chatType != 'community')
+          PopupMenuItem<String>(
+            value: 'mute',
+            child: Row(
+              children: [
+                iconoir.BellOff(
+                  width: 18,
+                  height: 18,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  context
+                          .read<NotificationSettingsProvider>()
+                          .isChatMuted(chat.id, chatType: chat.chatType)
+                      ? 'Включить уведомления'
+                      : 'Отключить уведомления',
+                ),
+              ],
+            ),
+          ),
         PopupMenuItem<String>(
           value: 'select',
           child: Row(
@@ -2946,6 +3157,12 @@ class _MainScreenState extends State<MainScreen>
       case 'read':
         await _toggleReadChat(chat);
         break;
+      case 'archive':
+        await _toggleArchiveChat(chat);
+        break;
+      case 'mute':
+        await _toggleMuteChat(chat);
+        break;
       case 'select':
         _enterSelectMode(chat.id);
         break;
@@ -2979,6 +3196,73 @@ class _MainScreenState extends State<MainScreen>
       await ChatService.pinChat(chatId: chat.id);
     } else {
       await ChatService.unpinChat(chatId: chat.id);
+    }
+  }
+
+  Future<void> _toggleArchiveChat(Chat chat) async {
+    if (chat.chatType == 'saved' || chat.chatType == 'community') return;
+    final targetArchived = !chat.isArchived;
+    final db = AppDatabase(_currentUserId);
+    await db.setChatArchived(chat.id, targetArchived);
+
+    final res = targetArchived
+        ? await ChatService.archiveChat(chatId: chat.id)
+        : await ChatService.unarchiveChat(chatId: chat.id);
+
+    if (res['success'] != true) {
+      await db.setChatArchived(chat.id, !targetArchived);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              res['message']?.toString() ?? 'Не удалось обновить архив',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            targetArchived
+                ? '${chat.name} перемещён в архив'
+                : '${chat.name} возвращён из архива',
+          ),
+          action: SnackBarAction(
+            label: 'Отменить',
+            onPressed: () {
+              unawaited(
+                _toggleArchiveChat(chat.copyWith(isArchived: targetArchived)),
+              );
+            },
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _toggleMuteChat(Chat chat) async {
+    if (chat.chatType == 'saved' || chat.chatType == 'community') return;
+    final notifProvider = context.read<NotificationSettingsProvider>();
+    final currentlyMuted =
+        notifProvider.isChatMuted(chat.id, chatType: chat.chatType);
+    await notifProvider.setMuteState(
+      chat.id,
+      currentlyMuted ? MuteState.notMuted : MuteState.muted,
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            currentlyMuted
+                ? 'Уведомления для «${chat.name}» включены'
+                : 'Уведомления для «${chat.name}» отключены',
+          ),
+        ),
+      );
     }
   }
 
@@ -3670,8 +3954,16 @@ class _MainScreenState extends State<MainScreen>
         },
         child: Consumer<LiquidGlassProvider>(
           builder: (context, glassProvider, _) {
-            final totalUnread =
-                context.watch<UnreadCountProvider>().totalUnread;
+            final unreadProvider = context.watch<UnreadCountProvider>();
+            final notifProvider = context.watch<NotificationSettingsProvider>();
+            final notifGlobal = notifProvider.globalSettings;
+            final totalUnread = unreadProvider.getBadgeCount(
+              badgeEnabled: notifGlobal.badgeEnabled,
+              badgeMode: notifGlobal.badgeMode,
+              includeMutedChats: notifGlobal.includeMutedChats,
+              isMutedResolver: (chatId, chatType) =>
+                  notifProvider.isChatMuted(chatId, chatType: chatType),
+            );
             final primaryColor = Theme.of(context).colorScheme.primary;
 
             if (_lastGlassEnabled != glassProvider.enabled) {

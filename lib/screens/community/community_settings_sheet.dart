@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/community_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/community_service.dart';
@@ -105,16 +106,21 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
       isPublic: _isPublic,
     );
     if (!mounted) return;
-    setState(() {
-      _savingOverview = false;
-      _community = updated ??
-          _community.copyWith(
-            name: name,
-            description: _descCtrl.text.trim(),
-            isPublic: _isPublic,
-          );
-    });
+    setState(() => _savingOverview = false);
+    if (updated == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(context.l10n.translate('common_error')),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+    setState(() => _community = updated);
     widget.onCommunityUpdated(_community);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(context.l10n.translate('settings_saved'))),
+    );
   }
 
   Future<void> _generateInvite() async {

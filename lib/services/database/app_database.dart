@@ -41,6 +41,7 @@ class Chats extends Table {
   BoolColumn get isPublic => boolean().withDefault(const Constant(false))();
   BoolColumn get isBot => boolean().withDefault(const Constant(false))();
   BoolColumn get isVerified => boolean().withDefault(const Constant(false))();
+  BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -202,7 +203,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -330,6 +331,11 @@ class AppDatabase extends _$AppDatabase {
               'ALTER TABLE chats ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0',
             );
           }
+          if (from < 11) {
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0',
+            );
+          }
         },
       );
 
@@ -382,12 +388,15 @@ class AppDatabase extends _$AppDatabase {
   /// 1) Избранное (saved) в самом верху
   /// 2) Закрепленные (isPinned == true)
   /// 3) По дате последнего сообщения / обновления (updatedAt DESC)
-  Stream<List<DbChat>> watchChats({int filter = 0}) {
+  Stream<List<DbChat>> watchChats({int filter = 0, bool includeArchived = false}) {
     final query = select(chats);
     // Исключаем сообщества и каналы сообществ из общего списка чатов
     query.where((t) =>
         t.chatType.isNotValue('community') &
         t.chatType.isNotValue('community_channel'));
+    if (!includeArchived) {
+      query.where((t) => t.isArchived.equals(false));
+    }
     // Скрываем пустые приватные чаты-«призраки» (должно быть сообщение или закрепление)
     query.where((t) =>
         t.chatType.isNotValue('private') |
@@ -451,6 +460,42 @@ class AppDatabase extends _$AppDatabase {
             (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
           ]))
         .get();
+  }
+
+  /// Реактивный поток архивированных чатов
+  Stream<List<DbChat>> watchArchivedChats() {
+    final query = select(chats)
+      ..where((t) =>
+          t.isArchived.equals(true) &
+          t.chatType.isNotValue('community') &
+          t.chatType.isNotValue('community_channel'))
+      ..orderBy([
+        (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+        (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+      ]);
+    return query.watch();
+  }
+
+  /// Получить все архивированные чаты
+  Future<List<DbChat>> getArchivedChats() async {
+    await ensureInitialized();
+    return (select(chats)
+          ..where((t) =>
+              t.isArchived.equals(true) &
+              t.chatType.isNotValue('community') &
+              t.chatType.isNotValue('community_channel'))
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+          ]))
+        .get();
+  }
+
+  /// Обновить статус архивирования чата
+  Future<void> setChatArchived(String chatId, bool archived) async {
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId)))
+        .write(ChatsCompanion(isArchived: Value(archived)));
   }
 
   /// Получить чат по server chatId

@@ -44,7 +44,9 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
   @override
   void initState() {
     super.initState();
-    unawaited(AppUpdateService.instance.init());
+    if (!kIsWeb) {
+      unawaited(AppUpdateService.instance.init());
+    }
     unawaited(_loadPrefs());
   }
 
@@ -53,15 +55,17 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
       final prefs = await SharedPreferences.getInstance();
       final unlocked =
           prefs.getBool(AboutTheaverScreen.debugMenuUnlockedKey) ?? false;
-      final autoCheck = await AppUpdateService.instance.isAutoCheckEnabled();
-      final channel = await AppUpdateService.instance.getChannel();
-      final effectiveChannel =
-          kIsWeb ? (AppConfig.webDomainChannel ?? channel) : channel;
+      final autoCheck = kIsWeb
+          ? false
+          : await AppUpdateService.instance.isAutoCheckEnabled();
+      final channel = kIsWeb
+          ? (AppConfig.webDomainChannel ?? 'stable')
+          : await AppUpdateService.instance.getChannel();
       if (!mounted) return;
       setState(() {
         _debugUnlocked = unlocked;
         _autoCheckEnabled = autoCheck;
-        _selectedChannel = effectiveChannel;
+        _selectedChannel = channel;
       });
     } catch (e) {
       debugPrint('[AboutTheaverScreen] Failed to load prefs: $e');
@@ -111,7 +115,7 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
   }
 
   Future<void> _checkForUpdates() async {
-    if (_isChecking) return;
+    if (kIsWeb || _isChecking) return;
     HapticUtils.tap();
     final l10n = context.l10n;
     setState(() => _isChecking = true);
@@ -549,74 +553,76 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
                     ),
                   ),
                 ),
-                _CardHairline(color: theav.dividerColor),
-                ValueListenableBuilder<AppUpdateDownloadState>(
-                  valueListenable: AppUpdateService.instance.stateNotifier,
-                  builder: (context, state, _) {
-                    final checking =
-                        _isChecking || state.status == AppUpdateStatus.checking;
-                    final update = state.availableUpdate;
-                    final hasUpdate = state.hasAvailableUpdate && update != null;
-                    final subtitleText = hasUpdate
-                        ? l10n.translate('about_update_available_sub', {
-                            'version': update.latestVersion,
-                            'build': update.latestBuild.toString(),
-                          })
-                        : _formatLastChecked(l10n, state.lastCheckedAt);
+                if (!kIsWeb) ...[
+                  _CardHairline(color: theav.dividerColor),
+                  ValueListenableBuilder<AppUpdateDownloadState>(
+                    valueListenable: AppUpdateService.instance.stateNotifier,
+                    builder: (context, state, _) {
+                      final checking =
+                          _isChecking || state.status == AppUpdateStatus.checking;
+                      final update = state.availableUpdate;
+                      final hasUpdate = state.hasAvailableUpdate && update != null;
+                      final subtitleText = hasUpdate
+                          ? l10n.translate('about_update_available_sub', {
+                              'version': update.latestVersion,
+                              'build': update.latestBuild.toString(),
+                            })
+                          : _formatLastChecked(l10n, state.lastCheckedAt);
 
-                    return _AboutRow(
-                      leading: checking
-                          ? SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.0,
-                                valueColor:
-                                    AlwaysStoppedAnimation<Color>(accent),
-                              ),
-                            )
-                          : iconoir.RefreshDouble(
-                              width: 22,
-                              height: 22,
-                              color: accent,
-                            ),
-                      title: l10n.translate('about_updates_title'),
-                      subtitle: subtitleText,
-                      subtitleColor: hasUpdate ? accent : textSecondary,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (hasUpdate)
-                            Container(
-                              width: 8,
-                              height: 8,
-                              margin: const EdgeInsets.only(right: 6),
-                              decoration: BoxDecoration(
+                      return _AboutRow(
+                        leading: checking
+                            ? SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.0,
+                                  valueColor:
+                                      AlwaysStoppedAnimation<Color>(accent),
+                                ),
+                              )
+                            : iconoir.RefreshDouble(
+                                width: 22,
+                                height: 22,
                                 color: accent,
-                                shape: BoxShape.circle,
                               ),
-                            ),
-                          Tooltip(
-                            message: l10n.translate('about_update_settings'),
-                            child: GestureDetector(
-                              onTap: _showUpdateSettingsSheet,
-                              behavior: HitTestBehavior.opaque,
-                              child: Padding(
-                                padding: const EdgeInsets.all(6),
-                                child: iconoir.ControlSlider(
-                                  width: 20,
-                                  height: 20,
+                        title: l10n.translate('about_updates_title'),
+                        subtitle: subtitleText,
+                        subtitleColor: hasUpdate ? accent : textSecondary,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (hasUpdate)
+                              Container(
+                                width: 8,
+                                height: 8,
+                                margin: const EdgeInsets.only(right: 6),
+                                decoration: BoxDecoration(
                                   color: accent,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            Tooltip(
+                              message: l10n.translate('about_update_settings'),
+                              child: GestureDetector(
+                                onTap: _showUpdateSettingsSheet,
+                                behavior: HitTestBehavior.opaque,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(6),
+                                  child: iconoir.ControlSlider(
+                                    width: 20,
+                                    height: 20,
+                                    color: accent,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                      onTap: _checkForUpdates,
-                    );
-                  },
-                ),
+                          ],
+                        ),
+                        onTap: _checkForUpdates,
+                      );
+                    },
+                  ),
+                ],
                 if (_debugUnlocked) ...[
                   _CardHairline(color: theav.dividerColor),
                   _AboutRow(

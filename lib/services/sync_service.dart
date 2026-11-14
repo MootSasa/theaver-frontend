@@ -142,6 +142,14 @@ class SyncService {
           ...payload,
         });
         break;
+      case 'chat_archive_updated':
+        final archiveChatId = payload['chat_id']?.toString() ?? chatId;
+        final isArchived =
+            payload['is_archived'] == true || payload['is_archived'] == 1;
+        if (archiveChatId != null && archiveChatId.isNotEmpty) {
+          await _db.setChatArchived(archiveChatId, isArchived);
+        }
+        break;
       case 'delete_chat':
       case 'chat_deleted':
         if (chatId != null) {
@@ -478,6 +486,9 @@ class SyncService {
       isPinned: payload.containsKey('is_pinned')
           ? Value(payload['is_pinned'] as bool? ?? chat.isPinned)
           : Value(chat.isPinned),
+      isArchived: payload.containsKey('is_archived')
+          ? Value(payload['is_archived'] == true || payload['is_archived'] == 1)
+          : Value(chat.isArchived),
       updatedAt: payload.containsKey('updated_at')
           ? Value(payload['updated_at'].toString())
           : Value(chat.updatedAt),

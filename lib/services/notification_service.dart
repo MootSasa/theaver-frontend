@@ -86,6 +86,7 @@ class NotificationService with WidgetsBindingObserver {
   HMSPushService? _hmsPushService;
   final PushServiceDetector _detector = PushServiceDetector();
   final NotificationDedupStore _dedup = NotificationDedupStore();
+  final Map<String, Timer> _repeatTimers = <String, Timer>{};
 
   NotificationSettingsProvider? _settingsProvider;
   String? _pushToken;
@@ -636,6 +637,7 @@ class NotificationService with WidgetsBindingObserver {
   Future<void> _onChatMessage(ChatMessageNotification m, NotificationSource source) async {
     final currentUserId = await AuthService.getUserId();
     final isOwn = m.senderId.isNotEmpty && currentUserId != null && m.senderId == currentUserId;
+    final chatType = m.isChannel ? 'channel' : (m.isGroup ? 'group' : 'private');
 
     final ctx = NotificationContext(
       source: source,
@@ -643,7 +645,13 @@ class NotificationService with WidgetsBindingObserver {
       isOwnMessage: isOwn,
       isChatOpen: isChatActive(m.chatId),
       isAppInForeground: _isAppInForeground,
-      isAllowedBySettings: _settingsProvider?.shouldShowNotification(m.chatId, isMention: m.isMention) ?? true,
+      isAllowedBySettings: _settingsProvider?.shouldShowNotification(
+            m.chatId,
+            isMention: m.isMention,
+            messageText: m.text,
+            chatType: chatType,
+          ) ??
+          true,
       foregroundNotificationsEnabled: foregroundNotificationsEnabled,
       pushAvailable: _pushAvailable,
       isDuplicate: false,
@@ -662,10 +670,21 @@ class NotificationService with WidgetsBindingObserver {
     await _presentChatMessage(m);
   }
 
-  Future<void> _presentChatMessage(ChatMessageNotification m) async {
-    final effective = _settingsProvider?.getEffectiveSettings(m.chatId);
+  Future<void> _presentChatMessage(
+    ChatMessageNotification m, {
+    bool isRepeat = false,
+  }) async {
+    final chatType = m.isChannel ? 'channel' : (m.isGroup ? 'group' : 'private');
+    final effective = _settingsProvider?.getEffectiveSettings(
+      m.chatId,
+      chatType: chatType,
+    );
     final showPreview = effective?.previewEnabled ?? true;
     final soundEnabled = effective?.soundEnabled ?? true;
+
+    if (!isRepeat) {
+      _scheduleRepeatNotification(m);
+    }
 
     if (kIsWeb) {
       final title = m.chatName;
@@ -1129,8 +1148,31 @@ class NotificationService with WidgetsBindingObserver {
     _unreadCount = count;
   }
 
+  /// Планирует повторное напоминание, если включён интервал повтора уведомлений.
+  void _scheduleRepeatNotification(ChatMessageNotification m) {
+    _repeatTimers.remove(m.chatId)?.cancel();
+    final intervalMinutes = _settingsProvider?.globalSettings.repeatNotifications ?? 0;
+    if (intervalMinutes <= 0 || m.chatId.isEmpty) return;
+
+    final chatType = m.isChannel ? 'channel' : (m.isGroup ? 'group' : 'private');
+    _repeatTimers[m.chatId] = Timer(Duration(minutes: intervalMinutes), () async {
+      _repeatTimers.remove(m.chatId);
+      if (isChatActive(m.chatId)) return;
+      final allowed = _settingsProvider?.shouldShowNotification(
+            m.chatId,
+            isMention: m.isMention,
+            messageText: m.text,
+            chatType: chatType,
+          ) ??
+          true;
+      if (!allowed) return;
+      await _presentChatMessage(m, isRepeat: true);
+    });
+  }
+
   /// Removes all notifications of a chat (local, FCM-rendered and HMS-rendered).
   Future<void> cancelChatNotifications(String chatId, {String? chatTitle}) async {
+    _repeatTimers.remove(chatId)?.cancel();
     if (kIsWeb || chatId.isEmpty) return;
     if (_usesLocalNotifier) {
       for (final n in _desktopNotifications.remove(chatId) ?? const <LocalNotification>[]) {
@@ -1157,6 +1199,10 @@ class NotificationService with WidgetsBindingObserver {
   }
 
   Future<void> cancelAllNotifications() async {
+    for (final timer in _repeatTimers.values) {
+      timer.cancel();
+    }
+    _repeatTimers.clear();
     if (kIsWeb) return;
     for (final list in _desktopNotifications.values) {
       for (final n in list) {
@@ -1189,9 +1235,20 @@ class NotificationService with WidgetsBindingObserver {
   bool get foregroundNotificationsEnabled =>
       _settingsProvider?.globalSettings.foregroundNotifications ?? true;
 
-  bool shouldShowNotification(String chatId, {bool isMention = false}) {
+  bool shouldShowNotification(
+    String chatId, {
+    bool isMention = false,
+    String? messageText,
+    String? chatType,
+  }) {
     if (isChatActive(chatId)) return false;
-    return _settingsProvider?.shouldShowNotification(chatId, isMention: isMention) ?? true;
+    return _settingsProvider?.shouldShowNotification(
+          chatId,
+          isMention: isMention,
+          messageText: messageText,
+          chatType: chatType,
+        ) ??
+        true;
   }
 
   static Int64List? _vibrationPattern(VibrationPattern? p) => switch (p) {
@@ -1508,5 +1565,9 @@ class NotificationService with WidgetsBindingObserver {
 
   void dispose() {
     _wsSubscription?.cancel();
+    for (final timer in _repeatTimers.values) {
+      timer.cancel();
+    }
+    _repeatTimers.clear();
   }
 }

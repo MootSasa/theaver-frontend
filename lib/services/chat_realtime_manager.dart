@@ -312,6 +312,18 @@ class ChatRealtimeManager {
         await _handleChatUpdate(event);
         break;
 
+      case WebSocketEventType.chatArchiveUpdated:
+        final archiveChatId =
+            event.data['chat_id']?.toString() ?? event.data['id']?.toString();
+        final isArchived =
+            event.data['is_archived'] == true || event.data['is_archived'] == 1;
+        if (archiveChatId != null && archiveChatId.isNotEmpty) {
+          try {
+            await AppDatabase().setChatArchived(archiveChatId, isArchived);
+          } catch (_) {}
+        }
+        break;
+
       case WebSocketEventType.userStatus:
         final statusUserId = event.data['user_id']?.toString();
         final statusIsOnline = event.data['is_online'] == true;
@@ -562,6 +574,10 @@ class ChatRealtimeManager {
         isPinned: event.data.containsKey('is_pinned')
             ? drift.Value(event.data['is_pinned'] as bool? ?? existing.isPinned)
             : drift.Value(existing.isPinned),
+        isArchived: event.data.containsKey('is_archived')
+            ? drift.Value(
+                event.data['is_archived'] == true || event.data['is_archived'] == 1)
+            : drift.Value(existing.isArchived),
         updatedAt: event.data.containsKey('updated_at')
             ? drift.Value(event.data['updated_at'].toString())
             : drift.Value(existing.updatedAt),

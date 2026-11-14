@@ -112,6 +112,7 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
             bool isEnabled;
             bool isPreview;
             bool isSound;
+            String? soundUri;
             VibrationPattern vibration;
 
             switch (category) {
@@ -119,18 +120,21 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                 isEnabled = s.privateChatNotifications;
                 isPreview = s.privateChatPreview;
                 isSound = s.privateChatSound;
+                soundUri = s.privateChatSoundUri;
                 vibration = s.privateChatVibration;
                 break;
               case ChatCategory.groupChats:
                 isEnabled = s.groupChatNotifications;
                 isPreview = s.groupChatPreview;
                 isSound = s.groupChatSound;
+                soundUri = s.groupChatSoundUri;
                 vibration = s.groupChatVibration;
                 break;
               case ChatCategory.channels:
                 isEnabled = s.channelNotifications;
                 isPreview = s.channelPreview;
                 isSound = s.channelSound;
+                soundUri = s.channelSoundUri;
                 vibration = s.channelVibration;
                 break;
             }
@@ -192,7 +196,11 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                       ),
                       ListTile(
                         title: Text(l10n.translate('notifications_sound')),
-                        subtitle: Text(soundOptionLabel(isSound ? '' : kSilentSoundId)),
+                        subtitle: Text(
+                          soundOptionLabel(
+                            isSound ? soundUri : kSilentSoundId,
+                          ),
+                        ),
                         trailing: AdaptiveSwitch(
                           value: isSound,
                           onChanged: (val) {
@@ -209,24 +217,25 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                         onTap: () {
                           SoundPickerSheet.show(
                             context,
-                            currentSoundId: isSound ? '' : kSilentSoundId,
+                            currentSoundId: isSound
+                                ? normalizeSoundId(soundUri)
+                                : kSilentSoundId,
                             onSelected: (newSound) {
-                              // Встроенных звуков нет: сохраняем только вкл/выкл,
-                              // а устаревший id звука сбрасываем.
                               final enabled = newSound != kSilentSoundId;
+                              final savedUri = enabled ? newSound : (soundUri ?? '');
                               if (category == ChatCategory.privateChats) {
                                 provider.updateGlobalSettings(
-                                  privateChatSoundUri: '',
+                                  privateChatSoundUri: savedUri,
                                   privateChatSound: enabled,
                                 );
                               } else if (category == ChatCategory.groupChats) {
                                 provider.updateGlobalSettings(
-                                  groupChatSoundUri: '',
+                                  groupChatSoundUri: savedUri,
                                   groupChatSound: enabled,
                                 );
                               } else {
                                 provider.updateGlobalSettings(
-                                  channelSoundUri: '',
+                                  channelSoundUri: savedUri,
                                   channelSound: enabled,
                                 );
                               }

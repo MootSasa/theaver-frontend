@@ -43,6 +43,7 @@ import '../../widgets/profile/expandable_avatar.dart';
 import '../../widgets/profile/liquid_glass_info_panel.dart';
 import '../../widgets/profile/liquid_glass_music_status.dart';
 import '../../widgets/profile/liquid_glass_profile_buttons.dart';
+import 'change_email_screen.dart';
 import '../../widgets/profile/profile_content_tabs.dart';
 import '../../widgets/profile/profile_section_pill.dart';
 import '../../widgets/profile/qr_code_dialog.dart';
@@ -797,8 +798,10 @@ class ProfileScreenState extends State<ProfileScreen>
             '${AppConfig.baseUrl}/api/security/blocked',
             options: Options(headers: {'Authorization': 'Bearer $token'}),
           );
-          if (resp.statusCode == 200 && resp.data is Map) {
-            final list = resp.data['blocked_users'] as List?;
+          if (resp.statusCode == 200) {
+            final list = resp.data is List
+                ? resp.data as List
+                : (resp.data is Map ? resp.data['blocked_users'] as List? : null);
             if (list != null) {
               final blocked = list.any(
                   (u) => (u['id'] ?? u['user_id'])?.toString() == widget.userId);
@@ -2507,6 +2510,10 @@ class ProfileScreenState extends State<ProfileScreen>
         if (result.containsKey('birthday')) {
           _birthday = result['birthday'] as DateTime?;
         }
+        final updatedEmail = _accountManager.currentAccount?.email;
+        if (updatedEmail != null && updatedEmail.isNotEmpty) {
+          _emailController.text = updatedEmail;
+        }
       });
       _saveSelfSnapshotToInstantCache();
       widget.onUpdate?.call();
@@ -3773,6 +3780,11 @@ class ProfileScreenState extends State<ProfileScreen>
                                                     .text.isNotEmpty
                                                 ? _phoneController.text
                                                 : null,
+                                            email: (_isSelf &&
+                                                    _emailController
+                                                        .text.isNotEmpty)
+                                                ? _emailController.text
+                                                : null,
                                             bio: _bio,
                                             username: _usernameController
                                                     .text.isNotEmpty
@@ -3785,6 +3797,29 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 _birthday, l10n),
                                             age: _calculateAge(_birthday)
                                                 ?.toString(),
+                                            onEmailTap: _isSelf
+                                                ? () async {
+                                                    await Navigator.push(
+                                                      context,
+                                                      MaterialPageRoute(
+                                                        builder: (_) =>
+                                                            const ChangeEmailScreen(),
+                                                      ),
+                                                    );
+                                                    if (!mounted) return;
+                                                    final freshEmail =
+                                                        _accountManager
+                                                            .currentAccount
+                                                            ?.email;
+                                                    if (freshEmail != null) {
+                                                      setState(() {
+                                                        _emailController.text =
+                                                            freshEmail;
+                                                      });
+                                                      _saveSelfSnapshotToInstantCache();
+                                                    }
+                                                  }
+                                                : null,
                                             onBirthdayTap: _birthday != null
                                                 ? _addBirthdayToCalendar
                                                 : null,
@@ -3796,6 +3831,8 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 : null,
                                             phoneLabel: _tr(l10n,
                                                 'profile_phone', 'телефон'),
+                                            emailLabel: _tr(l10n,
+                                                'auth_email', 'почта'),
                                             bioLabel: (_isGroup || _isChannel)
                                                 ? _tr(
                                                     l10n,

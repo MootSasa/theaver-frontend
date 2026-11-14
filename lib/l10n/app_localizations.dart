@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/auth_service.dart';
 
 /// Класс для управления локализацией приложения
 class AppLocalizations {
@@ -100,15 +101,18 @@ class LocaleProvider extends ChangeNotifier {
 
   Future<void> setLocale(Locale locale) async {
     _locale = locale;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_languageKey, locale.languageCode);
-    notifyListeners();
+    await _persistAndSyncLocale(locale.languageCode);
   }
 
   Future<void> setLocaleByCode(String languageCode) async {
     _locale = Locale(languageCode);
+    await _persistAndSyncLocale(languageCode);
+  }
+
+  Future<void> _persistAndSyncLocale(String languageCode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_languageKey, languageCode);
     notifyListeners();
+    unawaited(AuthService.syncSessionLocale(languageCode));
   }
 }

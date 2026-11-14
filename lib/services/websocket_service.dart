@@ -37,6 +37,7 @@ enum WebSocketEventType {
   messageUnpinned,
   callbackQueryAnswer,
   callEvent,
+  chatArchiveUpdated,
   rpcResult,
   rpcError,
 }
@@ -158,6 +159,8 @@ class WebSocketEvent {
         return WebSocketEventType.messageUnpinned;
       case 'callback_query_answer':
         return WebSocketEventType.callbackQueryAnswer;
+      case 'chat_archive_updated':
+        return WebSocketEventType.chatArchiveUpdated;
       case 'rpc_result':
         return WebSocketEventType.rpcResult;
       case 'rpc_error':

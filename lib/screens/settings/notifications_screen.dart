@@ -26,6 +26,28 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _isSendingTest = false;
+  final TextEditingController _globalKeywordController = TextEditingController();
+
+  @override
+  void dispose() {
+    _globalKeywordController.dispose();
+    super.dispose();
+  }
+
+  void _addGlobalKeyword(
+    NotificationSettingsProvider provider,
+    List<String> current,
+  ) {
+    final kw = _globalKeywordController.text.trim();
+    if (kw.isEmpty) return;
+    final lower = kw.toLowerCase();
+    if (current.any((e) => e.trim().toLowerCase() == lower)) {
+      _globalKeywordController.clear();
+      return;
+    }
+    provider.updateGlobalSettings(globalKeywords: [...current, kw]);
+    _globalKeywordController.clear();
+  }
 
   Future<void> _handleSendTestNotification() async {
     HapticUtils.tap();
@@ -467,6 +489,82 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           (m) => provider.updateGlobalSettings(repeatNotifications: m),
                         ),
                       ),
+                      AdaptiveSwitchListTile(
+                        secondary: const Icon(Icons.archive_outlined, color: Color(0xFF0088CC)),
+                        title: const Text('Не заглушать архивные чаты'),
+                        subtitle: const Text(
+                          'Оставлять уведомления для архивных чатов, если у них включён звук',
+                        ),
+                        value: s.keepArchivedUnmuted,
+                        onChanged: (val) {
+                          HapticUtils.selection();
+                          provider.updateGlobalSettings(keepArchivedUnmuted: val);
+                        },
+                      ),
+                      AdaptiveSwitchListTile(
+                        secondary: const Icon(Icons.label_important_outline, color: Color(0xFF0088CC)),
+                        title: const Text('Ключевые слова'),
+                        subtitle: const Text(
+                          'Уведомлять при совпадении слов даже в беззвучных чатах',
+                        ),
+                        value: s.keywordsNotifications,
+                        onChanged: (val) {
+                          HapticUtils.selection();
+                          provider.updateGlobalSettings(keywordsNotifications: val);
+                        },
+                      ),
+                      if (s.keywordsNotifications) ...[
+                        if (s.globalKeywords.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: s.globalKeywords
+                                  .map(
+                                    (kw) => Chip(
+                                      label: Text(kw),
+                                      deleteIcon: const Icon(Icons.close, size: 16),
+                                      onDeleted: () {
+                                        final next = s.globalKeywords
+                                            .where((e) => e != kw)
+                                            .toList();
+                                        provider.updateGlobalSettings(
+                                          globalKeywords: next,
+                                        );
+                                      },
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                          child: TextField(
+                            controller: _globalKeywordController,
+                            decoration: InputDecoration(
+                              hintText: 'Добавить ключевое слово...',
+                              isDense: true,
+                              border: const OutlineInputBorder(),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              suffixIcon: IconButton(
+                                icon: const Icon(Icons.add),
+                                onPressed: () => _addGlobalKeyword(
+                                  provider,
+                                  s.globalKeywords,
+                                ),
+                              ),
+                            ),
+                            onSubmitted: (_) => _addGlobalKeyword(
+                              provider,
+                              s.globalKeywords,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
 

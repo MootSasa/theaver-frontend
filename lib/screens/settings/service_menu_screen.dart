@@ -1,5 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -14,6 +17,8 @@ import '../../services/websocket_service.dart';
 import '../../theme/theav_theme.dart';
 import '../auth/login_screen.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../services/account_manager.dart';
+import '../../services/database/app_database.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import 'about_theaver_screen.dart';
 
@@ -33,12 +38,16 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
   String? _connectionTestResult;
   bool? _connectionTestSuccess;
   String? _currentUserToken;
+  int? _lastHealthLatencyMs;
+  bool _diagnosticsLoading = false;
+  Map<String, dynamic> _diagnostics = {};
 
   @override
   void initState() {
     super.initState();
     _isCutoutHighlighted = _cutoutOverlayEntry != null;
     _loadCurrentUserInfo();
+    unawaited(_loadDiagnostics());
   }
 
   Future<void> _loadCurrentUserInfo() async {
@@ -48,6 +57,151 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
         _currentUserToken = token;
       });
     }
+  }
+
+  String _maskSecret(String? value, {String emptyFallback = 'none'}) {
+    if (value == null || value.isEmpty) return emptyFallback;
+    if (value.length <= 10) return '***';
+    return '${value.substring(0, 6)}...${value.substring(value.length - 4)}';
+  }
+
+  Future<void> _loadDiagnostics() async {
+    if (mounted) {
+      setState(() => _diagnosticsLoading = true);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final account = AccountManager().currentAccount;
+    final token = _currentUserToken ?? await AuthService.getToken();
+    final deviceId = prefs.getString('current_device_id') ??
+        prefs.getString('device_id') ??
+        'unknown';
+    final rawPush = kIsWeb
+        ? 'web'
+        : (prefs.getString('fcm_token') ?? prefs.getString('push_token'));
+    final maskedPush =
+        kIsWeb ? 'web' : _maskSecret(rawPush, emptyFallback: 'none');
+
+    var schemaVersion = 0;
+    var chatCount = 0;
+    try {
+      final db = AppDatabase();
+      schemaVersion = db.schemaVersion;
+      final chats = await db.getChats();
+      chatCount = chats.length;
+    } catch (_) {}
+
+    final snapshot = <String, dynamic>{
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
+      'platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
+      'appVersion':
+          '${AppConfig.currentVersion}+${AppConfig.currentBuildNumber}',
+      'gitCommit': AppConfig.shortGitCommit,
+      'apiUrl': AppConfig.baseUrl,
+      'wsUrl': AppConfig.wsUrl,
+      'wsConnected': WebSocketService().isConnected,
+      'lastHealthLatencyMs': _lastHealthLatencyMs,
+      'userId': account?.userId ?? 'none',
+      'username': account?.username ?? 'none',
+      'email': account?.email ?? 'none',
+      'deviceId': deviceId,
+      'dbSchemaVersion': schemaVersion,
+      'cachedChatCount': chatCount,
+      'pushToken': maskedPush,
+      'authToken': (token != null && token.isNotEmpty)
+          ? 'redacted (${_maskSecret(token)})'
+          : 'none',
+    };
+
+    if (!mounted) return;
+    setState(() {
+      _diagnostics = snapshot;
+      _diagnosticsLoading = false;
+    });
+  }
+
+  Future<void> _copyDiagnosticReport() async {
+    await _loadDiagnostics();
+    final report = const JsonEncoder.withIndent('  ').convert(_diagnostics);
+    await Clipboard.setData(ClipboardData(text: report));
+    if (!mounted) return;
+    GlassToastService().show(
+      context,
+      'Отчёт диагностики скопирован',
+      icon: Icons.check_circle_outline,
+    );
+  }
+
+  Widget _buildDiagnosticsSection() {
+    String val(String key) => (_diagnostics[key] ?? '—').toString();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Row(
+            children: [
+              Text(
+                'ДИАГНОСТИКА СИСТЕМЫ',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Обновить диагностику',
+                onPressed: _diagnosticsLoading ? null : _loadDiagnostics,
+                icon: _diagnosticsLoading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh, size: 18),
+              ),
+            ],
+          ),
+        ),
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.person_outline),
+          title: const Text('Аккаунт и устройство'),
+          subtitle: Text(
+            'userId: ${val('userId')} | @${val('username')}\n'
+            'email: ${val('email')}\n'
+            'deviceId: ${val('deviceId')}',
+          ),
+        ),
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.storage_outlined),
+          title: const Text('База данных и кэш'),
+          subtitle: Text(
+            'schemaVersion: v${val('dbSchemaVersion')} | '
+            'Кэшировано чатов: ${val('cachedChatCount')}\n'
+            'Платформа: ${val('platform')} | Версия: ${val('appVersion')} (${val('gitCommit')})',
+          ),
+        ),
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.network_check_outlined),
+          title: const Text('Сеть и push-уведомления'),
+          subtitle: Text(
+            'WebSocket: ${_diagnostics['wsConnected'] == true ? 'Подключён' : 'Отключён'} | '
+            'Health latency: ${_lastHealthLatencyMs != null ? '${_lastHealthLatencyMs}ms' : 'не измерялось'}\n'
+            'Push token: ${val('pushToken')} | Auth: ${val('authToken')}',
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.copy_all_outlined),
+          title: const Text('Скопировать отчёт диагностики'),
+          subtitle: const Text('JSON с замаскированным токеном'),
+          onTap: _copyDiagnosticReport,
+        ),
+      ],
+    );
   }
 
   Future<void> _testServerConnection() async {
@@ -64,7 +218,7 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
       final latency = DateTime.now().difference(startTime).inMilliseconds;
 
       if (response.statusCode == 200) {
-        String msg = 'REST API: OK (${latency}мс)';
+        String msg = 'REST API: OK ($latency мс)';
         if (_currentUserToken == 'test_token_offline_mode') {
           msg += '\n⚠️ Токен тестовый (офлайн). Сервер отклонит WebSocket (401). Для работы выйдите и зарегистрируйтесь.';
           setState(() {
@@ -100,7 +254,9 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
             _connectionTestResult = msg;
             _connectionTestSuccess = isAuthValid && isWs;
             _isCheckingConnection = false;
+            _lastHealthLatencyMs = latency;
           });
+          unawaited(_loadDiagnostics());
         }
       } else {
         setState(() {
@@ -451,6 +607,8 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
             ),
             onTap: _isCheckingConnection ? null : _testServerConnection,
           ),
+          const Divider(),
+          _buildDiagnosticsSection(),
           const Divider(),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 8),

@@ -30,6 +30,9 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   /// Телефон
   final String? phone;
 
+  /// Email (только для собственного профиля)
+  final String? email;
+
   /// О себе (био) или описание группы/канала
   final String? bio;
 
@@ -48,6 +51,9 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   /// Коллбэк при нажатии на иконку QR-кода справа от username / inviteLink
   final VoidCallback? onQrCodeTap;
 
+  /// Коллбэк при нажатии на иконку редактирования почты
+  final VoidCallback? onEmailTap;
+
   /// Коллбэк при нажатии на иконку календаря справа от даты рождения
   final VoidCallback? onBirthdayTap;
 
@@ -59,6 +65,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
 
   /// Локализованные подписи
   final String phoneLabel;
+  final String emailLabel;
   final String bioLabel;
   final String usernameLabel;
   final String inviteLinkLabel;
@@ -71,15 +78,18 @@ class LiquidGlassInfoPanel extends StatelessWidget {
     this.isLite = false,
     this.hasColoredTheme = false,
     this.phone,
+    this.email,
     this.bio,
     this.username,
     this.inviteLink,
     this.birthday,
     this.age,
     this.onQrCodeTap,
+    this.onEmailTap,
     this.onBirthdayTap,
     this.onMentionTap,
     this.phoneLabel = 'телефон',
+    this.emailLabel = 'почта',
     this.bioLabel = 'о себе',
     this.usernameLabel = 'имя пользователя',
     this.inviteLinkLabel = 'ссылка-приглашение',
@@ -96,6 +106,16 @@ class LiquidGlassInfoPanel extends StatelessWidget {
         value: phone!.trim(),
         copyValue: phone!.trim(),
         isRichText: false,
+      ));
+    }
+
+    if (email != null && email!.trim().isNotEmpty) {
+      rows.add(_InfoRowData(
+        label: emailLabel.toLowerCase(),
+        value: email!.trim(),
+        copyValue: email!.trim(),
+        isRichText: false,
+        showEmailButton: onEmailTap != null,
       ));
     }
 
@@ -288,6 +308,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
             linkColor: linkColor,
             onCopy: () => _copyToClipboard(context, rows[i].copyValue, rows[i].label),
             onQrCodeTap: rows[i].showQrButton ? onQrCodeTap : null,
+            onEmailTap: rows[i].showEmailButton ? onEmailTap : null,
             onCalendarTap: rows[i].showCalendarButton ? onBirthdayTap : null,
             onMentionTap: onMentionTap,
           ),
@@ -312,6 +333,7 @@ class _InfoRowData {
   final String copyValue;
   final bool isRichText;
   final bool showQrButton;
+  final bool showEmailButton;
   final bool showCalendarButton;
 
   const _InfoRowData({
@@ -320,6 +342,7 @@ class _InfoRowData {
     required this.copyValue,
     this.isRichText = false,
     this.showQrButton = false,
+    this.showEmailButton = false,
     this.showCalendarButton = false,
   });
 }
@@ -331,6 +354,7 @@ class _InfoRowWidget extends StatelessWidget {
   final Color linkColor;
   final VoidCallback onCopy;
   final VoidCallback? onQrCodeTap;
+  final VoidCallback? onEmailTap;
   final VoidCallback? onCalendarTap;
   final ValueChanged<String>? onMentionTap;
 
@@ -341,6 +365,7 @@ class _InfoRowWidget extends StatelessWidget {
     required this.linkColor,
     required this.onCopy,
     this.onQrCodeTap,
+    this.onEmailTap,
     this.onCalendarTap,
     this.onMentionTap,
   });
@@ -475,6 +500,24 @@ class _InfoRowWidget extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(4.0),
                 child: iconoir.QrCode(
+                  width: 22,
+                  height: 22,
+                  color: linkColor,
+                ),
+              ),
+            ),
+          ],
+          if (onEmailTap != null) ...[
+            const SizedBox(width: 12),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticUtils.tap();
+                onEmailTap!();
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(4.0),
+                child: iconoir.Mail(
                   width: 22,
                   height: 22,
                   color: linkColor,

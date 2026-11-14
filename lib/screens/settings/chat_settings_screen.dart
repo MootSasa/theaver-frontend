@@ -38,22 +38,38 @@ class ChatSettingsScreen extends StatelessWidget {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
+        withData: kIsWeb,
       );
 
-      if (result == null || result.files.isEmpty || result.files.single.path == null) {
+      if (result == null || result.files.isEmpty) {
         return;
       }
 
-      final file = File(result.files.single.path!);
-      if (!file.path.toLowerCase().endsWith('.theavtheme')) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(l10n.translate('theme_select_theavtheme'))),
-        );
+      final pickedFile = result.files.single;
+      final pickedFileName = pickedFile.name;
+      if (!pickedFileName.toLowerCase().endsWith('.theavtheme')) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(l10n.translate('theme_select_theavtheme'))),
+          );
+        }
         return;
       }
 
-      final bytes = await file.readAsBytes();
-      final pickedFileName = result.files.single.name;
+      final Uint8List bytes;
+      if (kIsWeb) {
+        final pickedBytes = pickedFile.bytes;
+        if (pickedBytes == null) {
+          return;
+        }
+        bytes = pickedBytes;
+      } else {
+        if (pickedFile.path == null) {
+          return;
+        }
+        bytes = await File(pickedFile.path!).readAsBytes();
+      }
+
       final defaultName = pickedFileName.toLowerCase().endsWith('.theavtheme')
           ? pickedFileName.substring(0, pickedFileName.length - '.theavtheme'.length)
           : pickedFileName;
@@ -91,13 +107,23 @@ class ChatSettingsScreen extends StatelessWidget {
     final l10n = context.l10n;
     try {
       final bytes = await TheavThemeService().exportThemePackage(themeToExport);
-      final tempDir = await getTemporaryDirectory();
       final cleanName = TheavThemeService.sanitizeFileName(themeToExport.name);
-      final file = File('${tempDir.path}/$cleanName.theavtheme');
-      await file.writeAsBytes(bytes);
+      final XFile exportFile;
+      if (kIsWeb) {
+        exportFile = XFile.fromData(
+          Uint8List.fromList(bytes),
+          name: '$cleanName.theavtheme',
+          mimeType: 'application/octet-stream',
+        );
+      } else {
+        final tempDir = await getTemporaryDirectory();
+        final file = File('${tempDir.path}/$cleanName.theavtheme');
+        await file.writeAsBytes(bytes);
+        exportFile = XFile(file.path, name: '$cleanName.theavtheme');
+      }
 
       await Share.shareXFiles(
-        [XFile(file.path, name: '$cleanName.theavtheme')],
+        [exportFile],
         text: 'Тема Theaver: ${themeToExport.name}',
       );
     } catch (e) {
@@ -407,6 +433,27 @@ class ChatSettingsScreen extends StatelessWidget {
                         );
                       },
                     ),
+                    const Divider(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          l10n.translate('theme_message_font_size'),
+                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                        ),
+                        Text('${themeProvider.messageFontSize.round()} px'),
+                      ],
+                    ),
+                    Slider(
+                      value: themeProvider.messageFontSize.clamp(12.0, 24.0),
+                      min: 12,
+                      max: 24,
+                      divisions: 12,
+                      activeColor: activePrimary,
+                      onChanged: (val) {
+                        themeProvider.setMessageFontSize(val.roundToDouble());
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -459,26 +506,93 @@ class ChatSettingsScreen extends StatelessWidget {
                       _ThemeButton(
                         icon: const iconoir.SunLight(width: 22, height: 22),
                         label: l10n.translate('theme_light'),
-                        isSelected: themeProvider.themeMode == ThemeMode.light,
+                        isSelected: !themeProvider.scheduleEnabled &&
+                            themeProvider.themeMode == ThemeMode.light,
                         onTap: () => themeProvider.setToLight(),
                       ),
                       const SizedBox(width: 8),
                       _ThemeButton(
                         icon: const iconoir.HalfMoon(width: 22, height: 22),
                         label: l10n.translate('theme_dark'),
-                        isSelected: themeProvider.themeMode == ThemeMode.dark,
+                        isSelected: !themeProvider.scheduleEnabled &&
+                            themeProvider.themeMode == ThemeMode.dark,
                         onTap: () => themeProvider.setToDark(),
                       ),
                       const SizedBox(width: 8),
                       _ThemeButton(
                         icon: const iconoir.Laptop(width: 22, height: 22),
                         label: l10n.translate('theme_system'),
-                        isSelected: themeProvider.themeMode == ThemeMode.system,
+                        isSelected: !themeProvider.scheduleEnabled &&
+                            themeProvider.themeMode == ThemeMode.system,
                         onTap: () => themeProvider.setToSystem(),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: iconoir.Clock(
+                    color: themeProvider.scheduleEnabled
+                        ? activePrimary
+                        : Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(l10n.translate('theme_schedule_title')),
+                  subtitle: Text(
+                    themeProvider.scheduleEnabled
+                        ? '${_formatTod(themeProvider.darkStart)} – ${_formatTod(themeProvider.darkEnd)}'
+                        : l10n.translate('theme_schedule_desc'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: AdaptiveSwitch(
+                    value: themeProvider.scheduleEnabled,
+                    onChanged: (val) => themeProvider.setScheduleEnabled(val),
+                  ),
+                ),
+                if (themeProvider.scheduleEnabled)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const iconoir.HalfMoon(width: 16, height: 16),
+                            label: Text(
+                              '${l10n.translate('theme_schedule_dark_from')}: ${_formatTod(themeProvider.darkStart)}',
+                            ),
+                            onPressed: () async {
+                              final picked = await showTimePicker(
+                                context: context,
+                                initialTime: themeProvider.darkStart,
+                              );
+                              if (picked != null) {
+                                await themeProvider.setDarkSchedule(start: picked);
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const iconoir.SunLight(width: 16, height: 16),
+                            label: Text(
+                              '${l10n.translate('theme_schedule_light_from')}: ${_formatTod(themeProvider.darkEnd)}',
+                            ),
+                            onPressed: () async {
+                              final picked = await showTimePicker(
+                                context: context,
+                                initialTime: themeProvider.darkEnd,
+                              );
+                              if (picked != null) {
+                                await themeProvider.setDarkSchedule(end: picked);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
 
@@ -718,6 +832,9 @@ class ChatSettingsScreen extends StatelessWidget {
           body: listView,
         );
   }
+
+  String _formatTod(TimeOfDay tod) =>
+      '${tod.hour.toString().padLeft(2, '0')}:${tod.minute.toString().padLeft(2, '0')}';
 
   String _themeModeLabel(ThemeMode mode, AppLocalizations l10n) {
     switch (mode) {

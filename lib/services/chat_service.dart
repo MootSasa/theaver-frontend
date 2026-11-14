@@ -40,6 +40,7 @@ class Chat {
   final bool isPublic;
   final bool isBot;
   final bool isVerified;
+  final bool isArchived;
   final int? communityId;
 
   Chat({
@@ -69,6 +70,7 @@ class Chat {
     this.isPublic = false,
     this.isBot = false,
     this.isVerified = false,
+    this.isArchived = false,
     this.communityId,
   });
 
@@ -239,6 +241,7 @@ class Chat {
       isPublic: json['is_public'] == true,
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
+      isArchived: json['is_archived'] == true || json['is_archived'] == 1,
       communityId: (json['community_id'] as num?)?.toInt() ??
           int.tryParse(json['community_id']?.toString() ?? ''),
     );
@@ -271,6 +274,7 @@ class Chat {
     bool? isPublic,
     bool? isBot,
     bool? isVerified,
+    bool? isArchived,
     int? communityId,
   }) {
     return Chat(
@@ -302,6 +306,7 @@ class Chat {
       isPublic: isPublic ?? this.isPublic,
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
+      isArchived: isArchived ?? this.isArchived,
       communityId: communityId ?? this.communityId,
     );
   }
@@ -2614,6 +2619,58 @@ class ChatService {
       }
     } catch (e) {
       debugPrint('Unpin chat error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Archives a chat for the current user (`POST /api/chats/:id/archive`).
+  static Future<Map<String, dynamic>> archiveChat({
+    required String chatId,
+  }) =>
+      _setChatArchiveState(chatId: chatId, archived: true);
+
+  /// Unarchives a chat for the current user (`DELETE /api/chats/:id/archive`).
+  static Future<Map<String, dynamic>> unarchiveChat({
+    required String chatId,
+  }) =>
+      _setChatArchiveState(chatId: chatId, archived: false);
+
+  static Future<Map<String, dynamic>> _setChatArchiveState({
+    required String chatId,
+    required bool archived,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final uri = Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/archive');
+      final headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      };
+      final response = archived
+          ? await http.post(uri, headers: headers)
+          : await http.delete(uri, headers: headers);
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        final effectiveArchived = data['is_archived'] == true || archived;
+        await AppDatabase().setChatArchived(chatId, effectiveArchived);
+        return {
+          'success': true,
+          'is_archived': effectiveArchived,
+          'message': data['message'] ?? 'Archive state updated',
+        };
+      }
+      return {
+        'success': false,
+        'error': data['error']?.toString(),
+        'message': data['message'] ?? 'Failed to update archive state',
+      };
+    } catch (e) {
+      debugPrint('Set archive chat error: $e');
       return {'success': false, 'message': 'Network error: ${e.toString()}'};
     }
   }
