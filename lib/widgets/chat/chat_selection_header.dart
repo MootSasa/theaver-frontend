@@ -181,8 +181,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
   final Widget? normalLeftButton;
   final bool showBackButton;
   final VoidCallback? onBack;
-  final bool showLockButton;
-  final VoidCallback? onLock;
 
   final String normalTitle;
   final String normalTitleKey;
@@ -211,8 +209,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
     this.normalLeftButton,
     this.showBackButton = false,
     this.onBack,
-    this.showLockButton = false,
-    this.onLock,
     required this.normalTitle,
     this.normalTitleKey = 'title',
     this.isTitleConnected = true,
@@ -291,7 +287,7 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
             : math.max(_ctrlSize, visibleQuickActionsCount * iconBtnWidth + 12.0);
 
         final bool hasNormalLeft =
-            normalLeftButton != null || showBackButton || showLockButton;
+            normalLeftButton != null || showBackButton;
         final bool showLeftControl = isSelectMode || hasNormalLeft;
         final bool showRightControl =
             isSelectMode || normalMenuItems.isNotEmpty;
@@ -787,28 +783,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
             child: iconoir.NavArrowLeft(
               width: 22,
               height: 22,
-              color: textColor,
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (showLockButton) {
-      return GestureDetector(
-        key: const ValueKey<String>('left_lock_btn'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          HapticUtils.tap();
-          onLock?.call();
-        },
-        child: SizedBox(
-          width: _ctrlSize,
-          height: _ctrlSize,
-          child: Center(
-            child: iconoir.Lock(
-              width: 20,
-              height: 20,
               color: textColor,
             ),
           ),

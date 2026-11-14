@@ -26,7 +26,6 @@ import '../../services/draft_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
-import '../../services/app_lock_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/cache_service.dart';
 import '../../services/profile_instant_cache.dart';
@@ -1933,7 +1932,6 @@ class _MainScreenState extends State<MainScreen>
 
   Widget _buildAdaptiveTopBar(BuildContext context) {
     final notifProvider = context.watch<NotificationSettingsProvider>();
-    final showLockButton = context.watch<AppLockService>().hasPin;
     final folders = _folderService.folders;
     final activeFolder = (_activeFilter >= 0 && _activeFilter < folders.length)
         ? folders[_activeFilter]
@@ -2068,8 +2066,6 @@ class _MainScreenState extends State<MainScreen>
           }
         },
       ),
-      showLockButton: showLockButton,
-      onLock: () => AppLockService.instance.lockNow(),
       normalTitle: _currentTitleText,
       normalTitleKey: _currentTitleKey,
       isTitleConnected: _isTitleConnected,
