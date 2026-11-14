@@ -12,6 +12,7 @@ class NameColorPaletteRow extends StatelessWidget {
   final ValueChanged<NameColorPreset> onPresetSelected;
   final VoidCallback onPickCustomColor;
   final EdgeInsetsGeometry padding;
+  final bool? isDarkOverride;
 
   const NameColorPaletteRow({
     super.key,
@@ -20,6 +21,7 @@ class NameColorPaletteRow extends StatelessWidget {
     required this.onPresetSelected,
     required this.onPickCustomColor,
     this.padding = const EdgeInsets.symmetric(horizontal: 16),
+    this.isDarkOverride,
   });
 
   Widget _buildNameColorCircle({
@@ -184,7 +186,8 @@ class NameColorPaletteRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isDark =
+        isDarkOverride ?? (Theme.of(context).brightness == Brightness.dark);
     final isCustomSelected = selectedPreset.id.startsWith('custom_name_');
 
     return SizedBox(
@@ -227,6 +230,8 @@ class ReplyStripStyleSelector extends StatelessWidget {
   final ReplyStripStyle selectedStyle;
   final ValueChanged<ReplyStripStyle> onStyleSelected;
   final EdgeInsetsGeometry padding;
+  final bool flatInCard;
+  final bool? isDarkOverride;
 
   const ReplyStripStyleSelector({
     super.key,
@@ -234,12 +239,74 @@ class ReplyStripStyleSelector extends StatelessWidget {
     required this.selectedStyle,
     required this.onStyleSelected,
     this.padding = const EdgeInsets.symmetric(horizontal: 16),
+    this.flatInCard = false,
+    this.isDarkOverride,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final isDark = isDarkOverride ?? (theme.brightness == Brightness.dark);
+
+    if (flatInCard) {
+      const styles = ReplyStripStyle.values;
+      final selectedIndex =
+          styles.indexOf(selectedStyle).clamp(0, styles.length - 1);
+      final alignX = styles.length <= 1
+          ? 0.0
+          : (selectedIndex / (styles.length - 1)) * 2.0 - 1.0;
+
+      return Padding(
+        padding: padding,
+        child: SizedBox(
+          height: 46,
+          child: Stack(
+            children: [
+              AnimatedAlign(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment(alignX, 0),
+                child: FractionallySizedBox(
+                  widthFactor: 1.0 / styles.length,
+                  heightFactor: 1.0,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: selectedPreset.primaryColor
+                            .withValues(alpha: isDark ? 0.22 : 0.14),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  for (final style in styles)
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => onStyleSelected(style),
+                        behavior: HitTestBehavior.opaque,
+                        child: Center(
+                          child: ReplyStripWidget(
+                            preset: selectedPreset,
+                            style: style,
+                            width: 5.5,
+                            height: 26,
+                            borderRadius: 2.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final unselectedBg = isDark
         ? Colors.white.withValues(alpha: 0.05)
         : Colors.black.withValues(alpha: 0.035);

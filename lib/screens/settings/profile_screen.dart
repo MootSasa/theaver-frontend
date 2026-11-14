@@ -3831,25 +3831,6 @@ class ProfileScreenState extends State<ProfileScreen>
                                         ),
                                       ],
                                     ),
-                                    if (activeCustomization
-                                            ?.activeEmojiStatus?.note
-                                            .isNotEmpty ==
-                                        true) ...[
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        activeCustomization!
-                                            .activeEmojiStatus!.note,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          color: onSurfaceColor.withValues(
-                                            alpha: 0.78,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
                                     const SizedBox(height: 3),
                                     Hero(
                                       tag: 'profile_status_$_heroKey',

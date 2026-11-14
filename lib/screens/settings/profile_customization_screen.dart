@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:ios_color_picker/show_ios_color_picker.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 
 import '../../config/app_config.dart';
@@ -32,17 +31,17 @@ import '../../widgets/profile/color_palette_picker.dart';
 import '../../widgets/profile/name_color_picker.dart';
 import '../../widgets/profile/profile_floating_top_switcher.dart';
 import '../../widgets/profile/reply_message_preview_card.dart';
-import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
 
 /// Экран «Оформление профиля», визуально совпадающий с реальным экраном профиля:
 /// - Полноэкранный цветной/градиентный фон и растворяющийся баннер как на `ProfileScreen`;
-/// - Плавающая верхняя шапка с круглой кнопкой `←` и переключателем `Профиль / Имя в чатах`
-///   с живой плавающей пилюлей в Liquid Glass (контент и текст проходят прямо под ней при скролле);
-/// - Аватар без индикатора «в сети», полупрозрачные карточки [ProfileGlassSection]
-///   и выбор эмодзи-статуса прямо на вкладке «Профиль» через стеклянную шторку.
+/// - Компактная плавающая верхняя шапка с кнопкой `←` и анимированным переключателем
+///   `Профиль / Имя в чатах` на базе `LiquidGlassTabBar.buildGlassPillBar` + `PageController`
+///   (как в `EmojiStickerPanel`);
+/// - Свободная прокрутка 120fps без лишних вложенных двойных панелей;
+/// - Выбор эмодзи-статуса и длительности без текстовой заметки.
 class ProfileCustomizationScreen extends StatefulWidget {
   final int initialTab;
 
@@ -59,15 +58,15 @@ class ProfileCustomizationScreen extends StatefulWidget {
 class _ProfileCustomizationScreenState
     extends State<ProfileCustomizationScreen> {
   late int _activeTab; // 0 = Профиль, 1 = Имя в чатах
+  late final PageController _pageController;
+  bool _isAnimatingTabFromBar = false;
+
   Duration? _selectedDuration; // null = Навсегда
-  final TextEditingController _noteController = TextEditingController();
   final IOSColorPickerController _colorPickerController =
       IOSColorPickerController();
   final ScrollController _profileScrollController = ScrollController();
   final ScrollController _nameScrollController = ScrollController();
-
-  double _profileScrollOffset = 0.0;
-  double _nameScrollOffset = 0.0;
+  final ValueNotifier<double> _bannerScrollOffset = ValueNotifier<double>(0.0);
 
   ProfileColorPreset? _draftCoverPreset;
   NameColorPreset? _draftNamePreset;
@@ -75,7 +74,6 @@ class _ProfileCustomizationScreenState
 
   Timer? _coverDebounce;
   Timer? _nameColorDebounce;
-  Timer? _noteDebounce;
 
   bool _isUploadingBanner = false;
   String? _userId;
@@ -99,15 +97,8 @@ class _ProfileCustomizationScreenState
   void initState() {
     super.initState();
     _activeTab = _normalizeInitialTab(widget.initialTab);
-
+    _pageController = PageController(initialPage: _activeTab);
     _profileScrollController.addListener(_onProfileScroll);
-    _nameScrollController.addListener(_onNameScroll);
-
-    final themeProvider = context.read<ProfileThemeProvider>();
-    final existingStatus = themeProvider.currentEmojiStatus;
-    if (existingStatus != null) {
-      _noteController.text = existingStatus.note;
-    }
 
     _userId = AccountManager().currentAccount?.userId;
     if (_userId == null || _userId!.isEmpty) {
@@ -131,20 +122,28 @@ class _ProfileCustomizationScreenState
   }
 
   void _onProfileScroll() {
-    final next = _profileScrollController.hasClients
-        ? _profileScrollController.offset.clamp(0.0, double.infinity)
-        : 0.0;
-    if ((next - _profileScrollOffset).abs() > 0.5) {
-      setState(() => _profileScrollOffset = next);
+    if (!_profileScrollController.hasClients) return;
+    final next = _profileScrollController.offset.clamp(0.0, 260.0);
+    if ((next - _bannerScrollOffset.value).abs() > 0.5) {
+      _bannerScrollOffset.value = next;
     }
   }
 
-  void _onNameScroll() {
-    final next = _nameScrollController.hasClients
-        ? _nameScrollController.offset.clamp(0.0, double.infinity)
-        : 0.0;
-    if ((next - _nameScrollOffset).abs() > 0.5) {
-      setState(() => _nameScrollOffset = next);
+  void _onTabSelectedFromBar(int index) {
+    if (index < 0 || index > 1 || _activeTab == index) return;
+    HapticUtils.selection();
+    setState(() => _activeTab = index);
+    if (_pageController.hasClients) {
+      _isAnimatingTabFromBar = true;
+      _pageController
+          .animateToPage(
+            index,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+          )
+          .whenComplete(() {
+        _isAnimatingTabFromBar = false;
+      });
     }
   }
 
@@ -152,10 +151,10 @@ class _ProfileCustomizationScreenState
   void dispose() {
     _flushPendingSync();
     _profileScrollController.removeListener(_onProfileScroll);
-    _nameScrollController.removeListener(_onNameScroll);
     _profileScrollController.dispose();
     _nameScrollController.dispose();
-    _noteController.dispose();
+    _pageController.dispose();
+    _bannerScrollOffset.dispose();
     _colorPickerController.dispose();
     super.dispose();
   }
@@ -180,10 +179,6 @@ class _ProfileCustomizationScreenState
           style: style,
         );
       }
-    }
-    if (_noteDebounce?.isActive == true) {
-      _noteDebounce!.cancel();
-      _syncNoteForActiveStatus();
     }
   }
 
@@ -619,7 +614,7 @@ class _ProfileCustomizationScreenState
   }
 
   // ---------------------------------------------------------------------------
-  // Мгновенные действия: Эмодзи-статус, заметка и срок действия (на вкладке «Профиль»)
+  // Мгновенные действия: Эмодзи-статус и срок действия (без текстовой заметки)
   // ---------------------------------------------------------------------------
 
   DateTime? _computeExpiresAt() => _selectedDuration != null
@@ -630,19 +625,17 @@ class _ProfileCustomizationScreenState
     final trimmed = emoji.trim();
     if (trimmed.isEmpty) return;
     HapticUtils.selection();
-    _noteDebounce?.cancel();
-    final note = _noteController.text.trim();
     final until = _computeExpiresAt();
     final optimistic = EmojiStatusData(
       type: 'unicode',
       emoji: trimmed,
-      note: note,
+      note: '',
       expiresAt: until,
     );
     await context.read<ProfileThemeProvider>().updateCustomization(
           emojiStatusUnicode: trimmed,
           optimisticEmojiStatus: optimistic,
-          emojiStatusNote: note,
+          emojiStatusNote: '',
           emojiStatusUntil: until,
           clearEmojiStatusUntil: until == null,
         );
@@ -650,8 +643,6 @@ class _ProfileCustomizationScreenState
 
   Future<void> _selectCustomStickerStatus(StickerItem sticker) async {
     HapticUtils.selection();
-    _noteDebounce?.cancel();
-    final note = _noteController.text.trim();
     final until = _computeExpiresAt();
     final optimistic = EmojiStatusData(
       type: 'sticker',
@@ -659,51 +650,16 @@ class _ProfileCustomizationScreenState
       stickerUrl: sticker.fileUrl,
       thumbnailUrl: sticker.thumbnailUrl,
       stickerFormat: sticker.format,
-      note: note,
+      note: '',
       expiresAt: until,
     );
     await context.read<ProfileThemeProvider>().updateCustomization(
           emojiStatusStickerId: sticker.id,
           optimisticEmojiStatus: optimistic,
-          emojiStatusNote: note,
+          emojiStatusNote: '',
           emojiStatusUntil: until,
           clearEmojiStatusUntil: until == null,
         );
-  }
-
-  void _onStatusNoteChanged(String _) {
-    setState(() {});
-    _noteDebounce?.cancel();
-    _noteDebounce = Timer(const Duration(milliseconds: 450), () {
-      if (!mounted) return;
-      _syncNoteForActiveStatus();
-    });
-  }
-
-  Future<void> _syncNoteForActiveStatus() async {
-    final provider = context.read<ProfileThemeProvider>();
-    final active = provider.currentEmojiStatus;
-    if (active == null) return;
-    final note = _noteController.text.trim();
-    if (active.note == note) return;
-    await provider.updateCustomization(
-      emojiStatusUnicode: active.type == 'unicode' ? active.emoji : null,
-      emojiStatusStickerId:
-          active.type == 'sticker' ? active.stickerId : null,
-      optimisticEmojiStatus: EmojiStatusData(
-        type: active.type,
-        emoji: active.emoji,
-        stickerId: active.stickerId,
-        stickerUrl: active.stickerUrl,
-        thumbnailUrl: active.thumbnailUrl,
-        stickerFormat: active.stickerFormat,
-        note: note,
-        expiresAt: active.expiresAt,
-      ),
-      emojiStatusNote: note,
-      emojiStatusUntil: active.expiresAt,
-      clearEmojiStatusUntil: active.expiresAt == null,
-    );
   }
 
   Future<void> _onDurationSelected(Duration? duration) async {
@@ -724,10 +680,10 @@ class _ProfileCustomizationScreenState
         stickerUrl: active.stickerUrl,
         thumbnailUrl: active.thumbnailUrl,
         stickerFormat: active.stickerFormat,
-        note: _noteController.text.trim(),
+        note: '',
         expiresAt: until,
       ),
-      emojiStatusNote: _noteController.text.trim(),
+      emojiStatusNote: '',
       emojiStatusUntil: until,
       clearEmojiStatusUntil: until == null,
     );
@@ -735,18 +691,13 @@ class _ProfileCustomizationScreenState
 
   Future<void> _clearEmojiStatus() async {
     HapticUtils.selection();
-    _noteDebounce?.cancel();
-    setState(() => _noteController.clear());
     await context.read<ProfileThemeProvider>().updateCustomization(
           clearEmojiStatus: true,
         );
   }
 
   String _statusSubtitle(BuildContext context, EmojiStatusData? activeStatus) {
-    final note = _noteController.text.trim();
     if (activeStatus != null) {
-      if (note.isNotEmpty) return note;
-      if (activeStatus.note.trim().isNotEmpty) return activeStatus.note.trim();
       if (_selectedDuration == const Duration(hours: 1)) {
         return translateOrFallback(context, 'emojiStatusExpiry1h', '1 hour');
       }
@@ -764,7 +715,7 @@ class _ProfileCustomizationScreenState
     return translateOrFallback(
       context,
       'emojiStatusSelectHint',
-      'Choose emoji and note',
+      'Choose an emoji',
     );
   }
 
@@ -781,7 +732,7 @@ class _ProfileCustomizationScreenState
                 final mq = MediaQuery.of(ctx);
                 final kbBottom = mq.viewInsets.bottom;
                 final sheetHeight =
-                    (mq.size.height * 0.74 - kbBottom).clamp(240.0, 540.0);
+                    (mq.size.height * 0.70 - kbBottom).clamp(240.0, 520.0);
                 final theme = Theme.of(ctx);
                 final theav = TheavTheme.of(ctx);
                 final activeStatus = sheetThemeProvider.currentEmojiStatus;
@@ -789,7 +740,11 @@ class _ProfileCustomizationScreenState
                 final durationOptions = <(Duration?, String)>[
                   (
                     null,
-                    translateOrFallback(ctx, 'emojiStatusExpiryNever', 'Forever')
+                    translateOrFallback(
+                      ctx,
+                      'emojiStatusExpiryNever',
+                      'Forever',
+                    )
                   ),
                   (
                     const Duration(hours: 1),
@@ -817,101 +772,43 @@ class _ProfileCustomizationScreenState
                   }
                 }
 
-                final showMetaControls = sheetHeight >= 280.0;
-
                 return Padding(
                   padding: EdgeInsets.only(bottom: kbBottom),
                   child: SizedBox(
                     height: sheetHeight,
                     child: Column(
                       children: [
-                        Text(
-                          translateOrFallback(
-                            ctx,
-                            'emojiStatusTitle',
-                            'Emoji Status',
+                        // Компактная строка заголовка и срока действия без лишней вложенной панели
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            left: 4,
+                            right: 4,
+                            bottom: 10,
                           ),
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        if (showMetaControls)
-                          SettingsGroup(
-                            margin: const EdgeInsets.only(bottom: 10),
+                          child: Row(
                             children: [
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 2,
+                              if (activeStatus != null) ...[
+                                EmojiStatusBadge(
+                                  status: activeStatus,
+                                  size: 22,
+                                  animate: true,
+                                  interactive: false,
+                                  fallbackColor: theav.accent,
                                 ),
-                                child: Row(
-                                  children: [
-                                    if (activeStatus != null)
-                                      EmojiStatusBadge(
-                                        status: activeStatus,
-                                        size: 22,
-                                        animate: true,
-                                        interactive: false,
-                                        fallbackColor: theav.accent,
-                                      )
-                                    else
-                                      iconoir.Emoji(
-                                        width: 22,
-                                        height: 22,
-                                        color: theav.accent,
-                                      ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _noteController,
-                                        maxLength: 64,
-                                        decoration: InputDecoration(
-                                          counterText: '',
-                                          border: InputBorder.none,
-                                          isDense: true,
-                                          contentPadding:
-                                              const EdgeInsets.symmetric(
-                                            vertical: 11,
-                                          ),
-                                          hintText: translateOrFallback(
-                                            ctx,
-                                            'emojiStatusNoteHint',
-                                            'Add a short note (up to 64 chars)',
-                                          ),
-                                          hintStyle: TextStyle(
-                                            color: theav.textSecondary,
-                                            fontSize: 14.5,
-                                          ),
-                                        ),
-                                        onChanged: (val) {
-                                          _onStatusNoteChanged(val);
-                                          setSheetState(() {});
-                                        },
-                                      ),
-                                    ),
-                                    if (activeStatus != null ||
-                                        _noteController.text.isNotEmpty)
-                                      IconButton(
-                                        visualDensity: VisualDensity.compact,
-                                        tooltip: translateOrFallback(
-                                          ctx,
-                                          'emojiStatusClear',
-                                          'Clear Status',
-                                        ),
-                                        onPressed: () async {
-                                          await _clearEmojiStatus();
-                                          if (ctx.mounted) {
-                                            setSheetState(() {});
-                                          }
-                                        },
-                                        icon: iconoir.Xmark(
-                                          width: 18,
-                                          height: 18,
-                                          color: theav.textSecondary,
-                                        ),
-                                      ),
-                                  ],
+                                const SizedBox(width: 8),
+                              ],
+                              Expanded(
+                                child: Text(
+                                  translateOrFallback(
+                                    ctx,
+                                    'emojiStatusTitle',
+                                    'Emoji Status',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                               PopupMenuButton<int>(
@@ -944,68 +841,82 @@ class _ProfileCustomizationScreenState
                                       ),
                                     ),
                                 ],
-                                child: Padding(
+                                child: Container(
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 10,
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: theav.accent.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(14),
                                   ),
                                   child: Row(
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
                                       iconoir.Clock(
-                                        width: 20,
-                                        height: 20,
+                                        width: 15,
+                                        height: 15,
                                         color: theav.accent,
                                       ),
-                                      const SizedBox(width: 13),
-                                      Expanded(
-                                        child: Text(
-                                          translateOrFallback(
-                                            ctx,
-                                            'emojiStatusExpiryLabel',
-                                            'Duration',
-                                          ),
-                                          style: theme.textTheme.bodyMedium,
-                                        ),
-                                      ),
+                                      const SizedBox(width: 5),
                                       Text(
                                         durationOptions[selectedDurationIdx].$2,
                                         style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
                                           color: theav.accent,
                                         ),
                                       ),
-                                      const SizedBox(width: 4),
+                                      const SizedBox(width: 3),
                                       iconoir.NavArrowDown(
-                                        width: 16,
-                                        height: 16,
+                                        width: 14,
+                                        height: 14,
                                         color: theav.accent,
                                       ),
                                     ],
                                   ),
                                 ),
                               ),
+                              if (activeStatus != null) ...[
+                                const SizedBox(width: 4),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: translateOrFallback(
+                                    ctx,
+                                    'emojiStatusClear',
+                                    'Clear Status',
+                                  ),
+                                  onPressed: () async {
+                                    await _clearEmojiStatus();
+                                    if (ctx.mounted) {
+                                      setSheetState(() {});
+                                    }
+                                  },
+                                  icon: iconoir.Xmark(
+                                    width: 18,
+                                    height: 18,
+                                    color: theav.textSecondary,
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
+                        ),
                         Expanded(
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(16),
-                            child: ColoredBox(
-                              color: theme.cardColor,
-                              child: EmojiStickerPanel(
-                                emojiOnly: true,
-                                expandToAvailableHeight: true,
-                                selectedEmoji: activeStatus?.type == 'unicode'
-                                    ? activeStatus?.emoji
-                                    : null,
-                                selectedCustomEmojiId:
-                                    activeStatus?.type == 'sticker'
-                                        ? activeStatus?.stickerId
-                                        : null,
-                                onEmojiSelected: _selectUnicodeStatus,
-                                onCustomEmojiSelected:
-                                    _selectCustomStickerStatus,
-                              ),
+                            child: EmojiStickerPanel(
+                              emojiOnly: true,
+                              expandToAvailableHeight: true,
+                              selectedEmoji: activeStatus?.type == 'unicode'
+                                  ? activeStatus?.emoji
+                                  : null,
+                              selectedCustomEmojiId:
+                                  activeStatus?.type == 'sticker'
+                                      ? activeStatus?.stickerId
+                                      : null,
+                              onEmojiSelected: _selectUnicodeStatus,
+                              onCustomEmojiSelected: _selectCustomStickerStatus,
                             ),
                           ),
                         ),
@@ -1127,7 +1038,6 @@ class _ProfileCustomizationScreenState
     required BuildContext context,
     required ProfileThemeProvider themeProvider,
     required PeerCustomizationCache cache,
-    required LiquidGlassProvider glassProvider,
     required ProfileColorPreset coverPreset,
     required bool isDarkBackdrop,
     required double topContentPadding,
@@ -1137,11 +1047,6 @@ class _ProfileCustomizationScreenState
     final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
     final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
     final activeStatus = themeProvider.currentEmojiStatus;
-    final effectiveNote = activeStatus != null
-        ? (_noteController.text.trim().isNotEmpty
-            ? _noteController.text.trim()
-            : activeStatus.note.trim())
-        : '';
 
     final onCoverForeground =
         isDarkBackdrop ? Colors.white : const Color(0xFF1C1C1E);
@@ -1162,7 +1067,10 @@ class _ProfileCustomizationScreenState
     return ListView(
       key: const PageStorageKey<String>('profile_customization_tab_profile'),
       controller: _profileScrollController,
-      padding: EdgeInsets.only(top: topContentPadding, bottom: 40),
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      padding: EdgeInsets.only(top: topContentPadding, bottom: 44),
       children: [
         // 0. Живая шапка профиля как на реальном ProfileScreen (без кружка «в сети» у аватара)
         Padding(
@@ -1218,19 +1126,6 @@ class _ProfileCustomizationScreenState
                     ),
                 ],
               ),
-              if (effectiveNote.isNotEmpty) ...[
-                const SizedBox(height: 3),
-                Text(
-                  effectiveNote,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: onCoverForeground.withValues(alpha: 0.78),
-                  ),
-                ),
-              ],
               const SizedBox(height: 3),
               Text(
                 translateOrFallback(context, 'profile_online', 'online'),
@@ -1254,8 +1149,6 @@ class _ProfileCustomizationScreenState
             'customizationSectionCoverBanner',
             'Cover & Banner',
           ),
-          glassEnabled: glassProvider.enabled,
-          isLite: glassProvider.isLite,
           isDarkBackdrop: isDarkBackdrop,
           accentColor: sectionAccent,
           children: [
@@ -1338,8 +1231,6 @@ class _ProfileCustomizationScreenState
             'emojiStatusTitle',
             'Emoji Status',
           ),
-          glassEnabled: glassProvider.enabled,
-          isLite: glassProvider.isLite,
           isDarkBackdrop: isDarkBackdrop,
           accentColor: sectionAccent,
           children: [
@@ -1407,8 +1298,6 @@ class _ProfileCustomizationScreenState
             'customizationSectionAvatarFrame',
             'Avatar Frame',
           ),
-          glassEnabled: glassProvider.enabled,
-          isLite: glassProvider.isLite,
           isDarkBackdrop: isDarkBackdrop,
           accentColor: sectionAccent,
           children: [
@@ -1498,8 +1387,6 @@ class _ProfileCustomizationScreenState
             'customizationSectionBadge',
             'Profile Badge',
           ),
-          glassEnabled: glassProvider.enabled,
-          isLite: glassProvider.isLite,
           isDarkBackdrop: isDarkBackdrop,
           accentColor: sectionAccent,
           children: [
@@ -1581,13 +1468,12 @@ class _ProfileCustomizationScreenState
   }
 
   // ---------------------------------------------------------------------------
-  // Вкладка 1: «Имя в чатах» (скроллится под плавающим верхним переключателем)
+  // Вкладка 1: «Имя в чатах» (чистый дизайн в духе Telegram без вложенных двойных панелей)
   // ---------------------------------------------------------------------------
 
   Widget _buildNameTab({
     required BuildContext context,
     required ProfileThemeProvider themeProvider,
-    required LiquidGlassProvider glassProvider,
     required ProfileColorPreset coverPreset,
     required bool isDarkBackdrop,
     required double topContentPadding,
@@ -1607,86 +1493,60 @@ class _ProfileCustomizationScreenState
     return ListView(
       key: const PageStorageKey<String>('profile_customization_tab_name'),
       controller: _nameScrollController,
-      padding: EdgeInsets.only(top: topContentPadding, bottom: 40),
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      padding: EdgeInsets.only(top: topContentPadding, bottom: 44),
       children: [
-        ProfileGlassSection(
-          glassEnabled: glassProvider.enabled,
-          isLite: glassProvider.isLite,
-          isDarkBackdrop: isDarkBackdrop,
-          accentColor: sectionAccent,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(6),
-              child: ReplyMessagePreviewCard(
-                margin: EdgeInsets.zero,
-                preset: namePreset,
-                stripStyle: stripStyle,
-                userName: displayName,
-                avatarUrl: avatarUrl,
-                userId: _userId,
-                avatarDecoration: themeProvider.currentAvatarDecoration,
-                emojiStatus: themeProvider.currentEmojiStatus,
-                badge: themeProvider.currentVisibleBadge,
-              ),
-            ),
-          ],
+        // 1. Одиночный холст предпросмотра сообщения в чате (без обёртки во вторую панель!)
+        ReplyMessagePreviewCard(
+          margin: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+          isDarkBackdropOverride: isDarkBackdrop,
+          preset: namePreset,
+          stripStyle: stripStyle,
+          userName: displayName,
+          avatarUrl: avatarUrl,
+          userId: _userId,
+          avatarDecoration: themeProvider.currentAvatarDecoration,
+          emojiStatus: themeProvider.currentEmojiStatus,
+          badge: themeProvider.currentVisibleBadge,
         ),
+
+        // 2. Единая аккуратная панель выбора цвета имени и стиля полоски цитирования
         ProfileGlassSection(
-          title: translateOrFallback(
-            context,
-            'customizationNameColorTitle',
-            'Name Color',
-          ),
-          glassEnabled: glassProvider.enabled,
-          isLite: glassProvider.isLite,
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           isDarkBackdrop: isDarkBackdrop,
           accentColor: sectionAccent,
+          dividerIndent: 16,
           children: [
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.symmetric(vertical: 14),
               child: NameColorPaletteRow(
                 selectedPreset: namePreset,
                 selectedStyle: stripStyle,
+                isDarkOverride: isDarkBackdrop,
                 onPresetSelected: (preset) =>
                     _applyNameColorImmediate(preset, stripStyle),
                 onPickCustomColor: _pickCustomNameColor,
               ),
             ),
-          ],
-        ),
-        ProfileGlassSection(
-          title: translateOrFallback(
-            context,
-            'customizationReplyStripTitle',
-            'Reply Strip Style',
-          ),
-          glassEnabled: glassProvider.enabled,
-          isLite: glassProvider.isLite,
-          isDarkBackdrop: isDarkBackdrop,
-          accentColor: sectionAccent,
-          children: [
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.symmetric(vertical: 8),
               child: ReplyStripStyleSelector(
                 selectedPreset: namePreset,
                 selectedStyle: stripStyle,
+                flatInCard: true,
+                isDarkOverride: isDarkBackdrop,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 onStyleSelected: (style) =>
                     _applyNameColorImmediate(namePreset, style),
               ),
             ),
-          ],
-        ),
-        if (isNonDefault)
-          ProfileGlassSection(
-            glassEnabled: glassProvider.enabled,
-            isLite: glassProvider.isLite,
-            isDarkBackdrop: isDarkBackdrop,
-            accentColor: sectionAccent,
-            children: [
+            if (isNonDefault)
               ListTile(
                 leading: iconoir.RefreshDouble(
-                  width: 22,
-                  height: 22,
+                  width: 20,
+                  height: 20,
                   color: secondaryForeground,
                 ),
                 title: Text(
@@ -1698,86 +1558,9 @@ class _ProfileCustomizationScreenState
                 ),
                 onTap: _resetNameColor,
               ),
-            ],
-          ),
+          ],
+        ),
       ],
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Плавающая верхняя шапка (кнопка «←» + переключатель «Профиль / Имя в чатах»
-  // вместо капсулы «Оформление профиля»)
-  // ---------------------------------------------------------------------------
-
-  Widget _buildFloatingTopBar({
-    required BuildContext context,
-    required LiquidGlassProvider glassProvider,
-    required bool isDarkBackdrop,
-  }) {
-    final labels = <String>[
-      translateOrFallback(
-        context,
-        'customizationSegmentProfile',
-        'Profile',
-      ),
-      translateOrFallback(
-        context,
-        'customizationSegmentName',
-        'Chat Name',
-      ),
-    ];
-
-    return SizedBox(
-      height: SettingsFloatingHeader.buttonSize,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final availableWidth = constraints.maxWidth;
-          const leftOccupied =
-              SettingsFloatingHeader.buttonSize + SettingsFloatingHeader.headerGap;
-          final maxSwitcherWidth =
-              math.max(0.0, availableWidth - leftOccupied);
-          final targetSwitcherWidth = math.min(maxSwitcherWidth, 276.0);
-          final centeredLeft = (availableWidth - targetSwitcherWidth) / 2.0;
-          final double switcherLeft = centeredLeft
-              .clamp(
-                leftOccupied,
-                math.max(leftOccupied, availableWidth - targetSwitcherWidth),
-              )
-              .toDouble();
-
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                left: 0,
-                top: 0,
-                bottom: 0,
-                child: ProfileFloatingBackButton(
-                  onTap: () => Navigator.of(context).maybePop(),
-                  glassEnabled: glassProvider.enabled,
-                  isLite: glassProvider.isLite,
-                  isDarkBackdrop: isDarkBackdrop,
-                ),
-              ),
-              if (targetSwitcherWidth > 0)
-                Positioned(
-                  left: switcherLeft,
-                  top: 0,
-                  bottom: 0,
-                  width: targetSwitcherWidth,
-                  child: ProfileFloatingTopSwitcher(
-                    segments: labels,
-                    selectedIndex: _activeTab,
-                    glassEnabled: glassProvider.enabled,
-                    isLite: glassProvider.isLite,
-                    isDarkBackdrop: isDarkBackdrop,
-                    onChanged: (idx) => setState(() => _activeTab = idx),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
     );
   }
 
@@ -1796,20 +1579,12 @@ class _ProfileCustomizationScreenState
         : coverPreset.backgroundColor;
 
     final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
-    final hasBanner =
+    final showBanner =
         _activeTab == 0 && bannerUrl != null && bannerUrl.isNotEmpty;
-    final bannerOpacity =
-        (1.0 - (_profileScrollOffset / 180.0)).clamp(0.0, 1.0);
 
     final statusBarHeight = MediaQuery.paddingOf(context).top;
     final headerTopY = statusBarHeight + 8.0;
-    final topContentPadding =
-        headerTopY + SettingsFloatingHeader.buttonSize + 14.0;
-
-    final activeScrollOffset =
-        _activeTab == 0 ? _profileScrollOffset : _nameScrollOffset;
-    final statusBarEdgeProgress =
-        (activeScrollOffset / 72.0).clamp(0.0, 1.0);
+    final topContentPadding = headerTopY + kProfileFloatingBarHeight + 14.0;
 
     final overlayStyle = SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -1819,151 +1594,147 @@ class _ProfileCustomizationScreenState
           isDarkBackdrop ? Brightness.dark : Brightness.light,
     );
 
-    final Widget activeTabScroll = _activeTab == 1
-        ? _buildNameTab(
-            context: context,
-            themeProvider: themeProvider,
-            glassProvider: glassProvider,
-            coverPreset: coverPreset,
-            isDarkBackdrop: isDarkBackdrop,
-            topContentPadding: topContentPadding,
-          )
-        : _buildProfileTab(
-            context: context,
-            themeProvider: themeProvider,
-            cache: cache,
-            glassProvider: glassProvider,
-            coverPreset: coverPreset,
-            isDarkBackdrop: isDarkBackdrop,
-            topContentPadding: topContentPadding,
-          );
+    final labels = <String>[
+      translateOrFallback(
+        context,
+        'customizationSegmentProfile',
+        'Profile',
+      ),
+      translateOrFallback(
+        context,
+        'customizationSegmentName',
+        'Chat Name',
+      ),
+    ];
 
-    final hasOuterBatch = LiquidGlassBatch.backdropIdOf(context) != null;
+    final pageBackdropAndScroll = Stack(
+      fit: StackFit.expand,
+      children: [
+        // 1. Полноэкранный адаптивный фон и градиент как на реальном ProfileScreen
+        Positioned.fill(
+          key: const ValueKey<String>('profile_customization_bg'),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+            decoration: coverPreset.isGradient &&
+                    coverPreset.gradientColors != null
+                ? BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: coverPreset.gradientColors!,
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                  )
+                : BoxDecoration(color: baseBgColor),
+          ),
+        ),
+
+        // 2. Растворяющийся верхний баннер профиля (без setState во время скролла)
+        if (showBanner)
+          Positioned(
+            key: const ValueKey<String>('profile_customization_banner'),
+            top: 0,
+            left: 0,
+            right: 0,
+            height: math.max(250.0, topContentPadding + 150.0),
+            child: IgnorePointer(
+              child: ValueListenableBuilder<double>(
+                valueListenable: _bannerScrollOffset,
+                builder: (context, offset, child) {
+                  final opacity = (1.0 - (offset / 180.0)).clamp(0.0, 1.0);
+                  if (opacity <= 0.01) return const SizedBox.shrink();
+                  return Opacity(
+                    opacity: opacity,
+                    child: child,
+                  );
+                },
+                child: ShaderMask(
+                  shaderCallback: (rect) => const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.white,
+                      Colors.white,
+                      Colors.transparent,
+                    ],
+                    stops: [0.0, 0.52, 1.0],
+                  ).createShader(rect),
+                  blendMode: BlendMode.dstIn,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ControlledAnimatedNetworkImage(
+                        url: bannerUrl,
+                        fit: BoxFit.cover,
+                        animate: true,
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.black.withValues(alpha: 0.22),
+                              Colors.black.withValues(alpha: 0.42),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+        // 3. Плавный горизонтальный PageView с независимой прокруткой каждой вкладки
+        Positioned.fill(
+          key: const ValueKey<String>('profile_customization_pageview'),
+          child: PageView(
+            controller: _pageController,
+            physics: const ClampingScrollPhysics(),
+            onPageChanged: (index) {
+              if (_isAnimatingTabFromBar) return;
+              HapticUtils.selection();
+              setState(() => _activeTab = index);
+            },
+            children: [
+              _buildProfileTab(
+                context: context,
+                themeProvider: themeProvider,
+                cache: cache,
+                coverPreset: coverPreset,
+                isDarkBackdrop: isDarkBackdrop,
+                topContentPadding: topContentPadding,
+              ),
+              _buildNameTab(
+                context: context,
+                themeProvider: themeProvider,
+                coverPreset: coverPreset,
+                isDarkBackdrop: isDarkBackdrop,
+                topContentPadding: topContentPadding,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayStyle,
       child: Scaffold(
         backgroundColor: baseBgColor,
-        body: Stack(
-          children: [
-            // 1. Полноэкранный адаптивный фон и фиксированный градиент как на реальном ProfileScreen
-            Positioned.fill(
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeOutCubic,
-                decoration: coverPreset.isGradient &&
-                        coverPreset.gradientColors != null
-                    ? BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: coverPreset.gradientColors!,
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ),
-                      )
-                    : BoxDecoration(color: baseBgColor),
-              ),
-            ),
-
-            // 2. Растворяющийся верхний баннер профиля (идентично ProfileScreen)
-            if (hasBanner && bannerOpacity > 0.01)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: math.max(250.0, topContentPadding + 150.0),
-                child: IgnorePointer(
-                  child: Opacity(
-                    opacity: bannerOpacity,
-                    child: ShaderMask(
-                      shaderCallback: (rect) => const LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.white,
-                          Colors.white,
-                          Colors.transparent,
-                        ],
-                        stops: [0.0, 0.52, 1.0],
-                      ).createShader(rect),
-                      blendMode: BlendMode.dstIn,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          ControlledAnimatedNetworkImage(
-                            url: bannerUrl,
-                            fit: BoxFit.cover,
-                            animate: bannerOpacity > 0.1,
-                          ),
-                          DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.black.withValues(alpha: 0.22),
-                                  Colors.black.withValues(alpha: 0.42),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-            // 3. Полноэкранный скроллируемый контент (проходит прямо под плавающей шапкой)
-            Positioned.fill(
-              child: LiquidGlassBatch(
-                enabled: glassProvider.enabled && !hasOuterBatch,
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 200),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  child: activeTabScroll,
-                ),
-              ),
-            ),
-
-            // 4. Мягкое затемнение/размытие для строки состояния при прокрутке текста вверх
-            if (glassProvider.enabled &&
-                statusBarHeight > 0 &&
-                statusBarEdgeProgress > 0.01)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: statusBarHeight + 10.0 * statusBarEdgeProgress,
-                child: IgnorePointer(
-                  child: LiquidGlassScrollEdge(
-                    edge: LiquidGlassEdge.top,
-                    style: LiquidGlassScrollEdgeStyle.soft,
-                    blur: math.max(glassProvider.blur, 10.0) *
-                        statusBarEdgeProgress,
-                    color: Colors.black.withValues(
-                      alpha: (isDarkBackdrop ? 0.32 : 0.16) *
-                          statusBarEdgeProgress,
-                    ),
-                  ),
-                ),
-              ),
-
-            // 5. Плавающий верхний бар: кнопка «←» + переключатель «Профиль / Имя в чатах»
-            Positioned(
-              top: headerTopY,
-              left: SettingsFloatingHeader.horizontalPadding,
-              right: SettingsFloatingHeader.horizontalPadding,
-              child: LiquidGlassBatch(
-                enabled: glassProvider.enabled && !hasOuterBatch,
-                child: _buildFloatingTopBar(
-                  context: context,
-                  glassProvider: glassProvider,
-                  isDarkBackdrop: isDarkBackdrop,
-                ),
-              ),
-            ),
-          ],
+        body: ProfileFloatingSwitcherScaffold(
+          segments: labels,
+          selectedIndex: _activeTab,
+          pageController: _pageController,
+          onTabSelected: _onTabSelectedFromBar,
+          onBack: () => Navigator.of(context).maybePop(),
+          glassEnabled: glassProvider.enabled,
+          isLite: glassProvider.isLite,
+          isDarkBackdrop: isDarkBackdrop,
+          topMargin: headerTopY,
+          body: pageBackdropAndScroll,
         ),
       ),
     );

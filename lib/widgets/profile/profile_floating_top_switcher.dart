@@ -1,33 +1,17 @@
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:motor/motor.dart';
-import 'package:provider/provider.dart';
 
-import '../../services/liquid_glass_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../settings/settings_floating_header.dart';
 
-Matrix4 _switcherJellyTransform({
-  required double velocityX,
-  double maxDistortion = 0.55,
-  double velocityScale = 12.0,
-}) {
-  final speed = velocityX.abs();
-  final distortion = (speed / velocityScale).clamp(0.0, 1.0) * maxDistortion;
-  if (distortion == 0) return Matrix4.identity();
-  final scaleX = 1.0 + distortion * 0.28;
-  final scaleY = 1.0 - distortion * 0.22;
-  return Matrix4.diagonal3Values(scaleX, scaleY, 1.0);
-}
+/// Компактная высота верхней плавающей шапки и переключателя вкладок (`38px`).
+const double kProfileFloatingBarHeight = 38.0;
 
-/// Круглая плавающая кнопка «Назад» (`44x44`) поверх цветного/градиентного фона профиля.
-///
-/// Визуально полностью совпадает с верхней кнопкой возврата реального [ProfileScreen]
-/// и плавающим переключателем [ProfileFloatingTopSwitcher].
+/// Круглая плавающая кнопка «Назад» (`40x40`) поверх цветного/градиентного фона профиля.
 class ProfileFloatingBackButton extends StatelessWidget {
   final VoidCallback onTap;
   final bool glassEnabled;
@@ -46,23 +30,38 @@ class ProfileFloatingBackButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const size = SettingsFloatingHeader.buttonSize;
+    const size = kProfileFloatingBarHeight;
     final iconColor = isDarkBackdrop
         ? Colors.white.withValues(alpha: 0.94)
         : const Color(0xFF1C1C1E);
 
-    final inner = Material(
-      type: MaterialType.transparency,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(size / 2),
-        onTap: () {
-          HapticUtils.tap();
-          onTap();
-        },
+    final inner = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticUtils.tap();
+        onTap();
+      },
+      child: Container(
+        width: size,
+        height: size,
+        decoration: glassEnabled
+            ? null
+            : BoxDecoration(
+                color: isDarkBackdrop
+                    ? const Color(0xFF26262A).withValues(alpha: 0.72)
+                    : Colors.white.withValues(alpha: 0.78),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isDarkBackdrop
+                      ? Colors.white.withValues(alpha: 0.12)
+                      : Colors.black.withValues(alpha: 0.08),
+                  width: 0.5,
+                ),
+              ),
         child: Center(
           child: iconoir.NavArrowLeft(
-            width: 22,
-            height: 22,
+            width: 21,
+            height: 21,
             color: iconColor,
           ),
         ),
@@ -72,63 +71,38 @@ class ProfileFloatingBackButton extends StatelessWidget {
     Widget button;
     final glassProvider = maybeLiquidGlassProvider(context);
     if (glassEnabled && glassProvider != null) {
-      final style = glassProvider.createStyle(
+      final buttonStyle = glassProvider.createStyle(
         context: context,
         isDarkOverride: isDarkBackdrop,
         isLiteOverride: isLite,
+        cornerRadius: size / 2,
         color: isDarkBackdrop
             ? const Color(0x38202025)
             : const Color(0x66FFFFFF),
-        refractionIndex: 1.15,
+        refractionIndex: 1.12,
         refractionWidth: 22.0,
-        shape: const LiquidGlassShape.roundedRectangle(
-          cornerRadius: size / 2,
-        ),
       );
-      button = SizedBox(
-        width: size,
-        height: size,
-        child: LiquidGlassLens(
-          style: style,
+
+      button = LiquidGlassLens(
+        style: buttonStyle,
+        touch: const LiquidGlassTouch.flexing(
+          LiquidGlassFlex(
+            stretch: 4,
+            squeeze: 0.8,
+            lean: 0.2,
+          ),
+        ),
+        child: SizedBox(
+          width: size,
+          height: size,
           child: inner,
         ),
       );
     } else {
-      button = SizedBox(
-        width: size,
-        height: size,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black
-                    .withValues(alpha: isDarkBackdrop ? 0.24 : 0.08),
-                blurRadius: 12,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isDarkBackdrop
-                      ? const Color(0x9926262A)
-                      : const Color(0xCCFFFFFF),
-                  border: Border.all(
-                    color: isDarkBackdrop
-                        ? Colors.white.withValues(alpha: 0.14)
-                        : Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
-                child: inner,
-              ),
-            ),
-          ),
+      button = ClipOval(
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
+          child: inner,
         ),
       );
     }
@@ -140,202 +114,100 @@ class ProfileFloatingBackButton extends StatelessWidget {
   }
 }
 
-/// Плавающий переключатель разделов с живой стеклянной пилюлей ([LiquidGlassMotionPill]),
-/// идентичный по физике и дизайну переключателю на главном экране (`MainScreen`).
-///
-/// Поддерживает:
-/// - Нажатие на вкладку с вылетом и морфингом плавающей линзы-пилюли;
-/// - Горизонтальное перетаскивание пальцем с резиновым сопротивлением на краях;
-/// - Режим Liquid Glass (с [LiquidGlassLens] + [LiquidGlassMotionPill]) и классический матовый режим.
-class ProfileFloatingTopSwitcher extends StatefulWidget {
+/// Компактный переключатель разделов для классического (без Liquid Glass) режима,
+/// анимируемый напрямую от [PageController] как `_buildClassicNav` в `EmojiStickerPanel`.
+class ProfileClassicTopSwitcher extends StatelessWidget {
   final List<String> segments;
   final int selectedIndex;
-  final ValueChanged<int> onChanged;
-  final bool glassEnabled;
-  final bool isLite;
+  final PageController pageController;
+  final ValueChanged<int> onTabSelected;
   final bool isDarkBackdrop;
+  final double width;
   final double height;
-  final double padding;
 
-  const ProfileFloatingTopSwitcher({
+  const ProfileClassicTopSwitcher({
     super.key,
     required this.segments,
     required this.selectedIndex,
-    required this.onChanged,
-    required this.glassEnabled,
-    this.isLite = false,
-    this.isDarkBackdrop = true,
-    this.height = SettingsFloatingHeader.buttonSize,
-    this.padding = 4.0,
-  }) : assert(segments.length >= 2);
-
-  @override
-  State<ProfileFloatingTopSwitcher> createState() =>
-      _ProfileFloatingTopSwitcherState();
-}
-
-class _ProfileFloatingTopSwitcherState
-    extends State<ProfileFloatingTopSwitcher> {
-  bool _isDown = false;
-  bool _isDragging = false;
-  late double _xAlign = _alignForIndex(widget.selectedIndex);
-
-  double _alignForIndex(int index) {
-    final count = widget.segments.length;
-    if (count <= 1) return 0.0;
-    final clamped = index.clamp(0, count - 1);
-    return (clamped / (count - 1)) * 2.0 - 1.0;
-  }
-
-  @override
-  void didUpdateWidget(covariant ProfileFloatingTopSwitcher oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!_isDragging &&
-        (oldWidget.selectedIndex != widget.selectedIndex ||
-            oldWidget.segments.length != widget.segments.length)) {
-      _xAlign = _alignForIndex(widget.selectedIndex);
-    }
-  }
-
-  double _applyRubberBand(double normalized) {
-    const resistance = 0.35;
-    const maxOverdrag = 0.24;
-    if (normalized < 0.0) {
-      return -((-normalized) * resistance).clamp(0.0, maxOverdrag);
-    }
-    if (normalized > 1.0) {
-      return 1.0 + ((normalized - 1.0) * resistance).clamp(0.0, maxOverdrag);
-    }
-    return normalized;
-  }
-
-  double _alignmentFromGlobal(Offset globalPos) {
-    final renderObj = context.findRenderObject();
-    if (renderObj is! RenderBox || renderObj.size.width <= 0) {
-      return _alignForIndex(widget.selectedIndex);
-    }
-    final local = renderObj.globalToLocal(globalPos);
-    final count = widget.segments.length;
-    final indicatorFrac = 1.0 / count;
-    final draggableRange = math.max(0.001, 1.0 - indicatorFrac);
-    final halfPad = indicatorFrac / 2.0;
-
-    final rawFrac = (local.dx / renderObj.size.width).clamp(0.0, 1.0);
-    final normalized = (rawFrac - halfPad) / draggableRange;
-    final resisted = _applyRubberBand(normalized);
-    return resisted * 2.0 - 1.0;
-  }
-
-  void _handleDragStart(DragStartDetails details) {
-    setState(() {
-      _isDown = true;
-      _isDragging = true;
-      _xAlign = _alignmentFromGlobal(details.globalPosition);
-    });
-  }
-
-  void _handleDragUpdate(DragUpdateDetails details) {
-    setState(() {
-      _isDragging = true;
-      _xAlign = _alignmentFromGlobal(details.globalPosition);
-    });
-  }
-
-  void _handleDragEnd(DragEndDetails details) {
-    final renderObj = context.findRenderObject();
-    final count = widget.segments.length;
-    final currentFrac = (_xAlign + 1.0) / 2.0;
-
-    int targetIndex;
-    if (currentFrac <= 0.0) {
-      targetIndex = 0;
-    } else if (currentFrac >= 1.0) {
-      targetIndex = count - 1;
-    } else {
-      double velocityNorm = 0.0;
-      if (renderObj is RenderBox && renderObj.size.width > 0) {
-        final range = math.max(0.001, 1.0 - 1.0 / count);
-        velocityNorm =
-            (details.velocity.pixelsPerSecond.dx / renderObj.size.width) /
-                range;
-      }
-      final projected = (currentFrac + velocityNorm * 0.22).clamp(0.0, 1.0);
-      targetIndex = (projected * (count - 1)).round().clamp(0, count - 1);
-    }
-
-    setState(() {
-      _isDragging = false;
-      _isDown = false;
-      _xAlign = _alignForIndex(targetIndex);
-    });
-
-    if (targetIndex != widget.selectedIndex) {
-      HapticUtils.selection();
-      widget.onChanged(targetIndex);
-    }
-  }
-
-  void _handleDragCancel() {
-    setState(() {
-      _isDragging = false;
-      _isDown = false;
-      _xAlign = _alignForIndex(widget.selectedIndex);
-    });
-  }
+    required this.pageController,
+    required this.onTabSelected,
+    required this.isDarkBackdrop,
+    required this.width,
+    this.height = kProfileFloatingBarHeight,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final count = widget.segments.length;
-    final clampedSelected = widget.selectedIndex.clamp(0, count - 1);
-    final targetAlign = _alignForIndex(clampedSelected);
-    final outerRadius = widget.height / 2.0;
-
+    final count = segments.length;
+    final indicatorColor = isDarkBackdrop
+        ? Colors.white.withValues(alpha: 0.16)
+        : Colors.black.withValues(alpha: 0.08);
     final selectedTextColor =
-        widget.isDarkBackdrop ? Colors.white : const Color(0xFF1C1C1E);
-    final unselectedTextColor = widget.isDarkBackdrop
+        isDarkBackdrop ? Colors.white : const Color(0xFF1C1C1E);
+    final unselectedTextColor = isDarkBackdrop
         ? Colors.white.withValues(alpha: 0.68)
         : const Color(0xFF1C1C1E).withValues(alpha: 0.58);
 
-    // Цвет покоящейся пилюли совпадает с LiquidGlassTabPillStyle.rest на MainScreen
-    final restPillColor = widget.isDarkBackdrop
-        ? const Color(0x38FFFFFF)
-        : const Color(0x2EAEAEB2);
-
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final useGlass = widget.glassEnabled && glassProvider != null;
-
-    return SizedBox(
-      height: widget.height,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.maxWidth;
-          final pad = widget.padding;
-          final innerW = math.max(1.0, width - pad * 2.0);
-          final cellW = innerW / count;
-          final cellH = math.max(1.0, widget.height - pad * 2.0);
-          final travel = math.max(0.0, innerW - cellW);
-
-          Widget labelsRow = Row(
+    final navContent = Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: isDarkBackdrop
+            ? const Color(0xFF26262A).withValues(alpha: 0.72)
+            : Colors.white.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(height / 2),
+        border: Border.all(
+          color: isDarkBackdrop
+              ? Colors.white.withValues(alpha: 0.12)
+              : Colors.black.withValues(alpha: 0.08),
+          width: 0.5,
+        ),
+      ),
+      child: Stack(
+        children: [
+          AnimatedBuilder(
+            animation: pageController,
+            builder: (context, child) {
+              double offset = selectedIndex.toDouble();
+              try {
+                if (pageController.hasClients) {
+                  offset = pageController.page ?? selectedIndex.toDouble();
+                }
+              } catch (_) {
+                offset = selectedIndex.toDouble();
+              }
+              final alignX = count <= 1
+                  ? 0.0
+                  : ((offset / (count - 1)) * 2.0 - 1.0).clamp(-1.0, 1.0);
+              return Align(
+                alignment: Alignment(alignX, 0),
+                child: child!,
+              );
+            },
+            child: FractionallySizedBox(
+              widthFactor: 1.0 / count,
+              heightFactor: 1.0,
+              child: Padding(
+                padding: const EdgeInsets.all(3.5),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: indicatorColor,
+                    borderRadius: BorderRadius.circular(height / 2),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Row(
             children: [
               for (int i = 0; i < count; i++)
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTapDown: (_) => setState(() => _isDown = true),
-                    onTapCancel: () => setState(() => _isDown = false),
-                    onTap: () {
-                      setState(() {
-                        _isDown = false;
-                        _xAlign = _alignForIndex(i);
-                      });
-                      if (i != clampedSelected) {
-                        HapticUtils.selection();
-                        widget.onChanged(i);
-                      }
-                    },
+                    onTap: () => onTabSelected(i),
                     child: Center(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
                         child: AnimatedDefaultTextStyle(
                           duration: const Duration(milliseconds: 180),
                           curve: Curves.easeOutCubic,
@@ -344,17 +216,17 @@ class _ProfileFloatingTopSwitcherState
                                 .textTheme
                                 .titleMedium
                                 ?.fontFamily,
-                            fontSize: 14.0,
+                            fontSize: 13.0,
                             letterSpacing: -0.2,
-                            fontWeight: i == clampedSelected
+                            fontWeight: i == selectedIndex
                                 ? FontWeight.w700
-                                : FontWeight.w500,
-                            color: i == clampedSelected
+                                : FontWeight.w600,
+                            color: i == selectedIndex
                                 ? selectedTextColor
                                 : unselectedTextColor,
                           ),
                           child: Text(
-                            widget.segments[i],
+                            segments[i],
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.center,
@@ -365,168 +237,246 @@ class _ProfileFloatingTopSwitcherState
                   ),
                 ),
             ],
-          );
+          ),
+        ],
+      ),
+    );
 
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart: _handleDragStart,
-            onHorizontalDragUpdate: _handleDragUpdate,
-            onHorizontalDragEnd: _handleDragEnd,
-            onHorizontalDragCancel: _handleDragCancel,
-            child: VelocityMotionBuilder(
-              converter: const SingleMotionConverter(),
-              value: _xAlign,
-              motion: _isDragging
-                  ? const Motion.interactiveSpring(snapToEnd: true)
-                  : const Motion.snappySpring(
-                      snapToEnd: true,
-                      duration: Duration(milliseconds: 300),
-                    ),
-              builder: (context, animatedAlign, velocity, _) {
-                final norm = (animatedAlign + 1.0) / 2.0;
-                final centerX = pad + cellW / 2.0 + norm * travel;
-                final center = Offset(centerX, widget.height / 2.0);
-                final isGliding = (animatedAlign - targetAlign).abs() > 0.05;
-                final pillActive = _isDown || _isDragging || isGliding;
-
-                if (useGlass) {
-                  final capsuleStyle = glassProvider.createStyle(
-                    context: context,
-                    isDarkOverride: widget.isDarkBackdrop,
-                    isLiteOverride: widget.isLite,
-                    color: widget.isDarkBackdrop
-                        ? const Color(0x38202025)
-                        : const Color(0x66FFFFFF),
-                    refractionIndex: 1.15,
-                    refractionWidth: 22.0,
-                    shape: LiquidGlassShape.continuousRoundedRectangle(
-                      cornerRadius: outerRadius,
-                    ),
-                  );
-
-                  final movingPillStyle = LiquidGlassStyle(
-                    shape: LiquidGlassShape.continuousRoundedRectangle(
-                      cornerRadius: (cellH + 12.0) / 2.0,
-                    ),
-                    color: widget.isDarkBackdrop
-                        ? const Color(0x22FFFFFF)
-                        : const Color(0x36FFFFFF),
-                    blur: 0.0,
-                    refractionIndex: 1.14,
-                    refractionWidth: 18.0,
-                    liteGlass: widget.isLite,
-                  );
-
-                  return Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      // 1. Базовая стеклянная капсула переключателя
-                      Positioned.fill(
-                        child: LiquidGlassLens(
-                          style: capsuleStyle,
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                      // 2. Плавающая живая пилюля Liquid Glass (с вылетом за края и jelly-деформацией)
-                      Positioned.fill(
-                        child: LiquidGlassBatch.exclude(
-                          child: LiquidGlassMotionPill(
-                            center: center,
-                            active: pillActive,
-                            restSize: Size(cellW, cellH),
-                            activeSize: Size(cellW + 14.0, cellH + 12.0),
-                            style: movingPillStyle,
-                            cover: ColoredBox(color: restPillColor),
-                          ),
-                        ),
-                      ),
-                      // 3. Кликабельные подписи поверх пилюли
-                      Positioned.fill(
-                        child: Padding(
-                          padding: EdgeInsets.all(pad),
-                          child: labelsRow,
-                        ),
-                      ),
-                    ],
-                  );
-                }
-
-                // Классический матовый режим с пружинным скольжением пилюли
-                return DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(outerRadius),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(
-                          alpha: widget.isDarkBackdrop ? 0.24 : 0.08,
-                        ),
-                        blurRadius: 12,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(outerRadius),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(outerRadius),
-                          color: widget.isDarkBackdrop
-                              ? const Color(0x9926262A)
-                              : const Color(0xCCFFFFFF),
-                          border: Border.all(
-                            color: widget.isDarkBackdrop
-                                ? Colors.white.withValues(alpha: 0.14)
-                                : Colors.black.withValues(alpha: 0.08),
-                            width: 0.5,
-                          ),
-                        ),
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Positioned(
-                              left: centerX - cellW / 2.0,
-                              top: pad,
-                              width: cellW,
-                              height: cellH,
-                              child: Transform(
-                                alignment: Alignment.center,
-                                transform: _switcherJellyTransform(
-                                  velocityX: velocity,
-                                ),
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: restPillColor,
-                                    borderRadius:
-                                        BorderRadius.circular(cellH / 2.0),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            Positioned.fill(
-                              child: Padding(
-                                padding: EdgeInsets.all(pad),
-                                child: labelsRow,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          );
-        },
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(height / 2),
+      child: BackdropFilter.grouped(
+        filter: BlurUtils.createDownsampledBlur(15),
+        child: navContent,
       ),
     );
   }
 }
 
-/// Полупрозрачная карточка секции поверх фона/градиента профиля,
-/// выполненная по визуальному рецепту `LiquidGlassInfoPanel` на реальном `ProfileScreen`.
+/// Полноэкранная обёртка с компактным верхним переключателем разделов и кнопкой «←»,
+/// реализованная по той же архитектуре `LiquidGlassTabBar.buildGlassPillBar` + `PageController`,
+/// что и в `EmojiStickerPanel`.
+class ProfileFloatingSwitcherScaffold extends StatelessWidget {
+  final List<String> segments;
+  final int selectedIndex;
+  final PageController pageController;
+  final ValueChanged<int> onTabSelected;
+  final VoidCallback onBack;
+  final Widget body;
+  final bool glassEnabled;
+  final bool isLite;
+  final bool isDarkBackdrop;
+  final double topMargin;
+  final double horizontalMargin;
+
+  const ProfileFloatingSwitcherScaffold({
+    super.key,
+    required this.segments,
+    required this.selectedIndex,
+    required this.pageController,
+    required this.onTabSelected,
+    required this.onBack,
+    required this.body,
+    required this.glassEnabled,
+    this.isLite = false,
+    this.isDarkBackdrop = true,
+    required this.topMargin,
+    this.horizontalMargin = SettingsFloatingHeader.horizontalPadding,
+  }) : assert(segments.length >= 2);
+
+  /// Измеряет минимальную компактную ширину капсулы переключателя точно под размер слов.
+  static double measureCompactWidth(
+    BuildContext context,
+    List<String> segments, {
+    required double maxWidth,
+  }) {
+    if (maxWidth <= 0) return 0.0;
+    final textDirection = Directionality.of(context);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final fontFamily = Theme.of(context).textTheme.titleMedium?.fontFamily;
+    final measureStyle = TextStyle(
+      fontFamily: fontFamily,
+      fontSize: 13.0,
+      fontWeight: FontWeight.w700,
+      letterSpacing: -0.2,
+    );
+
+    double maxWordWidth = 0.0;
+    for (final word in segments) {
+      final painter = TextPainter(
+        text: TextSpan(text: word, style: measureStyle),
+        maxLines: 1,
+        textDirection: textDirection,
+        textScaler: textScaler,
+      )..layout();
+      if (painter.width > maxWordWidth) {
+        maxWordWidth = painter.width;
+      }
+    }
+
+    // По 8px компактного внутреннего отступа слева и справа от слова + 3px отступа капсулы с краёв
+    final idealWidth =
+        ((maxWordWidth.ceilToDouble() + 16.0) * segments.length) + 6.0;
+    final minCompact = math.min(108.0, maxWidth);
+    return idealWidth.clamp(minCompact, maxWidth).toDouble();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final glassProvider = maybeLiquidGlassProvider(context);
+    final useGlass = glassEnabled && glassProvider != null;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final panelW = constraints.maxWidth.isFinite && constraints.maxWidth > 0
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
+        const barHeight = kProfileFloatingBarHeight;
+        final leftOccupied =
+            horizontalMargin + kProfileFloatingBarHeight + SettingsFloatingHeader.headerGap;
+        final maxAvailableForBar =
+            math.max(0.0, panelW - leftOccupied - horizontalMargin);
+        final barWidth = measureCompactWidth(
+          context,
+          segments,
+          maxWidth: maxAvailableForBar,
+        );
+
+        final canCenter =
+            (panelW - barWidth) / 2.0 >= leftOccupied;
+        final barAlignment =
+            canCenter ? Alignment.topCenter : Alignment.topLeft;
+        final barMargin = canCenter
+            ? EdgeInsets.only(top: topMargin)
+            : EdgeInsets.only(left: leftOccupied, top: topMargin);
+
+        if (useGlass && barWidth > 0) {
+          final barStyle = glassProvider.createStyle(
+            context: context,
+            isDarkOverride: isDarkBackdrop,
+            isLiteOverride: isLite,
+            cornerRadius: barHeight / 2,
+            color: isDarkBackdrop
+                ? const Color(0x38202025)
+                : const Color(0x66FFFFFF),
+            refractionIndex: 1.1,
+            refractionWidth: 24.0,
+          );
+
+          final tabBar = LiquidGlassTabBar(
+            items: [
+              for (final label in segments)
+                LiquidGlassTabBarItem(
+                  label: label,
+                  iconBuilder: (_, __) => const SizedBox.shrink(),
+                ),
+            ],
+            selectedIndex: selectedIndex,
+            onChanged: onTabSelected,
+            width: barWidth,
+            height: barHeight,
+            alignment: barAlignment,
+            margin: barMargin,
+            itemPadding: 3,
+            style: barStyle,
+            itemStyle: LiquidGlassTabItemStyle(
+              selectedColor:
+                  isDarkBackdrop ? Colors.white : const Color(0xFF1C1C1E),
+              unselectedColor: isDarkBackdrop
+                  ? Colors.white.withValues(alpha: 0.68)
+                  : const Color(0xFF1C1C1E).withValues(alpha: 0.58),
+              iconSize: 0,
+              underGlassIconSize: 0,
+              iconLabelGap: 0,
+              labelFontSize: 13,
+              underGlassLabelFontSize: 13.5,
+              selectedFontWeight: FontWeight.w700,
+              unselectedFontWeight: FontWeight.w600,
+            ),
+            pillStyle: LiquidGlassTabPillStyle(
+              mode: LiquidGlassPillMode.both,
+              show: true,
+              animated: true,
+              growHeight: 7,
+              rest: LiquidGlassStyle(
+                shape: const LiquidGlassShape.continuousRoundedRectangle(
+                  cornerRadius: 28,
+                  clipQuality: LiquidGlassClipQuality.roundedRectangle,
+                ),
+                color: isDarkBackdrop
+                    ? const Color(0x38FFFFFF)
+                    : const Color(0x2EAEAEB2),
+              ),
+            ),
+          );
+
+          return tabBar.buildGlassPillBar(
+            body: body,
+            chromeChild: Stack(
+              fit: StackFit.expand,
+              children: [
+                Positioned(
+                  left: horizontalMargin,
+                  top: topMargin,
+                  child: ProfileFloatingBackButton(
+                    onTap: onBack,
+                    glassEnabled: true,
+                    isLite: isLite,
+                    isDarkBackdrop: isDarkBackdrop,
+                  ),
+                ),
+              ],
+            ),
+            bottomInset: 0,
+            pixelRatio: 1.0,
+            useSync: true,
+            batch: false,
+          );
+        }
+
+        final classicLeft = canCenter
+            ? (panelW - barWidth) / 2.0
+            : leftOccupied;
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            body,
+            Positioned(
+              left: horizontalMargin,
+              top: topMargin,
+              child: ProfileFloatingBackButton(
+                onTap: onBack,
+                glassEnabled: false,
+                isLite: isLite,
+                isDarkBackdrop: isDarkBackdrop,
+              ),
+            ),
+            if (barWidth > 0)
+              Positioned(
+                left: classicLeft,
+                top: topMargin,
+                width: barWidth,
+                height: barHeight,
+                child: ProfileClassicTopSwitcher(
+                  key: const ValueKey<String>('profile_classic_top_switcher'),
+                  segments: segments,
+                  selectedIndex: selectedIndex,
+                  pageController: pageController,
+                  onTabSelected: onTabSelected,
+                  isDarkBackdrop: isDarkBackdrop,
+                  width: barWidth,
+                  height: barHeight,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Лёгкая полупрозрачная карточка секции поверх фона/градиента профиля
+/// (без вложенных шейдеров/BackdropFilter внутри скролла для плавной прокрутки 120fps).
 class ProfileGlassSection extends StatelessWidget {
   final String? title;
   final List<Widget> children;
@@ -542,7 +492,7 @@ class ProfileGlassSection extends StatelessWidget {
     this.title,
     required this.children,
     this.margin = const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-    required this.glassEnabled,
+    this.glassEnabled = false,
     this.isLite = false,
     this.isDarkBackdrop = true,
     this.accentColor,
@@ -554,8 +504,6 @@ class ProfileGlassSection extends StatelessWidget {
     if (children.isEmpty) return const SizedBox.shrink();
 
     final baseTheme = Theme.of(context);
-    final targetBrightness =
-        isDarkBackdrop ? Brightness.dark : Brightness.light;
     final primaryText =
         isDarkBackdrop ? Colors.white : const Color(0xFF1C1C1E);
     final secondaryText = isDarkBackdrop
@@ -570,133 +518,77 @@ class ProfileGlassSection extends StatelessWidget {
     final effectiveAccent = accentColor ??
         (isDarkBackdrop ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
 
-    final adaptedScheme = ColorScheme.fromSeed(
-      seedColor: effectiveAccent,
-      brightness: targetBrightness,
-    ).copyWith(
-      primary: effectiveAccent,
-      onSurface: primaryText,
-      onSurfaceVariant: secondaryText,
-    );
-
-    final sectionTheme = baseTheme.copyWith(
-      brightness: targetBrightness,
-      colorScheme: adaptedScheme,
-      iconTheme: IconThemeData(color: primaryText),
-      listTileTheme: ListTileThemeData(
-        iconColor: primaryText,
-        textColor: primaryText,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        titleTextStyle: baseTheme.textTheme.bodyLarge?.copyWith(
-          fontSize: 15.5,
-          fontWeight: FontWeight.w500,
-          color: primaryText,
+    final rowsColumn = IconTheme(
+      data: IconThemeData(color: primaryText),
+      child: ListTileTheme(
+        data: ListTileThemeData(
+          iconColor: primaryText,
+          textColor: primaryText,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          titleTextStyle: baseTheme.textTheme.bodyLarge?.copyWith(
+            fontSize: 15.5,
+            fontWeight: FontWeight.w500,
+            color: primaryText,
+          ),
+          subtitleTextStyle: baseTheme.textTheme.bodySmall?.copyWith(
+            fontSize: 12.5,
+            color: secondaryText,
+          ),
         ),
-        subtitleTextStyle: baseTheme.textTheme.bodySmall?.copyWith(
-          fontSize: 12.5,
-          color: secondaryText,
-        ),
-      ),
-    );
-
-    final rowsColumn = Theme(
-      data: sectionTheme,
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (int i = 0; i < children.length; i++) ...[
-              children[i],
-              if (i < children.length - 1)
-                Divider(
-                  height: 1,
-                  thickness: 0.5,
-                  indent: dividerIndent,
-                  endIndent: 16,
-                  color: dividerColor,
-                ),
-            ],
-          ],
-        ),
-      ),
-    );
-
-    Widget card;
-    LiquidGlassProvider? glassProvider;
-    try {
-      glassProvider = context.watch<LiquidGlassProvider>();
-    } catch (_) {}
-
-    if (glassEnabled && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        isDarkOverride: isDarkBackdrop,
-        isLiteOverride: isLite,
-        color: isDarkBackdrop
-            ? const Color(0x38202025)
-            : const Color(0x66FFFFFF),
-        refractionIndex: 1.15,
-        refractionWidth: 22.0,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 24,
-        ),
-      );
-      card = LiquidGlassLens(
-        style: style,
-        child: DecoratedBox(
-          decoration: isDarkBackdrop
-              ? const BoxDecoration()
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (int i = 0; i < children.length; i++) ...[
+                children[i],
+                if (i < children.length - 1)
+                  Divider(
+                    height: 1,
+                    thickness: 0.5,
+                    indent: dividerIndent,
+                    endIndent: 16,
+                    color: dividerColor,
                   ),
-                ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final card = DecoratedBox(
+      decoration: BoxDecoration(
+        color: isDarkBackdrop
+            ? Colors.black.withValues(alpha: 0.25)
+            : Colors.white.withValues(alpha: 0.80),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDarkBackdrop
+              ? Colors.white.withValues(alpha: 0.10)
+              : Colors.black.withValues(alpha: 0.06),
+          width: 0.5,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: DefaultTextStyle.merge(
+          style: TextStyle(color: primaryText),
+          child: Theme(
+            data: baseTheme.copyWith(
+              colorScheme: baseTheme.colorScheme.copyWith(
+                primary: effectiveAccent,
+                onSurface: primaryText,
+                onSurfaceVariant: secondaryText,
+              ),
+            ),
             child: rowsColumn,
           ),
         ),
-      );
-    } else {
-      card = DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(22),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black
-                  .withValues(alpha: isDarkBackdrop ? 0.18 : 0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(22),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: isDarkBackdrop
-                    ? const Color(0x8C222228)
-                    : const Color(0xC2FFFFFF),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(
-                  color: isDarkBackdrop
-                      ? Colors.white.withValues(alpha: 0.12)
-                      : Colors.black.withValues(alpha: 0.08),
-                  width: 0.5,
-                ),
-              ),
-              child: rowsColumn,
-            ),
-          ),
-        ),
-      );
-    }
+      ),
+    );
 
     return Padding(
       padding: margin,
@@ -705,7 +597,12 @@ class ProfileGlassSection extends StatelessWidget {
         children: [
           if (title != null && title!.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8, top: 6),
+              padding: const EdgeInsets.only(
+                left: 16,
+                right: 16,
+                bottom: 8,
+                top: 6,
+              ),
               child: Text(
                 title!,
                 style: TextStyle(

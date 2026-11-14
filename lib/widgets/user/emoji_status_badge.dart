@@ -189,23 +189,6 @@ Future<void> showEmojiStatusDetailSheet(
             ),
             textAlign: TextAlign.center,
           ),
-          if (active.note.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHighest
-                    .withValues(alpha: 0.45),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Text(
-                active.note,
-                style: theme.textTheme.bodyMedium,
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ],
           const SizedBox(height: 10),
           Text(
             expiresLabel,
