@@ -10,7 +10,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import '../../models/theav_theme.dart';
+import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
+import '../../widgets/message/group_message_avatar_row.dart';
 import '../../services/chat_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
@@ -19,11 +21,10 @@ import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import 'package:drift/drift.dart' show Value;
-import '../../utils/image_utils.dart';
-import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
@@ -34,9 +35,6 @@ import '../../widgets/chat/chat_messages_shimmer.dart';
 import '../../widgets/chat/chat_scroll_navigator.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/message_bubble.dart';
-import '../../widgets/message/text_message_widget.dart';
-import '../../widgets/message/message_status_widget.dart';
-import '../../widgets/chat/message_reply_info.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
 import '../../utils/swipe_back_route.dart';
@@ -55,9 +53,6 @@ import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/chat/round_video_recording_overlay.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
-import '../../widgets/message/video_message_widget.dart';
-import '../../widgets/message/voice_message_widget.dart';
-import '../../widgets/message/poll_message_widget.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
@@ -65,7 +60,6 @@ import '../../services/glass_toast_service.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
 import '../../widgets/chat/pinned_message_banner.dart';
-import '../../widgets/message/inline_keyboard_widget.dart';
 import '../settings/profile_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/sticker_service.dart';
@@ -135,6 +129,8 @@ class _ChannelScreenState extends State<ChannelScreen>
   bool _isAdmin = false;
   bool _isMuted = false;
   bool _isVerified = false;
+  bool _showAuthorProfiles = true;
+  List<ChatParticipant> _participants = [];
   Message? _pinnedMessage;
   bool _showScrollDownFab = false;
   double _lastScrollOffset = 0;
@@ -811,6 +807,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       onMessageDeleted: _onMessageDeleted,
       onMessagePinned: _onMessagePinned,
       onMessageUnpinned: _onMessageUnpinned,
+      onUserAppearanceUpdated: _onUserAppearanceUpdated,
       onReconnect: _triggerSilentSync,
     );
   }
@@ -833,6 +830,28 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _onMessageUnpinned(WebSocketEvent event) {
     if (!mounted) return;
     setState(() => _pinnedMessage = null);
+  }
+
+  void _onUserAppearanceUpdated(WebSocketEvent event) {
+    final userId = event.data['user_id']?.toString();
+    if (userId == null || userId.isEmpty || !mounted) return;
+    PeerCustomizationCache.instance.mergeFromJson(userId, event.data);
+    final updatedCust = PeerCustomizationCache.instance.getSync(userId);
+    final nameColorPresetId = event.data['name_color_preset_id']?.toString();
+    final replyStripStyle = event.data['reply_strip_style']?.toString();
+
+    setState(() {
+      for (int i = 0; i < _messages.length; i++) {
+        if (_messages[i].senderId == userId) {
+          _messages[i] = _messages[i].copyWith(
+            senderNameColorId: nameColorPresetId ?? _messages[i].senderNameColorId,
+            senderReplyStripStyle:
+                replyStripStyle ?? _messages[i].senderReplyStripStyle,
+            senderCustomization: updatedCust ?? _messages[i].senderCustomization,
+          );
+        }
+      }
+    });
   }
 
   @override
@@ -907,6 +926,9 @@ class _ChannelScreenState extends State<ChannelScreen>
               _channelName = chat.name;
               _channelAvatar = chat.avatarUrl;
               _subscriberCount = chat.participants.length;
+              _isVerified = chat.isVerified;
+              _showAuthorProfiles = chat.showAuthorProfiles;
+              _participants = chat.participants;
             });
           }
         } catch (_) {}
@@ -1048,7 +1070,36 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
+  Future<void> _refreshChannelDetails() async {
+    try {
+      final chatResult = await ChatService.getChat(widget.channelId);
+      if (chatResult['success'] == true && mounted) {
+        final chat = chatResult['chat'] as ChatDetails;
+        setState(() {
+          _channelName = chat.name;
+          _channelAvatar = chat.avatarUrl;
+          _subscriberCount = chat.participants.length;
+          _isVerified = chat.isVerified;
+          _showAuthorProfiles = chat.showAuthorProfiles;
+          _participants = chat.participants;
+        });
+      }
+    } catch (_) {}
+  }
+
   Future<void> _loadData() async {
+    // Load cached showAuthorProfiles flag from Drift immediately
+    try {
+      final db = AppDatabase();
+      await db.ensureInitialized();
+      final cachedChat = await (db.select(db.chats)
+            ..where((t) => t.chatId.equals(widget.channelId)))
+          .getSingleOrNull();
+      if (cachedChat != null && mounted) {
+        setState(() => _showAuthorProfiles = cachedChat.showAuthorProfiles);
+      }
+    } catch (_) {}
+
     // Start loading local Drift messages immediately without waiting for network calls
     final loadMessagesFuture = _loadMessages();
 
@@ -1069,6 +1120,8 @@ class _ChannelScreenState extends State<ChannelScreen>
         _channelAvatar = chat.avatarUrl;
         _subscriberCount = chat.participants.length;
         _isVerified = chat.isVerified;
+        _showAuthorProfiles = chat.showAuthorProfiles;
+        _participants = chat.participants;
         if (chat.pinnedMessage != null) {
           _pinnedMessage = chat.pinnedMessage;
         }
@@ -1376,6 +1429,8 @@ class _ChannelScreenState extends State<ChannelScreen>
       isForward: Value(msg.isForward),
       forwardFromId: Value(msg.forwardFromId),
       forwardFromName: Value(msg.forwardFromName),
+      forwardFromAvatarUrl: Value(msg.forwardFromAvatarUrl),
+      senderCustomizationJson: Value(msg.senderCustomization?.toJsonString()),
     );
   }
 
@@ -2296,6 +2351,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           initialName: displayName,
           initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
           heroTag: displayName,
+          onUpdate: _refreshChannelDetails,
           onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
         ),
         onBack: () => TilingLayoutController.popOrCloseChatTile(context),
@@ -2309,6 +2365,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                 initialName: displayName,
                 initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
                 heroTag: displayName,
+                onUpdate: _refreshChannelDetails,
                 onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
               ),
             ),
@@ -2324,6 +2381,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                 initialName: displayName,
                 initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
                 heroTag: displayName,
+                onUpdate: _refreshChannelDetails,
                 onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
               ),
             ),
@@ -2548,6 +2606,50 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
+  ChatParticipant? _findParticipant(String senderId) {
+    if (senderId.isEmpty) return null;
+    for (final p in _participants) {
+      if (p.id == senderId) return p;
+    }
+    return null;
+  }
+
+  Color _resolveAuthorNameColor(Message message) {
+    final colorId = message.senderNameColorId ??
+        _findParticipant(message.senderId)
+            ?.peerCustomization
+            ?.nameColorPresetId;
+    if (colorId != null && colorId.isNotEmpty) {
+      return NameColorPresets.getById(colorId).primaryColor;
+    }
+    final idx =
+        message.senderId.hashCode.abs() % NameColorPresets.defaults.length;
+    return NameColorPresets.defaults[idx].primaryColor;
+  }
+
+  void _openAuthorProfile(Message message) {
+    if (message.senderId.isEmpty) return;
+    HapticUtils.tap();
+    final participant = _findParticipant(message.senderId);
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ProfileScreen(
+          entityType: ProfileEntityType.user,
+          userId: message.senderId,
+          initialName: participant?.displayName.isNotEmpty == true
+              ? participant!.displayName
+              : (message.senderName.isNotEmpty
+                  ? message.senderName
+                  : (_channelName.isNotEmpty ? _channelName : 'Channel')),
+          initialAvatarUrl: participant?.avatarUrl ?? message.senderAvatarUrl,
+          initialIsOnline: participant?.isOnline,
+          initialLastSeen: participant?.lastSeen,
+        ),
+      ),
+    );
+  }
+
   Widget _buildChannelMessage(Message message, int feedIndex) {
     final GlobalKey key;
     final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
@@ -2562,488 +2664,93 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
     final isHighlighted = message.id == _highlightMessageId;
     final isSelected = _selectedMessageIds.contains(message.id);
-    final bool useSelectedStyle = isSelected || isHighlighted;
-    final TheavPalette? palette =
-        Theme.of(context).extension<TheavThemeExtension>()?.palette;
-    final Color rowHighlightColor = palette?.messageSelectionOverlay ??
-        Theme.of(context).colorScheme.primary.withValues(alpha: 0.16);
-    final bool hasNoMedia = message.fileUrl == null || message.fileUrl!.trim().isEmpty;
-    final int emojiCount = (message.messageType == 'text' &&
-            hasNoMedia &&
-            !message.hasReply &&
-            message.entities.isEmpty)
-        ? EmojiUtils.countEmojiOnly(message.content)
-        : 0;
-    final bool isBigEmoji = emojiCount > 0;
     final bool isMe = message.senderId == _currentUserId || _isAdmin;
 
-    Widget postBody = isBigEmoji
-          ? Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-              child: Align(
-                alignment: Alignment.centerLeft, // Channels usually left-aligned
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    const double emojiFontSize = 64.0;
-                    final String stableKey = message.localId ?? message.id;
-                    final bool shouldAutoPlay = message.sendStatus == 0 ||
-                        (DateTime.tryParse(message.createdAt)
-                                ?.toLocal()
-                                .isAfter(DateTime.now().subtract(
-                                    const Duration(seconds: 3))) ??
-                            false);
+    final bool showAuthor = _showAuthorProfiles &&
+        message.messageType != 'system' &&
+        message.senderId.isNotEmpty;
+    final Message? olderNeighbor =
+        feedIndex + 1 < _messages.length ? _messages[feedIndex + 1] : null;
+    final Message? newerNeighbor =
+        feedIndex - 1 >= 0 ? _messages[feedIndex - 1] : null;
+    final bool firstInCluster = showAuthor &&
+        isFirstInSenderCluster(
+          current: message,
+          olderNeighbor: olderNeighbor,
+        );
+    final bool lastInCluster = showAuthor &&
+        isLastInSenderCluster(
+          current: message,
+          newerNeighbor: newerNeighbor,
+        );
+    final ChatParticipant? participant =
+        showAuthor ? _findParticipant(message.senderId) : null;
+    final PeerCustomization? senderCust = showAuthor
+        ? (PeerCustomizationCache.instance.getSync(message.senderId) ??
+            participant?.peerCustomization ??
+            message.senderCustomization)
+        : null;
+    final String senderDisplayName = message.senderName.isNotEmpty
+        ? message.senderName
+        : (participant?.displayName.isNotEmpty == true
+            ? participant!.displayName
+            : (_channelName.isNotEmpty ? _channelName : 'Channel'));
+    final Widget? senderHeaderWidget = (showAuthor && firstInCluster)
+        ? SenderHeaderRow(
+            senderName: senderDisplayName,
+            nameColor: _resolveAuthorNameColor(message),
+            customization: senderCust,
+            isBot: participant?.isBot ?? false,
+            isVerified: participant?.isVerified ?? false,
+            onTapSender:
+                _isSelectionMode ? null : () => _openAuthorProfile(message),
+          )
+        : null;
 
-                    Widget metadataRow = Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          iconoir.Eye(
-                            width: 10,
-                            height: 10,
-                            color: Colors.white.withValues(alpha: 0.8),
-                          ),
-                          const SizedBox(width: 4),
-                          const Text(
-                            '0',
-                            style: TextStyle(color: Colors.white, fontSize: 10),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _formatTime(message.createdAt),
-                            style: const TextStyle(color: Colors.white, fontSize: 10),
-                          ),
-                        ],
-                      ),
-                    );
-
-                    return MetaData(
-                      metaData: 'message_bubble_box',
-                      behavior: HitTestBehavior.translucent,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          if (emojiCount == 1)
-                            LottieEmoji(
-                              key: ValueKey('lottie_$stableKey'),
-                              emoji: message.content,
-                              width: emojiFontSize * 1.8,
-                              height: emojiFontSize * 1.8,
-                              isMe: false, // In channels usually left-aligned effects
-                              autoPlay: shouldAutoPlay,
-                              autoPlayId: stableKey,
-                            )
-                          else
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4.0, bottom: 20.0, right: 16.0),
-                              child: EmojiUtils.emojiOnlyText(
-                                message.content,
-                                fontSize: emojiCount <= 3 ? 44.0 : 32.0,
-                              ),
-                            ),
-                          Positioned(
-                            bottom: emojiCount == 1 ? 12 : 0,
-                            right: emojiCount == 1 ? -16 : 0,
-                            child: metadataRow,
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            )
-          : MetaData(
-              metaData: 'message_bubble_box',
-              behavior: HitTestBehavior.translucent,
-              child: Card(
-                color: useSelectedStyle
-                    ? (palette?.chatBubbleIncomingSelected ??
-                        Theme.of(context).cardColor)
-                    : null,
-                margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header box: Forwarded info or Reply info
-              if (message.forwardFromName != null &&
-                  message.forwardFromName!.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4.0),
-                  child: MessageReplyInfo.forwarded(
-                    authorName: message.forwardFromName!,
-                    isMe: false,
-                  ),
-                ),
-              if (message.hasReply)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4.0),
-                  child: MessageReplyInfo(
-                    replyInfo: message.replyInfo,
-                    isQuote: message.isQuote,
-                    quoteText: message.quoteText,
-                    quoteOffset: message.quoteOffset,
-                    quoteLength: message.quoteLength,
-                    entitiesOverride: message.replyToMessageId != null
-                        ? (_messages
-                                .where((m) => m.id == message.replyToMessageId)
-                                .map((m) => m.entities)
-                                .firstOrNull ??
-                            const [])
-                        : const [],
-                    isMe: false, // In channels, usually incoming style
-                    onTap: () => _handleReplyTap(message.replyToMessageId!,
-                        message.replyInfo?.chatId,
-                        fromMessageId: message.id),
-                  ),
-                ),
-              // Channel header
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor: const Color(0xFF0088CC),
-                    backgroundImage:
-                        getValidAvatarUrl(message.senderAvatarUrl) != null
-                            ? NetworkImage(
-                                getValidAvatarUrl(message.senderAvatarUrl)!)
-                            : null,
-                    child: getValidAvatarUrl(message.senderAvatarUrl) == null
-                        ? const iconoir.Megaphone(
-                            color: Colors.white, width: 16, height: 16)
-                        : null,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _channelName.isNotEmpty ? _channelName : 'Channel',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          _formatTime(message.createdAt),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // Message content
-              if (message.messageType == 'voice' && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: VoiceMessageWidget(
-                    key: ValueKey('voice_${message.id}'),
-                    messageId: message.id,
-                    audioUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                    duration: message.duration != null && message.duration! > 0
-                        ? Duration(seconds: message.duration!)
-                        : null,
-                    waveform: message.waveform,
-                    fileSize: message.mediaFileSize,
-                    isMe: false,
-                    isRead: true,
-                    sendStatus: message.sendStatus,
-                    timeText: _formatTime(message.createdAt),
-                    senderName: _channelName,
-                    onRetry: () => _retryMessage(message),
-                    chatId: widget.channelId,
-                    chatType: 'channel',
-                    chatTitle: _channelName,
-                  ),
-                )
-              else if (message.messageType == 'audio' && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: VoiceMessageWidget(
-                    key: ValueKey('audio_${message.id}'),
-                    messageId: message.id,
-                    audioUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                    title: message.fileName ?? 'Audio',
-                    duration: (message.duration ?? message.mediaDuration) != null &&
-                            (message.duration ?? message.mediaDuration)! > 0
-                        ? Duration(seconds: (message.duration ?? message.mediaDuration)!)
-                        : null,
-                    waveform: message.waveform,
-                    fileSize: message.mediaFileSize,
-                    isMe: false,
-                    isRead: true,
-                    sendStatus: message.sendStatus,
-                    timeText: _formatTime(message.createdAt),
-                    senderName: _channelName,
-                    onRetry: () => _retryMessage(message),
-                    chatId: widget.channelId,
-                    chatType: 'channel',
-                    chatTitle: _channelName,
-                  ),
-                )
-              else if ((message.isRound || (message.messageType == 'video' && message.isRound)) && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Center(
-                    child: VideoMessageWidget(
-                      key: ValueKey('vmsg_${message.id}'),
-                      messageId: message.id,
-                      videoUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                      duration: message.duration != null && message.duration! > 0
-                          ? Duration(seconds: message.duration!)
-                          : null,
-                      thumbUrl: message.thumbUrl,
-                      thumbBase64: message.thumbBase64,
-                      fileSize: message.mediaFileSize,
-                      isMe: false,
-                      isRead: true,
-                      sendStatus: message.sendStatus,
-                      timeText: _formatTime(message.createdAt),
-                      senderName: _channelName,
-                      onRetry: () => _retryMessage(message),
-                      chatId: widget.channelId,
-                      chatType: 'channel',
-                      chatTitle: _channelName,
-                    ),
-                  ),
-                )
-              else if (message.messageType != 'text' && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8.0),
-                    child: Image.network(
-                      AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[300],
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const iconoir.Attachment(width: 20, height: 20),
-                              const SizedBox(width: 8),
-                              Text(message.fileName ?? 'File'),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final bool isMediaNoteWithoutText =
-                      message.messageType == 'voice' ||
-                          message.isRound ||
-                          message.messageType == 'round' ||
-                          (message.messageType == 'audio' &&
-                              (message.content.trim().isEmpty ||
-                                  message.content.trim() == message.fileName));
-                  final String displayContent =
-                      isMediaNoteWithoutText ? '' : message.content;
-                  final textStyle = Theme.of(context).textTheme.bodyMedium;
-                  // Conservative estimate for metadata width (Views + Time + Icons + Padding)
-                  const double metadataWidth = 85.0;
-                  const double safetyMargin = 12.0;
-                  final double maxContentWidth = constraints.maxWidth;
-
-                  final TextPainter textPainter = TextPainter(
-                    text: TextSpan(text: displayContent, style: textStyle),
-                    textDirection: TextDirection.ltr,
-                  )..layout(maxWidth: maxContentWidth);
-
-                  final lineMetrics = textPainter.computeLineMetrics();
-                  final double lastLineWidth =
-                      lineMetrics.isNotEmpty ? lineMetrics.last.width : 0;
-
-                  // Check if content ends with a block element (Code block, LaTeX, or Poll)
-                  final bool endsWithBlock = message.messageType == 'poll' ||
-                                             displayContent.trim().endsWith('```') ||
-                                             displayContent.trim().endsWith('\$\$');
-
-                  // Strict check for inline fitting
-                  // But NEVER fit inline if it ends with a block element.
-                  final bool fitsInline = !endsWithBlock && (lastLineWidth + metadataWidth + safetyMargin) < maxContentWidth;
-
-                  Widget metadataRow = Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      iconoir.Eye(
-                        width: 14,
-                        height: 14,
-                        color: Colors.grey[500]!,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '0', // Placeholder views
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey[500],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _formatTime(message.createdAt),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey[500],
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      if (message.senderId == _currentUserId) ...[
-                        if (message.sendStatus == 0) // sending
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 1.2),
-                          )
-                        else if (message.sendStatus == 2) // failed
-                          GestureDetector(
-                            onTap: () => _retryMessage(message),
-                            child: const iconoir.WarningTriangle(
-                              width: 14,
-                              height: 14,
-                              color: Colors.red,
-                            ),
-                          )
-                        else
-                          MessageStatusWidget(
-                            isRead: message.isRead,
-                            isOutgoing: true,
-                          ),
-                        const SizedBox(width: 4),
-                      ],
-                    ],
-                  );
-
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (!isMediaNoteWithoutText)
-                        Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            if (message.messageType == 'poll')
-                              PollMessageWidget(
-                                chatId: message.chatId.isNotEmpty
-                                    ? message.chatId
-                                    : widget.channelId,
-                                messageId: message.id,
-                                questionFallback: message.content,
-                                pollData: message.mediaPayload,
-                                isMe: false,
-                                isDark: Theme.of(context).brightness ==
-                                    Brightness.dark,
-                                textColor: Theme.of(context).brightness ==
-                                        Brightness.dark
-                                    ? Colors.white
-                                    : Colors.black87,
-                                subtextColor: Theme.of(context).brightness ==
-                                        Brightness.dark
-                                    ? Colors.grey[400]!
-                                    : Colors.grey[600]!,
-                                accentColor:
-                                    Theme.of(context).colorScheme.primary,
-                                currentUserId: _currentUserId ?? '',
-                              )
-                            else
-                              MetaData(
-                                metaData: 'message_selectable_content',
-                                behavior: HitTestBehavior.translucent,
-                                child: TextMessageWidget(
-                                  text: displayContent,
-                                  isMe: false,
-                                ),
-                              ),
-                            if (fitsInline)
-                              Opacity(
-                                opacity: 0,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // Replicate text width
-                                    SizedBox(width: lastLineWidth),
-                                    SizedBox(width: metadataWidth),
-                                  ],
-                                ),
-                              ),
-                            if (fitsInline)
-                              Positioned(
-                                bottom: 0,
-                                right: 0,
-                                child: metadataRow,
-                              ),
-                          ],
-                        ),
-                      if (isMediaNoteWithoutText || !fitsInline)
-                        Align(
-                          alignment: Alignment.bottomRight,
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 4.0),
-                            child: metadataRow,
-                          ),
-                        ),
-                      if (message.inlineKeyboard.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: InlineKeyboardWidget(
-                            chatId: message.chatId.isNotEmpty
-                                ? message.chatId
-                                : widget.channelId,
-                            messageId: message.id,
-                            rows: message.inlineKeyboard,
-                          ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    Widget messageWidget = AnimatedContainer(
+    Widget messageWidget = MessageBubble(
       key: key,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeInOut,
-      width: double.infinity,
-      color: useSelectedStyle ? rowHighlightColor : Colors.transparent,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          AnimatedSize(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            child: _isSelectionMode
-                ? Padding(
-                    padding: const EdgeInsets.only(left: 12.0, right: 4.0),
-                    child: MessageSelectionCheckbox(isSelected: isSelected),
-                  )
-                : const SizedBox.shrink(),
-          ),
-          Expanded(child: postBody),
-        ],
+      message: message,
+      isMe: false,
+      currentUserId: _currentUserId ?? '',
+      senderName: showAuthor
+          ? null
+          : (message.messageType == 'system'
+              ? null
+              : (_channelName.isNotEmpty ? _channelName : 'Channel')),
+      senderHeaderWidget: senderHeaderWidget,
+      hasAvatarGutter: showAuthor,
+      chatType: 'channel',
+      chatTitle: _channelName,
+      isHighlighted: isHighlighted,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
+      reactions: message.reactions.isNotEmpty ? message.reactions : null,
+      myReactions: message.myReactions.isNotEmpty ? message.myReactions : null,
+      onRetry: (msg) => _retryMessage(msg),
+      onReplyTap: (replyToId, chatId) => _handleReplyTap(
+        replyToId,
+        chatId,
+        fromMessageId: message.id,
       ),
+      formatTime: _formatTime,
     );
+
+    if (showAuthor) {
+      messageWidget = GroupMessageAvatarRow(
+        senderId: message.senderId,
+        senderName: senderDisplayName,
+        senderAvatarUrl: participant?.avatarUrl ?? message.senderAvatarUrl,
+        showAvatar: lastInCluster,
+        customizationOverride: senderCust,
+        isSelectionMode: _isSelectionMode,
+        isSelected: isSelected,
+        isHighlighted: isHighlighted,
+        onAvatarTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : () => _openAuthorProfile(message),
+        child: messageWidget,
+      );
+    }
 
     // Wrap with SwipeToReplyWrapper for swipe-to-reply gesture
     messageWidget = SwipeToReplyWrapper(
@@ -3095,12 +2802,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           );
         },
         behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: double.infinity,
-          color: Colors.transparent,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: messageWidget,
-        ),
+        child: messageWidget,
       ),
     );
 

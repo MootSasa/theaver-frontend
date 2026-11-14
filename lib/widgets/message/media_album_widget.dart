@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,6 +25,8 @@ class MediaAlbumWidget extends StatelessWidget {
   final String currentUserId;
   final String? chatType;
   final String? senderName;
+  final Widget? senderHeaderWidget;
+  final bool hasAvatarGutter;
   final String Function(String)? formatTime;
   final Function(String url, String name, String type)? onFileTap;
   final bool isHighlighted;
@@ -38,6 +41,8 @@ class MediaAlbumWidget extends StatelessWidget {
     required this.currentUserId,
     this.chatType,
     this.senderName,
+    this.senderHeaderWidget,
+    this.hasAvatarGutter = false,
     this.formatTime,
     this.onFileTap,
     this.isHighlighted = false,
@@ -54,6 +59,8 @@ class MediaAlbumWidget extends StatelessWidget {
       currentUserId: currentUserId,
       chatType: chatType,
       senderName: senderName,
+      senderHeaderWidget: senderHeaderWidget,
+      hasAvatarGutter: hasAvatarGutter,
       formatTime: formatTime,
       onFileTap: onFileTap,
       isHighlighted: false,
@@ -77,8 +84,10 @@ class MediaAlbumWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = TileViewportScope.widthOf(context);
-    final albumWidth = (screenWidth * 0.76).clamp(240.0, 380.0);
+    final screenWidth =
+        TileViewportScope.widthOf(context) - (hasAvatarGutter ? 38.0 : 0.0);
+    final double minAlbumWidth = math.min(220.0, math.max(180.0, screenWidth - 16.0));
+    final albumWidth = (screenWidth * 0.76).clamp(minAlbumWidth, 380.0);
     // Dynamic height based on count
     final albumHeight = album.items.length <= 2
         ? albumWidth * 0.72
@@ -97,7 +106,9 @@ class MediaAlbumWidget extends StatelessWidget {
         isHighlighted ||
         (highlightItemId != null && album.items.any((it) => it.id == highlightItemId));
 
-    final showSender = !isMe && senderName != null && senderName!.isNotEmpty;
+    final showSender = !isMe &&
+        ((senderHeaderWidget != null) ||
+            (senderName != null && senderName!.isNotEmpty));
     final hasTextBubble = album.hasCaption || showSender;
     final Color bubbleColor = hasTextBubble
         ? (shouldHighlightAlbum
@@ -120,7 +131,12 @@ class MediaAlbumWidget extends StatelessWidget {
     final Widget albumContent = MetaData(
       metaData: 'message_bubble_box',
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
+        margin: EdgeInsets.only(
+          top: 3.0,
+          bottom: 3.0,
+          left: hasAvatarGutter ? 0.0 : 8.0,
+          right: 8.0,
+        ),
         width: albumWidth,
         decoration: BoxDecoration(
           color: bubbleColor,
@@ -131,19 +147,20 @@ class MediaAlbumWidget extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!isMe && senderName != null && senderName!.isNotEmpty)
+            if (showSender)
               Padding(
                 padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
-                child: Text(
-                  senderName!,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: theme.colorScheme.primary,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                child: senderHeaderWidget ??
+                    Text(
+                      senderName!,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: theme.colorScheme.primary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
               ),
             // 1. Mosaic Collage Container
             SizedBox(
@@ -244,7 +261,7 @@ class MediaAlbumWidget extends StatelessWidget {
         theme.colorScheme.primary.withValues(alpha: 0.18);
 
     Widget rowContent = alignedAlbum;
-    if (isSelectionMode) {
+    if (isSelectionMode && !hasAvatarGutter) {
       rowContent = Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -254,6 +271,10 @@ class MediaAlbumWidget extends StatelessWidget {
           ),
           Expanded(child: alignedAlbum),
         ],
+      );
+    } else if (isSelectionMode) {
+      rowContent = IgnorePointer(
+        child: alignedAlbum,
       );
     }
 
@@ -271,7 +292,9 @@ class MediaAlbumWidget extends StatelessWidget {
         duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
         width: double.infinity,
-        color: shouldHighlightAlbum ? rowHighlightColor : Colors.transparent,
+        color: (!hasAvatarGutter && shouldHighlightAlbum)
+            ? rowHighlightColor
+            : Colors.transparent,
         child: rowContent,
       ),
     );

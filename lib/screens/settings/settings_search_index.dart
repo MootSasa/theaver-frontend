@@ -20,6 +20,7 @@ import 'notifications_screen.dart';
 import 'passcode_screen.dart';
 import 'power_saving_screen.dart';
 import 'privacy_screen.dart';
+import 'profile_customization_screen.dart';
 import 'profile_screen.dart';
 import 'security_screen.dart';
 import 'storage_screen.dart';
@@ -276,6 +277,29 @@ class SettingsSearchIndex {
         ],
         icon: Icons.palette_outlined,
         onSelect: (c) => _push(c, const ChatSettingsScreen()),
+      ),
+      SettingsSearchEntry(
+        id: 'profile_customization',
+        titleKey: 'customizationTitle',
+        fallbackTitle: 'Кастомизация профиля',
+        sectionKey: 'settings_profile',
+        fallbackSection: 'Профиль',
+        keywords: const [
+          'customization',
+          'frame',
+          'status',
+          'banner',
+          'badge',
+          'color',
+          'рамка',
+          'статус',
+          'баннер',
+          'бейдж',
+          'кастомизация',
+          'профиль',
+        ],
+        icon: Icons.auto_awesome_outlined,
+        onSelect: (c) => _push(c, const ProfileCustomizationScreen()),
       ),
       SettingsSearchEntry(
         id: 'wallpaper',

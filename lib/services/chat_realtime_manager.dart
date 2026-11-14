@@ -5,9 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/community_models.dart';
+import '../models/profile_customization.dart';
 import '../utils/date_time_utils.dart';
 import 'community_service.dart';
 import 'database/app_database.dart';
+import 'peer_customization_cache.dart';
 import 'sync_service.dart';
 import 'websocket_service.dart';
 
@@ -349,6 +351,15 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.userAppearanceUpdated:
+        final appUserId = event.data['user_id']?.toString();
+        if (appUserId != null && appUserId.isNotEmpty) {
+          PeerCustomizationCache.instance.mergeFromJson(appUserId, event.data);
+          final cachedJson =
+              PeerCustomizationCache.instance.getSync(appUserId)?.toJsonString();
+          try {
+            await AppDatabase().updateUserCustomizationJson(appUserId, cachedJson);
+          } catch (_) {}
+        }
         _dispatchGlobal((s) => s.onUserAppearanceUpdated?.call(event));
         break;
 
@@ -547,6 +558,10 @@ class ChatRealtimeManager {
         isOnline: drift.Value(chatData['is_online'] == true),
         lastSeen: drift.Value(chatData['last_seen']?.toString()),
         isPinned: drift.Value(chatData['is_pinned'] == true),
+        showAuthorProfiles: drift.Value(chatData['show_author_profiles'] != false),
+        peerCustomizationJson: drift.Value(chatData['peer_customization'] is Map
+            ? jsonEncode(chatData['peer_customization'])
+            : chatData['peer_customization']?.toString()),
       ));
     } catch (e) {
       debugPrint('ChatRealtimeManager: Error saving new chat to Drift: $e');
@@ -581,6 +596,14 @@ class ChatRealtimeManager {
         updatedAt: event.data.containsKey('updated_at')
             ? drift.Value(event.data['updated_at'].toString())
             : drift.Value(existing.updatedAt),
+        showAuthorProfiles: event.data.containsKey('show_author_profiles')
+            ? drift.Value(event.data['show_author_profiles'] != false)
+            : drift.Value(existing.showAuthorProfiles),
+        peerCustomizationJson: event.data.containsKey('peer_customization')
+            ? drift.Value(event.data['peer_customization'] is Map
+                ? jsonEncode(event.data['peer_customization'])
+                : event.data['peer_customization']?.toString())
+            : drift.Value(existing.peerCustomizationJson),
       );
       await AppDatabase().saveChat(companion);
     } catch (e) {
@@ -704,6 +727,24 @@ class ChatRealtimeManager {
     final String? mediaPayloadStr =
         mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
 
+    final String? senderCustJsonStr = () {
+      final raw = msgData['sender_customization'];
+      if (raw is Map) {
+        final cust = PeerCustomization.fromJson(Map<String, dynamic>.from(raw));
+        final sid = msgData['sender_id']?.toString() ?? '';
+        if (sid.isNotEmpty) {
+          PeerCustomizationCache.instance.put(sid, cust, notify: false);
+        }
+        return cust.toJsonString();
+      } else if (raw is String && raw.isNotEmpty) {
+        return raw;
+      }
+      return null;
+    }();
+    final String? fwdAvatarUrl =
+        (msgData['forwarded_from_avatar_url'] ?? msgData['forward_from_avatar_url'])
+            ?.toString();
+
     await AppDatabase().saveMessage(MessagesCompanion(
       serverId: drift.Value(serverId),
       localId: drift.Value(_uuid.v4()),
@@ -745,6 +786,8 @@ class ChatRealtimeManager {
       invertMedia: drift.Value(invertMedia),
       isRound: drift.Value(isRound),
       groupedId: drift.Value(groupedId),
+      forwardFromAvatarUrl: drift.Value(fwdAvatarUrl),
+      senderCustomizationJson: drift.Value(senderCustJsonStr),
     ));
   }
 }

@@ -9,6 +9,7 @@ import '../../services/chat_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../../utils/image_utils.dart';
 import '../profile/reply_strip_painter.dart';
 
 /// Displays a compact reply/quote preview above a message bubble.
@@ -51,6 +52,9 @@ class MessageReplyInfo extends StatelessWidget {
   /// Optional explicit entities override for the original message
   final List<MessageEntity> entitiesOverride;
 
+  /// Optional override for the forward author avatar URL
+  final String? authorAvatarUrl;
+
   const MessageReplyInfo({
     Key? key,
     this.replyInfo,
@@ -64,17 +68,20 @@ class MessageReplyInfo extends StatelessWidget {
     this.titleOverride,
     this.contentOverride,
     this.entitiesOverride = const [],
+    this.authorAvatarUrl,
   }) : super(key: key);
 
   /// Helper to create a forwarded message header
   factory MessageReplyInfo.forwarded({
     required String authorName,
+    String? authorAvatarUrl,
     String? content,
     bool isMe = false,
     VoidCallback? onTap,
   }) {
     return MessageReplyInfo(
       titleOverride: authorName,
+      authorAvatarUrl: authorAvatarUrl,
       contentOverride: content,
       isMe: isMe,
       onTap: onTap,
@@ -576,17 +583,35 @@ class MessageReplyInfo extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Sender name / Title
+                  // Sender name / Title (with optional 16dp forwarded author mini-avatar)
                   if (!isDeleted && title.isNotEmpty)
-                    Text(
-                      title,
-                      style: TextStyle(
-                        color: accentColor,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (authorAvatarUrl != null &&
+                            authorAvatarUrl!.isNotEmpty &&
+                            avatarImageProvider(authorAvatarUrl!) != null) ...[
+                          CircleAvatar(
+                            radius: 8,
+                            backgroundColor: accentColor.withValues(alpha: 0.2),
+                            backgroundImage:
+                                avatarImageProvider(authorAvatarUrl!),
+                          ),
+                          const SizedBox(width: 5),
+                        ],
+                        Flexible(
+                          child: Text(
+                            title,
+                            style: TextStyle(
+                              color: accentColor,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
                   if (!isDeleted && title.isNotEmpty && hasPreview)
                     const SizedBox(height: 2),

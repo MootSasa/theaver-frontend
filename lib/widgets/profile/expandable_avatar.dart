@@ -5,8 +5,10 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../models/profile_customization.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../user/avatar_decoration_frame.dart';
 
 /// Аватарка с Telegram-подобной анимацией плавного раскрытия.
 ///
@@ -48,6 +50,9 @@ class ExpandableAvatar extends StatefulWidget {
   /// Цвет фона экрана
   final Color? backgroundColor;
 
+  /// Декорация рамки вокруг круглой аватарки (плавно растворяется при раскрытии)
+  final AvatarDecorationPreset? decoration;
+
   /// Имя пользователя для плейсхолдера
   final String displayName;
 
@@ -86,6 +91,7 @@ class ExpandableAvatar extends StatefulWidget {
     this.isCollapsing = false,
     this.tintColor,
     this.backgroundColor,
+    this.decoration,
     this.displayName = '',
     this.heroTagPrefix = 'avatar_hero',
     this.chatAvatarHeroTag,
@@ -499,13 +505,37 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
       );
     }
 
+    Widget finalChild = avatarContentBox;
+    final dec = widget.decoration;
+    if (dec != null && progress < 0.32) {
+      final frameOpacity =
+          (1.0 - ((progress - 0.05) / 0.25).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+      if (frameOpacity > 0.001) {
+        finalChild = Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            avatarContentBox,
+            IgnorePointer(
+              child: AvatarDecorationFrame(
+                decoration: dec,
+                avatarDiameter: size,
+                opacity: frameOpacity,
+                child: SizedBox(width: size, height: size),
+              ),
+            ),
+          ],
+        );
+      }
+    }
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: isFullyExpanded && widget.avatarUrls.length > 1 ? null : widget.onTap,
       onVerticalDragStart: widget.onVerticalDragStart,
       onVerticalDragUpdate: widget.onVerticalDragUpdate,
       onVerticalDragEnd: widget.onVerticalDragEnd,
-      child: avatarContentBox,
+      child: finalChild,
     );
   }
 

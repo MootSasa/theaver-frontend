@@ -26,8 +26,16 @@ import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/emoji_interaction_manager.dart';
 import '../../services/notification_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
+import '../../widgets/common/peer_badges_widget.dart';
+import '../../widgets/message/group_message_avatar_row.dart';
+import '../../widgets/user/avatar_with_status.dart';
+import '../../widgets/user/emoji_status_badge.dart';
+import '../settings/profile_screen.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../config/app_config.dart';
@@ -1126,6 +1134,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onCallbackQueryAnswer: _onCallbackQueryAnswer,
       onTyping: _onTypingIndicator,
       onUserStatus: _onUserStatusUpdate,
+      onUserAppearanceUpdated: _onUserAppearanceUpdated,
       onUnreadCountUpdated: _onUnreadCountUpdated,
       onEmojiInteraction: _onEmojiInteraction,
       onUserAvatarUpdated: (event) {
@@ -1429,6 +1438,37 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
       });
     }
+  }
+
+  void _onUserAppearanceUpdated(WebSocketEvent event) {
+    final userId = event.data['user_id']?.toString();
+    if (userId == null || userId.isEmpty || !mounted) return;
+    PeerCustomizationCache.instance.mergeFromJson(userId, event.data);
+    final updatedCust = PeerCustomizationCache.instance.getSync(userId);
+    final nameColorPresetId = event.data['name_color_preset_id']?.toString();
+    final replyStripStyle = event.data['reply_strip_style']?.toString();
+
+    setState(() {
+      for (int i = 0; i < _messages.length; i++) {
+        if (_messages[i].senderId == userId) {
+          _messages[i] = _messages[i].copyWith(
+            senderNameColorId: nameColorPresetId ?? _messages[i].senderNameColorId,
+            senderReplyStripStyle:
+                replyStripStyle ?? _messages[i].senderReplyStripStyle,
+            senderCustomization: updatedCust ?? _messages[i].senderCustomization,
+          );
+        }
+      }
+      if (updatedCust != null) {
+        final pIdx = _participants.indexWhere((p) => p.id == userId);
+        if (pIdx != -1) {
+          _participants[pIdx] = _participants[pIdx].copyWith(
+            peerCustomization: updatedCust,
+          );
+        }
+      }
+      _updateFeedItems();
+    });
   }
 
   void _onMessageEdited(WebSocketEvent event) {
@@ -2232,6 +2272,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       isForward: Value(msg.isForward),
       forwardFromId: Value(msg.forwardFromId),
       forwardFromName: Value(msg.forwardFromName),
+      forwardFromAvatarUrl: Value(msg.forwardFromAvatarUrl),
+      senderCustomizationJson: Value(msg.senderCustomization?.toJsonString()),
     );
   }
 
@@ -4561,23 +4603,48 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             : participant.role == 'admin'
                 ? Icons.shield
                 : null;
+        final participantCust =
+            PeerCustomizationCache.instance.getSync(participant.id) ??
+                participant.peerCustomization;
 
         return ListTile(
-          leading: CircleAvatar(
-            backgroundColor: const Color(0xFF0088CC),
-            backgroundImage: getValidAvatarUrl(participant.avatarUrl) != null
-                ? avatarImageProvider(participant.avatarUrl)
-                : null,
-            child: getValidAvatarUrl(participant.avatarUrl) == null
-                ? Text(
-                    participant.displayName.isNotEmpty
-                        ? participant.displayName[0].toUpperCase()
-                        : '?',
-                    style: const TextStyle(color: Colors.white),
-                  )
-                : null,
+          leading: AvatarWithStatus(
+            userId: participant.id,
+            avatarUrl: participant.avatarUrl,
+            name: participant.displayName,
+            radius: 20,
+            isOnline: participant.isOnline,
+            decorationOverride: participantCust?.avatarDecoration,
+            showDecoration: true,
+            animateDecoration: false,
           ),
-          title: Text(participant.displayName),
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  participant.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (participantCust?.activeEmojiStatus != null) ...[
+                const SizedBox(width: 4),
+                EmojiStatusBadge(
+                  status: participantCust!.activeEmojiStatus,
+                  size: 15,
+                  interactive: false,
+                ),
+              ],
+              PeerBadgesRow(
+                isBot: participant.isBot,
+                isVerified: participant.isVerified,
+                badge: participantCust?.visibleBadge,
+                interactiveBadge: false,
+                verifiedIconSize: 15,
+              ),
+            ],
+          ),
           subtitle: Text('@${participant.username}'),
           trailing: roleIcon != null
               ? Icon(
@@ -4587,8 +4654,74 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                       participant.role == 'owner' ? Colors.amber : Colors.blue,
                 )
               : null,
+          onTap: () {
+            HapticUtils.tap();
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(
+                builder: (_) => ProfileScreen(
+                  entityType: ProfileEntityType.user,
+                  userId: participant.id,
+                  initialName: participant.displayName,
+                  initialAvatarUrl: participant.avatarUrl,
+                  initialIsOnline: participant.isOnline,
+                  initialLastSeen: participant.lastSeen,
+                ),
+              ),
+            );
+          },
         );
       },
+    );
+  }
+
+  Message? _feedItemMessage(int idx) {
+    if (idx < 0 || idx >= _feedItems.length) return null;
+    final item = _feedItems[idx];
+    if (item is FeedSingleItem) return item.message;
+    if (item is FeedAlbumItem) return item.album.primaryMessage;
+    return null;
+  }
+
+  ChatParticipant? _findParticipant(String senderId) {
+    if (senderId.isEmpty) return null;
+    for (final p in _participants) {
+      if (p.id == senderId) return p;
+    }
+    return null;
+  }
+
+  Color _resolveSenderNameColor(Message message) {
+    final colorId = message.senderNameColorId ??
+        _findParticipant(message.senderId)
+            ?.peerCustomization
+            ?.nameColorPresetId;
+    if (colorId != null && colorId.isNotEmpty) {
+      return NameColorPresets.getById(colorId).primaryColor;
+    }
+    final idx =
+        message.senderId.hashCode.abs() % NameColorPresets.defaults.length;
+    return NameColorPresets.defaults[idx].primaryColor;
+  }
+
+  void _openSenderProfile(Message message) {
+    if (message.senderId.isEmpty) return;
+    HapticUtils.tap();
+    final participant = _findParticipant(message.senderId);
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ProfileScreen(
+          entityType: ProfileEntityType.user,
+          userId: message.senderId,
+          initialName: participant?.displayName.isNotEmpty == true
+              ? participant!.displayName
+              : message.senderName,
+          initialAvatarUrl: participant?.avatarUrl ?? message.senderAvatarUrl,
+          initialIsOnline: participant?.isOnline,
+          initialLastSeen: participant?.lastSeen,
+        ),
+      ),
     );
   }
 
@@ -4618,6 +4751,36 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
     final bool isSelected = _selectedMessageIds.contains(message.id);
+    final bool showGroupSenderAvatar =
+        !isMe && message.messageType != 'system' && message.senderId.isNotEmpty;
+    final bool firstInCluster = showGroupSenderAvatar &&
+        isFirstInSenderCluster(
+          current: message,
+          olderNeighbor: _feedItemMessage(index + 1),
+        );
+    final bool lastInCluster = showGroupSenderAvatar &&
+        isLastInSenderCluster(
+          current: message,
+          newerNeighbor: _feedItemMessage(index - 1),
+        );
+    final ChatParticipant? participant =
+        showGroupSenderAvatar ? _findParticipant(message.senderId) : null;
+    final PeerCustomization? senderCust = showGroupSenderAvatar
+        ? (PeerCustomizationCache.instance.getSync(message.senderId) ??
+            participant?.peerCustomization ??
+            message.senderCustomization)
+        : null;
+    final Widget? senderHeaderWidget = (showGroupSenderAvatar && firstInCluster)
+        ? SenderHeaderRow(
+            senderName: message.senderName,
+            nameColor: _resolveSenderNameColor(message),
+            customization: senderCust,
+            isBot: participant?.isBot ?? false,
+            isVerified: participant?.isVerified ?? false,
+            onTapSender:
+                _isSelectionMode ? null : () => _openSenderProfile(message),
+          )
+        : null;
 
     Widget albumWidget = MediaAlbumWidget(
       key: key,
@@ -4625,7 +4788,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
       chatType: 'group',
-      senderName: isMe ? null : message.senderName,
+      senderName: (isMe || showGroupSenderAvatar) ? null : message.senderName,
+      senderHeaderWidget: senderHeaderWidget,
+      hasAvatarGutter: showGroupSenderAvatar,
       formatTime: _formatTime,
       onFileTap: (url, name, type) => _openFile(url, name, type),
       isHighlighted: isAlbumTargeted,
@@ -4633,6 +4798,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       isSelected: isSelected,
       isSelectionMode: _isSelectionMode,
     );
+
+    if (showGroupSenderAvatar) {
+      albumWidget = GroupMessageAvatarRow(
+        senderId: message.senderId,
+        senderName: message.senderName,
+        senderAvatarUrl: participant?.avatarUrl ?? message.senderAvatarUrl,
+        showAvatar: lastInCluster,
+        customizationOverride: senderCust,
+        isSelectionMode: _isSelectionMode,
+        isSelected: isSelected,
+        isHighlighted: isAlbumTargeted,
+        onAvatarTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : () => _openSenderProfile(message),
+        child: albumWidget,
+      );
+    }
 
     albumWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
@@ -4769,13 +4951,45 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
     final isHighlighted = _highlightMessageId == message.id;
     final bool isSelected = _selectedMessageIds.contains(message.id);
+    final bool showGroupSenderAvatar =
+        !isMe && message.messageType != 'system' && message.senderId.isNotEmpty;
+    final bool firstInCluster = showGroupSenderAvatar &&
+        isFirstInSenderCluster(
+          current: message,
+          olderNeighbor: _feedItemMessage(index + 1),
+        );
+    final bool lastInCluster = showGroupSenderAvatar &&
+        isLastInSenderCluster(
+          current: message,
+          newerNeighbor: _feedItemMessage(index - 1),
+        );
+    final ChatParticipant? participant =
+        showGroupSenderAvatar ? _findParticipant(message.senderId) : null;
+    final PeerCustomization? senderCust = showGroupSenderAvatar
+        ? (PeerCustomizationCache.instance.getSync(message.senderId) ??
+            participant?.peerCustomization ??
+            message.senderCustomization)
+        : null;
+    final Widget? senderHeaderWidget = (showGroupSenderAvatar && firstInCluster)
+        ? SenderHeaderRow(
+            senderName: message.senderName,
+            nameColor: _resolveSenderNameColor(message),
+            customization: senderCust,
+            isBot: participant?.isBot ?? false,
+            isVerified: participant?.isVerified ?? false,
+            onTapSender:
+                _isSelectionMode ? null : () => _openSenderProfile(message),
+          )
+        : null;
 
     Widget messageWidget = MessageBubble(
       key: key,
       message: message,
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
-      senderName: isMe ? null : message.senderName,
+      senderName: (isMe || showGroupSenderAvatar) ? null : message.senderName,
+      senderHeaderWidget: senderHeaderWidget,
+      hasAvatarGutter: showGroupSenderAvatar,
       chatType: 'group',
       chatTitle: widget.groupName,
       isHighlighted: isHighlighted,
@@ -4795,6 +5009,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onFileTap: (url, name, type) => _openFile(url, name, type),
       formatTime: _formatTime,
     );
+
+    if (showGroupSenderAvatar) {
+      messageWidget = GroupMessageAvatarRow(
+        senderId: message.senderId,
+        senderName: message.senderName,
+        senderAvatarUrl: participant?.avatarUrl ?? message.senderAvatarUrl,
+        showAvatar: lastInCluster,
+        customizationOverride: senderCust,
+        isSelectionMode: _isSelectionMode,
+        isSelected: isSelected,
+        isHighlighted: isHighlighted,
+        onAvatarTap: _isSelectionMode
+            ? () => _toggleMessageSelection(message)
+            : () => _openSenderProfile(message),
+        child: messageWidget,
+      );
+    }
 
     if (!isMe && !message.isRead) {
       messageWidget = VisibleMessageDetector(

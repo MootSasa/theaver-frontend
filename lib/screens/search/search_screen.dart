@@ -5,9 +5,13 @@ import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/community_service.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/profile_customization.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../utils/image_utils.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/user/avatar_with_status.dart';
+import '../../widgets/user/emoji_status_badge.dart';
 
 class SearchScreen extends StatefulWidget {
   final String? initialChatId;
@@ -344,32 +348,49 @@ class _SearchScreenState extends State<SearchScreen> {
       subtitleParts.add(peer.description);
     }
 
+    final PeerCustomization? cust = peer.type == 'user'
+        ? (PeerCustomizationCache.instance.getSync(peer.id) ??
+            peer.peerCustomization)
+        : null;
+
     return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
-        backgroundImage:
-            validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
-        child: validAvatar == null
-            ? (peer.type == 'channel'
-                ? Icon(Icons.campaign_rounded,
-                    color: Theme.of(context).colorScheme.primary)
-                : peer.type == 'community'
-                    ? Icon(Icons.hub_rounded,
-                        color: Theme.of(context).colorScheme.primary)
-                    : peer.type == 'group'
-                        ? Icon(Icons.group_rounded,
-                            color: Theme.of(context).colorScheme.primary)
-                        : Text(
-                            peer.title.isNotEmpty
-                                ? peer.title[0].toUpperCase()
-                                : '?',
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ))
-            : null,
-      ),
+      leading: peer.type == 'user'
+          ? AvatarWithStatus(
+              userId: peer.id,
+              avatarUrl: validAvatar,
+              name: peer.title,
+              radius: 20,
+              decorationOverride: cust?.avatarDecoration,
+              showDecoration: true,
+              animateDecoration: false,
+            )
+          : CircleAvatar(
+              backgroundColor:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+              backgroundImage:
+                  validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
+              child: validAvatar == null
+                  ? (peer.type == 'channel'
+                      ? Icon(Icons.campaign_rounded,
+                          color: Theme.of(context).colorScheme.primary)
+                      : peer.type == 'community'
+                          ? Icon(Icons.hub_rounded,
+                              color: Theme.of(context).colorScheme.primary)
+                          : peer.type == 'group'
+                              ? Icon(Icons.group_rounded,
+                                  color: Theme.of(context).colorScheme.primary)
+                              : Text(
+                                  peer.title.isNotEmpty
+                                      ? peer.title[0].toUpperCase()
+                                      : '?',
+                                  style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ))
+                  : null,
+            ),
       title: Row(
         children: [
           Flexible(
@@ -380,7 +401,20 @@ class _SearchScreenState extends State<SearchScreen> {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
-          PeerBadgesRow(isBot: peer.isBot, isVerified: peer.isVerified),
+          if (cust?.activeEmojiStatus != null) ...[
+            const SizedBox(width: 4),
+            EmojiStatusBadge(
+              status: cust!.activeEmojiStatus,
+              size: 15,
+              interactive: false,
+            ),
+          ],
+          PeerBadgesRow(
+            isBot: peer.isBot,
+            isVerified: peer.isVerified,
+            badge: cust?.visibleBadge,
+            interactiveBadge: false,
+          ),
         ],
       ),
       subtitle: subtitleParts.isNotEmpty

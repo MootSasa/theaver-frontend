@@ -18,6 +18,8 @@ import '../../services/settings_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/websocket_service.dart';
+import '../../models/profile_customization.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/chat/chat_batch_dialogs.dart';
@@ -154,6 +156,17 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
         (unreadProvider != null && unreadProvider.hasAuthoritativeCount(model.chatId))
             ? unreadProvider.getCount(model.chatId)
             : model.unreadCount;
+    final dbCust = PeerCustomization.tryParseJsonString(model.peerCustomizationJson);
+    if (model.chatType == 'private' &&
+        model.otherUserId != null &&
+        model.otherUserId!.isNotEmpty &&
+        dbCust != null) {
+      PeerCustomizationCache.instance.put(
+        model.otherUserId!,
+        dbCust,
+        notify: false,
+      );
+    }
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
@@ -181,6 +194,8 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
       isBot: model.isBot,
       isVerified: model.isVerified,
       isArchived: true,
+      showAuthorProfiles: model.showAuthorProfiles,
+      peerCustomization: dbCust,
     );
   }
 

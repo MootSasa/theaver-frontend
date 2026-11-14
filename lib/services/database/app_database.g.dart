@@ -183,6 +183,22 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_archived" IN (0, 1))'),
       defaultValue: const Constant(false));
+  static const VerificationMeta _peerCustomizationJsonMeta =
+      const VerificationMeta('peerCustomizationJson');
+  @override
+  late final GeneratedColumn<String> peerCustomizationJson =
+      GeneratedColumn<String>('peer_customization_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _showAuthorProfilesMeta =
+      const VerificationMeta('showAuthorProfiles');
+  @override
+  late final GeneratedColumn<bool> showAuthorProfiles = GeneratedColumn<bool>(
+      'show_author_profiles', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("show_author_profiles" IN (0, 1))'),
+      defaultValue: const Constant(true));
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -208,7 +224,9 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         isPublic,
         isBot,
         isVerified,
-        isArchived
+        isArchived,
+        peerCustomizationJson,
+        showAuthorProfiles
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -352,6 +370,18 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           isArchived.isAcceptableOrUnknown(
               data['is_archived']!, _isArchivedMeta));
     }
+    if (data.containsKey('peer_customization_json')) {
+      context.handle(
+          _peerCustomizationJsonMeta,
+          peerCustomizationJson.isAcceptableOrUnknown(
+              data['peer_customization_json']!, _peerCustomizationJsonMeta));
+    }
+    if (data.containsKey('show_author_profiles')) {
+      context.handle(
+          _showAuthorProfilesMeta,
+          showAuthorProfiles.isAcceptableOrUnknown(
+              data['show_author_profiles']!, _showAuthorProfilesMeta));
+    }
     return context;
   }
 
@@ -412,6 +442,11 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           .read(DriftSqlType.bool, data['${effectivePrefix}is_verified'])!,
       isArchived: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}is_archived'])!,
+      peerCustomizationJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}peer_customization_json']),
+      showAuthorProfiles: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}show_author_profiles'])!,
     );
   }
 
@@ -446,6 +481,8 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final bool isBot;
   final bool isVerified;
   final bool isArchived;
+  final String? peerCustomizationJson;
+  final bool showAuthorProfiles;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -470,7 +507,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       required this.isPublic,
       required this.isBot,
       required this.isVerified,
-      required this.isArchived});
+      required this.isArchived,
+      this.peerCustomizationJson,
+      required this.showAuthorProfiles});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -518,6 +557,10 @@ class DbChat extends DataClass implements Insertable<DbChat> {
     map['is_bot'] = Variable<bool>(isBot);
     map['is_verified'] = Variable<bool>(isVerified);
     map['is_archived'] = Variable<bool>(isArchived);
+    if (!nullToAbsent || peerCustomizationJson != null) {
+      map['peer_customization_json'] = Variable<String>(peerCustomizationJson);
+    }
+    map['show_author_profiles'] = Variable<bool>(showAuthorProfiles);
     return map;
   }
 
@@ -567,6 +610,10 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isBot: Value(isBot),
       isVerified: Value(isVerified),
       isArchived: Value(isArchived),
+      peerCustomizationJson: peerCustomizationJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(peerCustomizationJson),
+      showAuthorProfiles: Value(showAuthorProfiles),
     );
   }
 
@@ -602,6 +649,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isBot: serializer.fromJson<bool>(json['isBot']),
       isVerified: serializer.fromJson<bool>(json['isVerified']),
       isArchived: serializer.fromJson<bool>(json['isArchived']),
+      peerCustomizationJson:
+          serializer.fromJson<String?>(json['peerCustomizationJson']),
+      showAuthorProfiles: serializer.fromJson<bool>(json['showAuthorProfiles']),
     );
   }
   @override
@@ -633,6 +683,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'isBot': serializer.toJson<bool>(isBot),
       'isVerified': serializer.toJson<bool>(isVerified),
       'isArchived': serializer.toJson<bool>(isArchived),
+      'peerCustomizationJson':
+          serializer.toJson<String?>(peerCustomizationJson),
+      'showAuthorProfiles': serializer.toJson<bool>(showAuthorProfiles),
     };
   }
 
@@ -660,7 +713,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           bool? isPublic,
           bool? isBot,
           bool? isVerified,
-          bool? isArchived}) =>
+          bool? isArchived,
+          Value<String?> peerCustomizationJson = const Value.absent(),
+          bool? showAuthorProfiles}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -698,6 +753,10 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         isBot: isBot ?? this.isBot,
         isVerified: isVerified ?? this.isVerified,
         isArchived: isArchived ?? this.isArchived,
+        peerCustomizationJson: peerCustomizationJson.present
+            ? peerCustomizationJson.value
+            : this.peerCustomizationJson,
+        showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -746,6 +805,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           data.isVerified.present ? data.isVerified.value : this.isVerified,
       isArchived:
           data.isArchived.present ? data.isArchived.value : this.isArchived,
+      peerCustomizationJson: data.peerCustomizationJson.present
+          ? data.peerCustomizationJson.value
+          : this.peerCustomizationJson,
+      showAuthorProfiles: data.showAuthorProfiles.present
+          ? data.showAuthorProfiles.value
+          : this.showAuthorProfiles,
     );
   }
 
@@ -775,7 +840,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('isPublic: $isPublic, ')
           ..write('isBot: $isBot, ')
           ..write('isVerified: $isVerified, ')
-          ..write('isArchived: $isArchived')
+          ..write('isArchived: $isArchived, ')
+          ..write('peerCustomizationJson: $peerCustomizationJson, ')
+          ..write('showAuthorProfiles: $showAuthorProfiles')
           ..write(')'))
         .toString();
   }
@@ -805,7 +872,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         isPublic,
         isBot,
         isVerified,
-        isArchived
+        isArchived,
+        peerCustomizationJson,
+        showAuthorProfiles
       ]);
   @override
   bool operator ==(Object other) =>
@@ -834,7 +903,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.isPublic == this.isPublic &&
           other.isBot == this.isBot &&
           other.isVerified == this.isVerified &&
-          other.isArchived == this.isArchived);
+          other.isArchived == this.isArchived &&
+          other.peerCustomizationJson == this.peerCustomizationJson &&
+          other.showAuthorProfiles == this.showAuthorProfiles);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -862,6 +933,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<bool> isBot;
   final Value<bool> isVerified;
   final Value<bool> isArchived;
+  final Value<String?> peerCustomizationJson;
+  final Value<bool> showAuthorProfiles;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -888,6 +961,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isBot = const Value.absent(),
     this.isVerified = const Value.absent(),
     this.isArchived = const Value.absent(),
+    this.peerCustomizationJson = const Value.absent(),
+    this.showAuthorProfiles = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -915,6 +990,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isBot = const Value.absent(),
     this.isVerified = const Value.absent(),
     this.isArchived = const Value.absent(),
+    this.peerCustomizationJson = const Value.absent(),
+    this.showAuthorProfiles = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -945,6 +1022,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<bool>? isBot,
     Expression<bool>? isVerified,
     Expression<bool>? isArchived,
+    Expression<String>? peerCustomizationJson,
+    Expression<bool>? showAuthorProfiles,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -977,6 +1056,10 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       if (isBot != null) 'is_bot': isBot,
       if (isVerified != null) 'is_verified': isVerified,
       if (isArchived != null) 'is_archived': isArchived,
+      if (peerCustomizationJson != null)
+        'peer_customization_json': peerCustomizationJson,
+      if (showAuthorProfiles != null)
+        'show_author_profiles': showAuthorProfiles,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1006,6 +1089,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<bool>? isBot,
       Value<bool>? isVerified,
       Value<bool>? isArchived,
+      Value<String?>? peerCustomizationJson,
+      Value<bool>? showAuthorProfiles,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -1034,6 +1119,9 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
       isArchived: isArchived ?? this.isArchived,
+      peerCustomizationJson:
+          peerCustomizationJson ?? this.peerCustomizationJson,
+      showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1116,6 +1204,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     if (isArchived.present) {
       map['is_archived'] = Variable<bool>(isArchived.value);
     }
+    if (peerCustomizationJson.present) {
+      map['peer_customization_json'] =
+          Variable<String>(peerCustomizationJson.value);
+    }
+    if (showAuthorProfiles.present) {
+      map['show_author_profiles'] = Variable<bool>(showAuthorProfiles.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1149,6 +1244,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('isBot: $isBot, ')
           ..write('isVerified: $isVerified, ')
           ..write('isArchived: $isArchived, ')
+          ..write('peerCustomizationJson: $peerCustomizationJson, ')
+          ..write('showAuthorProfiles: $showAuthorProfiles, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1341,6 +1438,18 @@ class $MessagesTable extends Messages
   late final GeneratedColumn<String> forwardFromName = GeneratedColumn<String>(
       'forward_from_name', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _forwardFromAvatarUrlMeta =
+      const VerificationMeta('forwardFromAvatarUrl');
+  @override
+  late final GeneratedColumn<String> forwardFromAvatarUrl =
+      GeneratedColumn<String>('forward_from_avatar_url', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderCustomizationJsonMeta =
+      const VerificationMeta('senderCustomizationJson');
+  @override
+  late final GeneratedColumn<String> senderCustomizationJson =
+      GeneratedColumn<String>('sender_customization_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _groupedIdMeta =
       const VerificationMeta('groupedId');
   @override
@@ -1419,6 +1528,8 @@ class $MessagesTable extends Messages
         isForward,
         forwardFromId,
         forwardFromName,
+        forwardFromAvatarUrl,
+        senderCustomizationJson,
         groupedId,
         entities,
         reactions,
@@ -1577,6 +1688,19 @@ class $MessagesTable extends Messages
           forwardFromName.isAcceptableOrUnknown(
               data['forward_from_name']!, _forwardFromNameMeta));
     }
+    if (data.containsKey('forward_from_avatar_url')) {
+      context.handle(
+          _forwardFromAvatarUrlMeta,
+          forwardFromAvatarUrl.isAcceptableOrUnknown(
+              data['forward_from_avatar_url']!, _forwardFromAvatarUrlMeta));
+    }
+    if (data.containsKey('sender_customization_json')) {
+      context.handle(
+          _senderCustomizationJsonMeta,
+          senderCustomizationJson.isAcceptableOrUnknown(
+              data['sender_customization_json']!,
+              _senderCustomizationJsonMeta));
+    }
     if (data.containsKey('grouped_id')) {
       context.handle(_groupedIdMeta,
           groupedId.isAcceptableOrUnknown(data['grouped_id']!, _groupedIdMeta));
@@ -1672,6 +1796,12 @@ class $MessagesTable extends Messages
           .read(DriftSqlType.string, data['${effectivePrefix}forward_from_id']),
       forwardFromName: attachedDatabase.typeMapping.read(
           DriftSqlType.string, data['${effectivePrefix}forward_from_name']),
+      forwardFromAvatarUrl: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}forward_from_avatar_url']),
+      senderCustomizationJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}sender_customization_json']),
       groupedId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}grouped_id']),
       entities: attachedDatabase.typeMapping
@@ -1722,6 +1852,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
   final bool isForward;
   final String? forwardFromId;
   final String? forwardFromName;
+  final String? forwardFromAvatarUrl;
+  final String? senderCustomizationJson;
   final String? groupedId;
   final String? entities;
   final String? reactions;
@@ -1756,6 +1888,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       required this.isForward,
       this.forwardFromId,
       this.forwardFromName,
+      this.forwardFromAvatarUrl,
+      this.senderCustomizationJson,
       this.groupedId,
       this.entities,
       this.reactions,
@@ -1815,6 +1949,13 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
     }
     if (!nullToAbsent || forwardFromName != null) {
       map['forward_from_name'] = Variable<String>(forwardFromName);
+    }
+    if (!nullToAbsent || forwardFromAvatarUrl != null) {
+      map['forward_from_avatar_url'] = Variable<String>(forwardFromAvatarUrl);
+    }
+    if (!nullToAbsent || senderCustomizationJson != null) {
+      map['sender_customization_json'] =
+          Variable<String>(senderCustomizationJson);
     }
     if (!nullToAbsent || groupedId != null) {
       map['grouped_id'] = Variable<String>(groupedId);
@@ -1888,6 +2029,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       forwardFromName: forwardFromName == null && nullToAbsent
           ? const Value.absent()
           : Value(forwardFromName),
+      forwardFromAvatarUrl: forwardFromAvatarUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(forwardFromAvatarUrl),
+      senderCustomizationJson: senderCustomizationJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderCustomizationJson),
       groupedId: groupedId == null && nullToAbsent
           ? const Value.absent()
           : Value(groupedId),
@@ -1940,6 +2087,10 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       isForward: serializer.fromJson<bool>(json['isForward']),
       forwardFromId: serializer.fromJson<String?>(json['forwardFromId']),
       forwardFromName: serializer.fromJson<String?>(json['forwardFromName']),
+      forwardFromAvatarUrl:
+          serializer.fromJson<String?>(json['forwardFromAvatarUrl']),
+      senderCustomizationJson:
+          serializer.fromJson<String?>(json['senderCustomizationJson']),
       groupedId: serializer.fromJson<String?>(json['groupedId']),
       entities: serializer.fromJson<String?>(json['entities']),
       reactions: serializer.fromJson<String?>(json['reactions']),
@@ -1980,6 +2131,9 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       'isForward': serializer.toJson<bool>(isForward),
       'forwardFromId': serializer.toJson<String?>(forwardFromId),
       'forwardFromName': serializer.toJson<String?>(forwardFromName),
+      'forwardFromAvatarUrl': serializer.toJson<String?>(forwardFromAvatarUrl),
+      'senderCustomizationJson':
+          serializer.toJson<String?>(senderCustomizationJson),
       'groupedId': serializer.toJson<String?>(groupedId),
       'entities': serializer.toJson<String?>(entities),
       'reactions': serializer.toJson<String?>(reactions),
@@ -2017,6 +2171,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           bool? isForward,
           Value<String?> forwardFromId = const Value.absent(),
           Value<String?> forwardFromName = const Value.absent(),
+          Value<String?> forwardFromAvatarUrl = const Value.absent(),
+          Value<String?> senderCustomizationJson = const Value.absent(),
           Value<String?> groupedId = const Value.absent(),
           Value<String?> entities = const Value.absent(),
           Value<String?> reactions = const Value.absent(),
@@ -2063,6 +2219,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         forwardFromName: forwardFromName.present
             ? forwardFromName.value
             : this.forwardFromName,
+        forwardFromAvatarUrl: forwardFromAvatarUrl.present
+            ? forwardFromAvatarUrl.value
+            : this.forwardFromAvatarUrl,
+        senderCustomizationJson: senderCustomizationJson.present
+            ? senderCustomizationJson.value
+            : this.senderCustomizationJson,
         groupedId: groupedId.present ? groupedId.value : this.groupedId,
         entities: entities.present ? entities.value : this.entities,
         reactions: reactions.present ? reactions.value : this.reactions,
@@ -2123,6 +2285,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       forwardFromName: data.forwardFromName.present
           ? data.forwardFromName.value
           : this.forwardFromName,
+      forwardFromAvatarUrl: data.forwardFromAvatarUrl.present
+          ? data.forwardFromAvatarUrl.value
+          : this.forwardFromAvatarUrl,
+      senderCustomizationJson: data.senderCustomizationJson.present
+          ? data.senderCustomizationJson.value
+          : this.senderCustomizationJson,
       groupedId: data.groupedId.present ? data.groupedId.value : this.groupedId,
       entities: data.entities.present ? data.entities.value : this.entities,
       reactions: data.reactions.present ? data.reactions.value : this.reactions,
@@ -2167,6 +2335,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           ..write('isForward: $isForward, ')
           ..write('forwardFromId: $forwardFromId, ')
           ..write('forwardFromName: $forwardFromName, ')
+          ..write('forwardFromAvatarUrl: $forwardFromAvatarUrl, ')
+          ..write('senderCustomizationJson: $senderCustomizationJson, ')
           ..write('groupedId: $groupedId, ')
           ..write('entities: $entities, ')
           ..write('reactions: $reactions, ')
@@ -2206,6 +2376,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         isForward,
         forwardFromId,
         forwardFromName,
+        forwardFromAvatarUrl,
+        senderCustomizationJson,
         groupedId,
         entities,
         reactions,
@@ -2244,6 +2416,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           other.isForward == this.isForward &&
           other.forwardFromId == this.forwardFromId &&
           other.forwardFromName == this.forwardFromName &&
+          other.forwardFromAvatarUrl == this.forwardFromAvatarUrl &&
+          other.senderCustomizationJson == this.senderCustomizationJson &&
           other.groupedId == this.groupedId &&
           other.entities == this.entities &&
           other.reactions == this.reactions &&
@@ -2280,6 +2454,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
   final Value<bool> isForward;
   final Value<String?> forwardFromId;
   final Value<String?> forwardFromName;
+  final Value<String?> forwardFromAvatarUrl;
+  final Value<String?> senderCustomizationJson;
   final Value<String?> groupedId;
   final Value<String?> entities;
   final Value<String?> reactions;
@@ -2315,6 +2491,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.isForward = const Value.absent(),
     this.forwardFromId = const Value.absent(),
     this.forwardFromName = const Value.absent(),
+    this.forwardFromAvatarUrl = const Value.absent(),
+    this.senderCustomizationJson = const Value.absent(),
     this.groupedId = const Value.absent(),
     this.entities = const Value.absent(),
     this.reactions = const Value.absent(),
@@ -2351,6 +2529,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.isForward = const Value.absent(),
     this.forwardFromId = const Value.absent(),
     this.forwardFromName = const Value.absent(),
+    this.forwardFromAvatarUrl = const Value.absent(),
+    this.senderCustomizationJson = const Value.absent(),
     this.groupedId = const Value.absent(),
     this.entities = const Value.absent(),
     this.reactions = const Value.absent(),
@@ -2391,6 +2571,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     Expression<bool>? isForward,
     Expression<String>? forwardFromId,
     Expression<String>? forwardFromName,
+    Expression<String>? forwardFromAvatarUrl,
+    Expression<String>? senderCustomizationJson,
     Expression<String>? groupedId,
     Expression<String>? entities,
     Expression<String>? reactions,
@@ -2428,6 +2610,10 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       if (isForward != null) 'is_forward': isForward,
       if (forwardFromId != null) 'forward_from_id': forwardFromId,
       if (forwardFromName != null) 'forward_from_name': forwardFromName,
+      if (forwardFromAvatarUrl != null)
+        'forward_from_avatar_url': forwardFromAvatarUrl,
+      if (senderCustomizationJson != null)
+        'sender_customization_json': senderCustomizationJson,
       if (groupedId != null) 'grouped_id': groupedId,
       if (entities != null) 'entities': entities,
       if (reactions != null) 'reactions': reactions,
@@ -2467,6 +2653,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       Value<bool>? isForward,
       Value<String?>? forwardFromId,
       Value<String?>? forwardFromName,
+      Value<String?>? forwardFromAvatarUrl,
+      Value<String?>? senderCustomizationJson,
       Value<String?>? groupedId,
       Value<String?>? entities,
       Value<String?>? reactions,
@@ -2502,6 +2690,9 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       isForward: isForward ?? this.isForward,
       forwardFromId: forwardFromId ?? this.forwardFromId,
       forwardFromName: forwardFromName ?? this.forwardFromName,
+      forwardFromAvatarUrl: forwardFromAvatarUrl ?? this.forwardFromAvatarUrl,
+      senderCustomizationJson:
+          senderCustomizationJson ?? this.senderCustomizationJson,
       groupedId: groupedId ?? this.groupedId,
       entities: entities ?? this.entities,
       reactions: reactions ?? this.reactions,
@@ -2594,6 +2785,14 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     if (forwardFromName.present) {
       map['forward_from_name'] = Variable<String>(forwardFromName.value);
     }
+    if (forwardFromAvatarUrl.present) {
+      map['forward_from_avatar_url'] =
+          Variable<String>(forwardFromAvatarUrl.value);
+    }
+    if (senderCustomizationJson.present) {
+      map['sender_customization_json'] =
+          Variable<String>(senderCustomizationJson.value);
+    }
     if (groupedId.present) {
       map['grouped_id'] = Variable<String>(groupedId.value);
     }
@@ -2650,6 +2849,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
           ..write('isForward: $isForward, ')
           ..write('forwardFromId: $forwardFromId, ')
           ..write('forwardFromName: $forwardFromName, ')
+          ..write('forwardFromAvatarUrl: $forwardFromAvatarUrl, ')
+          ..write('senderCustomizationJson: $senderCustomizationJson, ')
           ..write('groupedId: $groupedId, ')
           ..write('entities: $entities, ')
           ..write('reactions: $reactions, ')
@@ -3371,6 +3572,8 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isBot,
   Value<bool> isVerified,
   Value<bool> isArchived,
+  Value<String?> peerCustomizationJson,
+  Value<bool> showAuthorProfiles,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -3398,6 +3601,8 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isBot,
   Value<bool> isVerified,
   Value<bool> isArchived,
+  Value<String?> peerCustomizationJson,
+  Value<bool> showAuthorProfiles,
   Value<int> rowid,
 });
 
@@ -3488,6 +3693,14 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<bool> get isArchived => $composableBuilder(
       column: $table.isArchived, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get peerCustomizationJson => $composableBuilder(
+      column: $table.peerCustomizationJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get showAuthorProfiles => $composableBuilder(
+      column: $table.showAuthorProfiles,
+      builder: (column) => ColumnFilters(column));
 }
 
 class $$ChatsTableOrderingComposer
@@ -3578,6 +3791,14 @@ class $$ChatsTableOrderingComposer
 
   ColumnOrderings<bool> get isArchived => $composableBuilder(
       column: $table.isArchived, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get peerCustomizationJson => $composableBuilder(
+      column: $table.peerCustomizationJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get showAuthorProfiles => $composableBuilder(
+      column: $table.showAuthorProfiles,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -3660,6 +3881,12 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<bool> get isArchived => $composableBuilder(
       column: $table.isArchived, builder: (column) => column);
+
+  GeneratedColumn<String> get peerCustomizationJson => $composableBuilder(
+      column: $table.peerCustomizationJson, builder: (column) => column);
+
+  GeneratedColumn<bool> get showAuthorProfiles => $composableBuilder(
+      column: $table.showAuthorProfiles, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -3709,6 +3936,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isBot = const Value.absent(),
             Value<bool> isVerified = const Value.absent(),
             Value<bool> isArchived = const Value.absent(),
+            Value<String?> peerCustomizationJson = const Value.absent(),
+            Value<bool> showAuthorProfiles = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -3736,6 +3965,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             isBot: isBot,
             isVerified: isVerified,
             isArchived: isArchived,
+            peerCustomizationJson: peerCustomizationJson,
+            showAuthorProfiles: showAuthorProfiles,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3763,6 +3994,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isBot = const Value.absent(),
             Value<bool> isVerified = const Value.absent(),
             Value<bool> isArchived = const Value.absent(),
+            Value<String?> peerCustomizationJson = const Value.absent(),
+            Value<bool> showAuthorProfiles = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -3790,6 +4023,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             isBot: isBot,
             isVerified: isVerified,
             isArchived: isArchived,
+            peerCustomizationJson: peerCustomizationJson,
+            showAuthorProfiles: showAuthorProfiles,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -3838,6 +4073,8 @@ typedef $$MessagesTableCreateCompanionBuilder = MessagesCompanion Function({
   Value<bool> isForward,
   Value<String?> forwardFromId,
   Value<String?> forwardFromName,
+  Value<String?> forwardFromAvatarUrl,
+  Value<String?> senderCustomizationJson,
   Value<String?> groupedId,
   Value<String?> entities,
   Value<String?> reactions,
@@ -3874,6 +4111,8 @@ typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
   Value<bool> isForward,
   Value<String?> forwardFromId,
   Value<String?> forwardFromName,
+  Value<String?> forwardFromAvatarUrl,
+  Value<String?> senderCustomizationJson,
   Value<String?> groupedId,
   Value<String?> entities,
   Value<String?> reactions,
@@ -3976,6 +4215,14 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get forwardFromName => $composableBuilder(
       column: $table.forwardFromName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get forwardFromAvatarUrl => $composableBuilder(
+      column: $table.forwardFromAvatarUrl,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderCustomizationJson => $composableBuilder(
+      column: $table.senderCustomizationJson,
       builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get groupedId => $composableBuilder(
@@ -4096,6 +4343,14 @@ class $$MessagesTableOrderingComposer
       column: $table.forwardFromName,
       builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get forwardFromAvatarUrl => $composableBuilder(
+      column: $table.forwardFromAvatarUrl,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderCustomizationJson => $composableBuilder(
+      column: $table.senderCustomizationJson,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get groupedId => $composableBuilder(
       column: $table.groupedId, builder: (column) => ColumnOrderings(column));
 
@@ -4207,6 +4462,12 @@ class $$MessagesTableAnnotationComposer
   GeneratedColumn<String> get forwardFromName => $composableBuilder(
       column: $table.forwardFromName, builder: (column) => column);
 
+  GeneratedColumn<String> get forwardFromAvatarUrl => $composableBuilder(
+      column: $table.forwardFromAvatarUrl, builder: (column) => column);
+
+  GeneratedColumn<String> get senderCustomizationJson => $composableBuilder(
+      column: $table.senderCustomizationJson, builder: (column) => column);
+
   GeneratedColumn<String> get groupedId =>
       $composableBuilder(column: $table.groupedId, builder: (column) => column);
 
@@ -4278,6 +4539,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> isForward = const Value.absent(),
             Value<String?> forwardFromId = const Value.absent(),
             Value<String?> forwardFromName = const Value.absent(),
+            Value<String?> forwardFromAvatarUrl = const Value.absent(),
+            Value<String?> senderCustomizationJson = const Value.absent(),
             Value<String?> groupedId = const Value.absent(),
             Value<String?> entities = const Value.absent(),
             Value<String?> reactions = const Value.absent(),
@@ -4314,6 +4577,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             isForward: isForward,
             forwardFromId: forwardFromId,
             forwardFromName: forwardFromName,
+            forwardFromAvatarUrl: forwardFromAvatarUrl,
+            senderCustomizationJson: senderCustomizationJson,
             groupedId: groupedId,
             entities: entities,
             reactions: reactions,
@@ -4350,6 +4615,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> isForward = const Value.absent(),
             Value<String?> forwardFromId = const Value.absent(),
             Value<String?> forwardFromName = const Value.absent(),
+            Value<String?> forwardFromAvatarUrl = const Value.absent(),
+            Value<String?> senderCustomizationJson = const Value.absent(),
             Value<String?> groupedId = const Value.absent(),
             Value<String?> entities = const Value.absent(),
             Value<String?> reactions = const Value.absent(),
@@ -4386,6 +4653,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             isForward: isForward,
             forwardFromId: forwardFromId,
             forwardFromName: forwardFromName,
+            forwardFromAvatarUrl: forwardFromAvatarUrl,
+            senderCustomizationJson: senderCustomizationJson,
             groupedId: groupedId,
             entities: entities,
             reactions: reactions,

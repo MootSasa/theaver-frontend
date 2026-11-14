@@ -27,7 +27,9 @@ import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../models/profile_customization.dart';
 import '../../services/profile_instant_cache.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/search_service.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -36,6 +38,9 @@ import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../../widgets/chat/sticker_item_widget.dart';
+import '../../widgets/common/glass_modal_sheet.dart';
+import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/common/sync_banner.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../widgets/profile/avatar_gallery_viewer.dart';
@@ -43,6 +48,8 @@ import '../../widgets/profile/expandable_avatar.dart';
 import '../../widgets/profile/liquid_glass_info_panel.dart';
 import '../../widgets/profile/liquid_glass_music_status.dart';
 import '../../widgets/profile/liquid_glass_profile_buttons.dart';
+import '../../widgets/profile/manage_user_badge_sheet.dart';
+import '../../widgets/user/emoji_status_badge.dart';
 import 'change_email_screen.dart';
 import '../../widgets/profile/profile_content_tabs.dart';
 import '../../widgets/profile/profile_section_pill.dart';
@@ -52,7 +59,7 @@ import '../chat/edit_group_channel_screen.dart';
 import '../chat/group_chat_screen.dart';
 import '../chat/private_chat_screen.dart';
 import 'edit_profile_screen.dart';
-import 'profile_color_screen.dart';
+import 'profile_customization_screen.dart';
 
 /// Тип сущности, чей профиль открыт.
 enum ProfileEntityType {
@@ -155,6 +162,7 @@ class ProfileScreenState extends State<ProfileScreen>
   bool _isPublic = false;
   bool _historyForNew = true;
   int _slowModeInterval = 0;
+  bool _showAuthorProfiles = true;
   int _memberCount = 0;
   String _myRole = 'member';
   List<ProfileMemberItem> _members = [];
@@ -165,6 +173,8 @@ class ProfileScreenState extends State<ProfileScreen>
 
   // Оформление профиля собеседника
   ProfileColorPreset? _peerColorPreset;
+  bool _peerIsBot = false;
+  bool _peerIsVerified = false;
 
   // Общие материалы из локальной БД Drift
   List<DbMessage> _mediaMessages = [];
@@ -846,6 +856,12 @@ class ProfileScreenState extends State<ProfileScreen>
           if (u['is_online'] is bool) {
             _isOnline = u['is_online'] as bool;
           }
+          if (u['is_bot'] is bool) {
+            _peerIsBot = u['is_bot'] as bool;
+          }
+          if (u['is_verified'] is bool) {
+            _peerIsVerified = u['is_verified'] as bool;
+          }
           if (u['last_seen'] != null) {
             _lastSeen = DateTime.tryParse(u['last_seen'].toString());
           }
@@ -868,6 +884,14 @@ class ProfileScreenState extends State<ProfileScreen>
             }
           }
         });
+        if (u['peer_customization'] is Map) {
+          PeerCustomizationCache.instance.mergeFromJson(
+            widget.userId!,
+            Map<String, dynamic>.from(u['peer_customization'] as Map),
+          );
+        } else {
+          PeerCustomizationCache.instance.mergeFromJson(widget.userId!, u);
+        }
         ProfileInstantCache.instance.putUserSnapshot(
           CachedUserProfileSnapshot(
             userId: widget.userId!,
@@ -937,6 +961,7 @@ class ProfileScreenState extends State<ProfileScreen>
           _isPublic = data['is_public'] == true;
           _historyForNew = data['history_for_new'] ?? true;
           _slowModeInterval = (data['slow_mode_interval'] as num?)?.toInt() ?? 0;
+          _showAuthorProfiles = data['show_author_profiles'] != false;
           _memberCount = (data['member_count'] as num?)?.toInt() ?? 0;
           final srvAvatar = data['avatar_url']?.toString();
           if (srvAvatar != null && srvAvatar.isNotEmpty) {
@@ -1726,6 +1751,7 @@ class ProfileScreenState extends State<ProfileScreen>
           initialIsPublic: _isPublic,
           initialHistoryForNew: _historyForNew,
           initialSlowModeInterval: _slowModeInterval,
+          initialShowAuthorProfiles: _showAuthorProfiles,
           inviteLink: _inviteLink,
         ),
       ),
@@ -1754,6 +1780,9 @@ class ProfileScreenState extends State<ProfileScreen>
         }
         if (result['slow_mode_interval'] is int) {
           _slowModeInterval = result['slow_mode_interval'] as int;
+        }
+        if (result['show_author_profiles'] is bool) {
+          _showAuthorProfiles = result['show_author_profiles'] as bool;
         }
       });
       widget.onUpdate?.call();
@@ -2556,13 +2585,28 @@ class ProfileScreenState extends State<ProfileScreen>
     );
   }
 
-  void _openColorSettings() {
+  void _openColorSettings() => _openCustomizationStudio(0);
+
+  void _openCustomizationStudio(int initialTab) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => const ProfileColorScreen(),
+      SwipeBackPageRoute(
+        builder: (_) => ProfileCustomizationScreen(initialTab: initialTab),
       ),
     );
+  }
+
+  Future<void> _openManageBadgeSheet() async {
+    final targetId = widget.userId;
+    if (targetId == null || targetId.isEmpty) return;
+    final current = PeerCustomizationCache.instance.getSync(targetId)?.badge;
+    await ManageUserBadgeSheet.show(
+      context,
+      targetUserId: targetId,
+      targetDisplayName: _getDisplayName(),
+      currentBadge: current,
+    );
+    if (mounted) setState(() {});
   }
 
   // ============================================================
@@ -3448,6 +3492,12 @@ class ProfileScreenState extends State<ProfileScreen>
     final isDark = theme.brightness == Brightness.dark;
 
     final profileTheme = context.watch<ProfileThemeProvider>();
+    final custCache = context.watch<PeerCustomizationCache>();
+    final PeerCustomization? activeCustomization = _isSelf
+        ? profileTheme.ownCustomization
+        : (_isUser && widget.userId != null && widget.userId!.isNotEmpty
+            ? custCache.getSync(widget.userId!)
+            : null);
     final activePreset = _getActiveColorPreset(profileTheme);
 
     Color backgroundColor =
@@ -3571,6 +3621,11 @@ class ProfileScreenState extends State<ProfileScreen>
     ).clamp(0.0, 1.0);
 
     final isPhotoTopLight = _topLuminance > 0.55;
+    final resolvedBannerUrl =
+        AppConfig.resolveMediaUrl(activeCustomization?.profileBannerUrl);
+    final double bannerOpacity =
+        ((1.0 - (_expandFactor * 3.0)) * (1.0 - (scrollOffset / 180.0)))
+            .clamp(0.0, 1.0);
     final targetIconBrightness = _expandFactor > 0.38
         ? (isPhotoTopLight ? Brightness.dark : Brightness.light)
         : (effectiveIsDark ? Brightness.light : Brightness.dark);
@@ -3649,6 +3704,57 @@ class ProfileScreenState extends State<ProfileScreen>
                           ),
                         ),
 
+                      // 2.5. Баннер профиля поверх градиента с плавным растворением вниз
+                      if (resolvedBannerUrl != null &&
+                          resolvedBannerUrl.isNotEmpty &&
+                          bannerOpacity > 0.01)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: math.max(220.0, topSpacerHeight + 24.0),
+                          child: IgnorePointer(
+                            child: Opacity(
+                              opacity: bannerOpacity,
+                              child: ShaderMask(
+                                shaderCallback: (rect) => const LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.white,
+                                    Colors.white,
+                                    Colors.transparent,
+                                  ],
+                                  stops: [0.0, 0.52, 1.0],
+                                ).createShader(rect),
+                                blendMode: BlendMode.dstIn,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    ControlledAnimatedNetworkImage(
+                                      url: resolvedBannerUrl,
+                                      fit: BoxFit.cover,
+                                      animate: bannerOpacity > 0.1,
+                                    ),
+                                    DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Colors.black.withValues(alpha: 0.22),
+                                            Colors.black.withValues(alpha: 0.42),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+
                       // 3. Контент профиля (управляется единым вертикальным жестом)
                       SingleChildScrollView(
                         controller: _scrollController,
@@ -3674,26 +3780,76 @@ class ProfileScreenState extends State<ProfileScreen>
                                         .clamp(0.0, 1.0),
                                 child: Column(
                                   children: [
-                                    Hero(
-                                      tag: 'profile_name_$_heroKey',
-                                      flightShuttleBuilder:
-                                          _textHeroFlightShuttleBuilder,
-                                      child: Material(
-                                        type: MaterialType.transparency,
-                                        child: Text(
-                                          _getDisplayName(),
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                            fontSize: 23,
-                                            fontWeight: FontWeight.w700,
-                                            color: onSurfaceColor,
-                                            letterSpacing: -0.3,
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Flexible(
+                                          child: Hero(
+                                            tag: 'profile_name_$_heroKey',
+                                            flightShuttleBuilder:
+                                                _textHeroFlightShuttleBuilder,
+                                            child: Material(
+                                              type: MaterialType.transparency,
+                                              child: Text(
+                                                _getDisplayName(),
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  fontSize: 23,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: onSurfaceColor,
+                                                  letterSpacing: -0.3,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
                                           ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        if (activeCustomization
+                                                ?.activeEmojiStatus !=
+                                            null) ...[
+                                          const SizedBox(width: 6),
+                                          EmojiStatusBadge(
+                                            status: activeCustomization!
+                                                .activeEmojiStatus,
+                                            size: 20,
+                                            animate: true,
+                                            fallbackColor: onSurfaceColor,
+                                          ),
+                                        ],
+                                        PeerBadgesRow(
+                                          isBot: _isUser ? _peerIsBot : false,
+                                          isVerified: _isUser
+                                              ? _peerIsVerified
+                                              : false,
+                                          badge: activeCustomization
+                                              ?.visibleBadge,
+                                          interactiveBadge: true,
+                                          accentColor: activePreset?.ringColor,
+                                        ),
+                                      ],
+                                    ),
+                                    if (activeCustomization
+                                            ?.activeEmojiStatus?.note
+                                            .isNotEmpty ==
+                                        true) ...[
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        activeCustomization!
+                                            .activeEmojiStatus!.note,
+                                        textAlign: TextAlign.center,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: onSurfaceColor.withValues(
+                                            alpha: 0.78,
+                                          ),
                                         ),
                                       ),
-                                    ),
+                                    ],
                                     const SizedBox(height: 3),
                                     Hero(
                                       tag: 'profile_status_$_heroKey',
@@ -3983,6 +4139,7 @@ class ProfileScreenState extends State<ProfileScreen>
                               tintColor: backgroundColor,
                               backgroundColor: backgroundColor,
                               displayName: _getDisplayName(),
+                              decoration: activeCustomization?.avatarDecoration,
                               chatAvatarHeroTag:
                                   (_expandFactor >= 0.85 || _isAvatarViewerOpen)
                                       ? null
@@ -4214,7 +4371,11 @@ class ProfileScreenState extends State<ProfileScreen>
         ),
         _MorphMenuItemData(
           id: 'change_color',
-          label: _tr(l10n, 'profile_menu_change_color', 'Цвет профиля'),
+          label: translateOrFallback(
+            context,
+            'customizationTitle',
+            'Profile Customization',
+          ),
           iconBuilder: (color, size) =>
               iconoir.Palette(color: color, width: size, height: size),
         ),
@@ -4236,7 +4397,29 @@ class ProfileScreenState extends State<ProfileScreen>
     }
 
     if (_isUser) {
+      final viewerIsCreator =
+          context.read<ProfileThemeProvider>().currentOwnBadge?.id == 'creator';
+      final targetBadgeId =
+          PeerCustomizationCache.instance.getSync(widget.userId ?? '')?.badge?.id;
+      final canManageBadge = viewerIsCreator &&
+          widget.userId != null &&
+          widget.userId!.isNotEmpty &&
+          widget.userId != _accountManager.currentAccount?.userId &&
+          !_peerIsBot &&
+          targetBadgeId != 'creator';
+
       return [
+        if (canManageBadge)
+          _MorphMenuItemData(
+            id: 'manage_badge',
+            label: translateOrFallback(
+              context,
+              'manageBadgeMenu',
+              'Manage Badge',
+            ),
+            iconBuilder: (color, size) =>
+                iconoir.BadgeCheck(color: color, width: size, height: size),
+          ),
         _MorphMenuItemData(
           id: 'search_chat',
           label: _tr(l10n, 'chat_menu_search_messages', 'Поиск сообщений'),
@@ -4330,6 +4513,9 @@ class ProfileScreenState extends State<ProfileScreen>
         break;
       case 'change_color':
         _openColorSettings();
+        break;
+      case 'manage_badge':
+        _openManageBadgeSheet();
         break;
       case 'copy_link':
         _copyProfileLink();

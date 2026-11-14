@@ -9,6 +9,7 @@ import '../services/auth_service.dart';
 class AppLocalizations {
   final Locale locale;
   late Map<String, String> _localizedStrings;
+  Map<String, String> _fallbackStrings = const {};
 
   AppLocalizations(this.locale);
 
@@ -19,7 +20,7 @@ class AppLocalizations {
 
   /// Получить локализованный текст по ключу с поддержкой параметров
   String translate(String key, [Map<String, String>? params]) {
-    String str = _localizedStrings[key] ?? key;
+    String str = _localizedStrings[key] ?? _fallbackStrings[key] ?? key;
     if (params != null) {
       params.forEach((paramKey, paramValue) {
         str = str.replaceAll('{$paramKey}', paramValue);
@@ -28,7 +29,7 @@ class AppLocalizations {
     return str;
   }
 
-  /// Загрузить файл локализации
+  /// Загрузить файл локализации (с резервным fallback на EN при отсутствующих ключах)
   Future<bool> load() async {
     String jsonString = await rootBundle.loadString(
       'assets/l10n/${locale.languageCode}.json',
@@ -37,6 +38,19 @@ class AppLocalizations {
     _localizedStrings = jsonMap.map((key, value) {
       return MapEntry(key, value.toString());
     });
+    if (locale.languageCode != 'en') {
+      try {
+        final fallbackRaw = await rootBundle.loadString('assets/l10n/en.json');
+        final fallbackMap = json.decode(fallbackRaw) as Map<String, dynamic>;
+        _fallbackStrings = fallbackMap.map(
+          (key, value) => MapEntry(key, value.toString()),
+        );
+      } catch (_) {
+        _fallbackStrings = const {};
+      }
+    } else {
+      _fallbackStrings = const {};
+    }
     return true;
   }
 

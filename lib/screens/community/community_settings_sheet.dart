@@ -5,6 +5,9 @@ import '../../l10n/app_localizations.dart';
 import '../../models/community_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/community_service.dart';
+import '../../widgets/common/peer_badges_widget.dart';
+import '../../widgets/user/avatar_with_status.dart';
+import '../../widgets/user/emoji_status_badge.dart';
 
 /// Community administration bottom sheet for managing Overview, Categories,
 /// Channels (`#text`, `🔊 voice`, `🎙️ stage`), Roles (64-bit bitmask permissions),
@@ -966,31 +969,53 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
                                   .where((r) => m.roleIds.contains(r.id))
                                   .map((r) => r.name)
                                   .join(', ');
+                              final memberName = m.displayName.isNotEmpty
+                                  ? m.displayName
+                                  : (m.username.isNotEmpty ? m.username : 'U');
+                              final memberCust = m.peerCustomization;
                               return ListTile(
-                                leading: CircleAvatar(
-                                  backgroundColor:
-                                      primaryColor.withValues(alpha: 0.18),
-                                  child: Text(
-                                    (m.displayName.isNotEmpty
-                                            ? m.displayName
-                                            : m.username.isNotEmpty
-                                                ? m.username
-                                                : 'U')[0]
-                                        .toUpperCase(),
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      color: primaryColor,
-                                    ),
-                                  ),
+                                leading: AvatarWithStatus(
+                                  userId: m.userId,
+                                  avatarUrl: m.avatarUrl,
+                                  name: memberName,
+                                  radius: 20,
+                                  isOnline: m.isOnline,
+                                  decorationOverride:
+                                      memberCust?.avatarDecoration,
+                                  showDecoration: true,
+                                  animateDecoration: false,
                                 ),
-                                title: Text(
-                                  m.displayName.isNotEmpty
-                                      ? m.displayName
-                                      : m.username,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    color: p.textPrimary,
-                                  ),
+                                title: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        memberName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: p.textPrimary,
+                                        ),
+                                      ),
+                                    ),
+                                    if (memberCust?.activeEmojiStatus !=
+                                        null) ...[
+                                      const SizedBox(width: 4),
+                                      EmojiStatusBadge(
+                                        status: memberCust!.activeEmojiStatus,
+                                        size: 15,
+                                        interactive: false,
+                                      ),
+                                    ],
+                                    PeerBadgesRow(
+                                      isBot: m.isBot,
+                                      isVerified: m.isVerified,
+                                      badge: memberCust?.visibleBadge,
+                                      interactiveBadge: false,
+                                      verifiedIconSize: 15,
+                                    ),
+                                  ],
                                 ),
                                 subtitle: Text(
                                   roleNames.isNotEmpty

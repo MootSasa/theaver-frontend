@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../utils/image_utils.dart';
+import 'avatar_decoration_frame.dart';
 
 /// A widget that displays a user avatar with an online status indicator.
 /// Shows an online status circle in the bottom-right corner when the user is online.
@@ -11,6 +15,10 @@ class AvatarWithStatus extends StatefulWidget {
   final bool isOnline;
   final Color? backgroundColor;
   final VoidCallback? onTap;
+  final String? userId;
+  final AvatarDecorationPreset? decorationOverride;
+  final bool showDecoration;
+  final bool animateDecoration;
 
   const AvatarWithStatus({
     Key? key,
@@ -20,6 +28,10 @@ class AvatarWithStatus extends StatefulWidget {
     this.isOnline = false,
     this.backgroundColor,
     this.onTap,
+    this.userId,
+    this.decorationOverride,
+    this.showDecoration = true,
+    this.animateDecoration = true,
   }) : super(key: key);
 
   @override
@@ -145,6 +157,42 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
         },
       ),
     );
+
+    if (widget.showDecoration) {
+      AvatarDecorationPreset? decoration = widget.decorationOverride;
+      if (decoration == null &&
+          widget.userId != null &&
+          widget.userId!.isNotEmpty) {
+        try {
+          decoration =
+              context.select<PeerCustomizationCache, AvatarDecorationPreset?>(
+            (c) => c.getSync(widget.userId)?.avatarDecoration,
+          );
+        } catch (_) {
+          decoration =
+              PeerCustomizationCache.instance.getSync(widget.userId)?.avatarDecoration;
+        }
+      }
+      if (decoration != null) {
+        final outerSize = size * 1.24;
+        content = SizedBox(
+          width: size,
+          height: size,
+          child: OverflowBox(
+            minWidth: outerSize,
+            maxWidth: outerSize,
+            minHeight: outerSize,
+            maxHeight: outerSize,
+            child: AvatarDecorationFrame(
+              decoration: decoration,
+              avatarDiameter: size,
+              animate: widget.animateDecoration,
+              child: content,
+            ),
+          ),
+        );
+      }
+    }
 
     if (widget.onTap != null) {
       return GestureDetector(

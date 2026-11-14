@@ -1,6 +1,12 @@
 import 'avatar_gallery_viewer.dart';
-import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../models/profile_customization.dart';
+import '../../services/peer_customization_cache.dart';
+import '../common/peer_badges_widget.dart';
+import '../user/avatar_with_status.dart';
+import '../user/emoji_status_badge.dart';
 
 /// Попап с информацией о пользователе, который был найден через QR-код.
 ///
@@ -88,6 +94,14 @@ class _UserProfilePopupState extends State<UserProfilePopup> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    PeerCustomization? customization;
+    try {
+      customization = context.select<PeerCustomizationCache?, PeerCustomization?>(
+        (cache) => cache?.getSync(widget.userId),
+      );
+    } catch (_) {
+      customization = PeerCustomizationCache.instance.getSync(widget.userId);
+    }
 
     // Цвета из палитры приложения
     final backgroundColor = isDark ? const Color(0xFF2C2C2E) : Colors.white;
@@ -150,40 +164,52 @@ class _UserProfilePopupState extends State<UserProfilePopup> {
                     },
                   );
                 },
-                child: CircleAvatar(
+                child: AvatarWithStatus(
+                  userId: widget.userId,
+                  avatarUrl: widget.avatarUrl,
+                  name: widget.displayName,
                   radius: 40,
-                  backgroundColor: isDark ? const Color(0xFF3C3C43) : const Color(0xFFE0E0E0),
-                  backgroundImage: widget.avatarUrl != null && widget.avatarUrl!.isNotEmpty
-                      ? avatarImageProvider(widget.avatarUrl)
-                      : null,
-                  child: widget.avatarUrl == null || widget.avatarUrl!.isEmpty
-                      ? Text(
-                          widget.displayName.isNotEmpty
-                              ? widget.displayName[0].toUpperCase()
-                              : '?',
-                          style: TextStyle(
-                            color: isDark ? Colors.white70 : Colors.black38,
-                            fontSize: 36,
-                            fontWeight: FontWeight.w300,
-                          ),
-                        )
-                      : null,
+                  backgroundColor:
+                      isDark ? const Color(0xFF3C3C43) : const Color(0xFFE0E0E0),
+                  decorationOverride: customization?.avatarDecoration,
+                  showDecoration: true,
+                  animateDecoration: true,
                 ),
               ),
             ),
             const SizedBox(height: 16),
 
-            // Имя
-            Text(
-              widget.displayName,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: onSurfaceColor,
-              ),
+            // Имя + статус + бейдж
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    widget.displayName,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      color: onSurfaceColor,
+                    ),
+                  ),
+                ),
+                if (customization?.activeEmojiStatus != null) ...[
+                  const SizedBox(width: 6),
+                  EmojiStatusBadge(
+                    status: customization!.activeEmojiStatus,
+                    size: 18,
+                    animate: true,
+                  ),
+                ],
+                PeerBadgesRow(
+                  badge: customization?.visibleBadge,
+                  interactiveBadge: true,
+                ),
+              ],
             ),
             const SizedBox(height: 4),
 

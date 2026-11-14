@@ -1,4 +1,6 @@
 import 'call_models.dart';
+import 'profile_customization.dart';
+import '../services/peer_customization_cache.dart';
 
 /// Bitmask permissions for Community roles and channel overwrites,
 /// matching backend `permissions_community.go` 1-to-1.
@@ -342,7 +344,10 @@ class CommunityMember {
   final String displayName;
   final String? avatarUrl;
   final bool isOnline;
+  final bool isBot;
+  final bool isVerified;
   final List<String> roleIds;
+  final PeerCustomization? peerCustomization;
 
   const CommunityMember({
     required this.userId,
@@ -350,7 +355,10 @@ class CommunityMember {
     required this.displayName,
     this.avatarUrl,
     this.isOnline = false,
+    this.isBot = false,
+    this.isVerified = false,
     this.roleIds = const [],
+    this.peerCustomization,
   });
 
   factory CommunityMember.fromJson(Map<String, dynamic> json) {
@@ -362,13 +370,21 @@ class CommunityMember {
       }
     }
     final rawAvatar = json['avatar_url']?.toString().trim();
+    final userId = (json['user_id'] ?? '').toString();
+    final cust = PeerCustomization.fromJson(json);
+    if (!cust.isEmpty && userId.isNotEmpty) {
+      PeerCustomizationCache.instance.put(userId, cust);
+    }
     return CommunityMember(
-      userId: (json['user_id'] ?? '').toString(),
+      userId: userId,
       username: (json['username'] ?? '').toString(),
       displayName: (json['display_name'] ?? json['username'] ?? 'User').toString(),
       avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
       isOnline: json['is_online'] == true,
+      isBot: json['is_bot'] == true,
+      isVerified: json['is_verified'] == true,
       roleIds: parsedRoles,
+      peerCustomization: cust.isEmpty ? null : cust,
     );
   }
 }

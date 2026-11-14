@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/draft_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/image_utils.dart';
 import '../common/peer_badges_widget.dart';
 import '../user/avatar_with_status.dart';
+import '../user/emoji_status_badge.dart';
 import 'round_video_thumbnail.dart';
 import 'swipeable_chat_tile.dart';
 
@@ -74,6 +78,20 @@ class ChatListTileItem extends StatelessWidget {
     final isPrivateChat = chat.chatType == 'private';
     final isCommunity = chat.chatType == 'community';
 
+    PeerCustomization? cachedCust;
+    if (isPrivateChat &&
+        chat.otherUserId != null &&
+        chat.otherUserId!.isNotEmpty) {
+      try {
+        cachedCust = context.select<PeerCustomizationCache?, PeerCustomization?>(
+          (cache) => cache?.getSync(chat.otherUserId),
+        );
+      } catch (_) {
+        cachedCust = PeerCustomizationCache.instance.getSync(chat.otherUserId);
+      }
+    }
+    final effectiveCust = isPrivateChat ? (cachedCust ?? chat.peerCustomization) : null;
+
     const double avatarRadius = 22.0;
 
     final String? effectiveAvatarUrl = chat.chatType == 'saved' &&
@@ -85,10 +103,14 @@ class ChatListTileItem extends StatelessWidget {
 
     final Widget avatarWidget = isPrivateChat
         ? AvatarWithStatus(
+            userId: chat.otherUserId,
             avatarUrl: effectiveAvatarUrl,
             name: chat.name,
             radius: avatarRadius,
             isOnline: isSelectMode ? false : chat.isOnline,
+            decorationOverride: effectiveCust?.avatarDecoration,
+            showDecoration: true,
+            animateDecoration: false,
           )
         : isCommunity
             ? Container(
@@ -271,9 +293,20 @@ class ChatListTileItem extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    if (isPrivateChat &&
+                        effectiveCust?.activeEmojiStatus != null) ...[
+                      const SizedBox(width: 4),
+                      EmojiStatusBadge(
+                        status: effectiveCust!.activeEmojiStatus,
+                        size: 15,
+                        interactive: false,
+                      ),
+                    ],
                     PeerBadgesRow(
                       isBot: chat.isBot,
                       isVerified: chat.isVerified || chat.chatType == 'system',
+                      badge: isPrivateChat ? effectiveCust?.visibleBadge : null,
+                      interactiveBadge: false,
                       verifiedIconSize: 15,
                     ),
                     if (isMuted && chat.chatType != 'saved')

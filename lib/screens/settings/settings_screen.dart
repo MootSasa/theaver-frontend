@@ -4,6 +4,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'about_theaver_screen.dart';
+import 'profile_customization_screen.dart';
 import 'profile_screen.dart';
 import 'notifications_screen.dart';
 import 'privacy_screen.dart';
@@ -28,6 +29,7 @@ import '../../services/settings_service.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
+import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import 'package:http/http.dart' as http;
@@ -327,6 +329,27 @@ class _SettingsScreenState extends State<SettingsScreen>
                   });
                 }
               });
+            },
+          ),
+
+          // Profile Customization Studio
+          ListTile(
+            leading: iconoir.Spark(width: 22, height: 22, color: accent),
+            title: Text(
+              translateOrFallback(
+                context,
+                'customizationTitle',
+                'Profile Customization',
+              ),
+            ),
+            onTap: () {
+              HapticUtils.tap();
+              Navigator.push(
+                context,
+                SwipeBackPageRoute(
+                  builder: (_) => const ProfileCustomizationScreen(),
+                ),
+              );
             },
           ),
 

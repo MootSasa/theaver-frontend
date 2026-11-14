@@ -689,6 +689,8 @@ class MessageBubble extends StatelessWidget {
   final bool isMe;
   final String currentUserId;
   final String? senderName;
+  final Widget? senderHeaderWidget;
+  final bool hasAvatarGutter;
   final String? chatType;
   final String? chatTitle;
   final bool isHighlighted;
@@ -709,6 +711,8 @@ class MessageBubble extends StatelessWidget {
     required this.isMe,
     required this.currentUserId,
     this.senderName,
+    this.senderHeaderWidget,
+    this.hasAvatarGutter = false,
     this.chatType,
     this.chatTitle,
     this.isHighlighted = false,
@@ -731,6 +735,8 @@ class MessageBubble extends StatelessWidget {
       isMe: isMe,
       currentUserId: currentUserId,
       senderName: senderName,
+      senderHeaderWidget: senderHeaderWidget,
+      hasAvatarGutter: hasAvatarGutter,
       chatType: chatType,
       chatTitle: chatTitle,
       isHighlighted: false,
@@ -1166,8 +1172,10 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
+    final double effectiveViewportWidth =
+        TileViewportScope.widthOf(context) - (hasAvatarGutter ? 38.0 : 0.0);
     final double maxOuterBubbleWidth = math.min(
-      TileViewportScope.widthOf(context) * 0.76,
+      math.max(180.0, effectiveViewportWidth * 0.76),
       kMaxMessageBubbleWidth,
     );
     final double maxBubbleWidth = maxOuterBubbleWidth - 24.0; // 24 = horizontal padding
@@ -1199,13 +1207,19 @@ class MessageBubble extends StatelessWidget {
                 message.forwardFromName!.isNotEmpty)
             ? message.forwardFromName!
             : message.senderName,
+        authorAvatarUrl: message.forwardFromAvatarUrl,
         isMe: isMe,
       );
     }
 
     Widget? senderNameWidget;
     const double senderNameWidthEstimate = 0.0;
-    if (!isMe && senderName != null && senderName!.isNotEmpty) {
+    if (!isMe && senderHeaderWidget != null) {
+      senderNameWidget = Padding(
+        padding: const EdgeInsets.only(bottom: 4.0),
+        child: senderHeaderWidget!,
+      );
+    } else if (!isMe && senderName != null && senderName!.isNotEmpty) {
       final style = TextStyle(
         fontSize: 13,
         fontWeight: FontWeight.bold,
@@ -1593,7 +1607,12 @@ class MessageBubble extends StatelessWidget {
     );
 
     Widget bubbleCore = Container(
-      margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
+      margin: EdgeInsets.only(
+        top: 3.0,
+        bottom: 3.0,
+        left: hasAvatarGutter ? 0.0 : 8.0,
+        right: 8.0,
+      ),
       constraints: BoxConstraints(
         maxWidth: maxOuterBubbleWidth,
       ),
@@ -1643,7 +1662,7 @@ class MessageBubble extends StatelessWidget {
         Theme.of(context).colorScheme.primary.withValues(alpha: 0.18);
 
     Widget rowContent = alignedBubble;
-    if (isSelectionMode) {
+    if (isSelectionMode && !hasAvatarGutter) {
       rowContent = Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -1657,6 +1676,10 @@ class MessageBubble extends StatelessWidget {
             ),
           ),
         ],
+      );
+    } else if (isSelectionMode) {
+      rowContent = IgnorePointer(
+        child: alignedBubble,
       );
     }
 
@@ -1673,7 +1696,9 @@ class MessageBubble extends StatelessWidget {
         duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
         width: double.infinity,
-        color: useSelectedBubbleStyle ? rowHighlightColor : Colors.transparent,
+        color: (!hasAvatarGutter && useSelectedBubbleStyle)
+            ? rowHighlightColor
+            : Colors.transparent,
         child: rowContent,
       ),
     );

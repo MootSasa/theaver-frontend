@@ -9,8 +9,10 @@ import 'chat_service.dart';
 import 'community_service.dart';
 import 'file_service.dart';
 import 'media_cache_manager.dart';
+import 'peer_customization_cache.dart';
 import 'websocket_service.dart';
 import 'database/app_database.dart';
+import '../models/profile_customization.dart';
 
 /// Сервис синхронизации данных между сервером и локальной БД (Drift/SQLite)
 class SyncService {
@@ -165,6 +167,15 @@ class SyncService {
         break;
       case 'draft_updated':
         break;
+      case 'user_appearance_updated':
+        final targetUserId = payload['user_id']?.toString();
+        if (targetUserId != null && targetUserId.isNotEmpty) {
+          PeerCustomizationCache.instance.mergeFromJson(targetUserId, payload);
+          final cachedJson =
+              PeerCustomizationCache.instance.getSync(targetUserId)?.toJsonString();
+          await _db.updateUserCustomizationJson(targetUserId, cachedJson);
+        }
+        break;
       default:
         debugPrint('SyncService: Unknown event type: $eventType');
     }
@@ -231,6 +242,24 @@ class SyncService {
     final String? mediaPayloadStr =
         mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
 
+    final String? senderCustJsonStr = () {
+      final raw = payload['sender_customization'];
+      if (raw is Map) {
+        final cust = PeerCustomization.fromJson(Map<String, dynamic>.from(raw));
+        final sid = payload['sender_id']?.toString() ?? '';
+        if (sid.isNotEmpty) {
+          PeerCustomizationCache.instance.put(sid, cust, notify: false);
+        }
+        return cust.toJsonString();
+      } else if (raw is String && raw.isNotEmpty) {
+        return raw;
+      }
+      return null;
+    }();
+    final String? fwdAvatarUrl =
+        (payload['forwarded_from_avatar_url'] ?? payload['forward_from_avatar_url'])
+            ?.toString();
+
     await _db.saveMessage(MessagesCompanion(
       serverId: Value(serverId),
       localId: Value(_uuid.v4()),
@@ -279,6 +308,8 @@ class SyncService {
       forwardFromName: Value(
           (payload['forward_from_name'] ?? payload['forwarded_from_name'])
               ?.toString()),
+      forwardFromAvatarUrl: Value(fwdAvatarUrl),
+      senderCustomizationJson: Value(senderCustJsonStr),
       entities: Value(entitiesStr),
       linkPreviewOptions: Value(linkPreviewOptionsStr),
       mediaPayload: Value(mediaPayloadStr),
@@ -461,6 +492,10 @@ class SyncService {
       unreadCount: const Value(0),
       isOnline: const Value(false),
       isPinned: const Value(false),
+      showAuthorProfiles: Value(payload['show_author_profiles'] != false),
+      peerCustomizationJson: Value(payload['peer_customization'] is Map
+          ? jsonEncode(payload['peer_customization'])
+          : payload['peer_customization']?.toString()),
     ));
   }
 
@@ -492,6 +527,14 @@ class SyncService {
       updatedAt: payload.containsKey('updated_at')
           ? Value(payload['updated_at'].toString())
           : Value(chat.updatedAt),
+      showAuthorProfiles: payload.containsKey('show_author_profiles')
+          ? Value(payload['show_author_profiles'] != false)
+          : Value(chat.showAuthorProfiles),
+      peerCustomizationJson: payload.containsKey('peer_customization')
+          ? Value(payload['peer_customization'] is Map
+              ? jsonEncode(payload['peer_customization'])
+              : payload['peer_customization']?.toString())
+          : Value(chat.peerCustomizationJson),
     );
 
     await _db.saveChat(companion);

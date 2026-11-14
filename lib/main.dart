@@ -33,6 +33,7 @@ import 'services/banking_cards_provider.dart';
 import 'services/wallet_security_provider.dart';
 import 'services/wallpaper_provider.dart';
 import 'services/profile_theme_provider.dart';
+import 'services/peer_customization_cache.dart';
 import 'services/profile_instant_cache.dart';
 import 'utils/emoji_utils.dart';
 import 'l10n/app_localizations.dart';
@@ -227,6 +228,7 @@ class TheaverApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationSettingsProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => PrivacySettingsProvider()..loadAll()),
         ChangeNotifierProvider(create: (_) => WallpaperProvider()..init()),
+        ChangeNotifierProvider.value(value: PeerCustomizationCache.instance..init()),
         ChangeNotifierProvider(create: (_) => ProfileThemeProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => WalletSecurityProvider()),
         ChangeNotifierProvider.value(value: AppLockService.instance),

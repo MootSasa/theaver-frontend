@@ -42,6 +42,9 @@ class Chats extends Table {
   BoolColumn get isBot => boolean().withDefault(const Constant(false))();
   BoolColumn get isVerified => boolean().withDefault(const Constant(false))();
   BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
+  TextColumn get peerCustomizationJson => text().nullable()();
+  BoolColumn get showAuthorProfiles =>
+      boolean().withDefault(const Constant(true))();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -82,6 +85,8 @@ class Messages extends Table {
   BoolColumn get isForward => boolean().withDefault(const Constant(false))();
   TextColumn get forwardFromId => text().nullable()();
   TextColumn get forwardFromName => text().nullable()();
+  TextColumn get forwardFromAvatarUrl => text().nullable()();
+  TextColumn get senderCustomizationJson => text().nullable()();
 
   // Entities & Album grouping
   TextColumn get groupedId => text().nullable()();
@@ -207,7 +212,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -338,6 +343,20 @@ class AppDatabase extends _$AppDatabase {
           if (from < 11) {
             await customStatement(
               'ALTER TABLE chats ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0',
+            );
+          }
+          if (from < 12) {
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN peer_customization_json TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN show_author_profiles INTEGER NOT NULL DEFAULT 1',
+            );
+            await customStatement(
+              'ALTER TABLE messages ADD COLUMN forward_from_avatar_url TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE messages ADD COLUMN sender_customization_json TEXT',
             );
           }
         },
@@ -1105,6 +1124,38 @@ class AppDatabase extends _$AppDatabase {
       ChatsCompanion(
         pinnedMessageId: Value(pinnedMessageId),
       ),
+    );
+  }
+
+  /// Обновить флаг отображения профилей авторов в канале/группе
+  Future<void> updateChatShowAuthorProfiles(
+    String chatId,
+    bool showAuthorProfiles,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        showAuthorProfiles: Value(showAuthorProfiles),
+      ),
+    );
+  }
+
+  /// Обновить кэшированную кастомизацию пользователя в личных чатах и сообщениях
+  Future<void> updateUserCustomizationJson(
+    String userId,
+    String? customizationJson,
+  ) async {
+    if (userId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)
+          ..where((t) =>
+              t.chatType.equals('private') & t.otherUserId.equals(userId)))
+        .write(
+      ChatsCompanion(peerCustomizationJson: Value(customizationJson)),
+    );
+    await (update(messages)..where((t) => t.senderId.equals(userId))).write(
+      MessagesCompanion(senderCustomizationJson: Value(customizationJson)),
     );
   }
 

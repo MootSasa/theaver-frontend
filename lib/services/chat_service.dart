@@ -9,8 +9,10 @@ import 'notification_service.dart';
 import 'websocket_service.dart';
 import '../utils/date_time_utils.dart';
 import '../models/chat_draft.dart';
+import '../models/profile_customization.dart';
 import '../utils/emoji_utils.dart';
 import 'community_service.dart';
+import 'peer_customization_cache.dart';
 
 /// Chat represents a chat conversation.
 class Chat {
@@ -42,6 +44,8 @@ class Chat {
   final bool isVerified;
   final bool isArchived;
   final int? communityId;
+  final bool showAuthorProfiles;
+  final PeerCustomization? peerCustomization;
 
   Chat({
     required this.id,
@@ -72,6 +76,8 @@ class Chat {
     this.isVerified = false,
     this.isArchived = false,
     this.communityId,
+    this.showAuthorProfiles = true,
+    this.peerCustomization,
   });
 
   /// Whether this chat belongs to a community channel
@@ -205,9 +211,29 @@ class Chat {
       }
     }
 
+    final rawPeerCust = json['peer_customization'];
+    final PeerCustomization? parsedPeerCust = rawPeerCust is Map
+        ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawPeerCust))
+        : (rawPeerCust is String && rawPeerCust.isNotEmpty
+            ? PeerCustomization.tryParseJsonString(rawPeerCust)
+            : null);
+    final parsedChatType = json['chat_type']?.toString() ?? 'private';
+    final parsedOtherUserId =
+        json['other_user_id']?.toString() ?? json['otherUserId']?.toString();
+    if (parsedChatType == 'private' &&
+        parsedOtherUserId != null &&
+        parsedOtherUserId.isNotEmpty &&
+        parsedPeerCust != null) {
+      PeerCustomizationCache.instance.put(
+        parsedOtherUserId,
+        parsedPeerCust,
+        notify: false,
+      );
+    }
+
     return Chat(
       id: json['id']?.toString() ?? json['chat_id']?.toString() ?? '',
-      chatType: json['chat_type']?.toString() ?? 'private',
+      chatType: parsedChatType,
       name: json['name']?.toString() ?? '',
       avatarUrl: json['avatar_url']?.toString(),
       lastMessage: json['last_message']?.toString(),
@@ -221,7 +247,7 @@ class Chat {
       isOnline: json['is_online'] ?? false,
       lastSeen: json['last_seen']?.toString(),
       isPinned: json['is_pinned'] ?? false,
-      otherUserId: json['other_user_id']?.toString() ?? json['otherUserId']?.toString(),
+      otherUserId: parsedOtherUserId,
       lastMessageGroupedId: json['last_message_grouped_id']?.toString(),
       lastMessageEntities: parsedLastEntities,
       draft: json['draft'] != null && json['draft'] is Map<String, dynamic>
@@ -244,6 +270,8 @@ class Chat {
       isArchived: json['is_archived'] == true || json['is_archived'] == 1,
       communityId: (json['community_id'] as num?)?.toInt() ??
           int.tryParse(json['community_id']?.toString() ?? ''),
+      showAuthorProfiles: json['show_author_profiles'] != false,
+      peerCustomization: parsedPeerCust,
     );
   }
 
@@ -276,6 +304,8 @@ class Chat {
     bool? isVerified,
     bool? isArchived,
     int? communityId,
+    bool? showAuthorProfiles,
+    PeerCustomization? peerCustomization,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -308,6 +338,8 @@ class Chat {
       isVerified: isVerified ?? this.isVerified,
       isArchived: isArchived ?? this.isArchived,
       communityId: communityId ?? this.communityId,
+      showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
+      peerCustomization: peerCustomization ?? this.peerCustomization,
     );
   }
 }
@@ -608,6 +640,8 @@ class Message {
   final bool isForward;
   final String? forwardFromId;
   final String? forwardFromName;
+  final String? forwardFromAvatarUrl;
+  final PeerCustomization? senderCustomization;
 
   // Album grouping and text formatting entities
   final String? groupedId;
@@ -658,6 +692,8 @@ class Message {
     this.isForward = false,
     this.forwardFromId,
     this.forwardFromName,
+    this.forwardFromAvatarUrl,
+    this.senderCustomization,
     this.groupedId,
     this.entities = const [],
     this.linkPreviewOptions,
@@ -868,10 +904,25 @@ class Message {
         parsedMediaPayload?['is_listened'] == true ||
         parsedListenedAt != null;
 
+    final String parsedSenderId = json['sender_id']?.toString() ?? '';
+    final rawSenderCust = json['sender_customization'];
+    final PeerCustomization? parsedSenderCust = rawSenderCust is Map
+        ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawSenderCust))
+        : (rawSenderCust is String && rawSenderCust.isNotEmpty
+            ? PeerCustomization.tryParseJsonString(rawSenderCust)
+            : null);
+    if (parsedSenderId.isNotEmpty && parsedSenderCust != null) {
+      PeerCustomizationCache.instance.put(
+        parsedSenderId,
+        parsedSenderCust,
+        notify: false,
+      );
+    }
+
     return Message(
       id: json['id']?.toString() ?? '',
       chatId: json['chat_id']?.toString() ?? '',
-      senderId: json['sender_id']?.toString() ?? '',
+      senderId: parsedSenderId,
       content: json['content']?.toString() ?? '',
       messageType: json['message_type']?.toString() ?? 'text',
       isEdited: json['is_edited'] ?? false,
@@ -927,6 +978,10 @@ class Message {
       forwardFromName:
           (json['forward_from_name'] ?? json['forwarded_from_name'])
               ?.toString(),
+      forwardFromAvatarUrl:
+          (json['forwarded_from_avatar_url'] ?? json['forward_from_avatar_url'])
+              ?.toString(),
+      senderCustomization: parsedSenderCust,
       groupedId: json['grouped_id']?.toString(),
       entities: () {
         final raw = json['entities'];
@@ -1075,6 +1130,16 @@ class Message {
     final dbIsListened =
         dbMediaPayload?['is_listened'] == true || dbListenedAt != null;
 
+    final PeerCustomization? dbSenderCust =
+        PeerCustomization.tryParseJsonString(model.senderCustomizationJson);
+    if (model.senderId.isNotEmpty && dbSenderCust != null) {
+      PeerCustomizationCache.instance.put(
+        model.senderId,
+        dbSenderCust,
+        notify: false,
+      );
+    }
+
     return Message(
       id: model.serverId ?? model.localId,
       chatId: model.chatId,
@@ -1118,6 +1183,8 @@ class Message {
       isForward: model.isForward,
       forwardFromId: model.forwardFromId,
       forwardFromName: model.forwardFromName,
+      forwardFromAvatarUrl: model.forwardFromAvatarUrl,
+      senderCustomization: dbSenderCust,
       groupedId: model.groupedId,
       entities: parsedEntities,
       linkPreviewOptions: parsedLinkPreviewOptions,
@@ -1173,6 +1240,8 @@ class Message {
       isForward: drift.Value(isForward),
       forwardFromId: drift.Value(forwardFromId),
       forwardFromName: drift.Value(forwardFromName),
+      forwardFromAvatarUrl: drift.Value(forwardFromAvatarUrl),
+      senderCustomizationJson: drift.Value(senderCustomization?.toJsonString()),
       invertMedia: drift.Value(invertMedia),
       reactions: reactions.isNotEmpty || myReactions.isNotEmpty
           ? drift.Value(jsonEncode({
@@ -1224,6 +1293,8 @@ class Message {
     bool? isForward,
     String? forwardFromId,
     String? forwardFromName,
+    String? forwardFromAvatarUrl,
+    PeerCustomization? senderCustomization,
     String? groupedId,
     List<MessageEntity>? entities,
     LinkPreviewOptions? linkPreviewOptions,
@@ -1264,6 +1335,8 @@ class Message {
       isForward: isForward ?? this.isForward,
       forwardFromId: forwardFromId ?? this.forwardFromId,
       forwardFromName: forwardFromName ?? this.forwardFromName,
+      forwardFromAvatarUrl: forwardFromAvatarUrl ?? this.forwardFromAvatarUrl,
+      senderCustomization: senderCustomization ?? this.senderCustomization,
       groupedId: groupedId ?? this.groupedId,
       entities: entities ?? this.entities,
       linkPreviewOptions: linkPreviewOptions ?? this.linkPreviewOptions,
@@ -1303,6 +1376,7 @@ class ChatDetails {
   final String? username;
   final bool isPublic;
   final bool isVerified;
+  final bool showAuthorProfiles;
   final String? description;
 
   ChatDetails({
@@ -1321,6 +1395,7 @@ class ChatDetails {
     this.username,
     this.isPublic = false,
     this.isVerified = false,
+    this.showAuthorProfiles = true,
     this.description,
   });
 
@@ -1365,6 +1440,7 @@ class ChatDetails {
       username: json['username']?.toString(),
       isPublic: json['is_public'] == true,
       isVerified: json['is_verified'] == true,
+      showAuthorProfiles: json['show_author_profiles'] != false,
       description: json['description']?.toString(),
     );
   }
@@ -1381,6 +1457,7 @@ class ChatParticipant {
   final DateTime? lastSeen;
   final bool isBot;
   final bool isVerified;
+  final PeerCustomization? peerCustomization;
 
   ChatParticipant({
     required this.id,
@@ -1392,6 +1469,7 @@ class ChatParticipant {
     this.lastSeen,
     this.isBot = false,
     this.isVerified = false,
+    this.peerCustomization,
   });
 
   ChatParticipant copyWith({
@@ -1404,6 +1482,7 @@ class ChatParticipant {
     DateTime? lastSeen,
     bool? isBot,
     bool? isVerified,
+    PeerCustomization? peerCustomization,
   }) {
     return ChatParticipant(
       id: id ?? this.id,
@@ -1415,12 +1494,23 @@ class ChatParticipant {
       lastSeen: lastSeen ?? this.lastSeen,
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
+      peerCustomization: peerCustomization ?? this.peerCustomization,
     );
   }
 
   factory ChatParticipant.fromJson(Map<String, dynamic> json) {
+    final pid = json['id']?.toString() ?? '';
+    final rawCust = json['peer_customization'];
+    final PeerCustomization? parsedCust = rawCust is Map
+        ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawCust))
+        : (rawCust is String && rawCust.isNotEmpty
+            ? PeerCustomization.tryParseJsonString(rawCust)
+            : null);
+    if (pid.isNotEmpty && parsedCust != null) {
+      PeerCustomizationCache.instance.put(pid, parsedCust, notify: false);
+    }
     return ChatParticipant(
-      id: json['id']?.toString() ?? '',
+      id: pid,
       username: json['username']?.toString() ?? '',
       displayName: json['display_name']?.toString() ?? '',
       avatarUrl: json['avatar_url']?.toString(),
@@ -1429,6 +1519,7 @@ class ChatParticipant {
       lastSeen: DateTimeUtils.parseUtcDateTime(json['last_seen']),
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
+      peerCustomization: parsedCust,
     );
   }
 }

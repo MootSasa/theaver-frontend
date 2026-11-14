@@ -6,6 +6,8 @@ import 'community_service.dart';
 import 'database/app_database.dart';
 import '../config/app_config.dart';
 import '../models/community_models.dart';
+import '../models/profile_customization.dart';
+import 'peer_customization_cache.dart';
 
 /// Unified peer item returned by `GET /api/search` in `my_peers` and `global_peers`.
 class SearchPeer {
@@ -21,6 +23,7 @@ class SearchPeer {
   final bool isPublic;
   final int memberCount;
   final bool isMember;
+  final PeerCustomization? peerCustomization;
 
   const SearchPeer({
     required this.peerType,
@@ -35,6 +38,7 @@ class SearchPeer {
     this.isPublic = false,
     this.memberCount = 0,
     this.isMember = false,
+    this.peerCustomization,
   });
 
   bool get isUser => peerType == 'user';
@@ -61,6 +65,7 @@ class SearchPeer {
     bool? isPublic,
     int? memberCount,
     bool? isMember,
+    PeerCustomization? peerCustomization,
   }) {
     return SearchPeer(
       peerType: peerType ?? this.peerType,
@@ -75,6 +80,7 @@ class SearchPeer {
       isPublic: isPublic ?? this.isPublic,
       memberCount: memberCount ?? this.memberCount,
       isMember: isMember ?? this.isMember,
+      peerCustomization: peerCustomization ?? this.peerCustomization,
     );
   }
 
@@ -122,6 +128,20 @@ class SearchPeer {
       isPublic: json['is_public'] == true,
       memberCount: (json['member_count'] as num?)?.toInt() ?? 0,
       isMember: json['is_member'] == true,
+      peerCustomization: () {
+        final rawCust = json['peer_customization'];
+        final cust = rawCust is Map
+            ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawCust))
+            : (rawCust is String && rawCust.isNotEmpty
+                ? PeerCustomization.tryParseJsonString(rawCust)
+                : null);
+        final peerId = (json['id'] ?? '').toString();
+        final peerType = (json['type'] ?? json['peer_type'] ?? '').toString();
+        if (peerType == 'user' && peerId.isNotEmpty && cust != null) {
+          PeerCustomizationCache.instance.put(peerId, cust, notify: false);
+        }
+        return cust;
+      }(),
     );
   }
 }
@@ -216,6 +236,7 @@ class SearchResultUser {
   final bool isVerified;
   final bool isMyPeer;
   final bool isOnline;
+  final PeerCustomization? peerCustomization;
 
   SearchResultUser({
     required this.id,
@@ -229,13 +250,22 @@ class SearchResultUser {
     this.isVerified = false,
     this.isMyPeer = false,
     this.isOnline = false,
+    this.peerCustomization,
   });
 
   factory SearchResultUser.fromJson(Map<String, dynamic> json) {
     final rawAvatar = json['avatar_url']?.toString().trim();
     final rawChatId = json['chat_id']?.toString().trim();
+    final uid = (json['id'] ?? '').toString();
+    final rawCust = json['peer_customization'];
+    final cust = rawCust is Map
+        ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawCust))
+        : null;
+    if (uid.isNotEmpty && cust != null) {
+      PeerCustomizationCache.instance.put(uid, cust, notify: false);
+    }
     return SearchResultUser(
-      id: (json['id'] ?? '').toString(),
+      id: uid,
       name: (json['name'] ?? json['display_name'] ?? '').toString(),
       email: (json['email'] ?? '').toString(),
       username: (json['username'] ?? '').toString(),
@@ -246,6 +276,7 @@ class SearchResultUser {
       isVerified: json['is_verified'] == true,
       isMyPeer: json['is_member'] == true,
       isOnline: json['is_online'] == true,
+      peerCustomization: cust,
     );
   }
 
@@ -261,6 +292,7 @@ class SearchResultUser {
       isBot: peer.isBot,
       isVerified: peer.isVerified,
       isMyPeer: isMyPeer || peer.isMember,
+      peerCustomization: peer.peerCustomization,
     );
   }
 
@@ -504,6 +536,10 @@ class SearchService {
               : (c.chatType == 'channel'
                   ? 'channel'
                   : (c.chatType == 'community' ? 'community' : 'group'));
+          final dbCust = PeerCustomization.tryParseJsonString(c.peerCustomizationJson);
+          if (peerType == 'user' && c.otherUserId != null && c.otherUserId!.isNotEmpty && dbCust != null) {
+            PeerCustomizationCache.instance.put(c.otherUserId!, dbCust, notify: false);
+          }
           myPeers.add(
             SearchPeer(
               peerType: peerType,
@@ -518,6 +554,7 @@ class SearchService {
               isVerified: c.isVerified,
               isPublic: c.isPublic,
               isMember: true,
+              peerCustomization: dbCust,
             ),
           );
         }

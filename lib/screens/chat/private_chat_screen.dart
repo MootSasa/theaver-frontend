@@ -28,6 +28,7 @@ import '../../services/unread_count_provider.dart';
 import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/emoji_effect_cache_service.dart';
@@ -940,6 +941,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final nameColorPresetId = event.data['name_color_preset_id']?.toString();
     final replyStripStyle = event.data['reply_strip_style']?.toString();
     if (userId == null || !mounted) return;
+    PeerCustomizationCache.instance.mergeFromJson(userId, event.data);
 
     setState(() {
       for (int i = 0; i < _messages.length; i++) {
@@ -972,10 +974,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         }
       }
 
+      final updatedCust = PeerCustomizationCache.instance.getSync(userId);
+      if (updatedCust != null) {
+        for (int i = 0; i < _messages.length; i++) {
+          if (_messages[i].senderId == userId) {
+            _messages[i] = _messages[i].copyWith(senderCustomization: updatedCust);
+          }
+        }
+      }
       if (_replyToMessage != null && _replyToMessage!.senderId == userId) {
         _replyToMessage = _replyToMessage!.copyWith(
           senderNameColorId: nameColorPresetId ?? _replyToMessage!.senderNameColorId,
           senderReplyStripStyle: replyStripStyle ?? _replyToMessage!.senderReplyStripStyle,
+          senderCustomization: updatedCust ?? _replyToMessage!.senderCustomization,
         );
       }
       _updateFeedItems();
@@ -3249,6 +3260,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       isForward: Value(msg.isForward),
       forwardFromId: Value(msg.forwardFromId),
       forwardFromName: Value(msg.forwardFromName),
+      forwardFromAvatarUrl: Value(msg.forwardFromAvatarUrl),
+      senderCustomizationJson: Value(msg.senderCustomization?.toJsonString()),
     );
   }
 

@@ -28,6 +28,8 @@ import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/cache_service.dart';
+import '../../models/profile_customization.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -946,9 +948,28 @@ class _MainScreenState extends State<MainScreen>
   /// Handle real-time appearance settings changes (sync across devices)
   void _onUserAppearanceUpdated(WebSocketEvent event) {
     final userId = event.data['user_id']?.toString();
+    if (userId != null && userId.isNotEmpty) {
+      PeerCustomizationCache.instance.mergeFromJson(userId, event.data);
+    }
     final currentAccount = _accountManager.currentAccount;
     if (currentAccount != null && currentAccount.userId == userId && mounted) {
-      context.read<ProfileThemeProvider>().init();
+      context.read<ProfileThemeProvider>().applyAppearanceUpdateMap(
+            event.data,
+            targetUserId: userId,
+          );
+    }
+    if (userId != null && userId.isNotEmpty && mounted) {
+      final updatedCust = PeerCustomizationCache.instance.getSync(userId);
+      if (updatedCust != null) {
+        final idx = _chats.indexWhere(
+          (c) => c.chatType == 'private' && c.otherUserId == userId,
+        );
+        if (idx != -1) {
+          setState(() {
+            _chats[idx] = _chats[idx].copyWith(peerCustomization: updatedCust);
+          });
+        }
+      }
     }
   }
 
@@ -1242,6 +1263,18 @@ class _MainScreenState extends State<MainScreen>
       effectiveLastSeen = live.lastSeen ?? model.lastSeen;
     }
 
+    final dbCust = PeerCustomization.tryParseJsonString(model.peerCustomizationJson);
+    if (model.chatType == 'private' &&
+        model.otherUserId != null &&
+        model.otherUserId!.isNotEmpty &&
+        dbCust != null) {
+      PeerCustomizationCache.instance.put(
+        model.otherUserId!,
+        dbCust,
+        notify: false,
+      );
+    }
+
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
@@ -1269,6 +1302,8 @@ class _MainScreenState extends State<MainScreen>
       isBot: model.isBot,
       isVerified: model.isVerified,
       isArchived: model.isArchived,
+      showAuthorProfiles: model.showAuthorProfiles,
+      peerCustomization: dbCust,
     );
   }
 
@@ -1303,6 +1338,8 @@ class _MainScreenState extends State<MainScreen>
       isBot: Value(chat.isBot),
       isVerified: Value(chat.isVerified),
       isArchived: Value(chat.isArchived),
+      showAuthorProfiles: Value(chat.showAuthorProfiles),
+      peerCustomizationJson: Value(chat.peerCustomization?.toJsonString()),
     );
   }
 

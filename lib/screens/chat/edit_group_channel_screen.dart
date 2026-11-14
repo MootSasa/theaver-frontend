@@ -36,6 +36,7 @@ class EditGroupChannelScreen extends StatefulWidget {
   final String? initialUsername;
   final bool initialHistoryForNew;
   final int initialSlowModeInterval;
+  final bool initialShowAuthorProfiles;
   final String? inviteLink;
 
   const EditGroupChannelScreen({
@@ -49,6 +50,7 @@ class EditGroupChannelScreen extends StatefulWidget {
     this.initialUsername,
     this.initialHistoryForNew = true,
     this.initialSlowModeInterval = 0,
+    this.initialShowAuthorProfiles = true,
     this.inviteLink,
   }) : super(key: key);
 
@@ -66,6 +68,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   late bool _isPublic;
   late bool _historyForNew;
   late int _slowModeInterval;
+  late bool _showAuthorProfiles;
   bool _isSaving = false;
 
   @override
@@ -78,6 +81,27 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     _isPublic = widget.initialIsPublic;
     _historyForNew = widget.initialHistoryForNew;
     _slowModeInterval = widget.initialSlowModeInterval;
+    _showAuthorProfiles = widget.initialShowAuthorProfiles;
+    if (widget.isChannel) {
+      _loadChannelSettings();
+    }
+  }
+
+  Future<void> _loadChannelSettings() async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null || token.isEmpty) return;
+      final res = await Dio().get(
+        '${AppConfig.baseUrl}/api/chats/${widget.chatId}/group-settings',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      if (res.statusCode == 200 && res.data is Map && mounted) {
+        final raw = (res.data as Map)['show_author_profiles'];
+        if (raw is bool) {
+          setState(() => _showAuthorProfiles = raw);
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -145,6 +169,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           'username': _isPublic ? cleanUsername : '',
           'history_for_new': _historyForNew,
           'slow_mode_interval': _slowModeInterval,
+          if (widget.isChannel) 'show_author_profiles': _showAuthorProfiles,
         },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
@@ -152,6 +177,12 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
       // Обновляем локальную БД Drift
       try {
         await AppDatabase().updateChatAvatar(widget.chatId, finalAvatarUrl);
+        if (widget.isChannel) {
+          await AppDatabase().updateChatShowAuthorProfiles(
+            widget.chatId,
+            _showAuthorProfiles,
+          );
+        }
       } catch (_) {}
 
       if (!mounted) return;
@@ -163,6 +194,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         'username': _isPublic ? cleanUsername : '',
         'history_for_new': _historyForNew,
         'slow_mode_interval': _slowModeInterval,
+        if (widget.isChannel) 'show_author_profiles': _showAuthorProfiles,
       });
     } catch (e) {
       if (!mounted) return;
@@ -464,6 +496,31 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                       ],
                     ),
                     onTap: _showSlowModeSheet,
+                  ),
+                ],
+                if (widget.isChannel) ...[
+                  Divider(
+                    height: 1,
+                    indent: 16,
+                    color: isDark ? Colors.white12 : Colors.black12,
+                  ),
+                  AdaptiveSwitchListTile(
+                    title: Text(
+                      _tr('channelShowAuthorProfiles', 'Show Author Avatars'),
+                      style: TextStyle(color: textColor, fontSize: 15.5),
+                    ),
+                    subtitle: Text(
+                      _tr(
+                        'channelShowAuthorProfilesDesc',
+                        'Display sender avatar, badge, and status next to channel posts',
+                      ),
+                      style: TextStyle(
+                        color: isDark ? Colors.white60 : Colors.black54,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    value: _showAuthorProfiles,
+                    onChanged: (v) => setState(() => _showAuthorProfiles = v),
                   ),
                 ],
               ],
