@@ -8,7 +8,9 @@ import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
 import '../../models/theav_theme.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/emoji_utils.dart';
@@ -1024,6 +1026,36 @@ class MessageBubble extends StatelessWidget {
       effectiveStripStyle = ReplyStripStyle.solid;
     }
 
+    final ReplyEmojiData? quoteReplyEmoji;
+    if (message.hasReply &&
+        message.replyInfo != null &&
+        message.replyInfo!.senderId.isNotEmpty) {
+      final replyAuthorId = message.replyInfo!.senderId;
+      if (replyAuthorId == currentUserId ||
+          (isMe && replyAuthorId == message.senderId)) {
+        quoteReplyEmoji =
+            context.select<ProfileThemeProvider?, ReplyEmojiData?>(
+          (p) => p?.currentReplyEmoji,
+        );
+      } else {
+        final cached = PeerCustomizationCache.instance.getSync(replyAuthorId);
+        quoteReplyEmoji = cached?.replyEmoji ?? message.replyInfo!.replyEmoji;
+      }
+    } else {
+      if (isMe) {
+        quoteReplyEmoji =
+            context.select<ProfileThemeProvider?, ReplyEmojiData?>(
+          (p) => p?.currentReplyEmoji,
+        );
+      } else {
+        final cached = message.senderId.isNotEmpty
+            ? PeerCustomizationCache.instance.getSync(message.senderId)
+            : null;
+        quoteReplyEmoji =
+            cached?.replyEmoji ?? message.senderCustomization?.replyEmoji;
+      }
+    }
+
     final previewOpts = message.linkPreviewOptions;
     final bool previewDisabled = previewOpts?.isDisabled ?? false;
     String? previewUrl = previewOpts?.url;
@@ -1355,6 +1387,7 @@ class MessageBubble extends StatelessWidget {
           entities: message.entities,
           nameColorPreset: effectivePreset,
           replyStripStyle: effectiveStripStyle,
+          replyEmoji: quoteReplyEmoji,
         ),
       );
 
@@ -1424,6 +1457,7 @@ class MessageBubble extends StatelessWidget {
             entities: message.entities,
             nameColorPreset: effectivePreset,
             replyStripStyle: effectiveStripStyle,
+            replyEmoji: quoteReplyEmoji,
           ),
         );
         if (_isImage || _isVideo) {

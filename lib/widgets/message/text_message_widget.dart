@@ -5,6 +5,7 @@ import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../screens/settings/theme_preview_screen.dart';
 import '../../services/chat_service.dart';
@@ -55,6 +56,7 @@ class TextMessageWidget extends StatelessWidget {
   final List<MessageEntity>? entities;
   final NameColorPreset? nameColorPreset;
   final ReplyStripStyle? replyStripStyle;
+  final ReplyEmojiData? replyEmoji;
 
   const TextMessageWidget({
     Key? key,
@@ -64,6 +66,7 @@ class TextMessageWidget extends StatelessWidget {
     this.entities,
     this.nameColorPreset,
     this.replyStripStyle,
+    this.replyEmoji,
   }) : super(key: key);
 
   /// Preserves consecutive spaces and multiple enters inside message text,
@@ -345,6 +348,7 @@ class TextMessageWidget extends StatelessWidget {
           isMe: isMe,
           nameColorPreset: nameColorPreset,
           replyStripStyle: replyStripStyle,
+          replyEmoji: replyEmoji,
         ),
       ),
     );
@@ -360,6 +364,7 @@ class _DirectEntityMessageRenderer extends StatefulWidget {
   final bool isMe;
   final NameColorPreset? nameColorPreset;
   final ReplyStripStyle? replyStripStyle;
+  final ReplyEmojiData? replyEmoji;
 
   const _DirectEntityMessageRenderer({
     required this.cleanText,
@@ -370,6 +375,7 @@ class _DirectEntityMessageRenderer extends StatefulWidget {
     required this.isMe,
     this.nameColorPreset,
     this.replyStripStyle,
+    this.replyEmoji,
   });
 
   @override
@@ -995,6 +1001,7 @@ class _DirectEntityMessageRendererState
         isMe: widget.isMe,
         preset: widget.nameColorPreset,
         stripStyle: widget.replyStripStyle,
+        replyEmoji: widget.replyEmoji,
         stateKey: 'quote_${bStart}_$bEnd',
         child: formattedChild,
       );

@@ -157,7 +157,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       right: 10,
       topFrac: 0.08,
       size: 16.0,
-      angle: -0.18,
+      angle: 0.0,
       alpha: 0.55,
       minWidth: 96,
     ),
@@ -165,7 +165,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       right: 6,
       topFrac: 0.88,
       size: 14.5,
-      angle: 0.20,
+      angle: 0.0,
       alpha: 0.48,
       minWidth: 96,
     ),
@@ -173,7 +173,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       right: 34,
       topFrac: 0.42,
       size: 15.0,
-      angle: 0.16,
+      angle: 0.0,
       alpha: 0.42,
       minWidth: 120,
     ),
@@ -181,7 +181,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       right: 58,
       topFrac: 0.06,
       size: 13.5,
-      angle: -0.15,
+      angle: 0.0,
       alpha: 0.36,
       minWidth: 150,
     ),
@@ -189,7 +189,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       right: 62,
       topFrac: 0.90,
       size: 15.0,
-      angle: 0.21,
+      angle: 0.0,
       alpha: 0.30,
       minWidth: 160,
     ),
@@ -197,7 +197,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       right: 88,
       topFrac: 0.46,
       size: 14.0,
-      angle: -0.20,
+      angle: 0.0,
       alpha: 0.24,
       minWidth: 195,
     ),
@@ -205,11 +205,14 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       right: 114,
       topFrac: 0.22,
       size: 12.5,
-      angle: 0.18,
+      angle: 0.0,
       alpha: 0.18,
       minWidth: 235,
     ),
   ];
+
+  /// Exposed for testing: tilt angles of all watermark slots (all 0.0 per Telegram design).
+  static List<double> get slotAngles => _slots.map((s) => s.angle).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -239,18 +242,21 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
                 final slotColor = color.withValues(
                   alpha: (color.a * slot.alpha * opacityScale).clamp(0.0, 1.0),
                 );
+                final Widget glyph = ReplyEmojiGlyph(
+                  emoji: data,
+                  color: slotColor,
+                  size: slot.size,
+                );
                 children.add(
                   Positioned(
                     right: slot.right,
                     top: top,
-                    child: Transform.rotate(
-                      angle: slot.angle,
-                      child: ReplyEmojiGlyph(
-                        emoji: data,
-                        color: slotColor,
-                        size: slot.size,
-                      ),
-                    ),
+                    child: slot.angle == 0.0
+                        ? glyph
+                        : Transform.rotate(
+                            angle: slot.angle,
+                            child: glyph,
+                          ),
                   ),
                 );
               }

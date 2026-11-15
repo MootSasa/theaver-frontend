@@ -218,7 +218,7 @@ class ReplyMessagePreviewCard extends StatelessWidget {
                                       translateOrFallback(
                                         context,
                                         'customizationChatPreviewQuote',
-                                        'Updated profile design in Theaver',
+                                        'Ваше исходное сообщение',
                                       ),
                                       style: TextStyle(
                                         fontSize: 12,
@@ -239,33 +239,83 @@ class ReplyMessagePreviewCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 7),
 
-                // Текст сообщения + время
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        translateOrFallback(
-                          context,
-                          'customizationChatPreviewMessage',
-                          'This is how your name, badge, and reply quote look in group chats.',
+                // Текст сообщения
+                Text(
+                  translateOrFallback(
+                    context,
+                    'customizationChatPreviewMessage',
+                    'Выбранным цветом выделяются Ваше имя и ответы на Ваши сообщения.',
+                  ),
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.28,
+                    color: bubbleTextColor,
+                  ),
+                ),
+                const SizedBox(height: 7),
+
+                // Ссылка / цитата Theaver (с полоской и фоновым эмодзи)
+                Container(
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: preset.getOpaqueCardBackgroundColor(isDarkCanvas),
+                    borderRadius: BorderRadius.circular(7),
+                  ),
+                  child: Stack(
+                    children: [
+                      if (replyEmoji != null)
+                        Positioned.fill(
+                          child: ReplyBackgroundEmojiLayer(
+                            emoji: replyEmoji,
+                            color: preset.primaryColor,
+                          ),
                         ),
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          height: 1.28,
-                          color: bubbleTextColor,
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
+                        child: IntrinsicHeight(
+                          child: Row(
+                            children: [
+                              ReplyStripWidget(
+                                preset: preset,
+                                style: stripStyle,
+                                width: 3.5,
+                                borderRadius: 2,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Theaver',
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: preset.primaryColor,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 4),
+
+                // Время
+                Align(
+                  alignment: Alignment.bottomRight,
+                  child: Text(
+                    '12:45',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: bubbleSubtextColor,
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '12:45',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: bubbleSubtextColor,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ],
             ),

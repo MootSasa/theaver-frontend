@@ -5,9 +5,11 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../profile/reply_background_emoji_layer.dart';
 import '../profile/reply_strip_painter.dart';
 import 'message_interactive_state.dart';
 
@@ -24,6 +26,7 @@ class CollapsibleBlockquoteWidget extends StatefulWidget {
   final bool isMe;
   final NameColorPreset? preset;
   final ReplyStripStyle? stripStyle;
+  final ReplyEmojiData? replyEmoji;
   final String? stateKey;
 
   const CollapsibleBlockquoteWidget({
@@ -36,6 +39,7 @@ class CollapsibleBlockquoteWidget extends StatefulWidget {
     required this.isMe,
     this.preset,
     this.stripStyle,
+    this.replyEmoji,
     this.stateKey,
   }) : super(key: key);
 
@@ -154,6 +158,8 @@ class _CollapsibleBlockquoteWidgetState
     final profileTheme = context.watch<ProfileThemeProvider>();
     final effectivePreset = widget.preset ?? profileTheme.currentNameColorPreset;
     final effectiveStripStyle = widget.stripStyle ?? profileTheme.currentStripStyle;
+    final effectiveReplyEmoji = widget.replyEmoji ??
+        (widget.isMe ? profileTheme.currentReplyEmoji : null);
 
     final cardBgColor = effectivePreset.getOpaqueCardBackgroundColor(widget.isDark);
     final primaryColor = NameColorPreset.resolveReadableAccentColor(
@@ -226,9 +232,18 @@ class _CollapsibleBlockquoteWidgetState
               borderRadius: BorderRadius.circular(6),
             ),
             clipBehavior: Clip.antiAlias,
-            child: AnimatedBuilder(
-              animation: _curvedAnimation,
-              builder: (context, child) {
+            child: Stack(
+              children: [
+                if (effectiveReplyEmoji != null)
+                  Positioned.fill(
+                    child: ReplyBackgroundEmojiLayer(
+                      emoji: effectiveReplyEmoji,
+                      color: primaryColor,
+                    ),
+                  ),
+                AnimatedBuilder(
+                  animation: _curvedAnimation,
+                  builder: (context, child) {
                 final double progress = showToggle ? _curvedAnimation.value : 1.0;
                 final double currentTextHeight = showToggle
                     ? ui.lerpDouble(collapsedHeight, fullHeight, progress)!
@@ -401,8 +416,10 @@ class _CollapsibleBlockquoteWidgetState
                 );
               },
             ),
-          ),
-        );
+          ],
+        ),
+      ),
+    );
       },
     );
   }

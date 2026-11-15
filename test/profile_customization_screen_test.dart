@@ -26,6 +26,7 @@ import 'package:theaver/widgets/profile/floating_reply_emoji_menu.dart';
 import 'package:theaver/widgets/profile/name_color_picker.dart';
 import 'package:theaver/widgets/profile/profile_banner_layer.dart';
 import 'package:theaver/widgets/profile/profile_floating_top_switcher.dart';
+import 'package:theaver/widgets/message/collapsible_blockquote_widget.dart';
 import 'package:theaver/widgets/profile/reply_background_emoji_layer.dart';
 import 'package:theaver/widgets/profile/reply_message_preview_card.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
@@ -429,7 +430,7 @@ void main() {
       // 5. Switch to 'Chat Name' tab -> ReplyMessagePreviewCard + instant flat strip style update
       await tester.tap(find.text('Chat Name'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump(const Duration(milliseconds: 500));
       expect(find.byType(ReplyMessagePreviewCard), findsOneWidget);
 
       final stripSelector = find.byType(ReplyStripStyleSelector);
@@ -867,7 +868,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.byType(ReplyBackgroundEmojiLayer), findsOneWidget);
+      expect(find.byType(ReplyBackgroundEmojiLayer), findsNWidgets(2));
       expect(find.byType(ReplyEmojiGlyph), findsWidgets);
       expect(tester.takeException(), isNull);
 
@@ -1086,6 +1087,84 @@ void main() {
 
       // Let any pending debounce timers settle
       await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
+
+  testWidgets(
+    'ReplyBackgroundEmojiLayer slots have zero angle (no tilt) and render directly without Transform.rotate',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(300, 200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      const testEmoji = ReplyEmojiData(
+        stickerId: 101,
+        stickerUrl: '/stickers/test.webp',
+        thumbnailUrl: '/stickers/test_thumb.webp',
+        stickerFormat: 'webp',
+      );
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 250,
+              height: 100,
+              child: ReplyBackgroundEmojiLayer(
+                emoji: testEmoji,
+                color: Colors.red,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // With angle == 0.0, zero Transform.rotate widgets are created inside ReplyBackgroundEmojiLayer
+      expect(ReplyBackgroundEmojiLayer.slotAngles.every((a) => a == 0.0), isTrue);
+      expect(
+        find.descendant(
+          of: find.byType(ReplyBackgroundEmojiLayer),
+          matching: find.byType(Transform),
+        ),
+        findsNothing,
+      );
+      expect(find.byType(ReplyEmojiGlyph), findsWidgets);
+    },
+  );
+
+  testWidgets(
+    'CollapsibleBlockquoteWidget renders ReplyBackgroundEmojiLayer when quote author has replyEmoji',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(400, 300));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final themeProvider = ProfileThemeProvider();
+
+      const testEmoji = ReplyEmojiData(
+        stickerId: 202,
+        stickerUrl: '/stickers/author_emoji.webp',
+        thumbnailUrl: '/stickers/author_thumb.webp',
+        stickerFormat: 'webp',
+      );
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<ProfileThemeProvider>.value(
+          value: themeProvider,
+          child: const MaterialApp(
+            home: Scaffold(
+              body: CollapsibleBlockquoteWidget(
+                text: 'This is a quote from the author',
+                isDark: true,
+                isMe: false,
+                replyEmoji: testEmoji,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(ReplyBackgroundEmojiLayer), findsOneWidget);
     },
   );
 }

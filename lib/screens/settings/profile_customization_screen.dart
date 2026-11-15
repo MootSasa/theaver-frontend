@@ -141,14 +141,23 @@ class _ProfileCustomizationScreenState
   void _onTabSelectedFromBar(int index) {
     if (index < 0 || index > 1 || _activeTab == index) return;
     HapticUtils.selection();
+    if (_profileScrollController.hasClients &&
+        _profileScrollController.offset > 0.0) {
+      _profileScrollController.jumpTo(0.0);
+    }
+    if (_nameScrollController.hasClients &&
+        _nameScrollController.offset > 0.0) {
+      _nameScrollController.jumpTo(0.0);
+    }
+    _bannerScrollOffset.value = 0.0;
     setState(() => _activeTab = index);
     if (_pageController.hasClients) {
       _isAnimatingTabFromBar = true;
       _pageController
           .animateToPage(
             index,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOutCubic,
+            duration: const Duration(milliseconds: 450),
+            curve: Curves.easeInOutCubic,
           )
           .whenComplete(() {
         _isAnimatingTabFromBar = false;
@@ -1497,6 +1506,21 @@ class _ProfileCustomizationScreenState
               ),
           ],
         ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(28, 10, 28, 14),
+          child: Text(
+            translateOrFallback(
+              context,
+              'customizationNameColorDescription',
+              'В этот цвет будет окрашено Ваше имя, а также отправленные Вами ссылки и цитаты Ваших сообщений в ответах.',
+            ),
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.35,
+              color: secondaryForeground,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -1551,8 +1575,8 @@ class _ProfileCustomizationScreenState
         Positioned.fill(
           key: const ValueKey<String>('profile_customization_bg'),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 280),
-            curve: Curves.easeOutCubic,
+            duration: const Duration(milliseconds: 450),
+            curve: Curves.easeInOutCubic,
             decoration: coverPreset.isGradient &&
                     coverPreset.gradientColors != null
                 ? BoxDecoration(
@@ -1570,8 +1594,8 @@ class _ProfileCustomizationScreenState
         Positioned.fill(
           child: IgnorePointer(
             child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 280),
-              curve: Curves.easeOutCubic,
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeInOutCubic,
               opacity: _activeTab == 1 ? 1.0 : 0.0,
               child: Container(
                 color: Colors.black.withValues(
@@ -1596,8 +1620,8 @@ class _ProfileCustomizationScreenState
                 ),
             child: IgnorePointer(
               child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeOutCubic,
+                duration: const Duration(milliseconds: 450),
+                curve: Curves.easeInOutCubic,
                 opacity: _activeTab == 0 ? 1.0 : 0.0,
                 child: ValueListenableBuilder<double>(
                   valueListenable: _bannerScrollOffset,
