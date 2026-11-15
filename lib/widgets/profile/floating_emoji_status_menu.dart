@@ -5,7 +5,6 @@ import 'dart:math' as math;
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -603,8 +602,6 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
     }
     final activeStatus = themeProvider?.currentEmojiStatus;
 
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final useGlass = glassProvider != null && glassProvider.enabled;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final accent = widget.accentColor;
@@ -704,42 +701,23 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
         ? Colors.white.withValues(alpha: 0.10)
         : Colors.black.withValues(alpha: 0.08);
 
-    final Widget surface;
-    if (useGlass) {
-      final glassStyle = glassProvider.createStyle(
-        context: context,
-        isDarkOverride: isDark,
-        cornerRadius: 20.0,
-        color: isDark ? const Color(0xC823282C) : const Color(0xCCF7F8FA),
-        refractionIndex: 1.08,
-        refractionWidth: 16.0,
-      );
-      surface = LiquidGlassLens(
-        style: glassStyle,
-        child: Material(
-          type: MaterialType.transparency,
-          child: cardBody,
-        ),
-      );
-    } else {
-      surface = ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(22),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: surfaceColor,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: borderColor, width: 0.8),
-            ),
-            child: Material(
-              type: MaterialType.transparency,
-              child: cardBody,
-            ),
+    final Widget surface = ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: BackdropFilter.grouped(
+        filter: BlurUtils.createDownsampledBlur(22),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: surfaceColor,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: borderColor, width: 0.8),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: cardBody,
           ),
         ),
-      );
-    }
+      ),
+    );
 
     return DecoratedBox(
       decoration: BoxDecoration(

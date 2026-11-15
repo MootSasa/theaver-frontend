@@ -29,6 +29,9 @@ import 'package:theaver/widgets/profile/profile_floating_top_switcher.dart';
 import 'package:theaver/widgets/profile/reply_background_emoji_layer.dart';
 import 'package:theaver/widgets/profile/reply_message_preview_card.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:theaver/widgets/user/emoji_status_badge.dart';
 
 class _PreloadedAppLocalizationsDelegate
     extends LocalizationsDelegate<AppLocalizations> {
@@ -261,11 +264,37 @@ void main() {
           );
           expect(stripSelector.flatInCard, isTrue);
 
-          // Swipe PageView horizontally back to 'Profile'
+          // Verify horizontal swipe is disabled (NeverScrollableScrollPhysics)
+          final pageViewAfter = tester.widget<PageView>(
+            find.byType(PageView).first,
+          );
+          expect(pageViewAfter.physics, isA<NeverScrollableScrollPhysics>());
           await tester.drag(
             find.byType(PageView).first,
             const Offset(320, 0),
           );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 350));
+          // Still on Chat Name tab because swipe is disabled
+          expect(
+            find.byKey(const ValueKey<String>('profile_emoji_status_row')),
+            findsNothing,
+          );
+
+          // Switch back to Profile exclusively via top bar pill tap
+          if (mode == GlassMode.disabled) {
+            await tester.tap(find.text('Profile'));
+          } else {
+            final navOverlayRect = tester.getRect(
+              find.byKey(const ValueKey('lg-animated-nav-gesture-overlay')),
+            );
+            await tester.tapAt(
+              Offset(
+                navOverlayRect.left + navOverlayRect.width * 0.25,
+                navOverlayRect.center.dy,
+              ),
+            );
+          }
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 350));
           expect(
@@ -942,6 +971,121 @@ void main() {
         ),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'FloatingEmojiStatusMenu renders clean frosted card without LiquidGlassLens, emoji row has no duplicate emoji, and badge toggle preserves badge',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final devBadge = UserBadge.builtInDefaults.firstWhere(
+        (b) => b.id == 'developer',
+      );
+      final themeProvider = ProfileThemeProvider()
+        ..seedOwnCustomizationForTest(
+          PeerCustomization(
+            badge: devBadge,
+            badgeIsDisplayed: true,
+            emojiStatus: const EmojiStatusData(
+              type: 'unicode',
+              emoji: '🔥',
+            ),
+          ),
+          userId: 'u_badge_test_1',
+        );
+
+      final glassProvider = LiquidGlassProvider();
+      await glassProvider.setMode(GlassMode.full);
+
+      await tester.pumpWidget(
+        _buildTestHarness(
+          themeProvider: themeProvider,
+          glassProvider: glassProvider,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      // 1. Emoji Status row:
+      final rowFinder = find.byKey(
+        const ValueKey<String>('profile_emoji_status_row'),
+      );
+      expect(rowFinder, findsOneWidget);
+
+      // Exactly ONE EmojiStatusBadge in the row (on the left), NO duplicate on the right
+      final badgeInRow = find.descendant(
+        of: rowFinder,
+        matching: find.byType(EmojiStatusBadge),
+      );
+      expect(badgeInRow, findsOneWidget);
+
+      // Trailing has EditPencil and Xmark
+      expect(
+        find.descendant(
+          of: rowFinder,
+          matching: find.byType(iconoir.EditPencil),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: rowFinder,
+          matching: find.byType(iconoir.Xmark),
+        ),
+        findsOneWidget,
+      );
+
+      // 2. Open FloatingEmojiStatusMenu:
+      await tester.tap(
+        find.descendant(
+          of: rowFinder,
+          matching: find.byType(iconoir.EditPencil),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // In Liquid Glass mode, verify menu card does NOT use LiquidGlassLens (clean Material style)
+      expect(find.byType(FloatingEmojiStatusMenu), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(FloatingEmojiStatusMenu),
+          matching: find.byType(LiquidGlassLens),
+        ),
+        findsNothing,
+      );
+
+      // Close menu by tapping outside
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // 3. Badge toggle switch:
+      expect(themeProvider.currentOwnBadge, isNotNull);
+      final profileListFinder = find.byKey(
+        const PageStorageKey<String>('profile_customization_tab_profile'),
+      );
+      await tester.drag(profileListFinder, const Offset(0, -300));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final switchFinder = find.byType(AdaptiveSwitch);
+      expect(switchFinder, findsOneWidget);
+
+      // Toggle off
+      await tester.tap(switchFinder);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // Badge must STILL exist in themeProvider.currentOwnBadge and the switch stays visible
+      expect(themeProvider.currentOwnBadge, isNotNull);
+      expect(themeProvider.isBadgeDisplayed, isFalse);
+      expect(find.byType(AdaptiveSwitch), findsOneWidget);
+
+      // Let any pending debounce timers settle
+      await tester.pump(const Duration(milliseconds: 600));
     },
   );
 }

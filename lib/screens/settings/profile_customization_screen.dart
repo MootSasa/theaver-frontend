@@ -1169,25 +1169,23 @@ class _ProfileCustomizationScreenState
                     ),
                   KeyedSubtree(
                     key: _emojiStatusRowAnchorKey,
-                    child: activeStatus != null
-                        ? EmojiStatusBadge(
-                            status: activeStatus,
-                            size: 22,
-                            animate: true,
-                            interactive: false,
-                            fallbackColor: sectionAccent,
-                          )
-                        : iconoir.Emoji(
-                            width: 20,
-                            height: 20,
-                            color: secondaryForeground,
-                          ),
-                  ),
-                  const SizedBox(width: 4),
-                  iconoir.NavArrowRight(
-                    width: 18,
-                    height: 18,
-                    color: secondaryForeground,
+                    child: IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: translateOrFallback(
+                        context,
+                        activeStatus != null ? 'edit' : 'chooseEmojiStatus',
+                        activeStatus != null ? 'Edit' : 'Choose emoji status',
+                      ),
+                      onPressed: () => _openEmojiStatusMenu(
+                        context,
+                        anchorKey: _emojiStatusRowAnchorKey,
+                      ),
+                      icon: iconoir.EditPencil(
+                        width: 18,
+                        height: 18,
+                        color: secondaryForeground,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1568,6 +1566,22 @@ class _ProfileCustomizationScreenState
           ),
         ),
 
+        // Затемняющий оверлей для вкладки «Имя в чатах»
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+              opacity: _activeTab == 1 ? 1.0 : 0.0,
+              child: Container(
+                color: Colors.black.withValues(
+                  alpha: isDarkBackdrop ? 0.38 : 0.16,
+                ),
+              ),
+            ),
+          ),
+        ),
+
         // 2. Растворяющийся верхний баннер профиля (без setState во время скролла)
         if (showBanner)
           Positioned(
@@ -1581,20 +1595,25 @@ class _ProfileCustomizationScreenState
                   devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
                 ),
             child: IgnorePointer(
-              child: ValueListenableBuilder<double>(
-                valueListenable: _bannerScrollOffset,
-                builder: (context, offset, child) {
-                  final opacity = (1.0 - (offset / 180.0)).clamp(0.0, 1.0);
-                  if (opacity <= 0.01) return const SizedBox.shrink();
-                  return Opacity(
-                    opacity: opacity,
-                    child: child,
-                  );
-                },
-                child: ProfileBannerLayer(
-                  bannerUrl: bannerUrl,
-                  layout: themeProvider.currentBannerLayout,
-                  animate: true,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOutCubic,
+                opacity: _activeTab == 0 ? 1.0 : 0.0,
+                child: ValueListenableBuilder<double>(
+                  valueListenable: _bannerScrollOffset,
+                  builder: (context, offset, child) {
+                    final opacity = (1.0 - (offset / 180.0)).clamp(0.0, 1.0);
+                    if (opacity <= 0.01) return const SizedBox.shrink();
+                    return Opacity(
+                      opacity: opacity,
+                      child: child,
+                    );
+                  },
+                  child: ProfileBannerLayer(
+                    bannerUrl: bannerUrl,
+                    layout: themeProvider.currentBannerLayout,
+                    animate: true,
+                  ),
                 ),
               ),
             ),
@@ -1605,7 +1624,7 @@ class _ProfileCustomizationScreenState
           key: const ValueKey<String>('profile_customization_pageview'),
           child: PageView(
             controller: _pageController,
-            physics: const ClampingScrollPhysics(),
+            physics: const NeverScrollableScrollPhysics(),
             onPageChanged: (index) {
               if (_isAnimatingTabFromBar) return;
               HapticUtils.selection();

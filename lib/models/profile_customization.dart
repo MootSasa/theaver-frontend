@@ -799,8 +799,13 @@ class PeerCustomization {
           : activeEmojiStatus,
       badge: map.containsKey('badge')
           ? (map['badge'] is Map
-              ? UserBadge.fromJson(Map<String, dynamic>.from(map['badge'] as Map))
-              : null)
+              ? UserBadge.fromJson(
+                  Map<String, dynamic>.from(map['badge'] as Map))
+              : (map.containsKey('badge_is_displayed') &&
+                      map['badge_is_displayed'] == false &&
+                      badge != null
+                  ? badge
+                  : null))
           : badge,
       badgeIsDisplayed: map.containsKey('badge_is_displayed')
           ? (map['badge_is_displayed'] == null ? true : map['badge_is_displayed'] == true)

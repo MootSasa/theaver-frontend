@@ -158,7 +158,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       topFrac: 0.08,
       size: 16.0,
       angle: -0.18,
-      alpha: 0.22,
+      alpha: 0.55,
       minWidth: 96,
     ),
     _ReplyWatermarkSlot(
@@ -166,7 +166,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       topFrac: 0.88,
       size: 14.5,
       angle: 0.20,
-      alpha: 0.20,
+      alpha: 0.48,
       minWidth: 96,
     ),
     _ReplyWatermarkSlot(
@@ -174,7 +174,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       topFrac: 0.42,
       size: 15.0,
       angle: 0.16,
-      alpha: 0.18,
+      alpha: 0.42,
       minWidth: 120,
     ),
     _ReplyWatermarkSlot(
@@ -182,7 +182,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       topFrac: 0.06,
       size: 13.5,
       angle: -0.15,
-      alpha: 0.15,
+      alpha: 0.36,
       minWidth: 150,
     ),
     _ReplyWatermarkSlot(
@@ -190,7 +190,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       topFrac: 0.90,
       size: 15.0,
       angle: 0.21,
-      alpha: 0.14,
+      alpha: 0.30,
       minWidth: 160,
     ),
     _ReplyWatermarkSlot(
@@ -198,7 +198,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       topFrac: 0.46,
       size: 14.0,
       angle: -0.20,
-      alpha: 0.10,
+      alpha: 0.24,
       minWidth: 195,
     ),
     _ReplyWatermarkSlot(
@@ -206,7 +206,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
       topFrac: 0.22,
       size: 12.5,
       angle: 0.18,
-      alpha: 0.07,
+      alpha: 0.18,
       minWidth: 235,
     ),
   ];

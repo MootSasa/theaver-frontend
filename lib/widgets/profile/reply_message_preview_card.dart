@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
+import '../../models/theav_theme.dart';
 import '../common/glass_modal_sheet.dart';
 import '../common/peer_badges_widget.dart';
 import '../user/avatar_with_status.dart';
@@ -44,9 +45,30 @@ class ReplyMessagePreviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
     final isDarkCanvas = isDarkBackdropOverride ?? isDark;
     final activeStatus = emojiStatus?.activeOrNull;
+
+    final double effectiveBubbleRadius =
+        themeExt?.bubbleRadius ?? 16.0;
+
+    final Color bubbleColor = themeExt?.palette.chatBubbleIncoming ??
+        (isDarkCanvas ? const Color(0xFF21242C) : Colors.white);
+
+    final List<Color>? incomingGradient =
+        themeExt?.palette.chatBubbleIncomingGradient;
+    final bool useBubbleGradient =
+        incomingGradient != null && incomingGradient.length >= 2;
+
+    final Color bubbleTextColor = themeExt?.palette.chatBubbleIncomingText ??
+        (isDarkCanvas ? Colors.white : const Color(0xFF1C1C1E));
+
+    final Color bubbleSubtextColor =
+        themeExt?.palette.chatBubbleIncomingSubtext ??
+            (isDarkCanvas
+                ? Colors.white.withValues(alpha: 0.6)
+                : Colors.black.withValues(alpha: 0.5));
 
     final chatCanvasColor = isDarkBackdropOverride != null
         ? (isDarkCanvas
@@ -55,11 +77,11 @@ class ReplyMessagePreviewCard extends StatelessWidget {
         : (isDark
             ? Colors.white.withValues(alpha: 0.04)
             : Colors.black.withValues(alpha: 0.035));
-    final bubbleColor =
-        isDarkCanvas ? const Color(0xFF21242C) : Colors.white;
-    final quoteBodyColor = isDarkCanvas
-        ? Colors.white.withValues(alpha: 0.78)
-        : const Color(0xFF1C2530).withValues(alpha: 0.82);
+    final quoteBodyColor =
+        themeExt?.palette.chatBubbleIncomingText.withValues(alpha: 0.8) ??
+            (isDarkCanvas
+                ? Colors.white.withValues(alpha: 0.78)
+                : const Color(0xFF1C2530).withValues(alpha: 0.82));
 
     final rowContent = Row(
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -82,13 +104,15 @@ class ReplyMessagePreviewCard extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
             decoration: BoxDecoration(
-              color: bubbleColor,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(15),
-                topRight: Radius.circular(15),
-                bottomRight: Radius.circular(15),
-                bottomLeft: Radius.circular(5),
-              ),
+              color: useBubbleGradient ? null : bubbleColor,
+              gradient: useBubbleGradient
+                  ? LinearGradient(
+                      colors: incomingGradient,
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : null,
+              borderRadius: BorderRadius.circular(effectiveBubbleRadius),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black
@@ -229,9 +253,7 @@ class ReplyMessagePreviewCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 13.5,
                           height: 1.28,
-                          color: isDarkCanvas
-                              ? Colors.white
-                              : const Color(0xFF1C1C1E),
+                          color: bubbleTextColor,
                         ),
                       ),
                     ),
@@ -240,7 +262,7 @@ class ReplyMessagePreviewCard extends StatelessWidget {
                       '12:45',
                       style: TextStyle(
                         fontSize: 11,
-                        color: isDarkCanvas ? Colors.white38 : Colors.black38,
+                        color: bubbleSubtextColor,
                       ),
                     ),
                   ],
