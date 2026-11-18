@@ -257,6 +257,8 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
             name: _displayName,
             radius: 24,
             isOnline: widget.participant.isOnline,
+            decorationOverride:
+                widget.participant.peerCustomization?.avatarDecoration,
           ),
           title: _displayName,
           subtitle: subtitle,

@@ -19,7 +19,6 @@ import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import 'group_chat_screen.dart';
@@ -243,65 +242,33 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   }
 
   void _showSlowModeSheet() {
-    final palette = context.theav;
-    final primaryColor = Theme.of(context).colorScheme.primary;
     const options = [0, 10, 30, 60, 300, 900];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: palette.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
+      title: 'Медленный режим',
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+        return SingleChildScrollView(
+          child: TheavInsetGroup(
+            dividerIndent: 16,
             children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: palette.textTertiary.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Медленный режим',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: palette.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 6),
               for (final opt in options)
-                ListTile(
-                  title: Text(
-                    _slowModeLabel(opt),
-                    style: TextStyle(
-                      color: palette.textPrimary,
-                      fontWeight: _slowModeInterval == opt
-                          ? FontWeight.w600
-                          : FontWeight.w400,
-                    ),
+                TheavListRow(
+                  title: _slowModeLabel(opt),
+                  trailing: TheavCheckCircle(
+                    selected: _slowModeInterval == opt,
+                    onTap: () {
+                      setState(() => _slowModeInterval = opt);
+                      Navigator.pop(ctx);
+                    },
                   ),
-                  trailing: _slowModeInterval == opt
-                      ? iconoir.Check(
-                          width: 20,
-                          height: 20,
-                          color: primaryColor,
-                        )
-                      : null,
                   onTap: () {
-                    HapticUtils.selection();
                     setState(() => _slowModeInterval = opt);
                     Navigator.pop(ctx);
                   },
                 ),
-              const SizedBox(height: 8),
             ],
           ),
         );
@@ -540,271 +507,136 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                             ),
                             const SizedBox(width: 14),
                             Expanded(
-                              child: TextField(
+                              child: TheavInlineTextField(
                                 controller: _nameController,
                                 autofocus: true,
+                                padding: EdgeInsets.zero,
+                                label: _tr(
+                                  'group_name_hint',
+                                  'Название группы',
+                                ),
+                                placeholder: 'Например: Друзья / Команда',
                                 style: TextStyle(
                                   fontSize: 16.5,
                                   fontWeight: FontWeight.w600,
-                                  color: palette.textPrimary,
-                                ),
-                                decoration: InputDecoration(
-                                  labelText: _tr(
-                                    'group_name_hint',
-                                    'Название группы',
-                                  ),
-                                  hintText: 'Например: Друзья / Команда',
-                                  hintStyle:
-                                      TextStyle(color: palette.textTertiary),
-                                  border: InputBorder.none,
+                                  color: palette.onSurface,
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        Divider(height: 16, color: palette.borderSubtle),
-                        TextField(
+                        const SizedBox(height: 10),
+                        Divider(height: 0.5, color: palette.divider),
+                        const SizedBox(height: 6),
+                        TheavInlineTextField(
                           controller: _descriptionController,
                           maxLines: 3,
                           minLines: 1,
-                          style: TextStyle(
-                            fontSize: 14.5,
-                            color: palette.textPrimary,
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          label: _tr(
+                            'group_description_hint',
+                            'Описание группы (необязательно)',
                           ),
-                          decoration: InputDecoration(
-                            labelText: _tr(
-                              'group_description_hint',
-                              'Описание группы (необязательно)',
-                            ),
-                            hintText: 'О чём эта группа и правила общения',
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            border: InputBorder.none,
-                          ),
+                          placeholder: 'О чём эта группа и правила общения',
                         ),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
 
                 // 2. Настройки группы
-                _buildSectionHeader('НАСТРОЙКИ И ДОСТУП', palette),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  child: Column(
-                    children: [
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.public_rounded,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('group_public', 'Публичная группа'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'group_public_desc',
-                            'Доступна в глобальном поиске по @username',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: 'НАСТРОЙКИ И ДОСТУП',
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Globe(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('group_public', 'Публичная группа'),
+                      subtitle: _tr(
+                        'group_public_desc',
+                        'Доступна в глобальном поиске по @username',
+                      ),
+                      trailing: TheavSwitch(
                         value: _isPublic,
                         onChanged: (v) => setState(() => _isPublic = v),
                       ),
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        child: _isPublic
-                            ? Column(
-                                children: [
-                                  Divider(
-                                    height: 1,
-                                    indent: 56,
-                                    color: palette.borderSubtle,
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 6,
-                                    ),
-                                    child: TextField(
-                                      controller: _usernameController,
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w500,
-                                        color: palette.textPrimary,
-                                      ),
-                                      decoration: InputDecoration(
-                                        labelText:
-                                            'Публичная ссылка (@username)',
-                                        hintText: 'group_username',
-                                        hintStyle: TextStyle(
-                                          color: palette.textTertiary,
-                                        ),
-                                        prefixText: '@',
-                                        prefixIcon: Icon(
-                                          Icons.alternate_email_rounded,
-                                          size: 20,
-                                          color: primaryColor,
-                                        ),
-                                        border: InputBorder.none,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.history_rounded,
+                      onTap: () => setState(() => _isPublic = !_isPublic),
+                    ),
+                    if (_isPublic)
+                      TheavInlineTextField(
+                        controller: _usernameController,
+                        label: 'Публичная ссылка (@username)',
+                        placeholder: 'group_username',
+                        prefix: iconoir.AtSign(
+                          width: 19,
+                          height: 19,
                           color: primaryColor,
                         ),
-                        title: Text(
-                          _tr(
-                            'group_enable_history',
-                            'История для новых участников',
-                          ),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'group_enable_history_desc',
-                            'Показывать предыдущие сообщения при вступлении',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
+                      ),
+                    TheavListRow(
+                      leading: iconoir.Clock(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr(
+                        'group_enable_history',
+                        'История для новых участников',
+                      ),
+                      subtitle: _tr(
+                        'group_enable_history_desc',
+                        'Показывать предыдущие сообщения при вступлении',
+                      ),
+                      trailing: TheavSwitch(
                         value: _enableHistory,
                         onChanged: (v) => setState(() => _enableHistory = v),
                       ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
+                      onTap: () =>
+                          setState(() => _enableHistory = !_enableHistory),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.UserPlus(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
                       ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.person_add_alt_1_rounded,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr(
-                            'group_allow_invites',
-                            'Разрешить приглашать участников',
-                          ),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'group_allow_invites_desc',
-                            'Участники смогут добавлять своих друзей',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
+                      title: _tr(
+                        'group_allow_invites',
+                        'Разрешить приглашать участников',
+                      ),
+                      subtitle: _tr(
+                        'group_allow_invites_desc',
+                        'Участники смогут добавлять своих друзей',
+                      ),
+                      trailing: TheavSwitch(
                         value: _allowInvites,
                         onChanged: (v) => setState(() => _allowInvites = v),
                       ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
+                      onTap: () =>
+                          setState(() => _allowInvites = !_allowInvites),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.Timer(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
                       ),
-                      ListTile(
-                        leading: Icon(
-                          Icons.timer_outlined,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          'Медленный режим',
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          'Интервал между отправкой сообщений участниками',
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _slowModeLabel(_slowModeInterval),
-                              style: TextStyle(
-                                color: primaryColor,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            iconoir.NavArrowRight(
-                              width: 18,
-                              height: 18,
-                              color: palette.textTertiary,
-                            ),
-                          ],
-                        ),
-                        onTap: _showSlowModeSheet,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 18),
-
-                // 3. Участники группы
-                Row(
-                  children: [
-                    _buildSectionHeader('УЧАСТНИКИ', palette),
-                    const Spacer(),
-                    if (_selectedMembers.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: Text(
-                          'Выбрано: ${_selectedMembers.length}',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: primaryColor,
-                          ),
-                        ),
-                      ),
+                      title: 'Медленный режим',
+                      subtitle: 'Интервал между отправкой сообщений участниками',
+                      valueText: _slowModeLabel(_slowModeInterval),
+                      showChevron: true,
+                      onTap: _showSlowModeSheet,
+                    ),
                   ],
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 16),
 
-                // Выбранные участники
+                // 3. Выбранные участники
                 if (_selectedMembers.isNotEmpty) ...[
                   SizedBox(
                     height: 82,
@@ -825,6 +657,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                   clipBehavior: Clip.none,
                                   children: [
                                     AvatarWithStatus(
+                                      userId: member.id,
                                       avatarUrl: member.avatarUrl,
                                       name: member.name,
                                       radius: 24,
@@ -837,17 +670,17 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                         width: 20,
                                         height: 20,
                                         decoration: BoxDecoration(
-                                          color: Colors.redAccent,
+                                          color: palette.error,
                                           shape: BoxShape.circle,
                                           border: Border.all(
-                                            color: palette.bgBase,
+                                            color: palette.background,
                                             width: 1.8,
                                           ),
                                         ),
                                         alignment: Alignment.center,
-                                        child: const Icon(
-                                          Icons.close_rounded,
-                                          size: 12,
+                                        child: const iconoir.Xmark(
+                                          width: 12,
+                                          height: 12,
                                           color: Colors.white,
                                         ),
                                       ),
@@ -863,7 +696,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                   style: TextStyle(
                                     fontSize: 11.5,
                                     fontWeight: FontWeight.w500,
-                                    color: palette.textPrimary,
+                                    color: palette.onSurface,
                                   ),
                                 ),
                               ],
@@ -876,85 +709,64 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                   const SizedBox(height: 10),
                 ],
 
-                // Поиск и список пользователей
-                _buildSurfaceCard(
-                  context,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 4,
-                        ),
-                        child: TextField(
-                          controller: _searchController,
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: palette.textPrimary,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: _tr(
-                              'search_user_hint',
-                              'Поиск людей по имени или @username...',
-                            ),
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            prefixIcon: Icon(
-                              Icons.search_rounded,
-                              color: palette.textSecondary,
-                              size: 20,
-                            ),
-                            suffixIcon: _searchQuery.isNotEmpty
-                                ? IconButton(
-                                    icon: Icon(
-                                      Icons.clear_rounded,
-                                      size: 18,
-                                      color: palette.textSecondary,
-                                    ),
-                                    onPressed: () => _searchController.clear(),
-                                  )
-                                : null,
-                            border: InputBorder.none,
-                          ),
-                        ),
+                // 4. Поиск и список пользователей
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: _selectedMembers.isNotEmpty
+                      ? 'УЧАСТНИКИ (${_selectedMembers.length})'
+                      : 'УЧАСТНИКИ',
+                  children: [
+                    TheavInlineTextField(
+                      controller: _searchController,
+                      placeholder: _tr(
+                        'search_user_hint',
+                        'Поиск людей по имени или @username...',
                       ),
-                      Divider(height: 1, color: palette.borderSubtle),
-                      if (_isLoadingUsers && _filteredUsers.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.all(28),
-                          child: Center(child: CircularProgressIndicator()),
-                        )
-                      else if (_filteredUsers.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.all(28),
-                          child: Center(
-                            child: Text(
-                              _searchQuery.isEmpty
-                                  ? 'Введите имя или @username, чтобы пригласить участников'
-                                  : 'Пользователи не найдены',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: palette.textSecondary,
-                                fontSize: 13.5,
+                      prefix: iconoir.Search(
+                        width: 18,
+                        height: 18,
+                        color: palette.subtext,
+                      ),
+                      suffix: _searchQuery.isNotEmpty
+                          ? GestureDetector(
+                              onTap: () => _searchController.clear(),
+                              child: iconoir.XmarkCircle(
+                                width: 18,
+                                height: 18,
+                                color: palette.subtext,
                               ),
+                            )
+                          : null,
+                    ),
+                    if (_isLoadingUsers && _filteredUsers.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(28),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (_filteredUsers.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(28),
+                        child: Center(
+                          child: Text(
+                            _searchQuery.isEmpty
+                                ? 'Введите имя или @username, чтобы пригласить участников'
+                                : 'Пользователи не найдены',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: palette.subtext,
+                              fontSize: 13.5,
                             ),
                           ),
-                        )
-                      else
-                        for (int i = 0; i < _filteredUsers.length; i++) ...[
-                          if (i > 0)
-                            Divider(
-                              height: 1,
-                              indent: 68,
-                              color: palette.borderSubtle,
-                            ),
-                          _buildUserSelectTile(
-                            _filteredUsers[i],
-                            primaryColor: primaryColor,
-                            palette: palette,
-                          ),
-                        ],
-                    ],
-                  ),
+                        ),
+                      )
+                    else
+                      for (final user in _filteredUsers)
+                        _buildUserSelectTile(
+                          user,
+                          primaryColor: primaryColor,
+                          palette: palette,
+                        ),
+                  ],
                 ),
               ],
       ),
@@ -968,15 +780,15 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   }) {
     final isSelected = _selectedMembers.any((m) => m.id == user.id);
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+    return TheavListRow(
       leading: AvatarWithStatus(
+        userId: user.id,
         avatarUrl: getValidAvatarUrl(user.avatarUrl),
         name: user.name,
         radius: 21,
         isOnline: user.isOnline,
       ),
-      title: Row(
+      titleWidget: Row(
         children: [
           Flexible(
             child: Text(
@@ -986,56 +798,19 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 15,
-                color: palette.textPrimary,
+                color: palette.onSurface,
               ),
             ),
           ),
           PeerBadgesRow(isBot: user.isBot, isVerified: user.isVerified),
         ],
       ),
-      subtitle: user.username.isNotEmpty
-          ? Text(
-              '@${user.username}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12.5,
-                color: palette.textSecondary,
-              ),
-            )
-          : null,
-      trailing: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        width: 24,
-        height: 24,
-        decoration: BoxDecoration(
-          color: isSelected ? primaryColor : Colors.transparent,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isSelected ? primaryColor : palette.textTertiary,
-            width: 1.8,
-          ),
-        ),
-        child: isSelected
-            ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
-            : null,
+      subtitle: user.username.isNotEmpty ? '@${user.username}' : null,
+      trailing: TheavCheckCircle(
+        selected: isSelected,
+        onTap: () => _toggleMember(user),
       ),
       onTap: () => _toggleMember(user),
-    );
-  }
-
-  Widget _buildSectionHeader(String title, TheavPalette palette) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-          color: palette.textSecondary,
-        ),
-      ),
     );
   }
 

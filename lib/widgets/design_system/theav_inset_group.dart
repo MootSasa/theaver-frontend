@@ -36,9 +36,21 @@ class TheavInsetGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = TheavSurfaceStyle.of(context, listen: false);
+    final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
-    final effectiveBg = backgroundColor ?? style.cardSurface;
+    final effectiveBg = backgroundColor ??
+        (style.isGlass
+            ? palette.surface.withValues(alpha: style.isDark ? 0.72 : 0.84)
+            : Color.alphaBlend(
+                palette.onSurface.withValues(alpha: style.isDark ? 0.035 : 0.02),
+                palette.surface,
+              ));
+    final Color effectiveBorderColor = style.isGlass
+        ? (style.isDark
+            ? Colors.white.withValues(alpha: 0.11)
+            : Colors.black.withValues(alpha: 0.07))
+        : palette.divider;
+    final double effectiveBorderWidth = style.isGlass ? 0.6 : 0.5;
     final horizontalInset = margin.horizontal > 0 ? 16.0 : 4.0;
 
     return Padding(
@@ -73,8 +85,8 @@ class TheavInsetGroup extends StatelessWidget {
               color: effectiveBg,
               borderRadius: BorderRadius.circular(borderRadius),
               border: Border.all(
-                color: palette.divider,
-                width: 0.5,
+                color: effectiveBorderColor,
+                width: effectiveBorderWidth,
               ),
               boxShadow: style.isDark
                   ? null
@@ -196,9 +208,9 @@ class TheavListRow extends StatelessWidget {
                   color: isDestructive ? palette.error : palette.primary,
                   size: 22,
                 ),
-                child: SizedBox(
-                  width: 26,
-                  child: Center(child: leading!),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 26),
+                  child: Center(widthFactor: 1.0, child: leading!),
                 ),
               ),
               const SizedBox(width: 14),
@@ -401,6 +413,10 @@ class TheavInlineTextField extends StatelessWidget {
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
                     disabledBorder: InputBorder.none,
+                    errorBorder: InputBorder.none,
+                    focusedErrorBorder: InputBorder.none,
+                    filled: false,
+                    fillColor: Colors.transparent,
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
                     counterText: showCounter ? null : '',

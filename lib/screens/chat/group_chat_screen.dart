@@ -3497,40 +3497,40 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       FullscreenPhotoViewer.open(context, fileUrl);
       return;
     }
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const iconoir.OpenNewWindow(width: 22, height: 22),
-              title: Text(context.l10n.translate('chat_open_file')),
-              onTap: () {
-                Navigator.pop(context);
-                _downloadAndOpenFile(fileUrl, fileName);
-              },
-            ),
-            ListTile(
-              leading: const iconoir.Download(width: 22, height: 22),
-              title: Text(context.l10n.translate('chat_download')),
-              onTap: () {
-                Navigator.pop(context);
-                _downloadFile(fileUrl, fileName);
-              },
-            ),
-            ListTile(
-              leading: const iconoir.ShareAndroid(width: 22, height: 22),
-              title: Text(context.l10n.translate('share')),
-              onTap: () async {
-                Navigator.pop(context);
-                await SharePlus.instance.share(
-                  ShareParams(text: fileUrl, subject: fileName),
-                );
-              },
-            ),
-          ],
-        ),
+      title: fileName,
+      showCloseButton: true,
+      builder: (sheetCtx) => TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        children: [
+          TheavListRow(
+            leading: const iconoir.OpenNewWindow(width: 20, height: 20),
+            title: context.l10n.translate('chat_open_file'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _downloadAndOpenFile(fileUrl, fileName);
+            },
+          ),
+          TheavListRow(
+            leading: const iconoir.Download(width: 20, height: 20),
+            title: context.l10n.translate('chat_download'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _downloadFile(fileUrl, fileName);
+            },
+          ),
+          TheavListRow(
+            leading: const iconoir.ShareAndroid(width: 20, height: 20),
+            title: context.l10n.translate('share'),
+            onTap: () async {
+              Navigator.pop(sheetCtx);
+              await SharePlus.instance.share(
+                ShareParams(text: fileUrl, subject: fileName),
+              );
+            },
+          ),
+        ],
       ),
     );
   }

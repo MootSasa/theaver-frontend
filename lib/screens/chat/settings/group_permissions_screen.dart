@@ -516,6 +516,9 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                             avatarUrl: m.avatarUrl,
                             name: m.displayName,
                             radius: 20,
+                            isOnline: m.isOnline,
+                            decorationOverride:
+                                m.peerCustomization?.avatarDecoration,
                           ),
                           title: m.displayName,
                           subtitle: _formatRestrictionsSummary(m),
@@ -584,6 +587,9 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                             avatarUrl: banned.avatarUrl,
                             name: banned.displayName,
                             radius: 20,
+                            isOnline: banned.isOnline,
+                            decorationOverride:
+                                banned.peerCustomization?.avatarDecoration,
                           ),
                           title: banned.displayName.isNotEmpty
                               ? banned.displayName
@@ -704,6 +710,8 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                   avatarUrl: m.avatarUrl,
                   name: m.displayName,
                   radius: 20,
+                  isOnline: m.isOnline,
+                  decorationOverride: m.peerCustomization?.avatarDecoration,
                 ),
                 title: m.displayName.isNotEmpty
                     ? m.displayName

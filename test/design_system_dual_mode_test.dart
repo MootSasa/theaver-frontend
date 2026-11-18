@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
@@ -25,6 +26,10 @@ Widget _buildHost({
     theme: ThemeData(
       brightness: brightness,
       useMaterial3: true,
+      inputDecorationTheme: const InputDecorationTheme(
+        filled: true,
+        fillColor: Color(0xFF1C1C1E),
+      ),
     ),
     home: Scaffold(
       body: SafeArea(child: child),
@@ -104,6 +109,9 @@ void main() {
 
         await tester.enterText(find.byType(TextField), 'Канал новостей');
         expect(controller.text, 'Канал новостей');
+
+        final tf = tester.widget<TextField>(find.byType(TextField));
+        expect(tf.decoration?.filled, isFalse);
       });
 
       testWidgets(
@@ -194,6 +202,17 @@ void main() {
         await tester.tap(find.text('Частный'));
         await tester.pumpAndSettle();
         expect(selectedSegment, 'b');
+
+        final expectGlassControls =
+            mode == GlassMode.lite || mode == GlassMode.full;
+        expect(
+          find.byType(LiquidGlassSwitch),
+          expectGlassControls ? findsOneWidget : findsNothing,
+        );
+        expect(
+          find.byType(LiquidGlassSlider),
+          expectGlassControls ? findsOneWidget : findsNothing,
+        );
 
         await tester.tap(find.byType(TheavSwitch));
         await tester.pumpAndSettle();
@@ -287,6 +306,76 @@ void main() {
         await tester.tap(find.text('Выбрать'));
         await tester.pumpAndSettle();
         expect(sheetResult, 'selected');
+      });
+
+      testWidgets(
+          'TheavModalSheet stretches upward on pull, rebounds smoothly, and dismisses on downward fling',
+          (tester) async {
+        await tester.pumpWidget(
+          _buildHost(
+            glassMode: mode,
+            child: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    showTheavModalSheet<void>(
+                      context: context,
+                      title: 'Пружинящая панель',
+                      showCloseButton: true,
+                      builder: (_) => const SizedBox(
+                        height: 160,
+                        child: Center(child: Text('Контент панели')),
+                      ),
+                    );
+                  },
+                  child: const Text('OpenSpringSheet'),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        await tester.tap(find.text('OpenSpringSheet'));
+        await tester.pumpAndSettle();
+        expect(find.byType(TheavModalSheet), findsOneWidget);
+
+        final cardFinder = find
+            .descendant(
+              of: find.byType(TheavModalSheet),
+              matching: find.byWidgetPredicate(
+                (w) => w is Container && w.constraints != null,
+              ),
+            )
+            .first;
+
+        final Rect restRect = tester.getRect(cardFinder);
+
+        // Pull upward: sheet stretches upward while bottom stays anchored.
+        final gesture = await tester.startGesture(
+          tester.getCenter(find.text('Пружинящая панель')),
+        );
+        for (int i = 0; i < 4; i++) {
+          await gesture.moveBy(const Offset(0, -30));
+          await tester.pump();
+        }
+        final Rect stretchedRect = tester.getRect(cardFinder);
+        expect(stretchedRect.top, lessThan(restRect.top));
+        expect(stretchedRect.bottom, closeTo(restRect.bottom, 1.0));
+
+        // Release: springs back to rest position cleanly.
+        await gesture.up();
+        await tester.pumpAndSettle();
+        final Rect settledRect = tester.getRect(cardFinder);
+        expect(settledRect.top, closeTo(restRect.top, 0.5));
+
+        // Fling downward: dismisses cleanly.
+        await tester.fling(
+          find.text('Пружинящая панель'),
+          const Offset(0, 320),
+          1200,
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(TheavModalSheet), findsNothing);
       });
     });
   }

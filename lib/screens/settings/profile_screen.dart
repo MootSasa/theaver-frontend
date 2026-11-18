@@ -50,6 +50,7 @@ import '../../widgets/profile/liquid_glass_info_panel.dart';
 import '../../widgets/profile/liquid_glass_music_status.dart';
 import '../../widgets/profile/liquid_glass_profile_buttons.dart';
 import '../../widgets/profile/manage_user_badge_sheet.dart';
+import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
 import 'change_email_screen.dart';
 import '../../widgets/profile/profile_content_tabs.dart';
@@ -2740,8 +2741,6 @@ class ProfileScreenState extends State<ProfileScreen>
         : (member.username.isNotEmpty
             ? '@${member.username}'
             : _tr(l10n, 'profile_default_user', 'Пользователь'));
-    final validAvatar = getValidAvatarUrl(member.avatarUrl);
-    final avatarProvider = avatarImageProvider(validAvatar);
 
     final isRestricted = member.memberRestrictions != null &&
         (member.restrictedUntil == null ||
@@ -2788,43 +2787,14 @@ class ProfileScreenState extends State<ProfileScreen>
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
-            Stack(
-              children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: accentColor.withValues(alpha: 0.2),
-                  backgroundImage: avatarProvider,
-                  child: avatarProvider == null
-                      ? Text(
-                          memberName.isNotEmpty
-                              ? memberName[0].toUpperCase()
-                              : '?',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w600,
-                            color: accentColor,
-                          ),
-                        )
-                      : null,
-                ),
-                if (member.isOnline)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF4CAF50),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isDark ? context.theav.surface : Colors.white,
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+            AvatarWithStatus(
+              userId: member.id,
+              avatarUrl: member.avatarUrl,
+              name: memberName,
+              radius: 22,
+              isOnline: member.isOnline,
+              backgroundColor: accentColor.withValues(alpha: 0.2),
+              decorationOverride: member.peerCustomization?.avatarDecoration,
             ),
             const SizedBox(width: 12),
             Expanded(

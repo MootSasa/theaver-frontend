@@ -12,6 +12,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../design_system/theav_design_system.dart';
 
 enum AttachmentPickerAction {
   camera,
@@ -57,7 +58,13 @@ class AttachmentPickerBottomSheet extends StatefulWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
+      barrierColor: Colors.black54,
+      sheetAnimationStyle: const AnimationStyle(
+        duration: Duration(milliseconds: 360),
+        reverseDuration: Duration(milliseconds: 230),
+        curve: Curves.easeOutBack,
+        reverseCurve: Curves.easeInCubic,
+      ),
       builder: (ctx) => AttachmentPickerBottomSheet(
         allowPoll: allowPoll,
       ),
@@ -281,131 +288,91 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   }
 
   void _showAlbumSelector() {
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+      title: context.l10n.translate('chat_all_photos'),
+      showCloseButton: true,
+      maxHeightFactor: 0.72,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        return Container(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.65,
-          ),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E1E24) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 10),
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: isDark ? Colors.white30 : Colors.black26,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: Row(
-                  children: [
-                    Text(
-                      context.l10n.translate('chat_all_photos'),
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : Colors.black87,
+        final palette = ctx.theav;
+        return ListView.builder(
+          shrinkWrap: true,
+          itemCount: _albums.length,
+          itemBuilder: (context, index) {
+            final album = _albums[index];
+            final isSelected = album.id == _selectedAlbum?.id;
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+              child: TheavInsetGroup(
+                margin: EdgeInsets.zero,
+                showDividers: false,
+                children: [
+                  TheavListRow(
+                    leading: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: palette.onSurface.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                  ],
-                ),
-              ),
-              Divider(
-                height: 1,
-                color: isDark ? Colors.white10 : Colors.black12,
-              ),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _albums.length,
-                  itemBuilder: (context, index) {
-                    final album = _albums[index];
-                    final isSelected = album.id == _selectedAlbum?.id;
-                    return ListTile(
-                      leading: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF2C2C34) : const Color(0xFFF0F2F5),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: FutureBuilder<List<AssetEntity>>(
-                          future: album.getAssetListRange(start: 0, end: 1),
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                              return ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: AssetEntityImage(
-                                  snapshot.data!.first,
-                                  isOriginal: false,
-                                  thumbnailSize: const ThumbnailSize.square(120),
-                                  fit: BoxFit.cover,
-                                ),
-                              );
-                            }
-                            return Icon(
-                              Icons.folder_outlined,
-                              color: isDark ? Colors.white70 : Colors.black54,
-                            );
-                          },
-                        ),
-                      ),
-                      title: Text(
-                        album.isAll ? context.l10n.translate('chat_recent_photos') : album.name,
-                        style: TextStyle(
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                          color: isSelected
-                              ? const Color(0xFF2AABEE)
-                              : (isDark ? Colors.white : Colors.black87),
-                        ),
-                      ),
-                      subtitle: FutureBuilder<int>(
-                        future: album.assetCountAsync,
+                      child: FutureBuilder<List<AssetEntity>>(
+                        future: album.getAssetListRange(start: 0, end: 1),
                         builder: (context, snapshot) {
-                          return Text(
-                            snapshot.hasData ? '${snapshot.data}' : '...',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.white54 : Colors.black54,
-                            ),
+                          if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: AssetEntityImage(
+                                snapshot.data!.first,
+                                isOriginal: false,
+                                thumbnailSize: const ThumbnailSize.square(120),
+                                fit: BoxFit.cover,
+                              ),
+                            );
+                          }
+                          return iconoir.Folder(
+                            width: 20,
+                            height: 20,
+                            color: palette.subtext,
                           );
                         },
                       ),
-                      trailing: isSelected
-                          ? const Icon(Icons.check, color: Color(0xFF2AABEE))
-                          : null,
+                    ),
+                    title: album.isAll
+                        ? context.l10n.translate('chat_recent_photos')
+                        : album.name,
+                    subtitleWidget: FutureBuilder<int>(
+                      future: album.assetCountAsync,
+                      builder: (context, snapshot) {
+                        return Text(
+                          snapshot.hasData ? '${snapshot.data}' : '...',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: palette.subtext,
+                          ),
+                        );
+                      },
+                    ),
+                    trailing: TheavCheckCircle(
+                      selected: isSelected,
                       onTap: () {
                         Navigator.pop(ctx);
                         if (album.id != _selectedAlbum?.id) {
                           _selectAlbum(album);
                         }
                       },
-                    );
-                  },
-                ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      if (album.id != _selectedAlbum?.id) {
+                        _selectAlbum(album);
+                      }
+                    },
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -503,16 +470,9 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = LiquidGlassProvider.maybeOf(context);
-    final isGlassEnabled = glassProvider?.enabled ?? false;
-    final effectiveBlur = (isGlassEnabled && glassProvider != null)
-        ? (glassProvider.blur * 2.0).clamp(8.0, 30.0)
-        : 24.0;
-
-    final backgroundColor = isDark
-        ? const Color(0xFF1E1E24).withValues(alpha: isGlassEnabled ? 0.85 : 0.96)
-        : Colors.white.withValues(alpha: isGlassEnabled ? 0.88 : 0.97);
+    final surfaceStyle = TheavSurfaceStyle.of(context);
+    final isDark = surfaceStyle.isDark;
+    final blurFilter = surfaceStyle.getBlurFilter(sigma: 24.0);
 
     return DraggableScrollableSheet(
       initialChildSize: 0.58,
@@ -527,21 +487,15 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
                 : _selectedAlbum!.name)
             : context.l10n.translate('chat_recent_photos');
 
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur),
-            child: Container(
-              decoration: BoxDecoration(
-                color: backgroundColor,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : Colors.black.withValues(alpha: 0.06),
-                  width: 0.8,
-                ),
-              ),
+        Widget sheetCard = Container(
+          decoration: BoxDecoration(
+            color: surfaceStyle.overlayFill,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border.all(
+              color: surfaceStyle.hudBorder,
+              width: surfaceStyle.isGlass ? 0.6 : 0.5,
+            ),
+          ),
               child: SafeArea(
                 top: false,
                 child: Column(
@@ -658,9 +612,24 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
                   ],
                 ),
               ),
+            );
+
+        if (blurFilter != null) {
+          sheetCard = ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            child: BackdropFilter(
+              filter: blurFilter,
+              child: sheetCard,
             ),
-          ),
-        );
+          );
+        } else {
+          sheetCard = ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            child: sheetCard,
+          );
+        }
+
+        return sheetCard;
       },
     );
   }
@@ -756,6 +725,9 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
       labelConstraints: const BoxConstraints.tightFor(width: 120.0, height: 28.0),
       child: GridView.builder(
         controller: scrollController,
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
         cacheExtent: 600,
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(

@@ -84,8 +84,11 @@ class TheavSurfaceStyle {
 
   /// Base fill color for modal sheets and dialogs.
   Color get overlayFill => isGlass
-      ? palette.surface.withValues(alpha: isDark ? 0.86 : 0.90)
-      : palette.surface;
+      ? palette.surface.withValues(alpha: isDark ? 0.68 : 0.76)
+      : Color.alphaBlend(
+          palette.primary.withValues(alpha: isDark ? 0.04 : 0.025),
+          palette.surface,
+        );
 
   /// Subtle recessed track color for segmented controls and switches.
   Color get trackFill => Color.alphaBlend(

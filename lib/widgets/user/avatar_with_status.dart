@@ -111,55 +111,9 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
       ),
     );
 
-    Widget content = RepaintBoundary(
-      child: AnimatedBuilder(
-        animation: _animation,
-        builder: (context, _) {
-          final progress = _animation.value;
-          if (progress <= 0.0) {
-            return avatar;
-          }
-
-          final indicatorDiameter = (widget.radius * 0.55).clamp(8.0, 16.0);
-          final indicatorRadius = indicatorDiameter / 2;
-          final gap = (indicatorDiameter * 0.2).clamp(1.8, 2.8);
-          final indicatorCenter =
-              Offset(size - indicatorRadius, size - indicatorRadius);
-
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              ClipPath(
-                clipper: _AvatarCutoutClipper(
-                  center: indicatorCenter,
-                  cutoutRadius: (indicatorRadius + gap) * progress,
-                ),
-                child: avatar,
-              ),
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: Transform.scale(
-                  scale: progress,
-                  alignment: Alignment.center,
-                  child: Container(
-                    width: indicatorDiameter,
-                    height: indicatorDiameter,
-                    decoration: BoxDecoration(
-                      color: onlineColor,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-
+    AvatarDecorationPreset? decoration;
     if (widget.showDecoration) {
-      AvatarDecorationPreset? decoration = widget.decorationOverride;
+      decoration = widget.decorationOverride;
       if (decoration == null &&
           widget.userId != null &&
           widget.userId!.isNotEmpty) {
@@ -169,29 +123,81 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
             (c) => c.getSync(widget.userId)?.avatarDecoration,
           );
         } catch (_) {
-          decoration =
-              PeerCustomizationCache.instance.getSync(widget.userId)?.avatarDecoration;
+          decoration = PeerCustomizationCache.instance
+              .getSync(widget.userId)
+              ?.avatarDecoration;
         }
       }
-      if (decoration != null) {
-        final outerSize = size * 1.24;
-        content = SizedBox(
-          width: size,
-          height: size,
-          child: OverflowBox(
-            minWidth: outerSize,
-            maxWidth: outerSize,
-            minHeight: outerSize,
-            maxHeight: outerSize,
-            child: AvatarDecorationFrame(
-              decoration: decoration,
-              avatarDiameter: size,
-              animate: widget.animateDecoration,
-              child: content,
-            ),
+    }
+
+    Widget content;
+    if (decoration != null) {
+      // Never show the online indicator dot or cutout simultaneously with an
+      // avatar decoration frame because they visually overlap.
+      final outerSize = size * 1.24;
+      content = SizedBox(
+        width: size,
+        height: size,
+        child: OverflowBox(
+          minWidth: outerSize,
+          maxWidth: outerSize,
+          minHeight: outerSize,
+          maxHeight: outerSize,
+          child: AvatarDecorationFrame(
+            decoration: decoration,
+            avatarDiameter: size,
+            animate: widget.animateDecoration,
+            child: avatar,
           ),
-        );
-      }
+        ),
+      );
+    } else {
+      content = RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _animation,
+          builder: (context, _) {
+            final progress = _animation.value;
+            if (progress <= 0.0) {
+              return avatar;
+            }
+
+            final indicatorDiameter = (widget.radius * 0.55).clamp(8.0, 16.0);
+            final indicatorRadius = indicatorDiameter / 2;
+            final gap = (indicatorDiameter * 0.2).clamp(1.8, 2.8);
+            final indicatorCenter =
+                Offset(size - indicatorRadius, size - indicatorRadius);
+
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                ClipPath(
+                  clipper: _AvatarCutoutClipper(
+                    center: indicatorCenter,
+                    cutoutRadius: (indicatorRadius + gap) * progress,
+                  ),
+                  child: avatar,
+                ),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Transform.scale(
+                    scale: progress,
+                    alignment: Alignment.center,
+                    child: Container(
+                      width: indicatorDiameter,
+                      height: indicatorDiameter,
+                      decoration: BoxDecoration(
+                        color: onlineColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
     }
 
     if (widget.onTap != null) {

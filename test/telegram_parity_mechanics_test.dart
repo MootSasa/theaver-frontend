@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:theaver/models/profile_customization.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/utils/entity_parser.dart';
 import 'package:theaver/widgets/chat/chat_selection_header.dart';
 import 'package:theaver/widgets/chat/pinned_message_banner.dart';
 import 'package:theaver/widgets/chat/telegram_delete_messages_sheet.dart';
+import 'package:theaver/widgets/user/avatar_decoration_frame.dart';
+import 'package:theaver/widgets/user/avatar_with_status.dart';
 
 bool _hasUnpairedUtf16Surrogate(String value) {
   final units = value.codeUnits;
@@ -308,6 +311,54 @@ void main() {
       expect(modResult!.reportSpam, isTrue);
       expect(modResult!.banUser, isTrue);
       expect(modResult!.deleteAllFromUser, isFalse);
+    });
+
+    testWidgets(
+        'AvatarWithStatus suppresses online indicator and cutout when avatar frame is active',
+        (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: AvatarWithStatus(
+                avatarUrl: null,
+                name: 'Alex',
+                radius: 24,
+                isOnline: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AvatarDecorationFrame), findsNothing);
+      expect(find.byType(ClipPath), findsOneWidget);
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: AvatarWithStatus(
+                avatarUrl: null,
+                name: 'Alex',
+                radius: 24,
+                isOnline: true,
+                animateDecoration: false,
+                decorationOverride: AvatarDecorationPreset(
+                  id: 'neon_ring',
+                  nameKey: 'Neon Ring',
+                  isAnimated: false,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AvatarDecorationFrame), findsOneWidget);
+      expect(find.byType(ClipPath), findsNothing);
     });
   });
 }

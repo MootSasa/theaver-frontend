@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../utils/haptic_utils.dart';
 import 'theav_design_system.dart';
@@ -68,32 +69,37 @@ class TheavSegmentedControl<T> extends StatelessWidget {
               child: FractionallySizedBox(
                 widthFactor: 1.0 / options.length,
                 heightFactor: 1.0,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: style.isGlass
-                        ? Color.alphaBlend(
-                            palette.onSurface
-                                .withValues(alpha: style.isDark ? 0.14 : 0.04),
-                            palette.surface,
-                          )
-                        : palette.surface,
-                    borderRadius: BorderRadius.circular((height - 6) / 2),
-                    border: Border.all(
-                      color: style.isGlass
-                          ? style.hudBorder
-                          : palette.divider,
-                      width: 0.5,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black
-                            .withValues(alpha: style.isDark ? 0.24 : 0.07),
-                        blurRadius: 6,
-                        offset: const Offset(0, 1.5),
+                child: style.isGlass && style.glassProvider != null
+                    ? LiquidGlassLens(
+                        style: style.glassProvider!.createStyle(
+                          context: context,
+                          cornerRadius: (height - 6) / 2,
+                          refractionIndex: 1.12,
+                          refractionWidth: 18.0,
+                          color: style.isDark
+                              ? const Color(0x38FFFFFF)
+                              : const Color(0x52FFFFFF),
+                        ),
+                        child: const SizedBox.expand(),
+                      )
+                    : DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: palette.surface,
+                          borderRadius: BorderRadius.circular((height - 6) / 2),
+                          border: Border.all(
+                            color: palette.divider,
+                            width: 0.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black
+                                  .withValues(alpha: style.isDark ? 0.24 : 0.07),
+                              blurRadius: 6,
+                              offset: const Offset(0, 1.5),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
-                ),
               ),
             ),
             Row(
@@ -180,9 +186,32 @@ class TheavSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = TheavSurfaceStyle.of(context, listen: false);
+    final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
     final bool enabled = onChanged != null;
+
+    if (style.isGlass && enabled) {
+      Widget glassToggle = LiquidGlassSwitch(
+        value: value,
+        onChanged: (next) {
+          HapticUtils.selection();
+          onChanged!(next);
+        },
+        activeColor: activeColor ?? palette.primary,
+        inactiveColor: style.isDark ? Colors.white24 : Colors.black12,
+        thumbColor: palette.onPrimary,
+      );
+      if (semanticLabel != null) {
+        glassToggle = Semantics(
+          label: semanticLabel,
+          toggled: value,
+          enabled: true,
+          child: glassToggle,
+        );
+      }
+      return glassToggle;
+    }
+
     final Color activeTrack = activeColor ?? palette.primary;
     final Color inactiveTrack = Color.alphaBlend(
       palette.onSurface.withValues(alpha: style.isDark ? 0.22 : 0.16),
@@ -355,7 +384,8 @@ class TheavSteppedSlider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (labels.isEmpty) return const SizedBox.shrink();
-    final palette = context.theav;
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
     final int safeIndex = selectedIndex.clamp(0, labels.length - 1);
     final Color accent = activeColor ?? palette.primary;
     final int maxIdx = labels.length - 1;
@@ -396,6 +426,24 @@ class TheavSteppedSlider extends StatelessWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final double totalWidth = constraints.maxWidth.clamp(48.0, 2000.0);
+              if (style.isGlass && maxIdx > 0) {
+                return LiquidGlassSlider(
+                  value: safeIndex.toDouble(),
+                  minimumValue: 0.0,
+                  maximumValue: maxIdx.toDouble(),
+                  width: totalWidth,
+                  activeColor: accent,
+                  inactiveColor: style.isDark ? Colors.white24 : Colors.black12,
+                  thumbColor: Colors.white,
+                  onChanged: (v) {
+                    final int nextIdx = v.round().clamp(0, maxIdx);
+                    if (nextIdx != safeIndex) {
+                      HapticUtils.selection();
+                      onChanged(nextIdx);
+                    }
+                  },
+                );
+              }
               final double usableWidth = (totalWidth - 20.0).clamp(1.0, totalWidth);
               final double fraction = maxIdx > 0 ? safeIndex / maxIdx : 0.0;
               final double activeWidth = usableWidth * fraction;

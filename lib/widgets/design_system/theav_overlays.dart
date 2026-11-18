@@ -1,11 +1,55 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../utils/haptic_utils.dart';
 import 'theav_design_system.dart';
 
-/// Opens a dual-mode [TheavModalSheet] that renders crisp translucent glass blur
-/// in `full`/`lite` modes and solid matte [TheavPalette.surface] when disabled.
+class _TheavSpringCurve extends Curve {
+  const _TheavSpringCurve();
+
+  static final SpringSimulation _sim = SpringSimulation(
+    const SpringDescription(mass: 1.0, stiffness: 360.0, damping: 28.0),
+    0.0,
+    1.0,
+    0.0,
+  );
+
+  @override
+  double transformInternal(double t) {
+    if (t <= 0.0) return 0.0;
+    if (t >= 1.0) return 1.0;
+    final double raw = _sim.x(t * 0.52);
+    // Smoothly blend to exact 1.0 near the end of the normalized duration.
+    final double blend = ((t - 0.82) / 0.18).clamp(0.0, 1.0);
+    return raw * (1.0 - blend) + 1.0 * blend;
+  }
+}
+
+class _SheetScrollBehavior extends ScrollBehavior {
+  const _SheetScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    return const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
+  }
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+}
+
+/// Opens a dual-mode, spring-animated [TheavModalSheet] that responds to
+/// upward rubber-band stretch and velocity-based downward dismissal while
+/// rendering crisp frosted glass blur in `full`/`lite` modes and M3 tonal
+/// surface when disabled.
 Future<T?> showTheavModalSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -16,33 +60,144 @@ Future<T?> showTheavModalSheet<T>({
   bool enableDrag = true,
   bool showCloseButton = false,
   double maxHeightFactor = 0.92,
+  bool barrierDismissible = true,
+  bool useRootNavigator = false,
 }) {
-  return showModalBottomSheet<T>(
-    context: context,
-    isScrollControlled: isScrollControlled,
-    enableDrag: enableDrag,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.black54,
-    builder: (ctx) => TheavModalSheet(
+  return Navigator.of(context, rootNavigator: useRootNavigator).push<T>(
+    _TheavSpringModalSheetRoute<T>(
+      builder: builder,
       title: title,
       trailing: trailing,
       padding: padding,
+      enableDrag: enableDrag,
       showCloseButton: showCloseButton,
       maxHeightFactor: maxHeightFactor,
-      child: builder(ctx),
+      barrierDismissible: barrierDismissible,
+      barrierLabel: Localizations.of<MaterialLocalizations>(
+            context,
+            MaterialLocalizations,
+          )?.modalBarrierDismissLabel ??
+          'Dismiss',
     ),
   );
 }
 
-/// Dual-mode modal bottom sheet container with drag handle, optional header bar,
-/// safe keyboard inset handling, and [TheavPalette] styling.
-class TheavModalSheet extends StatelessWidget {
+class _TheavSpringModalSheetRoute<T> extends PopupRoute<T> {
+  final WidgetBuilder builder;
+  final String? title;
+  final Widget? trailing;
+  final EdgeInsetsGeometry padding;
+  final bool enableDrag;
+  final bool showCloseButton;
+  final double maxHeightFactor;
+  @override
+  final bool barrierDismissible;
+  @override
+  final String? barrierLabel;
+
+  _TheavSpringModalSheetRoute({
+    required this.builder,
+    this.title,
+    this.trailing,
+    required this.padding,
+    required this.enableDrag,
+    required this.showCloseButton,
+    required this.maxHeightFactor,
+    required this.barrierDismissible,
+    required this.barrierLabel,
+  });
+
+  @override
+  Color? get barrierColor => Colors.black54;
+
+  @override
+  bool get opaque => false;
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 360);
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 230);
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: TheavModalSheet(
+        title: title,
+        trailing: trailing,
+        padding: padding,
+        showCloseButton: showCloseButton,
+        maxHeightFactor: maxHeightFactor,
+        enableDrag: enableDrag,
+        child: Builder(builder: builder),
+      ),
+    );
+  }
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final disableAnim = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (disableAnim) return child;
+
+    if (animation.status == AnimationStatus.reverse) {
+      final rev = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+      );
+      return FractionalTranslation(
+        translation: Offset(0.0, 1.0 - rev.value),
+        child: child,
+      );
+    }
+
+    return AnimatedBuilder(
+      animation: animation,
+      child: child,
+      builder: (context, childWidget) {
+        final double springVal = const _TheavSpringCurve().transform(
+          animation.value.clamp(0.0, 1.0),
+        );
+        final double dy = math.max(0.0, 1.0 - springVal);
+        final double overshoot = math.max(0.0, springVal - 1.0);
+        Widget current = FractionalTranslation(
+          translation: Offset(0.0, dy),
+          child: childWidget,
+        );
+        if (overshoot > 0.0001) {
+          current = Transform.scale(
+            alignment: Alignment.bottomCenter,
+            scaleY: 1.0 + overshoot * 0.55,
+            scaleX: 1.0 - overshoot * 0.10,
+            child: current,
+          );
+        }
+        return current;
+      },
+    );
+  }
+}
+
+/// Dual-mode modal bottom sheet container with spring rubber-band stretch,
+/// drag handle, optional header bar, safe keyboard inset handling, and
+/// [TheavPalette] styling.
+class TheavModalSheet extends StatefulWidget {
   final Widget child;
   final String? title;
   final Widget? trailing;
   final EdgeInsetsGeometry padding;
   final bool showCloseButton;
   final double maxHeightFactor;
+  final bool enableDrag;
 
   const TheavModalSheet({
     super.key,
@@ -52,90 +207,211 @@ class TheavModalSheet extends StatelessWidget {
     this.padding = const EdgeInsets.fromLTRB(16, 10, 16, 20),
     this.showCloseButton = false,
     this.maxHeightFactor = 0.92,
+    this.enableDrag = true,
   });
+
+  @override
+  State<TheavModalSheet> createState() => _TheavModalSheetState();
+}
+
+class _TheavModalSheetState extends State<TheavModalSheet>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _springController;
+  double _dragOffset = 0.0;
+  bool _didHapticThreshold = false;
+  bool _isDismissing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _springController = AnimationController.unbounded(vsync: this)
+      ..addListener(() {
+        if (!mounted) return;
+        setState(() {
+          _dragOffset = _springController.value;
+        });
+      });
+  }
+
+  @override
+  void dispose() {
+    _springController.dispose();
+    super.dispose();
+  }
+
+  void _onDragStart() {
+    if (!widget.enableDrag || _isDismissing) return;
+    _springController.stop();
+    _didHapticThreshold = false;
+  }
+
+  void _onDragDelta(double deltaY) {
+    if (!widget.enableDrag || _isDismissing) return;
+    setState(() {
+      _dragOffset += deltaY;
+    });
+    final double height = context.size?.height ?? 360.0;
+    final double threshold = math.min(120.0, height * 0.28);
+    if (_dragOffset >= threshold && !_didHapticThreshold) {
+      _didHapticThreshold = true;
+      HapticUtils.selection();
+    } else if (_dragOffset < threshold * 0.8 && _didHapticThreshold) {
+      _didHapticThreshold = false;
+    }
+  }
+
+  void _onDragEnd(double velocityY) {
+    if (!widget.enableDrag || _isDismissing) return;
+    final double height = context.size?.height ?? 360.0;
+    final double dismissThreshold = math.min(120.0, height * 0.28);
+    if (velocityY > 650.0 ||
+        (_dragOffset >= dismissThreshold && velocityY > -200.0)) {
+      _isDismissing = true;
+      Navigator.of(context).maybePop();
+      return;
+    }
+
+    if (_dragOffset.abs() < 0.5 && velocityY.abs() < 20.0) {
+      if (_dragOffset != 0.0) {
+        setState(() => _dragOffset = 0.0);
+      }
+      return;
+    }
+
+    final SpringDescription spring = _dragOffset < 0
+        ? const SpringDescription(mass: 1.0, stiffness: 520.0, damping: 24.0)
+        : const SpringDescription(mass: 1.0, stiffness: 460.0, damping: 26.0);
+    final sim = SpringSimulation(
+      spring,
+      _dragOffset,
+      0.0,
+      velocityY.clamp(-2000.0, 2000.0),
+    );
+    _springController.animateWith(sim).whenComplete(() {
+      if (mounted && _dragOffset.abs() < 0.05) {
+        setState(() => _dragOffset = 0.0);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
     final mq = MediaQuery.of(context);
-    final blurFilter = style.getBlurFilter(sigma: 22.0);
-    final bool hasHeader =
-        (title != null && title!.isNotEmpty) || trailing != null || showCloseButton;
+    final blurFilter = style.getBlurFilter(sigma: 26.0);
+    final bool hasHeader = (widget.title != null && widget.title!.isNotEmpty) ||
+        widget.trailing != null ||
+        widget.showCloseButton;
+
+    // Asymmetric rubber-band stretch when pulling up (_dragOffset < 0) vs 1:1 pull down.
+    const double maxStretch = 38.0;
+    final double rawPullUp = _dragOffset < 0 ? -_dragOffset : 0.0;
+    final double dampedStretch = rawPullUp > 0
+        ? maxStretch * (1.0 - math.exp(-rawPullUp / 95.0))
+        : 0.0;
+    final double stretchProgress =
+        (dampedStretch / maxStretch).clamp(0.0, 1.0);
+    final double translateY = _dragOffset > 0 ? _dragOffset : 0.0;
+    final double scaleY = 1.0 + stretchProgress * 0.042;
+    final double scaleX = 1.0 - stretchProgress * 0.010;
+    final double extraBottomSkirt = dampedStretch * 0.35;
+    final double handleWidth = _dragOffset > 0
+        ? 36.0 + (_dragOffset / 120.0).clamp(0.0, 1.0) * 10.0
+        : 36.0 + stretchProgress * 8.0;
+
+    final Color borderColor = style.isGlass
+        ? (style.isDark
+            ? Colors.white.withValues(alpha: 0.16)
+            : Colors.black.withValues(alpha: 0.08))
+        : style.hairlineBorder;
+    final double borderWidth = style.isGlass ? 0.6 : 0.5;
 
     Widget sheet = Container(
       constraints: BoxConstraints(
-        maxHeight: mq.size.height * maxHeightFactor,
+        maxHeight: mq.size.height * widget.maxHeightFactor,
       ),
       decoration: BoxDecoration(
         color: style.overlayFill,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         border: Border.all(
-          color: style.hudBorder,
-          width: 0.5,
+          color: borderColor,
+          width: borderWidth,
         ),
+        boxShadow: style.floatingShadow,
       ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
+      child: Material(
+        type: MaterialType.transparency,
+        child: SafeArea(
+          top: false,
           child: Padding(
-            padding: padding,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    margin: EdgeInsets.only(bottom: hasHeader ? 12 : 14),
-                    decoration: BoxDecoration(
-                      color: palette.onSurface.withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(2),
+            padding: EdgeInsets.only(
+              bottom: mq.viewInsets.bottom + extraBottomSkirt,
+            ),
+            child: Padding(
+              padding: widget.padding,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 90),
+                      width: handleWidth,
+                      height: 4,
+                      margin: EdgeInsets.only(bottom: hasHeader ? 12 : 14),
+                      decoration: BoxDecoration(
+                        color: palette.onSurface.withValues(alpha: 0.24),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
-                ),
-                if (hasHeader) ...[
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Row(
-                      children: [
-                        if (showCloseButton) ...[
-                          TheavHeaderIconButton(
-                            size: 36,
-                            icon: iconoir.Xmark(
-                              width: 18,
-                              height: 18,
-                              color: palette.onSurface,
-                            ),
-                            onTap: () => Navigator.of(context).maybePop(),
-                          ),
-                          const SizedBox(width: 10),
-                        ],
-                        if (title != null && title!.isNotEmpty)
-                          Expanded(
-                            child: Text(
-                              title!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
+                  if (hasHeader) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          if (widget.showCloseButton) ...[
+                            TheavHeaderIconButton(
+                              size: 36,
+                              icon: iconoir.Xmark(
+                                width: 18,
+                                height: 18,
                                 color: palette.onSurface,
-                                fontSize: 17.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: -0.2,
                               ),
+                              onTap: () => Navigator.of(context).maybePop(),
                             ),
-                          )
-                        else
-                          const Spacer(),
-                        if (trailing != null) trailing!,
-                      ],
+                            const SizedBox(width: 10),
+                          ],
+                          if (widget.title != null && widget.title!.isNotEmpty)
+                            Expanded(
+                              child: Text(
+                                widget.title!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: palette.onSurface,
+                                  fontSize: 17.5,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                            )
+                          else
+                            const Spacer(),
+                          if (widget.trailing != null) widget.trailing!,
+                        ],
+                      ),
+                    ),
+                  ],
+                  Flexible(
+                    child: ScrollConfiguration(
+                      behavior: const _SheetScrollBehavior(),
+                      child: widget.child,
                     ),
                   ),
                 ],
-                Flexible(child: child),
-              ],
+              ),
             ),
           ),
         ),
@@ -152,7 +428,46 @@ class TheavModalSheet extends StatelessWidget {
       );
     }
 
-    return sheet;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart: widget.enableDrag ? (_) => _onDragStart() : null,
+      onVerticalDragUpdate:
+          widget.enableDrag ? (d) => _onDragDelta(d.delta.dy) : null,
+      onVerticalDragEnd: widget.enableDrag
+          ? (d) => _onDragEnd(d.velocity.pixelsPerSecond.dy)
+          : null,
+      onVerticalDragCancel: widget.enableDrag ? () => _onDragEnd(0.0) : null,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (!widget.enableDrag || _isDismissing) return false;
+          if (notification.metrics.axis != Axis.vertical) return false;
+          if (notification is ScrollStartNotification &&
+              notification.dragDetails != null) {
+            _onDragStart();
+          } else if (notification is OverscrollNotification &&
+              notification.dragDetails != null) {
+            // Overscroll < 0 at top edge pulls the sheet down; > 0 at bottom edge stretches up.
+            _onDragDelta(-notification.overscroll);
+          } else if (notification is ScrollEndNotification) {
+            if (_dragOffset != 0.0) {
+              _onDragEnd(
+                notification.dragDetails?.velocity.pixelsPerSecond.dy ?? 0.0,
+              );
+            }
+          }
+          return false;
+        },
+        child: Transform.translate(
+          offset: Offset(0.0, translateY),
+          child: Transform.scale(
+            alignment: Alignment.bottomCenter,
+            scaleY: scaleY,
+            scaleX: scaleX,
+            child: sheet,
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -184,11 +499,17 @@ Future<T?> showTheavDialog<T>({
   List<Widget>? customActions,
   bool barrierDismissible = true,
 }) {
-  return showDialog<T>(
+  return showGeneralDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
+    barrierLabel: Localizations.of<MaterialLocalizations>(
+          context,
+          MaterialLocalizations,
+        )?.modalBarrierDismissLabel ??
+        'Dismiss',
     barrierColor: Colors.black54,
-    builder: (ctx) => TheavDialog<T>(
+    transitionDuration: const Duration(milliseconds: 220),
+    pageBuilder: (ctx, animation, secondaryAnimation) => TheavDialog<T>(
       title: title,
       message: message,
       content: content,
@@ -196,6 +517,25 @@ Future<T?> showTheavDialog<T>({
       actions: actions,
       customActions: customActions,
     ),
+    transitionBuilder: (ctx, animation, secondaryAnimation, child) {
+      final disableAnim = MediaQuery.maybeDisableAnimationsOf(ctx) ?? false;
+      if (disableAnim) return child;
+      final isReversing = animation.status == AnimationStatus.reverse;
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: isReversing ? Curves.easeInCubic : Curves.easeOutBack,
+      );
+      return FadeTransition(
+        opacity: CurvedAnimation(
+          parent: animation,
+          curve: isReversing ? Curves.easeInCubic : Curves.easeOutCubic,
+        ),
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.93, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
   );
 }
 
@@ -223,8 +563,13 @@ class TheavDialog<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
-    final blurFilter = style.getBlurFilter(sigma: 22.0);
+    final blurFilter = style.getBlurFilter(sigma: 26.0);
     final resolvedActions = actions ?? const [];
+    final Color borderColor = style.isGlass
+        ? (style.isDark
+            ? Colors.white.withValues(alpha: 0.16)
+            : Colors.black.withValues(alpha: 0.08))
+        : style.hairlineBorder;
 
     Widget card = Container(
       constraints: const BoxConstraints(maxWidth: 344),
@@ -232,8 +577,8 @@ class TheavDialog<T> extends StatelessWidget {
         color: style.overlayFill,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: style.hudBorder,
-          width: 0.5,
+          color: borderColor,
+          width: style.isGlass ? 0.6 : 0.5,
         ),
         boxShadow: style.floatingShadow,
       ),

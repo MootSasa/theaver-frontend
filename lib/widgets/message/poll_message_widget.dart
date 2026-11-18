@@ -12,6 +12,7 @@ import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../chat/telegram_avatar_stack.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Interactive Telegram-style Poll / Quiz widget rendered inside a message bubble.
 class PollMessageWidget extends StatefulWidget {
@@ -246,10 +247,11 @@ class PollMessageWidget extends StatefulWidget {
     int? initialOptionId,
   }) {
     HapticUtils.tap();
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      title: context.l10n.translate('poll_results_title'),
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 6, 0, 16),
       builder: (ctx) => _PollResultsBottomSheet(
         chatId: chatId,
         messageId: messageId,
@@ -1073,158 +1075,107 @@ class _PollResultsBottomSheetState extends State<_PollResultsBottomSheet> {
                 PollMessageWidget.parseInt(o['id']) == _selectedFilterOptionId)
             .toList();
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.65,
-      minChildSize: 0.4,
-      maxChildSize: 0.92,
-      expand: false,
-      builder: (context, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF17212B) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.62,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+            child: Row(
+              children: [
+                Text(
+                  PollMessageWidget.formatVoteCount(
+                    context,
+                    totalVotes,
+                    isQuiz: _isQuiz,
+                  ),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+                const Spacer(),
+                if (_isLoading)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Drag handle
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 10, bottom: 4),
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+
+          // Question card
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: RichText(
+              text: EmojiUtils.buildEmojiTextSpan(
+                _question,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.onSurface,
                 ),
               ),
+            ),
+          ),
 
-              // Header
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            context.l10n.translate('poll_results_title'),
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            PollMessageWidget.formatVoteCount(
-                              context,
-                              totalVotes,
-                              isQuiz: _isQuiz,
-                            ),
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: theme.colorScheme.onSurface
-                                  .withValues(alpha: 0.6),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (_isLoading)
-                      const Padding(
-                        padding: EdgeInsets.only(right: 8.0),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Question card
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: RichText(
-                  text: EmojiUtils.buildEmojiTextSpan(
-                    _question,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurface,
+          // Option filter pills
+          if (options.length > 1)
+            SizedBox(
+              height: 36,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: TheavFloatingPillButton(
+                      height: 34,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      label:
+                          '${context.l10n.translate('poll_results')} ($totalVotes)',
+                      isPrimary: _selectedFilterOptionId == null,
+                      onTap: () =>
+                          setState(() => _selectedFilterOptionId = null),
                     ),
                   ),
-                ),
-              ),
-
-              // Option filter chips
-              if (options.length > 1)
-                SizedBox(
-                  height: 38,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(
-                            '${context.l10n.translate('poll_results')} ($totalVotes)',
-                          ),
-                          selected: _selectedFilterOptionId == null,
-                          onSelected: (_) {
-                            setState(() => _selectedFilterOptionId = null);
-                          },
-                        ),
+                  ...options.map((opt) {
+                    final optId = PollMessageWidget.parseInt(opt['id']);
+                    final optText = opt['text']?.toString() ?? '';
+                    final count =
+                        PollMessageWidget.parseInt(opt['vote_count']) ?? 0;
+                    final bool isSelected = _selectedFilterOptionId == optId;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: TheavFloatingPillButton(
+                        height: 34,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        label: '$optText ($count)',
+                        isPrimary: isSelected,
+                        onTap: () {
+                          setState(() {
+                            _selectedFilterOptionId = isSelected ? null : optId;
+                          });
+                        },
                       ),
-                      ...options.map((opt) {
-                        final optId = PollMessageWidget.parseInt(opt['id']);
-                        final optText = opt['text']?.toString() ?? '';
-                        final count =
-                            PollMessageWidget.parseInt(opt['vote_count']) ?? 0;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(
-                              '$optText ($count)',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            selected: _selectedFilterOptionId == optId,
-                            onSelected: (_) {
-                              setState(() {
-                                _selectedFilterOptionId =
-                                    _selectedFilterOptionId == optId
-                                        ? null
-                                        : optId;
-                              });
-                            },
-                          ),
-                        );
-                      }),
-                    ],
-                  ),
-                ),
-
-              const SizedBox(height: 8),
-              Divider(
-                height: 1,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.08),
+                    );
+                  }),
+                ],
               ),
+            ),
 
-              // Options and voters list
-              Expanded(
-                child: ListView.builder(
-                  controller: scrollController,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+          const SizedBox(height: 8),
+          Divider(
+            height: 1,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.08),
+          ),
+
+          // Options and voters list
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
                   itemCount: filteredOptions.length,
                   itemBuilder: (context, index) {
                     final opt = filteredOptions[index];
@@ -1405,12 +1356,10 @@ class _PollResultsBottomSheetState extends State<_PollResultsBottomSheet> {
                       ],
                     );
                   },
-                ),
-              ),
-            ],
+            ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 }

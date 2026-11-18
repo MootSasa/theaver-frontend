@@ -38,10 +38,13 @@ class ForwardChatPickerSheet extends StatefulWidget {
     void Function({required bool hideSender, required bool hideCaption})?
         onStageInCurrentChat,
   }) {
-    return showModalBottomSheet<bool>(
+    return showTheavModalSheet<bool>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      title: messageIds.length > 1
+          ? 'Переслать (${messageIds.length})'
+          : 'Переслать сообщение',
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 6, 0, 14),
       builder: (ctx) => ForwardChatPickerSheet(
         fromChatId: fromChatId,
         messageIds: messageIds,
@@ -57,10 +60,11 @@ class ForwardChatPickerSheet extends StatefulWidget {
     required String fromChatId,
     required int messageCount,
   }) {
-    return showModalBottomSheet<DbChat>(
+    return showTheavModalSheet<DbChat>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      title: 'Выбрать получателя',
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 6, 0, 14),
       builder: (ctx) => ForwardChatPickerSheet(
         fromChatId: fromChatId,
         messageIds: List<String>.filled(messageCount, ''),
@@ -177,7 +181,6 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
-    final blurFilter = style.getBlurFilter(sigma: 22.0);
     final query = _searchController.text.trim().toLowerCase();
 
     final filtered = _chats.where((c) {
@@ -188,81 +191,28 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
       return displayName.contains(query) || uname.contains(query);
     }).toList();
 
-    Widget sheetContainer = Container(
-      height: MediaQuery.of(context).size.height * 0.76,
-      decoration: BoxDecoration(
-        color: style.overlayFill,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(
-          top: BorderSide(color: palette.divider, width: 0.6),
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(
-          children: [
-            const SizedBox(height: 10),
-            Container(
-              width: 38,
-              height: 4,
-              decoration: BoxDecoration(
-                color: palette.onSurface.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(2),
-              ),
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.64,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TheavInsetGroup(
+              margin: EdgeInsets.zero,
+              children: [
+                TheavInlineTextField(
+                  controller: _searchController,
+                  placeholder: 'Поиск чата или контакта...',
+                  prefix: iconoir.Search(
+                    width: 18,
+                    height: 18,
+                    color: palette.subtext,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ],
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 12, 12, 8),
-              child: Row(
-                children: [
-                  iconoir.ForwardMessage(
-                    width: 20,
-                    height: 20,
-                    color: palette.primary,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      widget.returnTargetOnly
-                          ? 'Выбрать получателя'
-                          : (widget.messageIds.length > 1
-                              ? 'Переслать (${widget.messageIds.length})'
-                              : 'Переслать сообщение'),
-                      style: TextStyle(
-                        color: palette.onSurface,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: iconoir.Xmark(
-                      width: 20,
-                      height: 20,
-                      color: palette.subtext,
-                    ),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TheavInsetGroup(
-                margin: EdgeInsets.zero,
-                children: [
-                  TheavInlineTextField(
-                    controller: _searchController,
-                    placeholder: 'Поиск чата или контакта...',
-                    prefix: iconoir.Search(
-                      width: 18,
-                      height: 18,
-                      color: palette.subtext,
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ],
-              ),
-            ),
+          ),
             if (!widget.returnTargetOnly) ...[
               const SizedBox(height: 8),
               TheavInsetGroup(
@@ -409,19 +359,6 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
             ),
           ],
         ),
-      ),
-    );
-
-    if (blurFilter != null) {
-      sheetContainer = BackdropFilter(
-        filter: blurFilter,
-        child: sheetContainer,
       );
     }
-
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: sheetContainer,
-    );
   }
-}

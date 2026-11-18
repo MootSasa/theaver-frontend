@@ -19,6 +19,7 @@ import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../theme/viewport_gradient_box.dart';
 import '../tiling/static_tile_cache_boundary.dart';
+import '../design_system/theav_design_system.dart';
 import 'message_seen_view.dart';
 import 'sticker_item_widget.dart';
 import 'telegram_avatar_stack.dart';
@@ -1312,26 +1313,52 @@ class MessageContextMenuState extends State<MessageContextMenu>
     );
   }
 
+  Widget _wrapDualModePanel({
+    required TheavSurfaceStyle style,
+    required double borderRadius,
+    required Widget panel,
+  }) {
+    final blurFilter = style.getBlurFilter(sigma: 20.0);
+    Widget inner = panel;
+    if (blurFilter != null) {
+      inner = ClipRRect(
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: BackdropFilter(
+          filter: blurFilter,
+          child: panel,
+        ),
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+        boxShadow: style.floatingShadow,
+      ),
+      child: inner,
+    );
+  }
+
   Widget _buildEmojiPanel(ThemeData theme, double maxHeight) {
     final emojis = EmojiUtils.getFrequentEmojis();
-    return Container(
-      width: 44,
-      constraints: BoxConstraints(maxHeight: maxHeight),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+    final surfaceStyle = TheavSurfaceStyle.of(context);
+    return _wrapDualModePanel(
+      style: surfaceStyle,
+      borderRadius: 22,
+      panel: Container(
+        width: 44,
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: surfaceStyle.overlayFill,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: surfaceStyle.hudBorder,
+            width: surfaceStyle.isGlass ? 0.6 : 0.5,
           ),
-        ],
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Flexible(
@@ -1423,12 +1450,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
           ],
         ),
       ),
+    ),
     );
   }
 
   Widget _buildExpandedReactionsView(ThemeData theme, double maxHeight) {
     final query = _reactionSearchQuery.trim().toLowerCase();
     final installedEmojiPacks = StickerService.instance.installedEmojiPacks;
+    final surfaceStyle = TheavSurfaceStyle.of(context);
 
     final List<String> allStandardEmojis = [];
     final seenStd = <String>{};
@@ -1447,27 +1476,27 @@ class MessageContextMenuState extends State<MessageContextMenu>
       }
     }
 
-    return Container(
-      key: const ValueKey('expanded_reactions_view'),
-      width: 280,
-      constraints: BoxConstraints(
-        maxHeight: math.min(maxHeight, 340.0),
-      ),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.14),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+    return _wrapDualModePanel(
+      style: surfaceStyle,
+      borderRadius: 20,
+      panel: Container(
+        key: const ValueKey('expanded_reactions_view'),
+        width: 280,
+        constraints: BoxConstraints(
+          maxHeight: math.min(maxHeight, 340.0),
+        ),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: surfaceStyle.overlayFill,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: surfaceStyle.hudBorder,
+            width: surfaceStyle.isGlass ? 0.6 : 0.5,
           ),
-        ],
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
@@ -1524,6 +1553,10 @@ class MessageContextMenuState extends State<MessageContextMenu>
                                       .withValues(alpha: 0.45),
                                 ),
                                 border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                filled: false,
+                                fillColor: Colors.transparent,
                                 isDense: true,
                                 contentPadding: EdgeInsets.zero,
                               ),
@@ -1698,6 +1731,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -1710,28 +1744,29 @@ class MessageContextMenuState extends State<MessageContextMenu>
     final BuildContext navContext = widget.messageKey?.currentContext ??
         Navigator.maybeOf(context)?.context ??
         context;
+    final surfaceStyle = TheavSurfaceStyle.of(context);
     return AnimatedSize(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
       alignment: showAbove ? Alignment.bottomRight : Alignment.topRight,
-      child: Container(
-        width: _showingReadersList ? 275 : 225,
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
+      child: _wrapDualModePanel(
+        style: surfaceStyle,
+        borderRadius: 20,
+        panel: Container(
+          width: _showingReadersList ? 275 : 225,
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: surfaceStyle.overlayFill,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: surfaceStyle.hudBorder,
+              width: surfaceStyle.isGlass ? 0.6 : 0.5,
             ),
-          ],
-        ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: AnimatedSwitcher(
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
             switchInCurve: Curves.easeOutCubic,
             switchOutCurve: Curves.easeInCubic,
@@ -1994,6 +2029,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
                   ),
           ),
         ),
+      ),
       ),
     );
   }

@@ -23,9 +23,7 @@ import '../../services/unread_count_provider.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../common/adaptive_switch.dart';
 import '../design_system/theav_design_system.dart';
-import '../settings/settings_group.dart';
 
 String _tr(
   BuildContext context,
@@ -325,13 +323,10 @@ class ChatBatchDialogs {
       'Строка архива скроется из списка чатов. Потяните список вниз или откройте меню «⋮», чтобы войти в архив.',
     );
 
-    await showModalBottomSheet<void>(
+    await showTheavModalSheet<void>(
       context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      title: sheetTitle,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (sheetContext) {
         return ListenableBuilder(
           listenable: archivePrefs,
@@ -343,91 +338,53 @@ class ChatBatchDialogs {
 
             final keepUnmuted =
                 notifProvider?.globalSettings.keepArchivedUnmuted ?? false;
+            final palette = context.theav;
 
-            return Padding(
-              padding: const EdgeInsets.only(top: 12, bottom: 24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
+            return TheavInsetGroup(
+              children: [
+                TheavListRow(
+                  leading: iconoir.MailIn(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
                   ),
-                  const SizedBox(height: 14),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        sheetTitle,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      ListTile(
-                        leading: Icon(
-                          Icons.mark_chat_unread_outlined,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        title: Text(keepUnmutedTitle),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            keepUnmutedDesc,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ),
-                        trailing: AdaptiveSwitch(
-                          value: keepUnmuted,
-                          onChanged: notifProvider == null
-                              ? null
-                              : (val) {
-                                  notifProvider!.updateGlobalSettings(
-                                    keepArchivedUnmuted: val,
-                                  );
-                                },
-                        ),
-                      ),
-                      ListTile(
-                        leading: iconoir.Archive(
-                          width: 22,
-                          height: 22,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        title: Text(hideAboveTitle),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            hideAboveDesc,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                        ),
-                        trailing: AdaptiveSwitch(
-                          value: archivePrefs.isHiddenAboveList,
-                          onChanged: (val) {
-                            archivePrefs.setHiddenAboveList(val);
+                  title: keepUnmutedTitle,
+                  subtitle: keepUnmutedDesc,
+                  trailing: TheavSwitch(
+                    value: keepUnmuted,
+                    onChanged: notifProvider == null
+                        ? null
+                        : (val) {
+                            notifProvider!.updateGlobalSettings(
+                              keepArchivedUnmuted: val,
+                            );
                           },
-                        ),
-                      ),
-                    ],
                   ),
-                ],
-              ),
+                  onTap: notifProvider == null
+                      ? null
+                      : () => notifProvider!.updateGlobalSettings(
+                            keepArchivedUnmuted: !keepUnmuted,
+                          ),
+                ),
+                TheavListRow(
+                  leading: iconoir.Archive(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: hideAboveTitle,
+                  subtitle: hideAboveDesc,
+                  trailing: TheavSwitch(
+                    value: archivePrefs.isHiddenAboveList,
+                    onChanged: (val) {
+                      archivePrefs.setHiddenAboveList(val);
+                    },
+                  ),
+                  onTap: () => archivePrefs.setHiddenAboveList(
+                    !archivePrefs.isHiddenAboveList,
+                  ),
+                ),
+              ],
             );
           },
         );

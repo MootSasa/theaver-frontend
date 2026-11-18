@@ -17,7 +17,8 @@ import '../../services/media_playback_coordinator.dart';
 import '../../services/voice_playback_service.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
-import '../../utils/image_utils.dart';
+import '../design_system/theav_design_system.dart';
+import '../user/avatar_with_status.dart';
 import 'avatar_gallery_viewer.dart';
 import 'profile_section_pill.dart';
 
@@ -250,7 +251,6 @@ class ProfileSectionPageContent extends StatelessWidget {
         ? Colors.white.withValues(alpha: 0.55)
         : const Color(0xFF6C6C70);
 
-    final validAvatar = getValidAvatarUrl(member.avatarUrl);
     final canEditThisMember = canManageMembers &&
         member.userId != currentUserId &&
         member.role != 'owner';
@@ -290,45 +290,13 @@ class ProfileSectionPageContent extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
-            Stack(
-              children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: accentColor.withValues(alpha: 0.2),
-                  backgroundImage: (validAvatar != null && validAvatar.isNotEmpty)
-                      ? CachedNetworkImageProvider(validAvatar)
-                      : null,
-                  child: (validAvatar == null || validAvatar.isEmpty)
-                      ? Text(
-                          memberName.isNotEmpty
-                              ? memberName[0].toUpperCase()
-                              : '?',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w600,
-                            color: accentColor,
-                          ),
-                        )
-                      : null,
-                ),
-                if (member.isOnline)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF4CAF50),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+            AvatarWithStatus(
+              userId: member.userId,
+              avatarUrl: member.avatarUrl,
+              name: memberName,
+              radius: 22,
+              isOnline: member.isOnline,
+              backgroundColor: accentColor.withValues(alpha: 0.2),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -401,101 +369,59 @@ class ProfileSectionPageContent extends StatelessWidget {
   }
 
   void _showMemberActionsSheet(BuildContext context, ProfileMemberItem member) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final isAdmin = member.role == 'admin';
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: member.displayName,
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xB82C2C2E)
-                    : const Color(0xCCFFFFFF),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(20)),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.14)
-                        : Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
+        final palette = ctx.theav;
+        return TheavInsetGroup(
+          children: [
+            TheavListRow(
+              leading: iconoir.User(
+                width: 20,
+                height: 20,
+                color: palette.primary,
               ),
-              child: SafeArea(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(height: 8),
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.white24 : Colors.black12,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    ListTile(
-                      leading: iconoir.User(
-                        width: 22,
-                        height: 22,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                      title: Text(_tr(context, 'open_profile', 'Открыть профиль')),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        onMemberTap?.call(member);
-                      },
-                    ),
-                    if (onToggleAdminRole != null)
-                      ListTile(
-                        leading: iconoir.Shield(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(
-                          isAdmin
-                              ? _tr(context, 'group_demote_admin', 'Снять права администратора')
-                              : _tr(context, 'group_promote_admin', 'Назначить администратором'),
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          onToggleAdminRole!(member);
-                        },
-                      ),
-                    if (onRemoveMember != null)
-                      ListTile(
-                        leading: const iconoir.UserXmark(
-                          width: 22,
-                          height: 22,
-                          color: Colors.redAccent,
-                        ),
-                        title: Text(
-                          _tr(context, 'group_remove_member', 'Удалить из чата'),
-                          style: const TextStyle(color: Colors.redAccent),
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          onRemoveMember!(member);
-                        },
-                      ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
+              title: _tr(context, 'open_profile', 'Открыть профиль'),
+              onTap: () {
+                Navigator.pop(ctx);
+                onMemberTap?.call(member);
+              },
             ),
-          ),
+            if (onToggleAdminRole != null)
+              TheavListRow(
+                leading: iconoir.Shield(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                title: isAdmin
+                    ? _tr(context, 'group_demote_admin', 'Снять права администратора')
+                    : _tr(context, 'group_promote_admin', 'Назначить администратором'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onToggleAdminRole!(member);
+                },
+              ),
+            if (onRemoveMember != null)
+              TheavListRow(
+                leading: iconoir.UserXmark(
+                  width: 20,
+                  height: 20,
+                  color: palette.error,
+                ),
+                title: _tr(context, 'group_remove_member', 'Удалить из чата'),
+                isDestructive: true,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onRemoveMember!(member);
+                },
+              ),
+          ],
         );
       },
     );
@@ -1347,107 +1273,68 @@ class ProfileSectionPageContent extends StatelessWidget {
     String? fileName,
     String? linkUrl,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: fileName ?? 'Действия',
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xB82C2C2E)
-                    : const Color(0xCCFFFFFF),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(20)),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.14)
-                        : Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
+        final palette = ctx.theav;
+        return TheavInsetGroup(
+          children: [
+            if (onJumpToMessage != null)
+              TheavListRow(
+                leading: iconoir.ChatBubble(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
                 ),
+                title: _tr(context, 'jump_to_message', 'Перейти к сообщению в чате'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onJumpToMessage!(msg);
+                },
               ),
-              child: SafeArea(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(height: 8),
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.white24 : Colors.black12,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
+            if (linkUrl != null)
+              TheavListRow(
+                leading: iconoir.Copy(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                title: _tr(context, 'copy_link', 'Скопировать ссылку'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Clipboard.setData(ClipboardData(text: linkUrl));
+                  GlassToastService().show(
+                    context,
+                    _tr(context, 'copied_to_clipboard', 'Скопировано в буфер обмена'),
+                    iconWidget: iconoir.Copy(
+                      width: 18,
+                      height: 18,
+                      color: palette.onSurface,
                     ),
-                    const SizedBox(height: 12),
-                    if (onJumpToMessage != null)
-                      ListTile(
-                        leading: iconoir.ChatBubble(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(_tr(context, 'jump_to_message', 'Перейти к сообщению в чате')),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          onJumpToMessage!(msg);
-                        },
-                      ),
-                    if (linkUrl != null)
-                      ListTile(
-                        leading: iconoir.Copy(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(_tr(context, 'copy_link', 'Скопировать ссылку')),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          Clipboard.setData(ClipboardData(text: linkUrl));
-                          GlassToastService().show(
-                            context,
-                            _tr(context, 'copied_to_clipboard', 'Скопировано в буфер обмена'),
-                            iconWidget: iconoir.Copy(
-                              width: 18,
-                              height: 18,
-                              color: isDark ? Colors.white : Colors.black87,
-                            ),
-                          );
-                        },
-                      ),
-                    if (fileName != null || resolvedUrl != null)
-                      ListTile(
-                        leading: iconoir.Download(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(_tr(context, 'download_file', 'Скачать / Открыть')),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _downloadAndOpenFile(
-                            context,
-                            msg,
-                            fileName ?? 'media_${msg.localId}',
-                          );
-                        },
-                      ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
+                  );
+                },
               ),
-            ),
-          ),
+            if (fileName != null || resolvedUrl != null)
+              TheavListRow(
+                leading: iconoir.Download(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                title: _tr(context, 'download_file', 'Скачать / Открыть'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _downloadAndOpenFile(
+                    context,
+                    msg,
+                    fileName ?? 'media_${msg.localId}',
+                  );
+                },
+              ),
+          ],
         );
       },
     );

@@ -316,6 +316,10 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
                               )
                             : null,
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
+                        fillColor: Colors.transparent,
                       ),
                     ),
                   ),

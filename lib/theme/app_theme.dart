@@ -272,6 +272,16 @@ class AppTheme {
       colorScheme: colorScheme,
       scaffoldBackgroundColor: p.background,
       cardColor: p.surface,
+      inputDecorationTheme: base.inputDecorationTheme.copyWith(
+        fillColor: Color.alphaBlend(
+          p.onSurface.withValues(alpha: theme.isDark ? 0.06 : 0.04),
+          p.surface,
+        ),
+        hintStyle: TextStyle(color: p.subtext.withValues(alpha: 0.75)),
+      ),
+      bottomSheetTheme: base.bottomSheetTheme.copyWith(
+        backgroundColor: p.surface,
+      ),
       appBarTheme: base.appBarTheme.copyWith(
         backgroundColor: p.appBarBackground,
         foregroundColor: p.appBarForeground,

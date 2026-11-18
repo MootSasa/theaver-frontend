@@ -988,6 +988,10 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                                       fontSize: 14,
                                     ),
                                     border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    filled: false,
+                                    fillColor: Colors.transparent,
                                     isDense: true,
                                     contentPadding:
                                         const EdgeInsets.symmetric(vertical: 11),

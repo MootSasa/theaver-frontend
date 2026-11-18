@@ -31,6 +31,7 @@ import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
@@ -3515,40 +3516,40 @@ class _ChannelScreenState extends State<ChannelScreen>
       FullscreenPhotoViewer.open(context, resolved);
       return;
     }
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const iconoir.OpenNewWindow(width: 22, height: 22),
-              title: Text(context.l10n.translate('chat_open_file')),
-              onTap: () {
-                Navigator.pop(context);
-                _downloadAndOpenFile(resolved, fileName);
-              },
-            ),
-            ListTile(
-              leading: const iconoir.Download(width: 22, height: 22),
-              title: Text(context.l10n.translate('chat_download')),
-              onTap: () {
-                Navigator.pop(context);
-                _downloadFile(resolved, fileName);
-              },
-            ),
-            ListTile(
-              leading: const iconoir.ShareAndroid(width: 22, height: 22),
-              title: Text(context.l10n.translate('share')),
-              onTap: () async {
-                Navigator.pop(context);
-                await SharePlus.instance.share(
-                  ShareParams(text: resolved, subject: fileName),
-                );
-              },
-            ),
-          ],
-        ),
+      title: fileName,
+      showCloseButton: true,
+      builder: (sheetCtx) => TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        children: [
+          TheavListRow(
+            leading: const iconoir.OpenNewWindow(width: 20, height: 20),
+            title: context.l10n.translate('chat_open_file'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _downloadAndOpenFile(resolved, fileName);
+            },
+          ),
+          TheavListRow(
+            leading: const iconoir.Download(width: 20, height: 20),
+            title: context.l10n.translate('chat_download'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _downloadFile(resolved, fileName);
+            },
+          ),
+          TheavListRow(
+            leading: const iconoir.ShareAndroid(width: 20, height: 20),
+            title: context.l10n.translate('share'),
+            onTap: () async {
+              Navigator.pop(sheetCtx);
+              await SharePlus.instance.share(
+                ShareParams(text: resolved, subject: fileName),
+              );
+            },
+          ),
+        ],
       ),
     );
   }

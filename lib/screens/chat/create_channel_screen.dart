@@ -16,7 +16,6 @@ import '../../widgets/settings/settings_floating_header.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/common/adaptive_switch.dart';
 import 'channel_screen.dart';
 
 class CreateChannelScreen extends StatefulWidget {
@@ -316,394 +315,163 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 const SizedBox(height: 20),
 
                 // 2. Название и описание канала
-                _buildSectionHeader('О КАНАЛЕ', palette),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 6,
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: 'О КАНАЛЕ',
+                  dividerIndent: 16,
+                  children: [
+                    TheavInlineTextField(
+                      controller: _nameController,
+                      autofocus: true,
+                      label: _tr('channel_name', 'Название канала'),
+                      placeholder: _tr(
+                        'channel_name_hint',
+                        'Например: Новости проекта',
+                      ),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: palette.onSurface,
+                      ),
                     ),
-                    child: Column(
-                      children: [
-                        TextField(
-                          controller: _nameController,
-                          autofocus: true,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: palette.textPrimary,
-                          ),
-                          decoration: InputDecoration(
-                            labelText: _tr('channel_name', 'Название канала'),
-                            hintText: _tr(
-                              'channel_name_hint',
-                              'Например: Новости проекта',
-                            ),
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            border: InputBorder.none,
-                          ),
-                        ),
-                        Divider(height: 1, color: palette.borderSubtle),
-                        TextField(
-                          controller: _descriptionController,
-                          maxLines: 3,
-                          minLines: 1,
-                          style: TextStyle(
-                            fontSize: 14.5,
-                            color: palette.textPrimary,
-                          ),
-                          decoration: InputDecoration(
-                            labelText: _tr(
-                              'channel_description',
-                              'Описание (необязательно)',
-                            ),
-                            hintText: _tr(
-                              'channel_description_hint',
-                              'Расскажите подписчикам о тематике канала',
-                            ),
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            border: InputBorder.none,
-                          ),
-                        ),
-                      ],
+                    TheavInlineTextField(
+                      controller: _descriptionController,
+                      maxLines: 3,
+                      minLines: 1,
+                      label: _tr(
+                        'channel_description',
+                        'Описание (необязательно)',
+                      ),
+                      placeholder: _tr(
+                        'channel_description_hint',
+                        'Расскажите подписчикам о тематике канала',
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // 3. Тип канала (Публичный / Частный) + @username
-                _buildSectionHeader(
-                  _tr('channel_type', 'ТИП КАНАЛА').toUpperCase(),
-                  palette,
-                ),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  child: Column(
-                    children: [
-                      _buildTypeOptionTile(
-                        title: _tr('channel_public', 'Публичный канал'),
-                        subtitle: _tr(
-                          'channel_public_desc',
-                          'Канал можно найти в поиске, подписаться может любой',
-                        ),
-                        icon: Icons.public_rounded,
-                        selected: _isPublic,
-                        primaryColor: primaryColor,
-                        palette: palette,
-                        onTap: () {
-                          HapticUtils.selection();
-                          setState(() => _isPublic = true);
-                        },
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      _buildTypeOptionTile(
-                        title: _tr('channel_private', 'Частный канал'),
-                        subtitle: _tr(
-                          'channel_private_desc',
-                          'Подписаться можно только по пригласительной ссылке',
-                        ),
-                        icon: Icons.lock_outline_rounded,
-                        selected: !_isPublic,
-                        primaryColor: primaryColor,
-                        palette: palette,
-                        onTap: () {
-                          HapticUtils.selection();
-                          setState(() => _isPublic = false);
-                        },
-                      ),
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        child: _isPublic
-                            ? Column(
-                                children: [
-                                  Divider(
-                                    height: 1,
-                                    color: palette.borderSubtle,
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 6,
-                                    ),
-                                    child: TextField(
-                                      controller: _usernameController,
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w500,
-                                        color: palette.textPrimary,
-                                      ),
-                                      decoration: InputDecoration(
-                                        labelText: 'Публичная ссылка (@username)',
-                                        hintText: 'channel_username',
-                                        hintStyle: TextStyle(
-                                          color: palette.textTertiary,
-                                        ),
-                                        prefixText: '@',
-                                        prefixIcon: Icon(
-                                          Icons.alternate_email_rounded,
-                                          size: 20,
-                                          color: primaryColor,
-                                        ),
-                                        border: InputBorder.none,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // 4. Настройки вещания канала
-                _buildSectionHeader(
-                  _tr('channel_settings', 'НАСТРОЙКИ ВЕЩАНИЯ').toUpperCase(),
-                  palette,
-                ),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  child: Column(
-                    children: [
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.edit_outlined,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('channel_signatures', 'Подписи авторов'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'channel_signatures_desc',
-                            'Указывать имя администратора под публикациями',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        value: _enableSignatures,
-                        onChanged: (v) => setState(() => _enableSignatures = v),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.forum_outlined,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('channel_comments', 'Комментарии к постам'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'channel_comments_desc',
-                            'Разрешить подписчикам обсуждать публикации',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        value: _enableComments,
-                        onChanged: (v) => setState(() => _enableComments = v),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.history_rounded,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('channel_history', 'История публикаций'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'channel_history_desc',
-                            'Новые подписчики увидят предыдущие посты',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        value: _enableHistory,
-                        onChanged: (v) => setState(() => _enableHistory = v),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
                 const SizedBox(height: 16),
 
-                // 5. Адаптивная инфо-подсказка
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: primaryColor.withValues(
-                      alpha: Theme.of(context).brightness == Brightness.dark
-                          ? 0.12
-                          : 0.08,
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: primaryColor.withValues(alpha: 0.25),
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.info_outline_rounded,
-                        color: primaryColor,
-                        size: 20,
+                // 3. Тип канала (Публичный / Частный) + @username
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: _tr('channel_type', 'ТИП КАНАЛА').toUpperCase(),
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Globe(
+                        width: 20,
+                        height: 20,
+                        color: _isPublic ? primaryColor : palette.subtext,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _tr(
-                            'channel_info_box',
-                            'Каналы предназначены для вещания сообщений неограниченной аудитории. Публиковать посты могут только администраторы.',
-                          ),
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.35,
-                            color: palette.textSecondary,
-                          ),
+                      title: _tr('channel_public', 'Публичный канал'),
+                      subtitle: _tr(
+                        'channel_public_desc',
+                        'Канал можно найти в поиске, подписаться может любой',
+                      ),
+                      trailing: TheavCheckCircle(
+                        selected: _isPublic,
+                        onTap: () => setState(() => _isPublic = true),
+                      ),
+                      onTap: () => setState(() => _isPublic = true),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.Lock(
+                        width: 20,
+                        height: 20,
+                        color: !_isPublic ? primaryColor : palette.subtext,
+                      ),
+                      title: _tr('channel_private', 'Частный канал'),
+                      subtitle: _tr(
+                        'channel_private_desc',
+                        'Подписаться можно только по пригласительной ссылке',
+                      ),
+                      trailing: TheavCheckCircle(
+                        selected: !_isPublic,
+                        onTap: () => setState(() => _isPublic = false),
+                      ),
+                      onTap: () => setState(() => _isPublic = false),
+                    ),
+                    if (_isPublic)
+                      TheavInlineTextField(
+                        controller: _usernameController,
+                        label: 'Публичная ссылка (@username)',
+                        placeholder: 'channel_username',
+                        prefix: iconoir.AtSign(
+                          width: 19,
+                          height: 19,
+                          color: primaryColor,
                         ),
                       ),
-                    ],
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // 4. Настройки вещания канала
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: _tr('channel_settings', 'НАСТРОЙКИ ВЕЩАНИЯ').toUpperCase(),
+                  footer: _tr(
+                    'channel_info_box',
+                    'Каналы предназначены для вещания сообщений неограниченной аудитории. Публиковать посты могут только администраторы.',
                   ),
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.EditPencil(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('channel_signatures', 'Подписи авторов'),
+                      subtitle: _tr(
+                        'channel_signatures_desc',
+                        'Указывать имя администратора под публикациями',
+                      ),
+                      trailing: TheavSwitch(
+                        value: _enableSignatures,
+                        onChanged: (v) => setState(() => _enableSignatures = v),
+                      ),
+                      onTap: () =>
+                          setState(() => _enableSignatures = !_enableSignatures),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.ChatBubble(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('channel_comments', 'Комментарии к постам'),
+                      subtitle: _tr(
+                        'channel_comments_desc',
+                        'Разрешить подписчикам обсуждать публикации',
+                      ),
+                      trailing: TheavSwitch(
+                        value: _enableComments,
+                        onChanged: (v) => setState(() => _enableComments = v),
+                      ),
+                      onTap: () =>
+                          setState(() => _enableComments = !_enableComments),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.Clock(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('channel_history', 'История публикаций'),
+                      subtitle: _tr(
+                        'channel_history_desc',
+                        'Новые подписчики увидят предыдущие посты',
+                      ),
+                      trailing: TheavSwitch(
+                        value: _enableHistory,
+                        onChanged: (v) => setState(() => _enableHistory = v),
+                      ),
+                      onTap: () =>
+                          setState(() => _enableHistory = !_enableHistory),
+                    ),
+                  ],
                 ),
               ],
       ),
-    );
-  }
-
-  Widget _buildTypeOptionTile({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required bool selected,
-    required Color primaryColor,
-    required TheavPalette palette,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: selected
-                    ? primaryColor.withValues(alpha: 0.16)
-                    : palette.surfaceSecondary,
-                borderRadius: BorderRadius.circular(11),
-              ),
-              child: Icon(
-                icon,
-                size: 20,
-                color: selected ? primaryColor : palette.textSecondary,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: palette.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: palette.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              selected
-                  ? Icons.check_circle_rounded
-                  : Icons.radio_button_unchecked_rounded,
-              color: selected ? primaryColor : palette.textTertiary,
-              size: 22,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title, TheavPalette palette) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-          color: palette.textSecondary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSurfaceCard(
-    BuildContext context, {
-    required Widget child,
-    double cornerRadius = 20,
-  }) {
-    return TheavInsetGroup(
-      margin: EdgeInsets.zero,
-      borderRadius: cornerRadius,
-      children: [child],
     );
   }
 }

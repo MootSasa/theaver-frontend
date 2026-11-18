@@ -5,9 +5,8 @@ import '../../utils/haptic_utils.dart';
 import 'theav_design_system.dart';
 
 /// Layer 2 floating HUD surface supporting three rendering modes cleanly:
-/// - [GlassMode.full]: shader-backed [LiquidGlassLens] (never wrapped in
-///   `Opacity` or `FadeTransition`)
-/// - [GlassMode.lite]: [ClipRRect] + cached [BackdropFilter] + `0.5dp` rim
+/// - [GlassMode.full] / [GlassMode.lite]: shader-backed [LiquidGlassLens]
+///   (never wrapped in `Opacity` or `FadeTransition`)
 /// - [GlassMode.disabled]: M3 matte solid surface + `0.5dp` hairline divider
 class TheavFloatingSurface extends StatelessWidget {
   final Widget child;
@@ -16,6 +15,7 @@ class TheavFloatingSurface extends StatelessWidget {
   final double refractionIndex;
   final double refractionWidth;
   final Color? colorOverride;
+  final bool enableFlex;
 
   const TheavFloatingSurface({
     super.key,
@@ -25,6 +25,7 @@ class TheavFloatingSurface extends StatelessWidget {
     this.refractionIndex = 1.12,
     this.refractionWidth = 22.0,
     this.colorOverride,
+    this.enableFlex = true,
   });
 
   @override
@@ -33,7 +34,7 @@ class TheavFloatingSurface extends StatelessWidget {
     final Widget content =
         padding != null ? Padding(padding: padding!, child: child) : child;
 
-    if (surfaceStyle.isFull && surfaceStyle.glassProvider != null) {
+    if (surfaceStyle.isGlass && surfaceStyle.glassProvider != null) {
       final style = surfaceStyle.glassProvider!.createStyle(
         context: context,
         cornerRadius: borderRadius,
@@ -43,6 +44,16 @@ class TheavFloatingSurface extends StatelessWidget {
       );
       return LiquidGlassLens(
         style: style,
+        touch: enableFlex
+            ? const LiquidGlassTouch.flexing(
+                LiquidGlassFlex(
+                  stretch: 5,
+                  squeeze: 0.72,
+                  lean: 0.25,
+                  grip: 0.5,
+                ),
+              )
+            : null,
         child: content,
       );
     }
