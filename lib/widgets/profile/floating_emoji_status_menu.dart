@@ -677,6 +677,7 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
               ? _buildSearchGrid(
                   context: context,
                   accent: accent,
+                  primaryText: primaryText,
                   secondaryText: secondaryText,
                   installedPacks: installedPacks,
                   standardCategories: standardCategories,
@@ -685,6 +686,7 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
               : _buildBrowseGrid(
                   context: context,
                   accent: accent,
+                  primaryText: primaryText,
                   secondaryText: secondaryText,
                   installedPacks: installedPacks,
                   standardCategories: standardCategories,
@@ -871,24 +873,40 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
                           : secondaryText,
                     ),
                   ),
-                  for (final pack in installedPacks)
-                    _CategoryIconButton(
-                      isActive: _activeCategoryKey == 'pack_${pack.id}',
-                      activeColor: activePillColor,
-                      onTap: () => _jumpToSection('pack_${pack.id}'),
-                      child: StickerMediaView(
-                        fileUrl: pack.stickers.first.thumbnailUrl.isNotEmpty
-                            ? pack.stickers.first.thumbnailUrl
-                            : pack.stickers.first.fileUrl,
-                        thumbnailUrl: pack.stickers.first.thumbnailUrl,
-                        stickerId: pack.stickers.first.id,
-                        format: pack.stickers.first.format,
-                        width: 22,
-                        height: 22,
-                        animate: false,
-                        repeat: false,
-                      ),
+                  for (final pack in installedPacks) ...[
+                    Builder(
+                      builder: (_) {
+                        final firstSticker = pack.stickers.first;
+                        final isPackAdaptive = pack.isAdaptiveTextColor ||
+                            firstSticker.isAdaptiveTextColor;
+                        final isPackActive =
+                            _activeCategoryKey == 'pack_${pack.id}';
+                        return _CategoryIconButton(
+                          isActive: isPackActive,
+                          activeColor: activePillColor,
+                          onTap: () => _jumpToSection('pack_${pack.id}'),
+                          child: StickerMediaView(
+                            fileUrl: firstSticker.fileUrl.isNotEmpty
+                                ? firstSticker.fileUrl
+                                : firstSticker.thumbnailUrl,
+                            thumbnailUrl: firstSticker.thumbnailUrl,
+                            stickerId: firstSticker.id,
+                            format: firstSticker.format,
+                            width: 22,
+                            height: 22,
+                            animate: false,
+                            repeat: false,
+                            isAdaptiveOverride: isPackAdaptive,
+                            adaptiveTintColor: isPackAdaptive
+                                ? (isPackActive
+                                    ? primaryText
+                                    : primaryText.withValues(alpha: 0.78))
+                                : null,
+                          ),
+                        );
+                      },
                     ),
+                  ],
                   for (final cat in standardCategories)
                     _CategoryIconButton(
                       isActive: _activeCategoryKey == 'cat_${cat.category.name}',
@@ -974,6 +992,7 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
   Widget _buildBrowseGrid({
     required BuildContext context,
     required Color accent,
+    required Color primaryText,
     required Color secondaryText,
     required List<StickerPack> installedPacks,
     required List<CategoryEmoji> standardCategories,
@@ -1048,6 +1067,7 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
                     sticker: sticker,
                     isSelected: isSelected,
                     accent: accent,
+                    primaryText: primaryText,
                     onTap: () => _pickCustomEmoji(sticker),
                   );
                 },
@@ -1096,6 +1116,7 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
   Widget _buildSearchGrid({
     required BuildContext context,
     required Color accent,
+    required Color primaryText,
     required Color secondaryText,
     required List<StickerPack> installedPacks,
     required List<CategoryEmoji> standardCategories,
@@ -1166,6 +1187,7 @@ class _FloatingEmojiStatusMenuState extends State<FloatingEmojiStatusMenu> {
             sticker: sticker,
             isSelected: isSelected,
             accent: accent,
+            primaryText: primaryText,
             onTap: () => _pickCustomEmoji(sticker),
           );
         }
@@ -1324,12 +1346,14 @@ class _CustomEmojiCell extends StatelessWidget {
   final StickerItem sticker;
   final bool isSelected;
   final Color accent;
+  final Color primaryText;
   final VoidCallback onTap;
 
   const _CustomEmojiCell({
     required this.sticker,
     required this.isSelected,
     required this.accent,
+    required this.primaryText,
     required this.onTap,
   });
 
@@ -1359,6 +1383,9 @@ class _CustomEmojiCell extends StatelessWidget {
             height: 28,
             animate: true,
             repeat: true,
+            isAdaptiveOverride: sticker.isAdaptiveTextColor,
+            adaptiveTintColor:
+                sticker.isAdaptiveTextColor ? primaryText : null,
           ),
         ),
       ),

@@ -1602,10 +1602,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
                                         child: Center(
                                           child: StickerMediaView(
                                             fileUrl: item.fileUrl,
+                                            thumbnailUrl: item.thumbnailUrl,
+                                            stickerId: item.id,
                                             format: item.format,
                                             width: 26,
                                             height: 26,
                                             animate: true,
+                                            isAdaptiveOverride:
+                                                item.isAdaptiveTextColor,
                                           ),
                                         ),
                                       ),

@@ -515,12 +515,13 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final primaryText = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final secondaryText = isDark ? Colors.white60 : Colors.black54;
+    final primaryText = isDark ? Colors.white : const Color(0xFF141619);
+    final secondaryText = isDark
+        ? Colors.white.withValues(alpha: 0.65)
+        : const Color(0xFF141619).withValues(alpha: 0.60);
     final dividerColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
-    final accent = widget.accentColor;
 
     final rawAdaptivePacks = StickerService.instance.adaptiveEmojiPacks;
     final adaptivePacks = rawAdaptivePacks
@@ -562,7 +563,6 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
         _buildTopStrip(
           context: context,
           isDark: isDark,
-          accent: accent,
           primaryText: primaryText,
           secondaryText: secondaryText,
           sections: sections,
@@ -572,13 +572,15 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
           child: _searchQuery.trim().isNotEmpty
               ? _buildSearchGrid(
                   context: context,
-                  accent: accent,
+                  isDark: isDark,
+                  primaryText: primaryText,
                   secondaryText: secondaryText,
                   sections: sections,
                 )
               : _buildBrowseGrid(
                   context: context,
-                  accent: accent,
+                  isDark: isDark,
+                  primaryText: primaryText,
                   secondaryText: secondaryText,
                   recentStickers: recentStickers,
                   sections: sections,
@@ -629,7 +631,6 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
   Widget _buildTopStrip({
     required BuildContext context,
     required bool isDark,
-    required Color accent,
     required Color primaryText,
     required Color secondaryText,
     required List<_PackSectionEntry> sections,
@@ -655,7 +656,7 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
                   controller: _searchController,
                   autofocus: true,
                   style: TextStyle(fontSize: 14, color: primaryText),
-                  cursorColor: accent,
+                  cursorColor: primaryText,
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
@@ -734,29 +735,40 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
                       width: 18,
                       height: 18,
                       color: _activeCategoryKey == 'recent'
-                          ? accent
+                          ? primaryText
                           : secondaryText,
                     ),
                   ),
-                  for (final section in packSections)
-                    _CategoryIconButton(
-                      isActive: _activeCategoryKey == section.key,
-                      activeColor: activePillColor,
-                      onTap: () => _jumpToSection(section.key),
-                      child: StickerMediaView(
-                        fileUrl: section.stickers.first.thumbnailUrl.isNotEmpty
-                            ? section.stickers.first.thumbnailUrl
-                            : section.stickers.first.fileUrl,
-                        thumbnailUrl: section.stickers.first.thumbnailUrl,
-                        stickerId: section.stickers.first.id,
-                        format: section.stickers.first.format,
-                        width: 22,
-                        height: 22,
-                        animate: false,
-                        repeat: false,
-                        adaptiveTintColor: accent,
-                      ),
+                  for (final section in packSections) ...[
+                    Builder(
+                      builder: (_) {
+                        final firstSticker = section.stickers.first;
+                        final isSectionActive =
+                            _activeCategoryKey == section.key;
+                        return _CategoryIconButton(
+                          isActive: isSectionActive,
+                          activeColor: activePillColor,
+                          onTap: () => _jumpToSection(section.key),
+                          child: StickerMediaView(
+                            fileUrl: firstSticker.fileUrl.isNotEmpty
+                                ? firstSticker.fileUrl
+                                : firstSticker.thumbnailUrl,
+                            thumbnailUrl: firstSticker.thumbnailUrl,
+                            stickerId: firstSticker.id,
+                            format: firstSticker.format,
+                            width: 22,
+                            height: 22,
+                            animate: false,
+                            repeat: false,
+                            isAdaptiveOverride: true,
+                            adaptiveTintColor: isSectionActive
+                                ? primaryText
+                                : primaryText.withValues(alpha: 0.78),
+                          ),
+                        );
+                      },
                     ),
+                  ],
                 ],
               ),
             ),
@@ -768,7 +780,8 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
 
   Widget _buildBrowseGrid({
     required BuildContext context,
-    required Color accent,
+    required bool isDark,
+    required Color primaryText,
     required Color secondaryText,
     required List<StickerItem> recentStickers,
     required List<_PackSectionEntry> sections,
@@ -802,7 +815,7 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
               (ctx, index) {
                 if (index == 0) {
                   return _ClearReplyEmojiCell(
-                    accent: accent,
+                    primaryText: primaryText,
                     secondaryText: secondaryText,
                     hasActiveEmoji: hasAnySelected,
                     onTap: _pickClear,
@@ -812,7 +825,8 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
                 return _AdaptiveEmojiCell(
                   sticker: sticker,
                   isSelected: widget.selectedStickerId == sticker.id,
-                  accent: accent,
+                  isDark: isDark,
+                  primaryText: primaryText,
                   onTap: () => _pickSticker(sticker),
                 );
               },
@@ -832,7 +846,7 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
                         height: 24,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: accent,
+                          color: primaryText,
                         ),
                       )
                     : Column(
@@ -897,7 +911,8 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
                     return _AdaptiveEmojiCell(
                       sticker: sticker,
                       isSelected: widget.selectedStickerId == sticker.id,
-                      accent: accent,
+                      isDark: isDark,
+                      primaryText: primaryText,
                       onTap: () => _pickSticker(sticker),
                     );
                   },
@@ -914,7 +929,8 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
 
   Widget _buildSearchGrid({
     required BuildContext context,
-    required Color accent,
+    required bool isDark,
+    required Color primaryText,
     required Color secondaryText,
     required List<_PackSectionEntry> sections,
   }) {
@@ -957,7 +973,10 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
           child: SizedBox(
             width: 24,
             height: 24,
-            child: CircularProgressIndicator(strokeWidth: 2, color: accent),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: primaryText,
+            ),
           ),
         );
       }
@@ -998,7 +1017,8 @@ class _FloatingReplyEmojiMenuState extends State<FloatingReplyEmojiMenu> {
         return _AdaptiveEmojiCell(
           sticker: sticker,
           isSelected: widget.selectedStickerId == sticker.id,
-          accent: accent,
+          isDark: isDark,
+          primaryText: primaryText,
           onTap: () => _pickSticker(sticker),
         );
       },
@@ -1074,13 +1094,13 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _ClearReplyEmojiCell extends StatelessWidget {
-  final Color accent;
+  final Color primaryText;
   final Color secondaryText;
   final bool hasActiveEmoji;
   final VoidCallback onTap;
 
   const _ClearReplyEmojiCell({
-    required this.accent,
+    required this.primaryText,
     required this.secondaryText,
     required this.hasActiveEmoji,
     required this.onTap,
@@ -1098,7 +1118,7 @@ class _ClearReplyEmojiCell extends StatelessWidget {
           child: Icon(
             Icons.remove_circle_rounded,
             size: 25,
-            color: hasActiveEmoji ? accent : secondaryText,
+            color: hasActiveEmoji ? primaryText : secondaryText,
           ),
         ),
       ),
@@ -1109,13 +1129,15 @@ class _ClearReplyEmojiCell extends StatelessWidget {
 class _AdaptiveEmojiCell extends StatelessWidget {
   final StickerItem sticker;
   final bool isSelected;
-  final Color accent;
+  final bool isDark;
+  final Color primaryText;
   final VoidCallback onTap;
 
   const _AdaptiveEmojiCell({
     required this.sticker,
     required this.isSelected,
-    required this.accent,
+    required this.isDark,
+    required this.primaryText,
     required this.onTap,
   });
 
@@ -1128,11 +1150,13 @@ class _AdaptiveEmojiCell extends StatelessWidget {
       child: Container(
         decoration: isSelected
             ? BoxDecoration(
-                color: accent.withValues(alpha: 0.22),
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.16)
+                    : Colors.black.withValues(alpha: 0.09),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: accent.withValues(alpha: 0.55),
-                  width: 1.0,
+                  color: primaryText.withValues(alpha: isDark ? 0.55 : 0.45),
+                  width: 1.2,
                 ),
               )
             : null,
@@ -1146,7 +1170,8 @@ class _AdaptiveEmojiCell extends StatelessWidget {
             height: 28,
             animate: true,
             repeat: true,
-            adaptiveTintColor: accent,
+            isAdaptiveOverride: true,
+            adaptiveTintColor: primaryText,
           ),
         ),
       ),

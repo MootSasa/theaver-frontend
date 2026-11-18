@@ -164,18 +164,33 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
                         (pack.coverUrl.isNotEmpty || items.isNotEmpty))
                       Padding(
                         padding: const EdgeInsets.only(right: 12),
-                        child: StickerMediaView(
-                          fileUrl: pack.coverUrl.isNotEmpty
-                              ? pack.coverUrl
-                              : items.first.fileUrl,
-                          thumbnailUrl: items.isNotEmpty
-                              ? items.first.thumbnailUrl
-                              : pack.thumbnailUrl,
-                          stickerId: items.isNotEmpty ? items.first.id : null,
-                          format: items.isNotEmpty ? items.first.format : 'webp',
-                          width: 44,
-                          height: 44,
-                          animate: true,
+                        child: Builder(
+                          builder: (_) {
+                            final firstItem =
+                                items.isNotEmpty ? items.first : null;
+                            final headerFileUrl = (firstItem != null &&
+                                    firstItem.fileUrl.isNotEmpty)
+                                ? firstItem.fileUrl
+                                : pack.coverUrl;
+                            final headerFormat = firstItem?.format ??
+                                (pack.isAnimated ? 'tgs' : 'webp');
+                            final isHeaderAdaptive = pack.isAdaptiveTextColor ||
+                                (firstItem?.isAdaptiveTextColor ?? false);
+                            return StickerMediaView(
+                              fileUrl: headerFileUrl,
+                              thumbnailUrl: firstItem != null
+                                  ? firstItem.thumbnailUrl
+                                  : pack.thumbnailUrl,
+                              stickerId: firstItem?.id,
+                              format: headerFormat,
+                              width: 44,
+                              height: 44,
+                              animate: true,
+                              isAdaptiveOverride: isHeaderAdaptive,
+                              adaptiveTintColor:
+                                  isHeaderAdaptive ? theme.textPrimary : null,
+                            );
+                          },
                         ),
                       ),
                     Expanded(
@@ -263,6 +278,8 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
                             itemCount: items.length,
                             itemBuilder: (context, index) {
                               final item = items[index];
+                              final isItemAdaptive = item.isAdaptiveTextColor ||
+                                  (pack?.isAdaptiveTextColor ?? false);
                               return GestureDetector(
                                 onTap: () => _handleItemTap(item),
                                 onLongPress: () {
@@ -284,6 +301,10 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
                                       width: isEmojiPack ? 36 : 64,
                                       height: isEmojiPack ? 36 : 64,
                                       animate: true,
+                                      isAdaptiveOverride: isItemAdaptive,
+                                      adaptiveTintColor: isItemAdaptive
+                                          ? theme.textPrimary
+                                          : null,
                                     ),
                                     if (item.hasFullscreenEffect)
                                       Positioned(

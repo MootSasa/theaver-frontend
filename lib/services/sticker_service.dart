@@ -718,6 +718,21 @@ class StickerService extends ChangeNotifier {
     }
   }
 
+  /// Seeds custom emoji packs in tests without performing HTTP requests.
+  @visibleForTesting
+  void debugSeedCustomEmojiPacksForTest({
+    List<StickerPack> installedEmojiPacks = const [],
+    List<StickerPack> featuredEmojiPacks = const [],
+    bool initialized = true,
+  }) {
+    _installedEmojiPacks = List<StickerPack>.from(installedEmojiPacks);
+    _featuredEmojiPacks = List<StickerPack>.from(featuredEmojiPacks);
+    _initialized = initialized;
+    _indexPacksInCache(_installedEmojiPacks);
+    _indexPacksInCache(_featuredEmojiPacks);
+    notifyListeners();
+  }
+
   static const Set<String> _removedDefaultPackSlugs = {
     'theaver_reactions',
     'theaver_animals',
@@ -1583,29 +1598,39 @@ class StickerService extends ChangeNotifier {
             cacheFile = File(p.join(cacheDir.path, '$safeKey.json'));
             if (await cacheFile.exists()) {
               bytes = await cacheFile.readAsBytes();
+              if (bytes.isNotEmpty) {
+                try {
+                  final cachedComp = await LottieComposition.fromBytes(bytes);
+                  _lottieCompositionCache[fullUrl] = cachedComp;
+                  return cachedComp;
+                } catch (_) {
+                  // Purge corrupt cached bytes (e.g. .webp previously saved as .json)
+                  bytes = null;
+                  try {
+                    await cacheFile.delete();
+                  } catch (_) {}
+                }
+              }
             }
           }
         } catch (_) {}
       }
 
-      if (bytes == null || bytes.isEmpty) {
-        final resp = await http.get(Uri.parse(fullUrl));
-        if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
-          return null;
-        }
-        final Uint8List raw = resp.bodyBytes;
-        // Decompress gzip if .tgs (magic bytes 0x1f 0x8b) in background isolate
-        final Uint8List decoded =
-            (raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b)
-                ? await compute(_decompressGzipBytesIsolate, raw)
-                : raw;
-        if (cacheFile != null && decoded.isNotEmpty) {
-          unawaited(cacheFile.writeAsBytes(decoded));
-        }
-        bytes = decoded;
+      final resp = await http.get(Uri.parse(fullUrl));
+      if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
+        return null;
       }
+      final Uint8List raw = resp.bodyBytes;
+      // Decompress gzip if .tgs (magic bytes 0x1f 0x8b) in background isolate
+      final Uint8List decoded =
+          (raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b)
+              ? await compute(_decompressGzipBytesIsolate, raw)
+              : raw;
 
-      final comp = await LottieComposition.fromBytes(bytes);
+      final comp = await LottieComposition.fromBytes(decoded);
+      if (cacheFile != null && decoded.isNotEmpty) {
+        unawaited(cacheFile.writeAsBytes(decoded));
+      }
       _lottieCompositionCache[fullUrl] = comp;
       return comp;
     } catch (e) {
@@ -1619,7 +1644,8 @@ class StickerService extends ChangeNotifier {
     }
   }
 
-  /// Bakes the first frame of a vector sticker/custom-emoji into a GPU texture so idle stickers consume 0% CPU.
+  /// Bakes a representative static frame of a vector sticker/custom-emoji into a GPU texture
+  /// so idle stickers consume 0% CPU and fade-in `.tgs` animations never produce blank frame-0 icons.
   Future<ui.Image?> getBakedFirstFrame(
     String rawUrl, {
     LottieComposition? composition,
@@ -1639,6 +1665,7 @@ class StickerService extends ChangeNotifier {
       composition: comp,
       progress: 0.0,
       targetPx: px,
+      ensureVisible: true,
     );
     if (img != null) {
       _bakedFrameCache[key] = img;

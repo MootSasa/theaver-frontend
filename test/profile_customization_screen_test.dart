@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/l10n/app_localizations.dart';
@@ -18,6 +20,9 @@ import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/peer_customization_cache.dart';
 import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/settings_service.dart';
+import 'package:theaver/services/sticker_service.dart';
+import 'package:theaver/utils/emoji_utils.dart';
+import 'package:theaver/widgets/chat/sticker_item_widget.dart';
 import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/common/glass_modal_sheet.dart';
 import 'package:theaver/widgets/chat/message_reply_info.dart';
@@ -1513,6 +1518,291 @@ void main() {
 
       // Flush PeerCustomizationCache debounce timer
       await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
+
+  testWidgets(
+    'FloatingReplyEmojiMenu uses high-contrast monochrome tint (ignoring accentColor) and passes real .tgs fileUrl for top pack icons',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final prevInstalled = List<StickerPack>.from(
+        StickerService.instance.installedEmojiPacks,
+      );
+      final prevFeatured = List<StickerPack>.from(
+        StickerService.instance.featuredEmojiPacks,
+      );
+      addTearDown(() {
+        StickerService.instance.debugSeedCustomEmojiPacksForTest(
+          installedEmojiPacks: prevInstalled,
+          featuredEmojiPacks: prevFeatured,
+        );
+      });
+
+      const adaptiveTgsItem = StickerItem(
+        id: 901,
+        packId: 77,
+        packShortName: 'mono_tgs',
+        packTitle: 'Monotone TGS',
+        fileUrl: '/uploads/stickers/77/0_mono.tgs',
+        thumbnailUrl: '/uploads/stickers/77/thumb_0_mono.webp',
+        format: 'tgs',
+        isAdaptiveTextColor: true,
+      );
+      const adaptivePack = StickerPack(
+        id: 77,
+        shortName: 'mono_tgs',
+        title: 'Monotone TGS',
+        isAnimated: true,
+        isCustomEmoji: true,
+        isAdaptiveTextColor: true,
+        isInstalled: true,
+        thumbnailUrl: '/uploads/stickers/77/thumb_0_mono.webp',
+        stickersCount: 1,
+        stickers: [adaptiveTgsItem],
+      );
+
+      StickerService.instance.debugSeedCustomEmojiPacksForTest(
+        installedEmojiPacks: const [adaptivePack],
+      );
+
+      for (final brightness in <Brightness>[
+        Brightness.dark,
+        Brightness.light,
+      ]) {
+        final expectedTint =
+            brightness == Brightness.dark ? Colors.white : const Color(0xFF141619);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            themeAnimationDuration: Duration.zero,
+            theme: brightness == Brightness.dark
+                ? ThemeData.dark(useMaterial3: true)
+                : ThemeData.light(useMaterial3: true),
+            home: Scaffold(
+              body: Center(
+                child: FloatingReplyEmojiMenu(
+                  width: 312,
+                  height: 332,
+                  selectedStickerId: 901,
+                  accentColor: const Color(0xFF9C27B0),
+                  onEmojiSelected: (_) async {},
+                  onClear: () async {},
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        final gridCellMedia = tester.widget<StickerMediaView>(
+          find.descendant(
+            of: find.byKey(const ValueKey<String>('floating_reply_emoji_901')),
+            matching: find.byType(StickerMediaView),
+          ),
+        );
+        expect(gridCellMedia.adaptiveTintColor, equals(expectedTint));
+        expect(gridCellMedia.adaptiveTintColor, isNot(equals(const Color(0xFF9C27B0))));
+        expect(gridCellMedia.isAdaptiveOverride, isTrue);
+
+        final topStripMedia = tester
+            .widgetList<StickerMediaView>(find.byType(StickerMediaView))
+            .firstWhere((m) => m.width == 22.0);
+        expect(topStripMedia.fileUrl, equals('/uploads/stickers/77/0_mono.tgs'));
+        expect(topStripMedia.isAdaptiveOverride, isTrue);
+        expect(
+          topStripMedia.adaptiveTintColor,
+          anyOf(
+            equals(expectedTint),
+            equals(expectedTint.withValues(alpha: 0.78)),
+          ),
+        );
+      }
+    },
+  );
+
+  test('StickerMediaView.isLottieUrlOrFormat distinguishes raster thumbnails from .tgs/.json assets', () {
+    expect(
+      StickerMediaView.isLottieUrlOrFormat(
+        'stickers/5/thumb_0_abcd.webp',
+        'tgs',
+      ),
+      isFalse,
+    );
+    expect(
+      StickerMediaView.isLottieUrlOrFormat(
+        'stickers/5/0_abcd.tgs',
+        'webp',
+      ),
+      isTrue,
+    );
+    expect(
+      StickerMediaView.isLottieUrlOrFormat(
+        'https://cdn.example/s/0.tgs?token=1',
+        'webp',
+      ),
+      isTrue,
+    );
+    expect(
+      StickerMediaView.isLottieUrlOrFormat(
+        'stickers/5/0_abcd',
+        'tgs',
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets(
+    'StickerMediaView applies automatic contrast ColorFiltered tint when isAdaptiveOverride is true and adaptiveTintColor is null',
+    (tester) async {
+      for (final brightness in <Brightness>[
+        Brightness.light,
+        Brightness.dark,
+      ]) {
+        final themeData = brightness == Brightness.dark
+            ? ThemeData.dark(useMaterial3: true)
+            : ThemeData.light(useMaterial3: true);
+        final expectedTint = themeData.colorScheme.onSurface;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            themeAnimationDuration: Duration.zero,
+            theme: themeData,
+            home: const Scaffold(
+              body: StickerMediaView(
+                fileUrl: 'stickers/1/mono.webp',
+                width: 28,
+                height: 28,
+                animate: false,
+                isAdaptiveOverride: true,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final colorFiltered = tester.widget<ColorFiltered>(
+          find.descendant(
+            of: find.byType(StickerMediaView),
+            matching: find.byType(ColorFiltered),
+          ),
+        );
+        expect(
+          colorFiltered.colorFilter,
+          equals(ColorFilter.mode(expectedTint, BlendMode.srcIn)),
+        );
+        if (brightness == Brightness.dark) {
+          expect(expectedTint.computeLuminance(), greaterThan(0.5));
+        } else {
+          expect(expectedTint.computeLuminance(), lessThan(0.5));
+        }
+      }
+    },
+  );
+
+  test(
+    'EmojiUtils.bakeLottieFrame with ensureVisible recovers non-transparent frame when frame 0 is empty',
+    () async {
+      final fadeInLottieJson = jsonEncode(<String, dynamic>{
+        'v': '5.7.4',
+        'fr': 30,
+        'ip': 0,
+        'op': 60,
+        'w': 64,
+        'h': 64,
+        'ddd': 0,
+        'assets': <dynamic>[],
+        'layers': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'ddd': 0,
+            'ind': 1,
+            'ty': 4,
+            'nm': 'fade_rect',
+            'sr': 1,
+            'ks': <String, dynamic>{
+              'o': <String, dynamic>{
+                'a': 1,
+                'k': <Map<String, dynamic>>[
+                  <String, dynamic>{
+                    't': 0,
+                    's': <num>[0],
+                    'h': 1,
+                  },
+                  <String, dynamic>{
+                    't': 15,
+                    's': <num>[100],
+                    'h': 1,
+                  },
+                  <String, dynamic>{
+                    't': 60,
+                    's': <num>[100],
+                  },
+                ],
+              },
+              'r': <String, dynamic>{'a': 0, 'k': 0},
+              'p': <String, dynamic>{'a': 0, 'k': <num>[32, 32, 0]},
+              'a': <String, dynamic>{'a': 0, 'k': <num>[0, 0, 0]},
+              's': <String, dynamic>{'a': 0, 'k': <num>[100, 100, 100]},
+            },
+            'ao': 0,
+            'shapes': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'ty': 'rc',
+                'd': 1,
+                's': <String, dynamic>{'a': 0, 'k': <num>[48, 48]},
+                'p': <String, dynamic>{'a': 0, 'k': <num>[0, 0]},
+                'r': <String, dynamic>{'a': 0, 'k': 0},
+              },
+              <String, dynamic>{
+                'ty': 'fl',
+                'c': <String, dynamic>{'a': 0, 'k': <num>[1, 0, 0, 1]},
+                'o': <String, dynamic>{'a': 0, 'k': 100},
+                'r': 1,
+              },
+            ],
+            'ip': 0,
+            'op': 60,
+            'st': 0,
+            'bm': 0,
+          },
+        ],
+      });
+
+      final comp = await LottieComposition.fromBytes(
+        Uint8List.fromList(utf8.encode(fadeInLottieJson)),
+      );
+
+      Future<int> countVisiblePixels(ui.Image? image) async {
+        expect(image, isNotNull);
+        final bd = await image!.toByteData(format: ui.ImageByteFormat.rawRgba);
+        expect(bd, isNotNull);
+        final bytes = bd!;
+        int count = 0;
+        for (int i = 3; i < bytes.lengthInBytes; i += 4) {
+          if (bytes.getUint8(i) >= 24) count++;
+        }
+        return count;
+      }
+
+      final blankFrame0 = await EmojiUtils.bakeLottieFrame(
+        cacheKey: 'test_fade_in_blank',
+        composition: comp,
+        progress: 0.0,
+        targetPx: 64,
+        ensureVisible: false,
+      );
+      expect(await countVisiblePixels(blankFrame0), equals(0));
+
+      final visibleFrame = await EmojiUtils.bakeLottieFrame(
+        cacheKey: 'test_fade_in_blank',
+        composition: comp,
+        progress: 0.0,
+        targetPx: 64,
+        ensureVisible: true,
+      );
+      expect(await countVisiblePixels(visibleFrame), greaterThan(100));
     },
   );
 }

@@ -1454,6 +1454,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
               final item = items[index];
               final isSelected = widget.selectedCustomEmojiId != null &&
                   widget.selectedCustomEmojiId == item.id;
+              final isItemAdaptive = item.isAdaptiveTextColor ||
+                  (pack?.isAdaptiveTextColor ?? false);
               return GestureDetector(
                 onTap: () => _onCustomEmojiItemTapped(item),
                 onLongPress: () {
@@ -1489,6 +1491,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                       height: 30,
                       animate:
                           _currentTab == PanelTab.emoji && widget.isVisible,
+                      isAdaptiveOverride: isItemAdaptive,
+                      adaptiveTintColor:
+                          isItemAdaptive ? theme.textPrimary : null,
                     ),
                   ),
                 ),
@@ -1802,14 +1807,17 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildServerPackSelectorIcon(StickerPack pack, VoidCallback onTap) {
+    final theavTheme = TheavTheme.of(context);
     final firstItem = pack.items.isNotEmpty ? pack.items.first : null;
-    final coverUrl = pack.coverUrl.isNotEmpty
-        ? pack.coverUrl
-        : (firstItem?.fileUrl ?? '');
+    final coverUrl = (firstItem != null && firstItem.fileUrl.isNotEmpty)
+        ? firstItem.fileUrl
+        : pack.coverUrl;
     final thumbUrl = firstItem?.thumbnailUrl.isNotEmpty == true
         ? firstItem!.thumbnailUrl
         : pack.thumbnailUrl;
-    final format = firstItem?.format ?? 'webp';
+    final format = firstItem?.format ?? (pack.isAnimated ? 'tgs' : 'webp');
+    final isAdaptive =
+        pack.isAdaptiveTextColor || (firstItem?.isAdaptiveTextColor ?? false);
     return GestureDetector(
       onTap: () {
         HapticUtils.tap();
@@ -1829,6 +1837,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   width: 24,
                   height: 24,
                   animate: false,
+                  isAdaptiveOverride: isAdaptive,
+                  adaptiveTintColor: isAdaptive ? theavTheme.textPrimary : null,
                 )
               : Text(
                   pack.title.isNotEmpty ? pack.title[0].toUpperCase() : '#',
@@ -2599,6 +2609,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               final item = items[index];
+              final isItemAdaptive = item.isAdaptiveTextColor ||
+                  (pack?.isAdaptiveTextColor ?? false);
               return GestureDetector(
                 onTap: () => _onStickerItemTapped(item),
                 onLongPress: () {
@@ -2627,6 +2639,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                       width: 68,
                       height: 68,
                       animate: _currentTab == PanelTab.sticker && widget.isVisible,
+                      isAdaptiveOverride: isItemAdaptive,
+                      adaptiveTintColor:
+                          isItemAdaptive ? theme.textPrimary : null,
                     ),
                     if (item.hasFullscreenEffect)
                       Positioned(
@@ -2652,13 +2667,15 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
 
   Widget _buildFeaturedPackCard(StickerPack pack, TheavThemeData theme) {
     final firstItem = pack.items.isNotEmpty ? pack.items.first : null;
-    final cover = pack.coverUrl.isNotEmpty
-        ? pack.coverUrl
-        : (firstItem?.fileUrl ?? '');
+    final cover = (firstItem != null && firstItem.fileUrl.isNotEmpty)
+        ? firstItem.fileUrl
+        : pack.coverUrl;
     final thumbUrl = firstItem?.thumbnailUrl.isNotEmpty == true
         ? firstItem!.thumbnailUrl
         : pack.thumbnailUrl;
-    final format = firstItem?.format ?? 'webp';
+    final format = firstItem?.format ?? (pack.isAnimated ? 'tgs' : 'webp');
+    final isAdaptive =
+        pack.isAdaptiveTextColor || (firstItem?.isAdaptiveTextColor ?? false);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -2689,6 +2706,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                     width: 40,
                     height: 40,
                     animate: false,
+                    isAdaptiveOverride: isAdaptive,
+                    adaptiveTintColor: isAdaptive ? theme.textPrimary : null,
                   ),
                 ),
               Expanded(
