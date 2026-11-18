@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:theaver/models/profile_customization.dart';
 import 'package:theaver/services/chat_service.dart';
@@ -314,26 +315,13 @@ void main() {
     });
 
     testWidgets(
-        'AvatarWithStatus suppresses online indicator and cutout when avatar frame is active',
+        'AvatarWithStatus renders online indicator on top of avatar frame when isOnline is true and omits it when false',
         (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: AvatarWithStatus(
-                avatarUrl: null,
-                name: 'Alex',
-                radius: 24,
-                isOnline: true,
-              ),
-            ),
-          ),
-        ),
+      const preset = AvatarDecorationPreset(
+        id: 'neon_ring',
+        nameKey: 'Neon Ring',
+        isAnimated: false,
       );
-      await tester.pumpAndSettle();
-
-      expect(find.byType(AvatarDecorationFrame), findsNothing);
-      expect(find.byType(ClipPath), findsOneWidget);
 
       await tester.pumpWidget(
         const MaterialApp(
@@ -345,11 +333,7 @@ void main() {
                 radius: 24,
                 isOnline: true,
                 animateDecoration: false,
-                decorationOverride: AvatarDecorationPreset(
-                  id: 'neon_ring',
-                  nameKey: 'Neon Ring',
-                  isAnimated: false,
-                ),
+                decorationOverride: preset,
               ),
             ),
           ),
@@ -357,8 +341,59 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byType(AvatarDecorationFrame), findsOneWidget);
-      expect(find.byType(ClipPath), findsNothing);
+      final frameFinder = find.byType(AvatarDecorationFrame);
+      final indicatorFinder = find.byKey(const ValueKey('avatar_online_indicator'));
+      final clipPathFinder = find.descendant(
+        of: find.byType(AvatarWithStatus),
+        matching: find.byType(ClipPath),
+      );
+
+      expect(frameFinder, findsOneWidget);
+      expect(indicatorFinder, findsOneWidget);
+      expect(clipPathFinder, findsOneWidget);
+
+      final outerStack = tester.widget<Stack>(
+        find.ancestor(
+          of: indicatorFinder,
+          matching: find.byType(Stack),
+        ).first,
+      );
+      expect(outerStack.children.length, 2);
+      expect(outerStack.children[0], isA<ClipPath>());
+      expect(outerStack.children[1], isA<Positioned>());
+      expect(
+        find.descendant(of: clipPathFinder, matching: frameFinder),
+        findsOneWidget,
+      );
+
+      final renderClipPath = tester.renderObject<RenderClipPath>(clipPathFinder);
+      final clipBounds =
+          renderClipPath.clipper!.getClip(renderClipPath.size).getBounds();
+      expect(renderClipPath.size, const Size(48, 48));
+      expect(clipBounds.width, greaterThan(48));
+      expect(clipBounds.height, greaterThan(48));
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: AvatarWithStatus(
+                avatarUrl: null,
+                name: 'Alex',
+                radius: 24,
+                isOnline: false,
+                animateDecoration: false,
+                decorationOverride: preset,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(frameFinder, findsOneWidget);
+      expect(indicatorFinder, findsNothing);
+      expect(clipPathFinder, findsNothing);
     });
   });
 }

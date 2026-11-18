@@ -130,75 +130,73 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
       }
     }
 
-    Widget content;
-    if (decoration != null) {
-      // Never show the online indicator dot or cutout simultaneously with an
-      // avatar decoration frame because they visually overlap.
-      final outerSize = size * 1.24;
-      content = SizedBox(
-        width: size,
-        height: size,
-        child: OverflowBox(
-          minWidth: outerSize,
-          maxWidth: outerSize,
-          minHeight: outerSize,
-          maxHeight: outerSize,
-          child: AvatarDecorationFrame(
-            decoration: decoration,
-            avatarDiameter: size,
-            animate: widget.animateDecoration,
-            child: avatar,
-          ),
-        ),
-      );
-    } else {
-      content = RepaintBoundary(
-        child: AnimatedBuilder(
-          animation: _animation,
-          builder: (context, _) {
-            final progress = _animation.value;
-            if (progress <= 0.0) {
-              return avatar;
-            }
+    final Widget baseAvatar = decoration != null
+        ? SizedBox(
+            width: size,
+            height: size,
+            child: OverflowBox(
+              minWidth: size * 1.24,
+              maxWidth: size * 1.24,
+              minHeight: size * 1.24,
+              maxHeight: size * 1.24,
+              child: AvatarDecorationFrame(
+                decoration: decoration,
+                avatarDiameter: size,
+                animate: widget.animateDecoration,
+                child: avatar,
+              ),
+            ),
+          )
+        : avatar;
 
-            final indicatorDiameter = (widget.radius * 0.55).clamp(8.0, 16.0);
-            final indicatorRadius = indicatorDiameter / 2;
-            final gap = (indicatorDiameter * 0.2).clamp(1.8, 2.8);
-            final indicatorCenter =
-                Offset(size - indicatorRadius, size - indicatorRadius);
+    final Widget content = RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _animation,
+        builder: (context, _) {
+          final progress = _animation.value;
+          if (progress <= 0.0) {
+            return baseAvatar;
+          }
 
-            return Stack(
-              clipBehavior: Clip.none,
-              children: [
-                ClipPath(
-                  clipper: _AvatarCutoutClipper(
-                    center: indicatorCenter,
-                    cutoutRadius: (indicatorRadius + gap) * progress,
-                  ),
-                  child: avatar,
+          final indicatorDiameter = (widget.radius * 0.55).clamp(8.0, 16.0);
+          final indicatorRadius = indicatorDiameter / 2;
+          final gap = (indicatorDiameter * 0.2).clamp(1.8, 2.8);
+          final indicatorCenter =
+              Offset(size - indicatorRadius, size - indicatorRadius);
+
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              ClipPath(
+                clipper: _AvatarCutoutClipper(
+                  center: indicatorCenter,
+                  cutoutRadius: (indicatorRadius + gap) * progress,
+                  clipToOval: decoration == null,
                 ),
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: Transform.scale(
-                    scale: progress,
-                    alignment: Alignment.center,
-                    child: Container(
-                      width: indicatorDiameter,
-                      height: indicatorDiameter,
-                      decoration: BoxDecoration(
-                        color: onlineColor,
-                        shape: BoxShape.circle,
-                      ),
+                child: baseAvatar,
+              ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Transform.scale(
+                  scale: progress,
+                  alignment: Alignment.center,
+                  child: Container(
+                    key: const ValueKey('avatar_online_indicator'),
+                    width: indicatorDiameter,
+                    height: indicatorDiameter,
+                    decoration: BoxDecoration(
+                      color: onlineColor,
+                      shape: BoxShape.circle,
                     ),
                   ),
                 ),
-              ],
-            );
-          },
-        ),
-      );
-    }
+              ),
+            ],
+          );
+        },
+      ),
+    );
 
     if (widget.onTap != null) {
       return GestureDetector(
@@ -214,25 +212,42 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
 class _AvatarCutoutClipper extends CustomClipper<Path> {
   final Offset center;
   final double cutoutRadius;
+  final bool clipToOval;
 
   const _AvatarCutoutClipper({
     required this.center,
     required this.cutoutRadius,
+    this.clipToOval = true,
   });
 
   @override
   Path getClip(Size size) {
-    final avatarPath = Path()
-      ..addOval(Rect.fromLTWH(0, 0, size.width, size.height));
-    if (cutoutRadius <= 0) return avatarPath;
+    final outerPath = Path();
+    if (clipToOval) {
+      outerPath.addOval(Rect.fromLTWH(0, 0, size.width, size.height));
+    } else {
+      // Allow the 1.24x AvatarDecorationFrame overflow box to extend outside
+      // size while still punching a clean gap around the online dot.
+      outerPath.addRect(
+        Rect.fromLTRB(
+          -size.width * 0.5,
+          -size.height * 0.5,
+          size.width * 1.5,
+          size.height * 1.5,
+        ),
+      );
+    }
+    if (cutoutRadius <= 0) return outerPath;
 
     final cutoutPath = Path()
       ..addOval(Rect.fromCircle(center: center, radius: cutoutRadius));
-    return Path.combine(PathOperation.difference, avatarPath, cutoutPath);
+    return Path.combine(PathOperation.difference, outerPath, cutoutPath);
   }
 
   @override
   bool shouldReclip(covariant _AvatarCutoutClipper oldClipper) {
-    return oldClipper.center != center || oldClipper.cutoutRadius != cutoutRadius;
+    return oldClipper.center != center ||
+        oldClipper.cutoutRadius != cutoutRadius ||
+        oldClipper.clipToOval != clipToOval;
   }
 }

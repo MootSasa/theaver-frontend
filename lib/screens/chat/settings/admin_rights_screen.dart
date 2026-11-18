@@ -244,9 +244,7 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
     required TheavPalette palette,
   }) {
     final username = widget.participant.username.trim();
-    final subtitle = username.isNotEmpty
-        ? '@$username'
-        : (widget.participant.isOnline ? 'в сети' : 'участник');
+    final subtitle = username.isNotEmpty ? '@$username' : 'участник';
 
     return TheavInsetGroup(
       children: [
@@ -256,7 +254,7 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
             avatarUrl: widget.participant.avatarUrl,
             name: _displayName,
             radius: 24,
-            isOnline: widget.participant.isOnline,
+            isOnline: false,
             decorationOverride:
                 widget.participant.peerCustomization?.avatarDecoration,
           ),
