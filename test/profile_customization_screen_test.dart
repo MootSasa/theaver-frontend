@@ -1226,15 +1226,25 @@ void main() {
         expect(tallRects[i].bottom, lessThanOrEqualTo(54.0));
       }
 
-      // 2. Organic scatter & comfortable pairwise spacing (no aligned rows/columns, no overlaps)
+      // 2. Organic scatter, varied sizes & comfortable pairwise spacing (no aligned rows/columns, no overlaps)
       expect(normalRects.map((r) => r.top).toSet(), hasLength(10));
       expect(normalRects.map((r) => r.left).toSet(), hasLength(10));
+      final widths = normalRects.map((r) => r.width).toSet();
+      expect(widths.length, greaterThanOrEqualTo(6));
+      expect(
+        normalRects.map((r) => r.width).reduce((a, b) => a > b ? a : b),
+        greaterThanOrEqualTo(19.0),
+      );
+      expect(
+        normalRects.map((r) => r.width).reduce((a, b) => a < b ? a : b),
+        lessThanOrEqualTo(12.5),
+      );
       for (int i = 0; i < normalRects.length; i++) {
         for (int j = i + 1; j < normalRects.length; j++) {
           expect(normalRects[i].overlaps(normalRects[j]), isFalse);
           final dx = normalRects[i].center.dx - normalRects[j].center.dx;
           final dy = normalRects[i].center.dy - normalRects[j].center.dy;
-          expect(dx * dx + dy * dy, greaterThanOrEqualTo(21.0 * 21.0 - 0.1));
+          expect(dx * dx + dy * dy, greaterThanOrEqualTo(20.5 * 20.5 - 0.1));
         }
       }
 
