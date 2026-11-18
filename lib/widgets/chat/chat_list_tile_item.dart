@@ -1,7 +1,12 @@
+import 'dart:io';
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 
+import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
@@ -9,11 +14,13 @@ import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/draft_service.dart';
 import '../../services/peer_customization_cache.dart';
+import '../../services/power_saving_provider.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/image_utils.dart';
 import '../common/peer_badges_widget.dart';
+import '../message/message_status_widget.dart';
 import '../user/avatar_with_status.dart';
 import '../user/emoji_status_badge.dart';
 import 'round_video_thumbnail.dart';
@@ -29,7 +36,8 @@ String _tr(BuildContext context, String key, String fallback) {
 
 /// Shared Telegram-style chat list row with animated selection state,
 /// persistent timestamps/unread badges, mute indicators, drafts, typing
-/// previews, custom emojis, and bounded swipe actions.
+/// previews, custom emojis, active call rings, group author prefixes,
+/// media thumbnails, and bounded swipe actions.
 class ChatListTileItem extends StatelessWidget {
   final Chat chat;
   final bool isSelectMode;
@@ -41,6 +49,7 @@ class ChatListTileItem extends StatelessWidget {
   final List<MessageEntity> fallbackEntities;
   final bool isOpenInTile;
   final bool isFocusedInTile;
+  final bool? lastMessageIsRead;
   final ChatSwipeAction? swipeOverrideAction;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -61,6 +70,7 @@ class ChatListTileItem extends StatelessWidget {
     this.fallbackEntities = const [],
     this.isOpenInTile = false,
     this.isFocusedInTile = false,
+    this.lastMessageIsRead,
     this.swipeOverrideAction,
     required this.onTap,
     required this.onLongPress,
@@ -68,6 +78,12 @@ class ChatListTileItem extends StatelessWidget {
     this.onCreateDragPayload,
     required this.onSwipeAction,
   });
+
+  bool get _isLastMessageOutgoing =>
+      currentUserId != null &&
+      currentUserId!.isNotEmpty &&
+      chat.lastMessageSenderId != null &&
+      chat.lastMessageSenderId == currentUserId;
 
   @override
   Widget build(BuildContext context) {
@@ -77,6 +93,8 @@ class ChatListTileItem extends StatelessWidget {
     final hasUnread = chat.unreadCount > 0 || chat.unreadCount == -1;
     final isPrivateChat = chat.chatType == 'private';
     final isCommunity = chat.chatType == 'community';
+    final isChannel = chat.chatType == 'channel';
+    final isGroup = chat.chatType == 'group';
 
     PeerCustomization? cachedCust;
     if (isPrivateChat &&
@@ -101,7 +119,7 @@ class ChatListTileItem extends StatelessWidget {
 
     final Widget fallbackIcon = _buildFallbackIcon();
 
-    final Widget avatarWidget = isPrivateChat
+    final Widget baseAvatarWidget = isPrivateChat
         ? AvatarWithStatus(
             userId: chat.otherUserId,
             avatarUrl: effectiveAvatarUrl,
@@ -149,6 +167,15 @@ class ChatListTileItem extends StatelessWidget {
                 ),
               );
 
+    final Widget avatarWidget = chat.hasActiveCall
+        ? _ActiveCallAvatarRing(
+            size: avatarRadius * 2,
+            accentColor: primaryColor,
+            isSquareRounded: isCommunity,
+            child: baseAvatarWidget,
+          )
+        : baseAvatarWidget;
+
     final Widget leadingWidget = Stack(
       clipBehavior: Clip.none,
       children: [
@@ -158,6 +185,31 @@ class ChatListTileItem extends StatelessWidget {
           curve: Curves.easeOutCubic,
           child: avatarWidget,
         ),
+        if (chat.hasActiveCall && !(isSelectMode && isSelected))
+          Positioned(
+            right: -2,
+            bottom: -2,
+            child: IgnorePointer(
+              child: Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: primaryColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: theme.scaffoldBackgroundColor,
+                    width: 1.5,
+                  ),
+                ),
+                alignment: Alignment.center,
+                child: const iconoir.SoundHigh(
+                  width: 10,
+                  height: 10,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
         Positioned(
           right: -1,
           bottom: -1,
@@ -201,17 +253,33 @@ class ChatListTileItem extends StatelessWidget {
         ? Colors.white
         : (themeExt?.palette.unreadBadgeText ?? theme.colorScheme.onPrimary);
 
+    final bool showOutgoingStatus =
+        _isLastMessageOutgoing && !isChannel && chat.chatType != 'saved';
+
     final Widget trailingWidget = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         if (chat.lastMessageTime != null)
-          Text(
-            _formatChatTime(context, chat.lastMessageTime!),
-            style: TextStyle(
-              fontSize: 12,
-              color: (hasUnread && !isMuted) ? primaryColor : Colors.grey[500],
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showOutgoingStatus) ...[
+                MessageStatusWidget(
+                  isRead: lastMessageIsRead ?? (chat.lastReadOutboxMessageId > 0),
+                  isOutgoing: true,
+                  accentColor: primaryColor,
+                ),
+                const SizedBox(width: 3),
+              ],
+              Text(
+                _formatChatTime(context, chat.lastMessageTime!),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: (hasUnread && !isMuted) ? primaryColor : Colors.grey[500],
+                ),
+              ),
+            ],
           ),
         const SizedBox(height: 4),
         if (hasUnread)
@@ -257,6 +325,10 @@ class ChatListTileItem extends StatelessWidget {
                 ? primaryColor.withValues(alpha: 0.06)
                 : null;
 
+    final Color typeIconColor = hasUnread
+        ? theme.colorScheme.onSurface.withValues(alpha: 0.85)
+        : theme.colorScheme.onSurface.withValues(alpha: 0.65);
+
     Widget rowContent = AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
@@ -281,6 +353,21 @@ class ChatListTileItem extends StatelessWidget {
               Expanded(
                 child: Row(
                   children: [
+                    if (isChannel || isGroup)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: isChannel
+                            ? iconoir.Megaphone(
+                                width: 15,
+                                height: 15,
+                                color: typeIconColor,
+                              )
+                            : iconoir.Group(
+                                width: 15,
+                                height: 15,
+                                color: typeIconColor,
+                              ),
+                      ),
                     Flexible(
                       child: Text(
                         chat.chatType == 'saved'
@@ -362,7 +449,11 @@ class ChatListTileItem extends StatelessWidget {
           height: 22,
         );
       case 'community':
-        return const Icon(Icons.hub_rounded, color: Colors.white, size: 22);
+        return const iconoir.Community(
+          color: Colors.white,
+          width: 22,
+          height: 22,
+        );
       case 'saved':
         return const iconoir.Bookmark(
           color: Colors.white,
@@ -384,8 +475,30 @@ class ChatListTileItem extends StatelessWidget {
     }
   }
 
+  String? _resolveGroupSenderPrefix(BuildContext context) {
+    if (chat.chatType != 'group') return null;
+    final msgType = chat.lastMessageType?.toLowerCase() ?? '';
+    if (msgType == 'system') return null;
+
+    if (_isLastMessageOutgoing) {
+      final you = _tr(context, 'chat_reply_you', 'Вы');
+      return '$you: ';
+    }
+    final senderName = chat.lastMessageSenderName?.trim();
+    if (senderName != null && senderName.isNotEmpty) {
+      return '$senderName: ';
+    }
+    return null;
+  }
+
   Widget? _buildSubtitle(BuildContext context, bool hasUnread) {
     final loc = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final accentColor = isDark
+        ? const Color(0xFF5CB8E6)
+        : theme.colorScheme.primary;
+
     final info = typingInfo;
     if (info != null) {
       final isGroup = chat.chatType == 'group';
@@ -413,9 +526,6 @@ class ChatListTileItem extends StatelessWidget {
         }
         statusText = loc?.translate(key) ?? 'typing...';
       }
-      final accentColor = Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFF5CB8E6)
-          : Theme.of(context).colorScheme.primary;
       return Text(
         statusText,
         maxLines: 1,
@@ -434,7 +544,7 @@ class ChatListTileItem extends StatelessWidget {
       final hasDraftText = draft.text.trim().isNotEmpty;
       final draftText = hasDraftText ? draft.text : '...';
       final draftStyle = TextStyle(
-        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+        color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
         fontSize: 14,
       );
       return RichText(
@@ -461,11 +571,28 @@ class ChatListTileItem extends StatelessWidget {
       );
     }
 
+    final String? groupPrefix = _resolveGroupSenderPrefix(context);
+    final TextStyle prefixStyle = TextStyle(
+      color: accentColor,
+      fontWeight: FontWeight.w500,
+      fontSize: 14,
+    );
+
     if (chat.isLastMessageRoundVideo) {
-      final primary = Theme.of(context).colorScheme.primary;
+      final primary = theme.colorScheme.primary;
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (groupPrefix != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 110),
+              child: Text(
+                groupPrefix,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: prefixStyle,
+              ),
+            ),
           RoundVideoThumbnail(
             videoUrl: chat.lastMessageFileUrl,
             size: 18,
@@ -487,15 +614,27 @@ class ChatListTileItem extends StatelessWidget {
       );
     }
 
+    final String msgTypeLower = chat.lastMessageType?.toLowerCase() ?? '';
+    bool isCallPreview = false;
+    bool isVideoCallPreview = false;
     String? displaySubtitle;
+
     if (chat.isLastMessageUnsupported) {
       displaySubtitle =
           loc?.translate('message_unsupported_preview') ?? 'Unsupported message';
-    } else if (chat.lastMessageType?.toLowerCase() == 'call') {
-      displaySubtitle = Chat.formatCallPreview(
+    } else if (msgTypeLower == 'call') {
+      isCallPreview = true;
+      var formattedCall = Chat.formatCallPreview(
         chat.lastMessage,
         currentUserId: currentUserId,
       );
+      if (formattedCall.startsWith('📹 ')) {
+        isVideoCallPreview = true;
+        formattedCall = formattedCall.substring('📹 '.length);
+      } else if (formattedCall.startsWith('📞 ')) {
+        formattedCall = formattedCall.substring('📞 '.length);
+      }
+      displaySubtitle = formattedCall;
     } else {
       displaySubtitle = chat.lastMessage;
       if (displaySubtitle == null || displaySubtitle.trim().isEmpty) {
@@ -503,18 +642,21 @@ class ChatListTileItem extends StatelessWidget {
             chat.lastMessageGroupedId!.isNotEmpty) {
           displaySubtitle = loc?.translate('chat_album') ?? 'Album';
         } else {
-          final msgType = chat.lastMessageType?.toLowerCase();
-          if (msgType == 'photo' || msgType == 'image') {
+          if (msgTypeLower == 'photo' || msgTypeLower == 'image') {
             displaySubtitle = loc?.translate('chat_photo') ?? 'Photo';
-          } else if (msgType == 'video') {
+          } else if (msgTypeLower == 'video') {
             displaySubtitle = loc?.translate('chat_video') ?? 'Video';
-          } else if (msgType == 'album') {
+          } else if (msgTypeLower == 'gif' || msgTypeLower == 'animation') {
+            displaySubtitle = 'GIF';
+          } else if (msgTypeLower == 'album') {
             displaySubtitle = loc?.translate('chat_album') ?? 'Album';
-          } else if (msgType == 'voice' || msgType == 'audio') {
+          } else if (msgTypeLower == 'voice' || msgTypeLower == 'audio') {
             displaySubtitle =
                 loc?.translate('chat_voice_message') ?? 'Voice message';
-          } else if (msgType == 'file') {
+          } else if (msgTypeLower == 'file' || msgTypeLower == 'document') {
             displaySubtitle = loc?.translate('chat_file') ?? 'File';
+          } else if (msgTypeLower == 'sticker') {
+            displaySubtitle = loc?.translate('chat_sticker') ?? 'Стикер';
           }
         }
       }
@@ -524,12 +666,11 @@ class ChatListTileItem extends StatelessWidget {
       return null;
     }
 
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
+    final themeExt = theme.extension<TheavThemeExtension>();
     final subtitleColor = hasUnread
-        ? (themeExt?.palette.chatSubtitleUnread ??
-            Theme.of(context).colorScheme.onSurface)
+        ? (themeExt?.palette.chatSubtitleUnread ?? theme.colorScheme.onSurface)
         : (themeExt?.palette.chatSubtitle ??
-            Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6));
+            theme.colorScheme.onSurface.withValues(alpha: 0.6));
 
     final subtitleStyle = TextStyle(
       color: subtitleColor,
@@ -542,14 +683,182 @@ class ChatListTileItem extends StatelessWidget {
             : fallbackEntities)
         : const <MessageEntity>[];
 
+    final previewSpan = EmojiUtils.buildPreviewWithCustomEmojis(
+      displaySubtitle,
+      style: subtitleStyle,
+      entities: effectiveEntities,
+      emojiSize: 16.0,
+    );
+
+    final String? rawThumbUrl = chat.lastMessageFileUrl?.trim();
+    final bool hasVisualMediaThumb = rawThumbUrl != null &&
+        rawThumbUrl.isNotEmpty &&
+        (msgTypeLower == 'photo' ||
+            msgTypeLower == 'image' ||
+            msgTypeLower == 'video' ||
+            msgTypeLower == 'gif' ||
+            msgTypeLower == 'animation' ||
+            msgTypeLower == 'album' ||
+            (msgTypeLower.isEmpty &&
+                chat.lastMessageGroupedId != null &&
+                chat.lastMessageGroupedId!.isNotEmpty));
+
+    if (hasVisualMediaThumb) {
+      return Row(
+        children: [
+          if (groupPrefix != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 110),
+              child: Text(
+                groupPrefix,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: prefixStyle,
+              ),
+            ),
+          _buildMediaThumbnail(context, rawThumbUrl, msgTypeLower),
+          const SizedBox(width: 5),
+          Expanded(
+            child: RichText(
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              text: previewSpan,
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (isCallPreview) {
+      return Row(
+        children: [
+          if (groupPrefix != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 110),
+              child: Text(
+                groupPrefix,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: prefixStyle,
+              ),
+            ),
+          isVideoCallPreview
+              ? iconoir.VideoCamera(
+                  width: 14,
+                  height: 14,
+                  color: subtitleColor,
+                )
+              : iconoir.Phone(
+                  width: 14,
+                  height: 14,
+                  color: subtitleColor,
+                ),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Text(
+              displaySubtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: subtitleStyle,
+            ),
+          ),
+        ],
+      );
+    }
+
     return RichText(
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      text: EmojiUtils.buildPreviewWithCustomEmojis(
-        displaySubtitle,
-        style: subtitleStyle,
-        entities: effectiveEntities,
-        emojiSize: 16.0,
+      text: groupPrefix != null
+          ? TextSpan(
+              children: [
+                TextSpan(text: groupPrefix, style: prefixStyle),
+                previewSpan,
+              ],
+            )
+          : previewSpan,
+    );
+  }
+
+  Widget _buildMediaThumbnail(
+    BuildContext context,
+    String rawUrl,
+    String msgTypeLower,
+  ) {
+    final theme = Theme.of(context);
+    final resolved =
+        AppConfig.resolveMediaUrl(rawUrl) ?? getValidAvatarUrl(rawUrl) ?? rawUrl;
+    final isVideo = msgTypeLower == 'video';
+
+    Widget fallback = Container(
+      width: 18,
+      height: 18,
+      color: theme.colorScheme.primary.withValues(alpha: 0.14),
+      alignment: Alignment.center,
+      child: isVideo
+          ? iconoir.VideoCamera(
+              width: 11,
+              height: 11,
+              color: theme.colorScheme.primary,
+            )
+          : iconoir.MediaImage(
+              width: 11,
+              height: 11,
+              color: theme.colorScheme.primary,
+            ),
+    );
+
+    Widget imageWidget;
+    if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+      imageWidget = CachedNetworkImage(
+        imageUrl: resolved,
+        width: 18,
+        height: 18,
+        fit: BoxFit.cover,
+        memCacheWidth: 54,
+        memCacheHeight: 54,
+        placeholder: (_, __) => fallback,
+        errorWidget: (_, __, ___) => fallback,
+      );
+    } else if (resolved.startsWith('data:')) {
+      final provider = avatarImageProvider(resolved);
+      imageWidget = provider != null
+          ? Image(
+              image: provider,
+              width: 18,
+              height: 18,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => fallback,
+            )
+          : fallback;
+    } else if (!kIsWeb && resolved.isNotEmpty) {
+      try {
+        final localPath = resolved.startsWith('file://')
+            ? Uri.parse(resolved).toFilePath()
+            : resolved;
+        final file = File(localPath);
+        imageWidget = file.existsSync()
+            ? Image.file(
+                file,
+                width: 18,
+                height: 18,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => fallback,
+              )
+            : fallback;
+      } catch (_) {
+        imageWidget = fallback;
+      }
+    } else {
+      imageWidget = fallback;
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: SizedBox(
+        width: 18,
+        height: 18,
+        child: imageWidget,
       ),
     );
   }
@@ -576,5 +885,110 @@ class ChatListTileItem extends StatelessWidget {
     } catch (_) {
       return '';
     }
+  }
+}
+
+class _ActiveCallAvatarRing extends StatefulWidget {
+  final double size;
+  final Color accentColor;
+  final bool isSquareRounded;
+  final Widget child;
+
+  const _ActiveCallAvatarRing({
+    required this.size,
+    required this.accentColor,
+    this.isSquareRounded = false,
+    required this.child,
+  });
+
+  @override
+  State<_ActiveCallAvatarRing> createState() => _ActiveCallAvatarRingState();
+}
+
+class _ActiveCallAvatarRingState extends State<_ActiveCallAvatarRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final disableAnimations = MediaQuery.disableAnimationsOf(context) ||
+        !PowerSavingProvider.instance.allowAnimations;
+    if (disableAnimations) {
+      if (_controller.isAnimating) _controller.stop();
+      _controller.value = 0.5;
+    } else if (!_controller.isAnimating) {
+      _controller.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final secondaryAccent = Color.lerp(
+      widget.accentColor,
+      const Color(0xFF10B981),
+      0.55,
+    )!;
+    final radius = widget.isSquareRounded ? 15.0 : widget.size / 2;
+
+    return SizedBox(
+      width: widget.size,
+      height: widget.size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              final pulse = _controller.value;
+              final haloAlpha = 0.28 + (0.24 * pulse);
+              final ringScale = 1.0 + (0.04 * pulse);
+              return Transform.scale(
+                scale: ringScale,
+                child: Container(
+                  width: widget.size,
+                  height: widget.size,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(radius),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [widget.accentColor, secondaryAccent],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: widget.accentColor.withValues(alpha: haloAlpha),
+                        blurRadius: 8,
+                        spreadRadius: 0.5,
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          Transform.scale(
+            scale: 0.88,
+            child: widget.child,
+          ),
+        ],
+      ),
+    );
   }
 }

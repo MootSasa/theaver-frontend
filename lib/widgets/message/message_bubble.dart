@@ -43,9 +43,11 @@ import 'message_interactive_state.dart';
 import 'inline_keyboard_widget.dart';
 import '../tiling/tile_viewport_scope.dart';
 import '../../utils/date_time_utils.dart';
+import 'bubble_tail_painter.dart';
+import 'group_message_avatar_row.dart' show GroupMessageAvatarRow;
 
 /// Радиус скругления "облачка" сообщения.
-const double kMessageBorderRadius = 18.0;
+const double kMessageBorderRadius = 16.0;
 
 /// Максимальная ширина "облачка" сообщения в пикселях (для широких экранов и планшетов).
 const double kMaxMessageBubbleWidth = 460.0;
@@ -462,7 +464,12 @@ class RenderBubbleLayout extends RenderBox
     if (senderName != null) {
       senderName.layout(BoxConstraints(maxWidth: constraints.maxWidth), parentUsesSize: true);
       senderNameHeight = senderName.size.height + senderSpacing;
-      measuredSenderWidth = senderName.size.width;
+      final double intrinsicSenderWidth =
+          senderName.getMaxIntrinsicWidth(double.infinity);
+      measuredSenderWidth = math.min(
+        constraints.maxWidth,
+        intrinsicSenderWidth.isFinite ? intrinsicSenderWidth : senderName.size.width,
+      );
     }
 
     // 1b. Measure reply natural width with loose constraints if present
@@ -568,7 +575,11 @@ class RenderBubbleLayout extends RenderBox
       bubbleHeight = contentHeight + rowGap + metaHeight;
     }
 
-    // 6. Layout reply with exact bubble width if present
+    // 6. Stretch senderName and reply to exact bubble width if present
+    if (senderName != null) {
+      senderName.layout(BoxConstraints.tightFor(width: bubbleWidth), parentUsesSize: true);
+      senderNameHeight = senderName.size.height + senderSpacing;
+    }
     double replyHeight = 0.0;
     if (reply != null) {
       reply.layout(BoxConstraints.tightFor(width: bubbleWidth), parentUsesSize: true);
@@ -706,6 +717,9 @@ class MessageBubble extends StatelessWidget {
   final Function(String replyToId, String? chatId)? onReplyTap;
   final Function(String url, String name, String type)? onFileTap;
   final String Function(String timestamp) formatTime;
+  final bool isFirstInCluster;
+  final bool isLastInCluster;
+  final VoidCallback? onThreadRootTap;
 
   const MessageBubble({
     Key? key,
@@ -728,6 +742,9 @@ class MessageBubble extends StatelessWidget {
     this.onReplyTap,
     this.onFileTap,
     required this.formatTime,
+    this.isFirstInCluster = true,
+    this.isLastInCluster = true,
+    this.onThreadRootTap,
   }) : super(key: key);
 
   MessageBubble copyWithKey(Key? newKey) {
@@ -752,6 +769,9 @@ class MessageBubble extends StatelessWidget {
       onReplyTap: onReplyTap,
       onFileTap: onFileTap,
       formatTime: formatTime,
+      isFirstInCluster: isFirstInCluster,
+      isLastInCluster: isLastInCluster,
+      onThreadRootTap: onThreadRootTap,
     );
   }
 
@@ -972,11 +992,6 @@ class MessageBubble extends StatelessWidget {
     final Color bubbleSubtextColor = isMe
         ? (themeExt?.palette.chatBubbleOutgoingSubtext ?? bubbleTextColor.withValues(alpha: 0.7))
         : (themeExt?.palette.chatBubbleIncomingSubtext ?? bubbleTextColor.withValues(alpha: 0.7));
-
-    final bool isPureMedia = hasMedia && !hasCaption && !_isAudio && !_isVoice;
-    final Color backgroundColor = (isBigEmoji || _isRoundVideo || isPureMedia)
-        ? Colors.transparent
-        : bubbleColor;
 
     final TextStyle textStyle = TextStyle(
       fontSize: themeExt?.messageFontSize ?? 16.0,
@@ -1205,7 +1220,8 @@ class MessageBubble extends StatelessWidget {
           );
 
     final double effectiveViewportWidth =
-        TileViewportScope.widthOf(context) - (hasAvatarGutter ? 38.0 : 0.0);
+        TileViewportScope.widthOf(context) -
+            (hasAvatarGutter ? GroupMessageAvatarRow.gutterWidth : 0.0);
     final double maxOuterBubbleWidth = math.min(
       math.max(180.0, effectiveViewportWidth * 0.76),
       kMaxMessageBubbleWidth,
@@ -1244,8 +1260,55 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    if (onThreadRootTap != null &&
+        message.threadRootMessageId != null &&
+        message.threadRootMessageId!.isNotEmpty) {
+      final Color tagColor = isMe
+          ? bubbleSubtextColor
+          : effectivePreset.primaryColor;
+      final Widget threadTag = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onThreadRootTap,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 4.0),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              iconoir.ChatLines(
+                width: 12,
+                height: 12,
+                color: tagColor,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Комментарий к посту',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: tagColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      replyWidget = replyWidget == null
+          ? threadTag
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                threadTag,
+                replyWidget,
+              ],
+            );
+    }
+
     Widget? senderNameWidget;
     const double senderNameWidthEstimate = 0.0;
+    final bool hasSenderInBubble = !isMe &&
+        ((senderHeaderWidget != null) ||
+            (senderName != null && senderName!.isNotEmpty));
     if (!isMe && senderHeaderWidget != null) {
       senderNameWidget = Padding(
         padding: const EdgeInsets.only(bottom: 4.0),
@@ -1266,6 +1329,15 @@ class MessageBubble extends StatelessWidget {
         ),
       );
     }
+
+    final bool isPureMedia = hasMedia &&
+        !hasCaption &&
+        !_isAudio &&
+        !_isVoice &&
+        ((_isSticker || _isGif) || (!hasSenderInBubble && replyWidget == null));
+    final Color backgroundColor = (isBigEmoji || _isRoundVideo || isPureMedia)
+        ? Colors.transparent
+        : bubbleColor;
 
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -1518,25 +1590,30 @@ class MessageBubble extends StatelessWidget {
         );
       }
 
-      if (replyWidget != null || (!isMe && senderName != null && senderName!.isNotEmpty)) {
+      if (replyWidget != null || hasSenderInBubble) {
         mediaContentWidget = Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            if (!isMe && senderName != null && senderName!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4.0),
-                child: Text(
-                  senderName!,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: effectivePreset.primaryColor,
+            if (hasSenderInBubble)
+              if (_isRoundVideo || _isSticker || _isGif)
+                Container(
+                  constraints: BoxConstraints(maxWidth: math.min(mediaWidth, 230.0)),
+                  margin: const EdgeInsets.only(bottom: 4.0),
+                  padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 5.0),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(14.0),
                   ),
+                  child: senderNameWidget,
+                )
+              else
+                SizedBox(
+                  width: _isVoice ? 240.0 : mediaWidth,
+                  child: senderNameWidget,
                 ),
-              ),
             if (replyWidget != null) ...[
-              if (_isRoundVideo)
+              if (_isRoundVideo || _isSticker || _isGif)
                 Container(
                   width: math.min(mediaWidth, 230.0),
                   margin: const EdgeInsets.only(bottom: 6.0),
@@ -1566,7 +1643,7 @@ class MessageBubble extends StatelessWidget {
         ? EdgeInsets.zero
         : _isVoice
             ? const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4.0)
-            : (hasMedia && !hasCaption && replyWidget == null && (senderName == null || senderName!.isEmpty || isMe))
+            : (hasMedia && !hasCaption && replyWidget == null && !hasSenderInBubble)
                 ? const EdgeInsets.all(4.0)
                 : const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0);
 
@@ -1620,30 +1697,68 @@ class MessageBubble extends StatelessWidget {
       child: bubbleContent,
     );
 
-    final Widget decoratedBubble = MetaData(
+    final bool hasBubbleBackground = backgroundColor != Colors.transparent;
+    final bool showTail = isLastInCluster && hasBubbleBackground;
+    final BorderRadius clusterBorderRadius = computeClusterBubbleBorderRadius(
+      isMe: isMe,
+      isFirstInCluster: isFirstInCluster,
+      isLastInCluster: isLastInCluster,
+      outerRadius: effectiveBubbleRadius,
+      innerRadius: 6.0,
+      tailCornerRadius: 4.0,
+      hasTail: showTail,
+    );
+    final Color tailColor =
+        useBubbleGradient ? activeGradientColors.last : backgroundColor;
+
+    final Widget bubbleBox = MetaData(
       metaData: 'message_bubble_box',
       child: useBubbleGradient
           ? ViewportGradientBox(
-              borderRadius: BorderRadius.circular(effectiveBubbleRadius),
+              borderRadius: clusterBorderRadius,
               gradientColors: activeGradientColors,
               solidColor: backgroundColor,
               child: paddedContent,
             )
-          : (backgroundColor == Colors.transparent
+          : (!hasBubbleBackground
               ? paddedContent
               : DecoratedBox(
                   decoration: BoxDecoration(
                     color: backgroundColor,
-                    borderRadius: BorderRadius.circular(effectiveBubbleRadius),
+                    borderRadius: clusterBorderRadius,
                   ),
                   child: paddedContent,
                 )),
     );
 
+    final Widget decoratedBubble = showTail
+        ? Stack(
+            clipBehavior: Clip.none,
+            children: [
+              bubbleBox,
+              Positioned(
+                right: isMe ? -BubbleTailPainter.horizontalOutset : null,
+                left: isMe ? null : -BubbleTailPainter.horizontalOutset,
+                bottom: 0.0,
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    size: BubbleTailPainter.defaultSize,
+                    painter: BubbleTailPainter(
+                      color: tailColor,
+                      isMe: isMe,
+                      cornerRadius: math.min(effectiveBubbleRadius, 4.0),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          )
+        : bubbleBox;
+
     Widget bubbleCore = Container(
       margin: EdgeInsets.only(
-        top: 3.0,
-        bottom: 3.0,
+        top: isFirstInCluster ? 4.0 : 2.0,
+        bottom: isLastInCluster ? 4.0 : 2.0,
         left: hasAvatarGutter ? 0.0 : 8.0,
         right: 8.0,
       ),

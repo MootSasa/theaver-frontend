@@ -44,7 +44,17 @@ class Chats extends Table {
   BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
   TextColumn get peerCustomizationJson => text().nullable()();
   BoolColumn get showAuthorProfiles =>
-      boolean().withDefault(const Constant(true))();
+      boolean().withDefault(const Constant(false))();
+  BoolColumn get signMessages =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get linkedChatId => text().nullable()();
+  TextColumn get myRole => text().nullable()();
+  TextColumn get lastMessageSenderId => text().nullable()();
+  TextColumn get lastMessageSenderName => text().nullable()();
+  BoolColumn get hasActiveCall =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get chatPermissionsJson => text().nullable()();
+  TextColumn get reactionSettingsJson => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -104,6 +114,19 @@ class Messages extends Table {
 
   // Dedicated media payload (waveform, duration, thumb, metadata)
   TextColumn get mediaPayload => text().nullable()();
+
+  // Channel posts, views, signatures, anonymous admins, silent posts & comments
+  IntColumn get viewsCount => integer().withDefault(const Constant(0))();
+  TextColumn get authorSignature => text().nullable()();
+  TextColumn get postAuthorId => text().nullable()();
+  TextColumn get senderRole => text().nullable()();
+  TextColumn get senderAdminTitle => text().nullable()();
+  BoolColumn get isFromAnonymousAdmin =>
+      boolean().withDefault(const Constant(false))();
+  BoolColumn get isSilent => boolean().withDefault(const Constant(false))();
+  IntColumn get commentsCount => integer().withDefault(const Constant(0))();
+  TextColumn get recentRepliersJson => text().nullable()();
+  TextColumn get threadRootMessageId => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {localId};
@@ -211,8 +234,22 @@ class AppDatabase extends _$AppDatabase {
     } catch (_) {}
   }
 
+  Future<void> _addColumnIfMissing(
+    String tableName,
+    String columnName,
+    String sqlDefinition,
+  ) async {
+    final cols = await customSelect('PRAGMA table_info($tableName)').get();
+    final exists = cols.any((row) => row.data['name'] == columnName);
+    if (!exists) {
+      await customStatement(
+        'ALTER TABLE $tableName ADD COLUMN $columnName $sqlDefinition',
+      );
+    }
+  }
+
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -230,6 +267,9 @@ class AppDatabase extends _$AppDatabase {
           );
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_messages_grouped_id ON messages(grouped_id) WHERE grouped_id IS NOT NULL',
+          );
+          await customStatement(
+            'CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(chat_id, thread_root_message_id, created_at) WHERE thread_root_message_id IS NOT NULL',
           );
         },
         onUpgrade: (Migrator m, int from, int to) async {
@@ -357,6 +397,58 @@ class AppDatabase extends _$AppDatabase {
             );
             await customStatement(
               'ALTER TABLE messages ADD COLUMN sender_customization_json TEXT',
+            );
+          }
+          if (from < 13) {
+            await _addColumnIfMissing(
+              'chats',
+              'sign_messages',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('chats', 'linked_chat_id', 'TEXT');
+            await _addColumnIfMissing('chats', 'my_role', 'TEXT');
+            await _addColumnIfMissing('chats', 'last_message_sender_id', 'TEXT');
+            await _addColumnIfMissing('chats', 'last_message_sender_name', 'TEXT');
+            await _addColumnIfMissing(
+              'chats',
+              'has_active_call',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('chats', 'chat_permissions_json', 'TEXT');
+            await _addColumnIfMissing('chats', 'reaction_settings_json', 'TEXT');
+            await customStatement(
+              "UPDATE chats SET show_author_profiles = 0 WHERE chat_type = 'channel'",
+            );
+
+            await _addColumnIfMissing(
+              'messages',
+              'views_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'author_signature', 'TEXT');
+            await _addColumnIfMissing('messages', 'post_author_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'sender_role', 'TEXT');
+            await _addColumnIfMissing('messages', 'sender_admin_title', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'is_from_anonymous_admin',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'is_silent',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'comments_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'recent_repliers_json', 'TEXT');
+            await _addColumnIfMissing('messages', 'thread_root_message_id', 'TEXT');
+
+            await customStatement(
+              'CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(chat_id, thread_root_message_id, created_at) WHERE thread_root_message_id IS NOT NULL',
             );
           }
         },
@@ -622,6 +714,8 @@ class AppDatabase extends _$AppDatabase {
     bool isRound = false,
     String? fileUrl,
     String? groupedId,
+    String? senderId,
+    String? senderName,
     bool incrementUnread = false,
   }) async {
     await ensureInitialized();
@@ -637,6 +731,10 @@ class AppDatabase extends _$AppDatabase {
         lastMessageIsRound: Value(isRound),
         lastMessageFileUrl: Value(fileUrl),
         lastMessageGroupedId: Value(groupedId),
+        lastMessageSenderId:
+            senderId != null ? Value(senderId) : const Value.absent(),
+        lastMessageSenderName:
+            senderName != null ? Value(senderName) : const Value.absent(),
         updatedAt: Value(createdAt),
         unreadCount: Value(newUnread),
       ),
@@ -661,6 +759,8 @@ class AppDatabase extends _$AppDatabase {
           lastMessageIsRound: Value(isRound),
           lastMessageFileUrl: Value(lastMsg.fileUrl),
           lastMessageGroupedId: Value(lastMsg.groupedId),
+          lastMessageSenderId: Value(lastMsg.senderId),
+          lastMessageSenderName: Value(lastMsg.senderName),
           updatedAt: Value(lastMsg.createdAt),
         ),
       );
@@ -673,6 +773,8 @@ class AppDatabase extends _$AppDatabase {
           lastMessageIsRound: Value(false),
           lastMessageFileUrl: Value(null),
           lastMessageGroupedId: Value(null),
+          lastMessageSenderId: Value(null),
+          lastMessageSenderName: Value(null),
         ),
       );
     }
@@ -828,26 +930,95 @@ class AppDatabase extends _$AppDatabase {
 
   // === СООБЩЕНИЯ ===
 
-  /// Получить сообщения чата с пагинацией
+  /// Получить сообщения чата с пагинацией (исключая комментарии тредов по умолчанию)
   /// [beforeCreatedAt] — курсор (ISO 8601), загружать сообщения старше этого
   /// [limit] — количество
   Future<List<DbMessage>> getMessages(
     String chatId, {
     String? beforeCreatedAt,
     int limit = 50,
+    bool includeThreadComments = false,
   }) async {
     await ensureInitialized();
     final stmt = select(messages);
-    if (beforeCreatedAt != null) {
-      stmt.where((t) =>
-          t.chatId.equals(chatId) &
-          t.createdAt.isSmallerThanValue(beforeCreatedAt));
-    } else {
-      stmt.where((t) => t.chatId.equals(chatId));
-    }
-    stmt.orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.localId)]);
+    stmt.where((t) {
+      Expression<bool> cond = t.chatId.equals(chatId);
+      if (!includeThreadComments) {
+        cond = cond &
+            (t.threadRootMessageId.isNull() | t.threadRootMessageId.equals(''));
+      }
+      if (beforeCreatedAt != null) {
+        cond = cond & t.createdAt.isSmallerThanValue(beforeCreatedAt);
+      }
+      return cond;
+    });
+    stmt.orderBy([
+      (t) => OrderingTerm.desc(t.createdAt),
+      (t) => OrderingTerm.desc(t.localId),
+    ]);
     stmt.limit(limit);
     return stmt.get();
+  }
+
+  /// Реактивный поток сообщений основной ленты чата (включая зеркалированные посты канала, но без комментариев внутри тредов)
+  Stream<List<DbMessage>> watchMessagesForChat(
+    String chatId, {
+    int limit = 50,
+    bool includeThreadComments = false,
+  }) {
+    final stmt = select(messages)
+      ..where((t) {
+        Expression<bool> cond = t.chatId.equals(chatId);
+        if (!includeThreadComments) {
+          cond = cond &
+              (t.threadRootMessageId.isNull() |
+                  t.threadRootMessageId.equals(''));
+        }
+        return cond;
+      })
+      ..orderBy([
+        (t) => OrderingTerm.desc(t.createdAt),
+        (t) => OrderingTerm.desc(t.localId),
+      ])
+      ..limit(limit);
+    return stmt.watch();
+  }
+
+  /// Реактивный поток комментариев под постом канала в группе обсуждения
+  Stream<List<DbMessage>> watchThreadComments(
+    String chatId,
+    String rootMessageId, {
+    int limit = 100,
+  }) {
+    final stmt = select(messages)
+      ..where((t) =>
+          t.chatId.equals(chatId) &
+          t.threadRootMessageId.equals(rootMessageId))
+      ..orderBy([
+        (t) => OrderingTerm.asc(t.createdAt),
+        (t) => OrderingTerm.asc(t.localId),
+      ])
+      ..limit(limit);
+    return stmt.watch();
+  }
+
+  /// Получить комментарии к посту канала в группе обсуждения
+  Future<List<DbMessage>> getThreadComments(
+    String chatId,
+    String rootMessageId, {
+    int limit = 100,
+  }) async {
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              t.threadRootMessageId.equals(rootMessageId))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.localId),
+          ])
+          ..limit(limit))
+        .get();
   }
 
   /// Получить сообщение по localId
@@ -976,6 +1147,55 @@ class AppDatabase extends _$AppDatabase {
     ));
   }
 
+  /// Обновить счётчик просмотров одного сообщения
+  Future<void> updateMessageViews(String messageId, int viewsCount) async {
+    if (messageId.isEmpty) return;
+    await ensureInitialized();
+    await (update(messages)
+          ..where((t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId)))
+        .write(MessagesCompanion(viewsCount: Value(viewsCount)));
+  }
+
+  /// Пакетно обновить счётчики просмотров сообщений
+  Future<void> updateMessagesViews(Map<String, int> viewsByMessageId) async {
+    if (viewsByMessageId.isEmpty) return;
+    await ensureInitialized();
+    await batch((b) {
+      viewsByMessageId.forEach((messageId, viewsCount) {
+        if (messageId.isEmpty) return;
+        b.update(
+          messages,
+          MessagesCompanion(viewsCount: Value(viewsCount)),
+          where: (t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId),
+        );
+      });
+    });
+  }
+
+  /// Обновить количество комментариев и список последних комментаторов поста канала
+  Future<void> updatePostCommentsMeta({
+    required String messageId,
+    int? commentsCount,
+    String? recentRepliersJson,
+  }) async {
+    if (messageId.isEmpty) return;
+    await ensureInitialized();
+    await (update(messages)
+          ..where((t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId)))
+        .write(
+      MessagesCompanion(
+        commentsCount:
+            commentsCount != null ? Value(commentsCount) : const Value.absent(),
+        recentRepliersJson: recentRepliersJson != null
+            ? Value(recentRepliersJson)
+            : const Value.absent(),
+      ),
+    );
+  }
+
   /// Удалить сообщение по serverId или localId
   Future<void> deleteMessage(String messageId) async {
     await (delete(messages)
@@ -983,10 +1203,13 @@ class AppDatabase extends _$AppDatabase {
         .go();
   }
 
-  /// Получить последнее сообщение чата
+  /// Получить последнее сообщение основной ленты чата
   Future<DbMessage?> getLastMessageForChat(String chatId) async {
     return (select(messages)
-          ..where((t) => t.chatId.equals(chatId))
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.threadRootMessageId.isNull() |
+                  t.threadRootMessageId.equals('')))
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
           ..limit(1))
         .getSingleOrNull();
@@ -1137,6 +1360,86 @@ class AppDatabase extends _$AppDatabase {
     await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
       ChatsCompanion(
         showAuthorProfiles: Value(showAuthorProfiles),
+      ),
+    );
+  }
+
+  /// Обновить привязанный чат обсуждений (канал <-> группа)
+  Future<void> updateChatLinkedChatId(
+    String chatId,
+    String? linkedChatId,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        linkedChatId: Value(
+          (linkedChatId != null && linkedChatId.isNotEmpty)
+              ? linkedChatId
+              : null,
+        ),
+      ),
+    );
+  }
+
+  /// Обновить статус активного звонка / видеочата в чате
+  Future<void> updateChatActiveCall(
+    String chatId,
+    bool hasActiveCall,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(hasActiveCall: Value(hasActiveCall)),
+    );
+  }
+
+  /// Обновить настройки группы/канала в локальной БД
+  Future<void> updateChatSettings(
+    String chatId, {
+    String? name,
+    String? avatarUrl,
+    bool updateAvatarUrl = false,
+    String? username,
+    bool updateUsername = false,
+    bool? isPublic,
+    bool? showAuthorProfiles,
+    bool? signMessages,
+    String? linkedChatId,
+    bool updateLinkedChatId = false,
+    String? myRole,
+    bool? hasActiveCall,
+    String? chatPermissionsJson,
+    String? reactionSettingsJson,
+  }) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        name: name != null ? Value(name) : const Value.absent(),
+        avatarUrl: updateAvatarUrl ? Value(avatarUrl) : const Value.absent(),
+        username: updateUsername ? Value(username) : const Value.absent(),
+        isPublic: isPublic != null ? Value(isPublic) : const Value.absent(),
+        showAuthorProfiles: showAuthorProfiles != null
+            ? Value(showAuthorProfiles)
+            : const Value.absent(),
+        signMessages:
+            signMessages != null ? Value(signMessages) : const Value.absent(),
+        linkedChatId: updateLinkedChatId
+            ? Value((linkedChatId != null && linkedChatId.isNotEmpty)
+                ? linkedChatId
+                : null)
+            : const Value.absent(),
+        myRole: myRole != null ? Value(myRole) : const Value.absent(),
+        hasActiveCall: hasActiveCall != null
+            ? Value(hasActiveCall)
+            : const Value.absent(),
+        chatPermissionsJson: chatPermissionsJson != null
+            ? Value(chatPermissionsJson)
+            : const Value.absent(),
+        reactionSettingsJson: reactionSettingsJson != null
+            ? Value(reactionSettingsJson)
+            : const Value.absent(),
       ),
     );
   }

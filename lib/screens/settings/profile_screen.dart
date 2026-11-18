@@ -54,10 +54,16 @@ import 'change_email_screen.dart';
 import '../../widgets/profile/profile_content_tabs.dart';
 import '../../widgets/profile/profile_section_pill.dart';
 import '../../widgets/profile/qr_code_dialog.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../chat/channel_screen.dart';
 import '../chat/edit_group_channel_screen.dart';
 import '../chat/group_chat_screen.dart';
 import '../chat/private_chat_screen.dart';
+import '../chat/settings/admin_rights_screen.dart';
+import '../chat/settings/channel_discussion_settings_screen.dart';
+import '../chat/settings/chat_reactions_settings_screen.dart';
+import '../chat/settings/group_permissions_screen.dart';
+import '../chat/settings/invite_links_screen.dart';
 import 'edit_profile_screen.dart';
 import 'profile_customization_screen.dart';
 
@@ -162,10 +168,17 @@ class ProfileScreenState extends State<ProfileScreen>
   bool _isPublic = false;
   bool _historyForNew = true;
   int _slowModeInterval = 0;
-  bool _showAuthorProfiles = true;
+  bool _signMessages = false;
+  bool _showAuthorProfiles = false;
+  String? _linkedChatId;
+  LinkedChatSummary? _linkedChat;
+  GroupDefaultPermissions _defaultPermissions = const GroupDefaultPermissions();
+  ReactionSettings _reactionSettings = const ReactionSettings();
+  AdminRights? _myAdminPermissions;
   int _memberCount = 0;
   String _myRole = 'member';
   List<ProfileMemberItem> _members = [];
+  List<ChatParticipant> _participants = [];
 
   // Музыкальный статус
   String? _musicTitle;
@@ -274,12 +287,26 @@ class ProfileScreenState extends State<ProfileScreen>
       (_isGroup || _isChannel) && (_myRole == 'owner' || _myRole == 'admin');
 
   bool get _canAddGroupMembers =>
-      _isGroup && (_myRole == 'owner' || _myRole == 'admin' || _isPublic);
+      _isGroup &&
+      (_myRole == 'owner' ||
+          _myRole == 'admin' ||
+          (_isPublic && _defaultPermissions.canInviteUsers));
+
+  bool get _canManageAdminRights =>
+      (_isGroup || _isChannel) &&
+      (_myRole == 'owner' ||
+          (_myRole == 'admin' && (_myAdminPermissions?.canAddAdmins ?? false)));
+
+  bool get _canRestrictOrBanMembers =>
+      (_isGroup || _isChannel) &&
+      (_myRole == 'owner' ||
+          (_myRole == 'admin' && (_myAdminPermissions?.canBanUsers ?? true)));
 
   @override
   void initState() {
     super.initState();
     _entityType = _resolveEntityType();
+    _showAuthorProfiles = !_isChannel;
     _resolvedChatId = widget.chatId;
 
     _nameController = TextEditingController();
@@ -923,47 +950,121 @@ class ProfileScreenState extends State<ProfileScreen>
     if (cid == null || cid.isEmpty) return;
 
     try {
-      final token = await AuthService.getToken();
-      final dio = Dio();
-      final settingsFuture = dio.get(
-        '${AppConfig.baseUrl}/api/chats/$cid/group-settings',
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
-      );
-      final membersFuture = dio.get(
-        '${AppConfig.baseUrl}/api/chats/$cid/members',
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
-      );
-
       final results = await Future.wait([
-        settingsFuture.catchError((_) => Response(
-              requestOptions: RequestOptions(path: ''),
-              statusCode: 400,
-            )),
-        membersFuture.catchError((_) => Response(
-              requestOptions: RequestOptions(path: ''),
-              statusCode: 400,
-            )),
+        ChatService.getChat(cid).catchError((_) => const <String, dynamic>{}),
+        ChatService.getGroupSettings(cid)
+            .catchError((_) => const <String, dynamic>{}),
+        ChatService.getGroupMembers(cid).catchError((_) => <ChatParticipant>[]),
       ]);
 
-      final settingsResp = results[0];
-      final membersResp = results[1];
+      final chatRes = results[0] as Map<String, dynamic>;
+      final settingsData = results[1] as Map<String, dynamic>;
+      final groupMembers = results[2] as List<ChatParticipant>;
       final currentUid = _accountManager.currentAccount?.userId;
 
       if (!mounted) return;
       setState(() {
-        if (settingsResp.statusCode == 200 && settingsResp.data is Map) {
-          final data = settingsResp.data as Map;
-          if (data['name'] != null && data['name'].toString().isNotEmpty) {
-            _nameController.text = data['name'].toString();
+        if (chatRes['success'] == true && chatRes['chat'] is ChatDetails) {
+          final details = chatRes['chat'] as ChatDetails;
+          _chatDetails = details;
+          if (details.name.isNotEmpty) {
+            _nameController.text = details.name;
           }
-          _bio = (data['description'] ?? '').toString();
-          _inviteLink = (data['invite_link'] ?? '').toString();
-          _isPublic = data['is_public'] == true;
-          _historyForNew = data['history_for_new'] ?? true;
-          _slowModeInterval = (data['slow_mode_interval'] as num?)?.toInt() ?? 0;
-          _showAuthorProfiles = data['show_author_profiles'] != false;
-          _memberCount = (data['member_count'] as num?)?.toInt() ?? 0;
-          final srvAvatar = data['avatar_url']?.toString();
+          if (details.description != null) {
+            _bio = details.description;
+          }
+          if (details.username != null) {
+            _usernameController.text = details.username!;
+          }
+          _isPublic = details.isPublic;
+          _historyForNew = details.historyForNewMembers;
+          _slowModeInterval = details.slowModeInterval;
+          _signMessages = details.signMessages;
+          _showAuthorProfiles = _isChannel
+              ? (_signMessages && details.showAuthorProfiles)
+              : details.showAuthorProfiles;
+          _linkedChatId = details.linkedChatId;
+          _linkedChat = details.linkedChat;
+          if (details.defaultPermissions != null) {
+            _defaultPermissions = details.defaultPermissions!;
+          }
+          if (details.reactionSettings != null) {
+            _reactionSettings = details.reactionSettings!;
+          }
+          _myAdminPermissions = details.myAdminPermissions;
+          if (details.myRole != null && details.myRole!.isNotEmpty) {
+            _myRole = details.myRole!;
+          }
+          final srvAvatar = details.avatarUrl;
+          if (srvAvatar != null && srvAvatar.isNotEmpty) {
+            _avatarUrl = srvAvatar;
+            if (!_avatarUrls.contains(srvAvatar)) {
+              _avatarUrls = [srvAvatar, ..._avatarUrls];
+            }
+          }
+          if (details.participants.isNotEmpty) {
+            _participants = _sortParticipants(details.participants);
+          }
+        }
+
+        if (settingsData['success'] == true) {
+          if (settingsData['name'] != null &&
+              settingsData['name'].toString().isNotEmpty) {
+            _nameController.text = settingsData['name'].toString();
+          }
+          if (settingsData['description'] != null) {
+            _bio = settingsData['description'].toString();
+          }
+          if (settingsData['username'] != null) {
+            _usernameController.text = settingsData['username'].toString();
+          }
+          _inviteLink = (settingsData['invite_link'] ?? '').toString();
+          _isPublic = settingsData['is_public'] == true;
+          _historyForNew = settingsData['history_for_new'] ?? _historyForNew;
+          _slowModeInterval =
+              (settingsData['slow_mode_interval'] as num?)?.toInt() ??
+                  _slowModeInterval;
+          if (settingsData['sign_messages'] is bool) {
+            _signMessages = settingsData['sign_messages'] as bool;
+          }
+          if (settingsData['show_author_profiles'] is bool) {
+            _showAuthorProfiles = _isChannel
+                ? (_signMessages &&
+                    (settingsData['show_author_profiles'] as bool))
+                : (settingsData['show_author_profiles'] as bool);
+          }
+          final rawLinked = settingsData['linked_chat_id']?.toString().trim();
+          if (rawLinked != null) {
+            _linkedChatId = rawLinked.isNotEmpty ? rawLinked : null;
+          }
+          final parsedLinked =
+              LinkedChatSummary.tryParse(settingsData['linked_chat']);
+          if (parsedLinked != null) {
+            _linkedChat = parsedLinked;
+          }
+          final parsedPerms = GroupDefaultPermissions.tryParse(
+            settingsData['default_permissions'],
+          );
+          if (parsedPerms != null) {
+            _defaultPermissions = parsedPerms;
+          }
+          final parsedReactions = ReactionSettings.fromChatJson(settingsData);
+          if (parsedReactions != null) {
+            _reactionSettings = parsedReactions;
+          }
+          final parsedAdminPerms = AdminRights.tryParse(
+            settingsData['my_admin_permissions'],
+          );
+          if (parsedAdminPerms != null) {
+            _myAdminPermissions = parsedAdminPerms;
+          }
+          if (settingsData['my_role'] != null &&
+              settingsData['my_role'].toString().isNotEmpty) {
+            _myRole = settingsData['my_role'].toString();
+          }
+          _memberCount =
+              (settingsData['member_count'] as num?)?.toInt() ?? _memberCount;
+          final srvAvatar = settingsData['avatar_url']?.toString();
           if (srvAvatar != null && srvAvatar.isNotEmpty) {
             _avatarUrl = srvAvatar;
             if (!_avatarUrls.contains(srvAvatar)) {
@@ -972,22 +1073,43 @@ class ProfileScreenState extends State<ProfileScreen>
           }
         }
 
-        if (membersResp.statusCode == 200 && membersResp.data is Map) {
-          final rawMembers = membersResp.data['members'] as List?;
-          if (rawMembers != null) {
-            _members = rawMembers
-                .whereType<Map>()
-                .map((m) =>
-                    ProfileMemberItem.fromJson(Map<String, dynamic>.from(m)))
-                .toList();
-            if (_memberCount == 0) {
-              _memberCount = _members.length;
-            }
-            if (currentUid != null) {
-              final me =
-                  _members.where((m) => m.userId == currentUid).firstOrNull;
-              if (me != null) {
-                _myRole = me.role;
+        if (groupMembers.isNotEmpty) {
+          final presenceById = {
+            for (final p in _participants) p.id: p,
+          };
+          _participants = _sortParticipants([
+            for (final gm in groupMembers)
+              gm.copyWith(
+                isOnline: presenceById[gm.id]?.isOnline ?? gm.isOnline,
+                lastSeen: presenceById[gm.id]?.lastSeen ?? gm.lastSeen,
+              ),
+          ]);
+        }
+
+        if (_participants.isNotEmpty) {
+          _members = _participants
+              .map(
+                (p) => ProfileMemberItem(
+                  userId: p.id,
+                  name: p.displayName.isNotEmpty ? p.displayName : p.username,
+                  username: p.username,
+                  avatarUrl: p.avatarUrl,
+                  role: p.role,
+                  isOnline: p.isOnline,
+                  lastSeen: p.lastSeen?.toIso8601String(),
+                ),
+              )
+              .toList();
+          if (_memberCount == 0) {
+            _memberCount = _members.length;
+          }
+          if (currentUid != null) {
+            final me =
+                _participants.where((m) => m.id == currentUid).firstOrNull;
+            if (me != null) {
+              _myRole = me.role;
+              if (me.adminPermissions != null) {
+                _myAdminPermissions = me.adminPermissions;
               }
             }
           }
@@ -1014,6 +1136,25 @@ class ProfileScreenState extends State<ProfileScreen>
       debugPrint('[ProfileScreen] Error loading group/channel profile: $e');
     }
   }
+
+  List<ChatParticipant> _sortParticipants(List<ChatParticipant> list) {
+    int rank(String role) {
+      if (role == 'owner') return 0;
+      if (role == 'admin') return 1;
+      return 2;
+    }
+
+    final sorted = List<ChatParticipant>.from(list);
+    sorted.sort((a, b) {
+      final rCmp = rank(a.role).compareTo(rank(b.role));
+      if (rCmp != 0) return rCmp;
+      if (a.isOnline != b.isOnline) return a.isOnline ? -1 : 1;
+      return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+    });
+    return sorted;
+  }
+
+  ChatDetails? _chatDetails;
 
   Future<void> _loadSharedContentForSelf() async {
     try {
@@ -1749,9 +1890,15 @@ class ProfileScreenState extends State<ProfileScreen>
           initialDescription: _bio ?? '',
           initialAvatarUrl: _avatarUrl,
           initialIsPublic: _isPublic,
+          initialUsername: _usernameController.text,
           initialHistoryForNew: _historyForNew,
           initialSlowModeInterval: _slowModeInterval,
+          initialSignMessages: _signMessages,
           initialShowAuthorProfiles: _showAuthorProfiles,
+          initialLinkedChatId: _linkedChatId,
+          initialLinkedChat: _linkedChat,
+          initialDefaultPermissions: _defaultPermissions,
+          initialReactionSettings: _reactionSettings,
           inviteLink: _inviteLink,
         ),
       ),
@@ -1775,17 +1922,133 @@ class ProfileScreenState extends State<ProfileScreen>
         if (result['is_public'] is bool) {
           _isPublic = result['is_public'] as bool;
         }
+        if (result['username'] != null) {
+          _usernameController.text = result['username'].toString();
+        }
         if (result['history_for_new'] is bool) {
           _historyForNew = result['history_for_new'] as bool;
         }
         if (result['slow_mode_interval'] is int) {
           _slowModeInterval = result['slow_mode_interval'] as int;
         }
+        if (result['sign_messages'] is bool) {
+          _signMessages = result['sign_messages'] as bool;
+        }
         if (result['show_author_profiles'] is bool) {
           _showAuthorProfiles = result['show_author_profiles'] as bool;
         }
+        if (result.containsKey('linked_chat_id')) {
+          final rawLinked = result['linked_chat_id']?.toString().trim() ?? '';
+          _linkedChatId = rawLinked.isNotEmpty ? rawLinked : null;
+        }
+        if (result.containsKey('linked_chat')) {
+          _linkedChat = result['linked_chat'] as LinkedChatSummary?;
+        }
+        if (result['default_permissions'] is GroupDefaultPermissions) {
+          _defaultPermissions =
+              result['default_permissions'] as GroupDefaultPermissions;
+        }
+        if (result['reaction_settings'] is ReactionSettings) {
+          _reactionSettings = result['reaction_settings'] as ReactionSettings;
+        }
+        if (result['invite_link'] != null) {
+          _inviteLink = result['invite_link'].toString();
+        }
       });
+      unawaited(_loadGroupOrChannelProfile());
       widget.onUpdate?.call();
+    }
+  }
+
+  Future<void> _openDiscussionQuickSettings() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    final res = await Navigator.push<Map<String, dynamic>>(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ChannelDiscussionSettingsScreen(
+          channelId: cid,
+          channelName: _getDisplayName(),
+          currentLinkedChatId: _linkedChatId ?? _chatDetails?.linkedChatId,
+          currentLinkedChat: _linkedChat ?? _chatDetails?.linkedChat,
+        ),
+      ),
+    );
+    if (res != null && mounted) {
+      setState(() {
+        final rawId = res['linked_chat_id']?.toString().trim() ?? '';
+        _linkedChatId = rawId.isNotEmpty ? rawId : null;
+        _linkedChat = res['linked_chat'] as LinkedChatSummary?;
+      });
+      unawaited(_loadGroupOrChannelProfile());
+    }
+  }
+
+  Future<void> _openPermissionsQuickSettings() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    final res = await Navigator.push<Map<String, dynamic>>(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => GroupPermissionsScreen(
+          chatId: cid,
+          initialPermissions: _defaultPermissions,
+          initialSlowMode: _slowModeInterval,
+        ),
+      ),
+    );
+    if (res != null && mounted) {
+      setState(() {
+        if (res['default_permissions'] is GroupDefaultPermissions) {
+          _defaultPermissions =
+              res['default_permissions'] as GroupDefaultPermissions;
+        }
+        if (res['slow_mode_interval'] is int) {
+          _slowModeInterval = res['slow_mode_interval'] as int;
+        }
+      });
+      unawaited(_loadGroupOrChannelProfile());
+    }
+  }
+
+  Future<void> _openReactionsQuickSettings() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    final updated = await Navigator.push<ReactionSettings>(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ChatReactionsSettingsScreen(
+          chatId: cid,
+          initialSettings: _reactionSettings,
+        ),
+      ),
+    );
+    if (updated != null && mounted) {
+      setState(() => _reactionSettings = updated);
+      unawaited(_loadGroupOrChannelProfile());
+    }
+  }
+
+  Future<void> _openInviteLinksQuickSettings() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    final updatedPrimary = await Navigator.push<String>(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => InviteLinksScreen(
+          chatId: cid,
+          chatType: _isChannel ? 'channel' : 'group',
+          primaryInviteLink: _inviteLink,
+        ),
+      ),
+    );
+    if (updatedPrimary != null && updatedPrimary.isNotEmpty && mounted) {
+      setState(() => _inviteLink = updatedPrimary);
+      unawaited(_loadGroupOrChannelProfile());
     }
   }
 
@@ -1904,6 +2167,7 @@ class ProfileScreenState extends State<ProfileScreen>
       );
       setState(() {
         _members.removeWhere((m) => m.userId == member.userId);
+        _participants.removeWhere((p) => p.id == member.userId);
         if (_memberCount > 0) _memberCount--;
       });
       if (mounted) {
@@ -1920,6 +2184,958 @@ class ProfileScreenState extends State<ProfileScreen>
             _tr(l10n, 'profile_member_remove_error', 'Не удалось удалить участника'));
       }
     }
+  }
+
+  Future<void> _openMemberAdminRights(ChatParticipant participant) async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    final changed = await Navigator.push<bool>(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => AdminRightsScreen(
+          chatId: cid,
+          chatType: _isChannel ? 'channel' : 'group',
+          participant: participant,
+          isOwnerCaller: _myRole == 'owner',
+        ),
+      ),
+    );
+    if (changed == true && mounted) {
+      await _loadGroupOrChannelProfile();
+    }
+  }
+
+  Future<void> _confirmBanMember(ChatParticipant participant) async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final targetName = participant.displayName.isNotEmpty
+        ? participant.displayName
+        : '@${participant.username}';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
+        title: Text(
+          'Заблокировать в чате?',
+          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+        ),
+        content: Text(
+          '$targetName будет удалён(а) и не сможет снова вступить в этот чат.',
+          style: TextStyle(
+            color: isDark ? Colors.white70 : const Color(0xFF475569),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Заблокировать',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    HapticUtils.tap();
+    final ok = await ChatService.banChatMember(
+      chatId: cid,
+      userId: participant.id,
+    );
+    if (!mounted) return;
+    if (ok) {
+      setState(() {
+        _participants.removeWhere((p) => p.id == participant.id);
+        _members.removeWhere((m) => m.userId == participant.id);
+        if (_memberCount > 0) _memberCount--;
+      });
+      _showToast('$targetName заблокирован(а)');
+    } else {
+      _showToast('Не удалось заблокировать пользователя');
+    }
+  }
+
+  Future<void> _showRestrictMemberSheet(ChatParticipant participant) async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accentColor =
+        isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final subColor = isDark
+        ? Colors.white.withValues(alpha: 0.68)
+        : const Color(0xFF475569);
+
+    var current = participant.memberRestrictions ??
+        MemberRestrictions(
+          canSendMessages: _defaultPermissions.canSendMessages,
+          canSendMedia: _defaultPermissions.canSendMedia,
+          canSendStickersGifs: _defaultPermissions.canSendStickersGifs,
+          canSendPolls: _defaultPermissions.canSendPolls,
+          canPinMessages: _defaultPermissions.canPinMessages,
+          canInviteUsers: _defaultPermissions.canInviteUsers,
+          canChangeInfo: _defaultPermissions.canChangeInfo,
+        );
+    Duration? duration;
+    var saving = false;
+
+    final durations = <({String label, Duration? value})>[
+      (label: 'Навсегда', value: null),
+      (label: '1 час', value: const Duration(hours: 1)),
+      (label: '1 день', value: const Duration(days: 1)),
+      (label: '1 неделя', value: const Duration(days: 7)),
+      (label: '1 месяц', value: const Duration(days: 30)),
+    ];
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SettingsAttachedSheet(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Ограничить права: ${participant.displayName}',
+                  style: TextStyle(
+                    fontSize: 17.5,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _buildRestrictionSwitch(
+                  'Отправка сообщений',
+                  current.canSendMessages,
+                  accentColor,
+                  textColor,
+                  (v) => setSheetState(
+                    () => current = current.copyWith(canSendMessages: v),
+                  ),
+                ),
+                _buildRestrictionSwitch(
+                  'Отправка медиа',
+                  current.canSendMedia,
+                  accentColor,
+                  textColor,
+                  (v) => setSheetState(
+                    () => current = current.copyWith(canSendMedia: v),
+                  ),
+                ),
+                _buildRestrictionSwitch(
+                  'Стикеры и GIF',
+                  current.canSendStickersGifs,
+                  accentColor,
+                  textColor,
+                  (v) => setSheetState(
+                    () => current = current.copyWith(canSendStickersGifs: v),
+                  ),
+                ),
+                _buildRestrictionSwitch(
+                  'Опросы',
+                  current.canSendPolls,
+                  accentColor,
+                  textColor,
+                  (v) => setSheetState(
+                    () => current = current.copyWith(canSendPolls: v),
+                  ),
+                ),
+                _buildRestrictionSwitch(
+                  'Добавление участников',
+                  current.canInviteUsers,
+                  accentColor,
+                  textColor,
+                  (v) => setSheetState(
+                    () => current = current.copyWith(canInviteUsers: v),
+                  ),
+                ),
+                _buildRestrictionSwitch(
+                  'Закрепление сообщений',
+                  current.canPinMessages,
+                  accentColor,
+                  textColor,
+                  (v) => setSheetState(
+                    () => current = current.copyWith(canPinMessages: v),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'СРОК ОГРАНИЧЕНИЯ',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: subColor,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final opt in durations)
+                      ChoiceChip(
+                        label: Text(opt.label),
+                        selected: duration == opt.value,
+                        onSelected: (_) =>
+                            setSheetState(() => duration = opt.value),
+                        selectedColor: accentColor.withValues(alpha: 0.22),
+                        labelStyle: TextStyle(
+                          color: duration == opt.value
+                              ? accentColor
+                              : textColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: Builder(
+                    builder: (_) {
+                      final buttonFg = accentColor.computeLuminance() > 0.35
+                          ? const Color(0xFF0F172A)
+                          : Colors.white;
+                      return FilledButton(
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                setSheetState(() => saving = true);
+                                final until = duration != null
+                                    ? DateTime.now().add(duration!)
+                                    : null;
+                                final ok =
+                                    await ChatService.updateMemberRestrictions(
+                                  chatId: cid,
+                                  userId: participant.id,
+                                  restrictions: current,
+                                  restrictedUntil: until,
+                                );
+                                if (ctx.mounted) Navigator.pop(ctx, ok);
+                              },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: accentColor,
+                          foregroundColor: buttonFg,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text('Сохранить ограничения'),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (saved == true && mounted) {
+      _showToast('Ограничения обновлены');
+      await _loadGroupOrChannelProfile();
+    }
+  }
+
+  Widget _buildRestrictionSwitch(
+    String title,
+    bool value,
+    Color accentColor,
+    Color textColor,
+    ValueChanged<bool> onChanged,
+  ) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      minTileHeight: 46,
+      title: Text(title, style: TextStyle(color: textColor, fontSize: 15)),
+      trailing: Switch.adaptive(
+        value: value,
+        activeThumbColor: accentColor,
+        onChanged: onChanged,
+      ),
+      onTap: () => onChanged(!value),
+    );
+  }
+
+  Widget _buildGroupAdminQuickSettingsCard(
+    BuildContext context, {
+    required bool isGlass,
+    required bool isLite,
+    required bool isDark,
+    required bool hasColoredTheme,
+  }) {
+    final effectiveDark = isDark || hasColoredTheme;
+    final textColor = effectiveDark ? Colors.white : const Color(0xFF1C1C1E);
+    final subColor = effectiveDark
+        ? Colors.white.withValues(alpha: 0.65)
+        : const Color(0xFF475569);
+    final accentColor =
+        effectiveDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final dividerColor = effectiveDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.black.withValues(alpha: 0.06);
+
+    int enabledPermsCount = 0;
+    if (_defaultPermissions.canSendMessages) enabledPermsCount++;
+    if (_defaultPermissions.canSendMedia) enabledPermsCount++;
+    if (_defaultPermissions.canSendStickersGifs) enabledPermsCount++;
+    if (_defaultPermissions.canSendPolls) enabledPermsCount++;
+    if (_defaultPermissions.canInviteUsers) enabledPermsCount++;
+    if (_defaultPermissions.canPinMessages) enabledPermsCount++;
+    if (_defaultPermissions.canChangeInfo) enabledPermsCount++;
+
+    final reactionsLabel = _reactionSettings.isNone
+        ? 'Выкл'
+        : (_reactionSettings.isSelected
+            ? 'Выбрано ${_reactionSettings.allowedReactions.length}'
+            : 'Все');
+
+    final rows = <Widget>[
+      if (_isChannel)
+        _buildQuickSettingRow(
+          icon: iconoir.ChatLines(width: 20, height: 20, color: accentColor),
+          title: 'Обсуждение',
+          trailingText: _linkedChat?.name.isNotEmpty == true
+              ? _linkedChat!.name
+              : ((_linkedChatId ?? '').isNotEmpty
+                  ? 'Группа #$_linkedChatId'
+                  : 'Добавить группу'),
+          accentColor: accentColor,
+          textColor: textColor,
+          subColor: subColor,
+          onTap: _openDiscussionQuickSettings,
+        ),
+      if (_isGroup)
+        _buildQuickSettingRow(
+          icon: iconoir.Lock(width: 20, height: 20, color: accentColor),
+          title: 'Разрешения',
+          trailingText: '$enabledPermsCount/7',
+          accentColor: accentColor,
+          textColor: textColor,
+          subColor: subColor,
+          onTap: _openPermissionsQuickSettings,
+        ),
+      _buildQuickSettingRow(
+        icon: iconoir.Heart(width: 20, height: 20, color: accentColor),
+        title: 'Реакции',
+        trailingText: reactionsLabel,
+        accentColor: accentColor,
+        textColor: textColor,
+        subColor: subColor,
+        onTap: _openReactionsQuickSettings,
+      ),
+      _buildQuickSettingRow(
+        icon: iconoir.Link(width: 20, height: 20, color: accentColor),
+        title: 'Пригласительные ссылки',
+        trailingText: _inviteLink.isNotEmpty ? 'Открыть' : '',
+        accentColor: accentColor,
+        textColor: textColor,
+        subColor: subColor,
+        onTap: _openInviteLinksQuickSettings,
+      ),
+    ];
+
+    final inner = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int i = 0; i < rows.length; i++) ...[
+          rows[i],
+          if (i < rows.length - 1)
+            Divider(height: 1, indent: 54, color: dividerColor),
+        ],
+      ],
+    );
+
+    if (isGlass) {
+      final glassProvider = context.watch<LiquidGlassProvider>();
+      final glassStyle = glassProvider.createStyle(
+        context: context,
+        isDarkOverride: effectiveDark,
+        isLiteOverride: isLite,
+        color: effectiveDark
+            ? const Color(0x33202025)
+            : const Color(0x66FFFFFF),
+        refractionIndex: 1.15,
+        refractionWidth: 22.0,
+        shape: const LiquidGlassShape.continuousRoundedRectangle(
+          cornerRadius: 24,
+        ),
+      );
+      return LiquidGlassLens(
+        style: glassStyle,
+        child: Container(
+          decoration: effectiveDark
+              ? null
+              : BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    width: 0.5,
+                  ),
+                ),
+          child: Material(type: MaterialType.transparency, child: inner),
+        ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          decoration: BoxDecoration(
+            color: effectiveDark
+                ? const Color(0x99262628)
+                : const Color(0xB3FFFFFF),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: effectiveDark
+                  ? Colors.white.withValues(alpha: 0.12)
+                  : Colors.black.withValues(alpha: 0.08),
+              width: 0.5,
+            ),
+          ),
+          child: Material(type: MaterialType.transparency, child: inner),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickSettingRow({
+    required Widget icon,
+    required String title,
+    required String trailingText,
+    required Color accentColor,
+    required Color textColor,
+    required Color subColor,
+    required VoidCallback onTap,
+  }) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 48),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+        leading: SizedBox(width: 24, child: Center(child: icon)),
+        title: Text(
+          title,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+            color: textColor,
+          ),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (trailingText.isNotEmpty)
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 120),
+                child: Text(
+                  trailingText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w500,
+                    color: accentColor,
+                  ),
+                ),
+              ),
+            const SizedBox(width: 4),
+            iconoir.NavArrowRight(width: 17, height: 17, color: subColor),
+          ],
+        ),
+        onTap: onTap,
+      ),
+    );
+  }
+
+  List<ChatParticipant> get _resolvedParticipantsForList {
+    if (_participants.isNotEmpty) return _participants;
+    return _members
+        .map(
+          (m) => ChatParticipant(
+            id: m.userId,
+            username: m.username,
+            displayName: m.displayName,
+            avatarUrl: m.avatarUrl,
+            role: m.role,
+            isOnline: m.isOnline,
+          ),
+        )
+        .toList();
+  }
+
+  Widget _buildUpgradedMembersSection(
+    BuildContext context, {
+    required bool isDark,
+  }) {
+    final l10n = context.l10n;
+    final accentColor =
+        isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final subColor = isDark
+        ? Colors.white.withValues(alpha: 0.60)
+        : const Color(0xFF6C6C70);
+    final dividerColor = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.black.withValues(alpha: 0.06);
+    final list = _resolvedParticipantsForList;
+
+    if (list.isEmpty && !_canAddGroupMembers) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: accentColor.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: iconoir.Group(width: 26, height: 26, color: accentColor),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              _tr(l10n, 'group_no_members', 'Нет участников'),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: textColor,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_canAddGroupMembers) ...[
+          InkWell(
+            onTap: () {
+              HapticUtils.tap();
+              _showAddMemberDialog();
+            },
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: accentColor.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: iconoir.UserPlus(
+                      width: 20,
+                      height: 20,
+                      color: accentColor,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _tr(l10n, 'group_add_members', 'Добавить участников'),
+                      style: TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w500,
+                        color: accentColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (list.isNotEmpty)
+            Divider(height: 1, indent: 70, color: dividerColor),
+        ],
+        for (int i = 0; i < list.length; i++) ...[
+          _buildUpgradedMemberRow(
+            context,
+            list[i],
+            l10n: l10n,
+            isDark: isDark,
+            accentColor: accentColor,
+            textColor: textColor,
+            subColor: subColor,
+          ),
+          if (i < list.length - 1)
+            Divider(height: 1, indent: 70, color: dividerColor),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildUpgradedMemberRow(
+    BuildContext context,
+    ChatParticipant member, {
+    required AppLocalizations l10n,
+    required bool isDark,
+    required Color accentColor,
+    required Color textColor,
+    required Color subColor,
+  }) {
+    final currentUid = _accountManager.currentAccount?.userId;
+    final isSelf = member.id == currentUid;
+    final canManageAdmins = _canManageAdminRights &&
+        ((member.role != 'owner' && !isSelf) ||
+            (member.role == 'owner' && isSelf));
+    final canModerate = _canRestrictOrBanMembers &&
+        !isSelf &&
+        member.role != 'owner' &&
+        (member.role != 'admin' || _myRole == 'owner');
+    final canShowMenu = canManageAdmins || canModerate;
+
+    final memberName = member.displayName.isNotEmpty
+        ? member.displayName
+        : (member.username.isNotEmpty
+            ? '@${member.username}'
+            : _tr(l10n, 'profile_default_user', 'Пользователь'));
+    final validAvatar = getValidAvatarUrl(member.avatarUrl);
+    final avatarProvider = avatarImageProvider(validAvatar);
+
+    final isRestricted = member.memberRestrictions != null &&
+        (member.restrictedUntil == null ||
+            member.restrictedUntil!.isAfter(DateTime.now()));
+
+    String? roleBadge;
+    if (member.adminTitle.isNotEmpty) {
+      roleBadge = member.adminTitle;
+    } else if (member.role == 'owner') {
+      roleBadge = _tr(l10n, 'role_owner', 'владелец');
+    } else if (member.role == 'admin') {
+      roleBadge = _tr(l10n, 'role_admin', 'админ');
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticUtils.tap();
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ProfileScreen(
+              entityType: ProfileEntityType.user,
+              userId: member.id,
+              initialName: memberName,
+              initialAvatarUrl: member.avatarUrl,
+              initialIsOnline: member.isOnline,
+            ),
+          ),
+        );
+      },
+      onLongPress: canShowMenu
+          ? () {
+              HapticUtils.selection();
+              _showUpgradedMemberActionsSheet(
+                context,
+                member,
+                canManageAdmins: canManageAdmins,
+                canModerate: canModerate,
+              );
+            }
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            Stack(
+              children: [
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: accentColor.withValues(alpha: 0.2),
+                  backgroundImage: avatarProvider,
+                  child: avatarProvider == null
+                      ? Text(
+                          memberName.isNotEmpty
+                              ? memberName[0].toUpperCase()
+                              : '?',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            color: accentColor,
+                          ),
+                        )
+                      : null,
+                ),
+                if (member.isOnline)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF4CAF50),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          memberName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w600,
+                            color: textColor,
+                          ),
+                        ),
+                      ),
+                      if (isRestricted) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1.5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            'ограничен',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.deepOrange,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    member.isOnline
+                        ? _tr(l10n, 'profile_online', 'в сети')
+                        : _tr(l10n, 'status_offline', 'был(а) недавно'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: member.isOnline ? accentColor : subColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (roleBadge != null) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (member.role == 'owner' || member.adminTitle.isNotEmpty
+                          ? accentColor
+                          : subColor)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  roleBadge,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color:
+                        member.role == 'owner' || member.adminTitle.isNotEmpty
+                            ? accentColor
+                            : subColor,
+                  ),
+                ),
+              ),
+            ],
+            if (canShowMenu)
+              IconButton(
+                onPressed: () {
+                  HapticUtils.tap();
+                  _showUpgradedMemberActionsSheet(
+                    context,
+                    member,
+                    canManageAdmins: canManageAdmins,
+                    canModerate: canModerate,
+                  );
+                },
+                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                icon: iconoir.MoreVert(width: 18, height: 18, color: subColor),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showUpgradedMemberActionsSheet(
+    BuildContext context,
+    ChatParticipant member, {
+    required bool canManageAdmins,
+    required bool canModerate,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final accentColor =
+        isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final isAdminOrOwner = member.role == 'admin' || member.role == 'owner';
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SettingsAttachedSheet(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              minTileHeight: 50,
+              leading: iconoir.User(width: 22, height: 22, color: textColor),
+              title: Text(
+                'Открыть профиль',
+                style: TextStyle(color: textColor, fontWeight: FontWeight.w500),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(
+                  context,
+                  SwipeBackPageRoute(
+                    builder: (_) => ProfileScreen(
+                      entityType: ProfileEntityType.user,
+                      userId: member.id,
+                      initialName: member.displayName,
+                      initialAvatarUrl: member.avatarUrl,
+                      initialIsOnline: member.isOnline,
+                    ),
+                  ),
+                );
+              },
+            ),
+            if (canManageAdmins)
+              ListTile(
+                minTileHeight: 50,
+                leading: iconoir.ShieldCheck(
+                  width: 22,
+                  height: 22,
+                  color: accentColor,
+                ),
+                title: Text(
+                  isAdminOrOwner
+                      ? 'Права администратора'
+                      : 'Назначить админом',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openMemberAdminRights(member);
+                },
+              ),
+            if (canModerate && _isGroup)
+              ListTile(
+                minTileHeight: 50,
+                leading: const iconoir.Lock(
+                  width: 22,
+                  height: 22,
+                  color: Colors.orange,
+                ),
+                title: Text(
+                  'Ограничить права',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showRestrictMemberSheet(member);
+                },
+              ),
+            if (canModerate) ...[
+              ListTile(
+                minTileHeight: 50,
+                leading: const iconoir.Prohibition(
+                  width: 22,
+                  height: 22,
+                  color: Colors.redAccent,
+                ),
+                title: const Text(
+                  'Заблокировать в чате',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmBanMember(member);
+                },
+              ),
+              ListTile(
+                minTileHeight: 50,
+                leading: const iconoir.UserXmark(
+                  width: 22,
+                  height: 22,
+                  color: Colors.redAccent,
+                ),
+                title: Text(
+                  _isGroup ? 'Удалить из группы' : 'Удалить из канала',
+                  style: const TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _handleRemoveMember(
+                    ProfileMemberItem(
+                      userId: member.id,
+                      name: member.displayName,
+                      username: member.username,
+                      avatarUrl: member.avatarUrl,
+                      role: member.role,
+                    ),
+                  );
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   void _handleJumpToMessage(DbMessage msg) {
@@ -3967,106 +5183,138 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 l10n,
                                                 'profile_birthday',
                                                 'дата рождения'),
-                                            ageLabel: _tr(l10n,
-                                                'profile_age_years', 'лет'),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-
-                                  const SizedBox(height: 16),
-
-                                  // Слот-ориентир для единой капсулы выбора разделов (`ProfileSectionPill`)
-                                  SizedBox(
-                                    key: _sectionPillSlotKey,
-                                    height: 44.0,
-                                    width: double.infinity,
-                                  ),
-
-                                  const SizedBox(height: 12),
-
-                                  // Контент выбранной вкладки естественной высоты (без искусственного ограничения SizedBox/PageView)
-                                  ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      minHeight: math.max(
-                                        340.0,
-                                        screenHeight - headerTopY - 56.0,
-                                      ),
-                                    ),
-                                    child: Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 48),
-                                      child: AnimatedSwitcher(
-                                        duration:
-                                            const Duration(milliseconds: 220),
-                                        switchInCurve: Curves.easeOutCubic,
-                                        switchOutCurve: Curves.easeInCubic,
-                                        layoutBuilder:
-                                            (currentChild, previousChildren) {
-                                          return Stack(
-                                            alignment: Alignment.topCenter,
-                                            children: <Widget>[
-                                              ...previousChildren,
-                                              if (currentChild != null)
-                                                currentChild,
-                                            ],
-                                          );
-                                        },
-                                        child: KeyedSubtree(
-                                          key: ValueKey<ProfileSectionType>(
-                                            sections[safeSectionIdx].type,
-                                          ),
-                                          child: ProfileSectionPageContent(
-                                            sectionType:
-                                                sections[safeSectionIdx].type,
-                                            glassEnabled: isGlass,
-                                            isLite: isLite,
-                                            chatId: _resolvedChatId ?? '',
-                                            chatType: _isGroup
-                                                ? 'group'
-                                                : (_isChannel
-                                                    ? 'channel'
-                                                    : 'private'),
-                                            chatTitle: _getDisplayName(),
-                                            currentUserId: _accountManager
-                                                .currentAccount?.userId,
-                                            members: _members,
-                                            mediaMessages: _mediaMessages,
-                                            fileMessages: _fileMessages,
-                                            linkMessages: _linkMessages,
-                                            voiceMessages: _voiceMessages,
-                                            canAddMembers: _canAddGroupMembers,
-                                            canManageMembers:
-                                                _canEditGroupOrChannel,
-                                            onAddMemberTap:
-                                                _showAddMemberDialog,
-                                            onMemberTap: (m) {
-                                              Navigator.push(
+                                              ageLabel: _tr(l10n,
+                                                  'profile_age_years', 'лет'),
+                                            ),
+                                            if ((_isGroup || _isChannel) &&
+                                                _canEditGroupOrChannel) ...[
+                                              const SizedBox(height: 12),
+                                              _buildGroupAdminQuickSettingsCard(
                                                 context,
-                                                SwipeBackPageRoute(
-                                                  builder: (_) => ProfileScreen(
-                                                    entityType:
-                                                        ProfileEntityType.user,
-                                                    userId: m.userId,
-                                                    initialName: m.displayName,
-                                                    initialAvatarUrl:
-                                                        m.avatarUrl,
-                                                    initialIsOnline: m.isOnline,
+                                                isGlass: isGlass,
+                                                isLite: isLite,
+                                                isDark: effectiveIsDark,
+                                                hasColoredTheme:
+                                                    hasColoredTheme,
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 16),
+
+                                    // Слот-ориентир для единой капсулы выбора разделов (`ProfileSectionPill`)
+                                    SizedBox(
+                                      key: _sectionPillSlotKey,
+                                      height: 44.0,
+                                      width: double.infinity,
+                                    ),
+
+                                    const SizedBox(height: 12),
+
+                                    // Контент выбранной вкладки естественной высоты (без искусственного ограничения SizedBox/PageView)
+                                    ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minHeight: math.max(
+                                          340.0,
+                                          screenHeight - headerTopY - 56.0,
+                                        ),
+                                      ),
+                                      child: Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 48),
+                                        child: AnimatedSwitcher(
+                                          duration:
+                                              const Duration(milliseconds: 220),
+                                          switchInCurve: Curves.easeOutCubic,
+                                          switchOutCurve: Curves.easeInCubic,
+                                          layoutBuilder:
+                                              (currentChild, previousChildren) {
+                                            return Stack(
+                                              alignment: Alignment.topCenter,
+                                              children: <Widget>[
+                                                ...previousChildren,
+                                                if (currentChild != null)
+                                                  currentChild,
+                                              ],
+                                            );
+                                          },
+                                          child: KeyedSubtree(
+                                            key: ValueKey<ProfileSectionType>(
+                                              sections[safeSectionIdx].type,
+                                            ),
+                                            child: sections[safeSectionIdx]
+                                                        .type ==
+                                                    ProfileSectionType.members
+                                                ? _buildUpgradedMembersSection(
+                                                    context,
+                                                    isDark: effectiveIsDark,
+                                                  )
+                                                : ProfileSectionPageContent(
+                                                    sectionType:
+                                                        sections[safeSectionIdx]
+                                                            .type,
+                                                    glassEnabled: isGlass,
+                                                    isLite: isLite,
+                                                    chatId:
+                                                        _resolvedChatId ?? '',
+                                                    chatType: _isGroup
+                                                        ? 'group'
+                                                        : (_isChannel
+                                                            ? 'channel'
+                                                            : 'private'),
+                                                    chatTitle:
+                                                        _getDisplayName(),
+                                                    currentUserId:
+                                                        _accountManager
+                                                            .currentAccount
+                                                            ?.userId,
+                                                    members: _members,
+                                                    mediaMessages:
+                                                        _mediaMessages,
+                                                    fileMessages: _fileMessages,
+                                                    linkMessages: _linkMessages,
+                                                    voiceMessages:
+                                                        _voiceMessages,
+                                                    canAddMembers:
+                                                        _canAddGroupMembers,
+                                                    canManageMembers:
+                                                        _canEditGroupOrChannel,
+                                                    onAddMemberTap:
+                                                        _showAddMemberDialog,
+                                                    onMemberTap: (m) {
+                                                      Navigator.push(
+                                                        context,
+                                                        SwipeBackPageRoute(
+                                                          builder: (_) =>
+                                                              ProfileScreen(
+                                                            entityType:
+                                                                ProfileEntityType
+                                                                    .user,
+                                                            userId: m.userId,
+                                                            initialName:
+                                                                m.displayName,
+                                                            initialAvatarUrl:
+                                                                m.avatarUrl,
+                                                            initialIsOnline:
+                                                                m.isOnline,
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                    onToggleAdminRole:
+                                                        _handleToggleMemberRole,
+                                                    onRemoveMember:
+                                                        _handleRemoveMember,
+                                                    onJumpToMessage:
+                                                        _handleJumpToMessage,
                                                   ),
-                                                ),
-                                              );
-                                            },
-                                            onToggleAdminRole:
-                                                _handleToggleMemberRole,
-                                            onRemoveMember: _handleRemoveMember,
-                                            onJumpToMessage:
-                                                _handleJumpToMessage,
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
                                 ],
                               ),
                             ),

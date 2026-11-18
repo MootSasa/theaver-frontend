@@ -198,7 +198,62 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
       requiredDuringInsert: false,
       defaultConstraints: GeneratedColumn.constraintIsAlways(
           'CHECK ("show_author_profiles" IN (0, 1))'),
-      defaultValue: const Constant(true));
+      defaultValue: const Constant(false));
+  static const VerificationMeta _signMessagesMeta =
+      const VerificationMeta('signMessages');
+  @override
+  late final GeneratedColumn<bool> signMessages = GeneratedColumn<bool>(
+      'sign_messages', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("sign_messages" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _linkedChatIdMeta =
+      const VerificationMeta('linkedChatId');
+  @override
+  late final GeneratedColumn<String> linkedChatId = GeneratedColumn<String>(
+      'linked_chat_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _myRoleMeta = const VerificationMeta('myRole');
+  @override
+  late final GeneratedColumn<String> myRole = GeneratedColumn<String>(
+      'my_role', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastMessageSenderIdMeta =
+      const VerificationMeta('lastMessageSenderId');
+  @override
+  late final GeneratedColumn<String> lastMessageSenderId =
+      GeneratedColumn<String>('last_message_sender_id', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastMessageSenderNameMeta =
+      const VerificationMeta('lastMessageSenderName');
+  @override
+  late final GeneratedColumn<String> lastMessageSenderName =
+      GeneratedColumn<String>('last_message_sender_name', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _hasActiveCallMeta =
+      const VerificationMeta('hasActiveCall');
+  @override
+  late final GeneratedColumn<bool> hasActiveCall = GeneratedColumn<bool>(
+      'has_active_call', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("has_active_call" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _chatPermissionsJsonMeta =
+      const VerificationMeta('chatPermissionsJson');
+  @override
+  late final GeneratedColumn<String> chatPermissionsJson =
+      GeneratedColumn<String>('chat_permissions_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _reactionSettingsJsonMeta =
+      const VerificationMeta('reactionSettingsJson');
+  @override
+  late final GeneratedColumn<String> reactionSettingsJson =
+      GeneratedColumn<String>('reaction_settings_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -226,7 +281,15 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         isVerified,
         isArchived,
         peerCustomizationJson,
-        showAuthorProfiles
+        showAuthorProfiles,
+        signMessages,
+        linkedChatId,
+        myRole,
+        lastMessageSenderId,
+        lastMessageSenderName,
+        hasActiveCall,
+        chatPermissionsJson,
+        reactionSettingsJson
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -382,6 +445,52 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           showAuthorProfiles.isAcceptableOrUnknown(
               data['show_author_profiles']!, _showAuthorProfilesMeta));
     }
+    if (data.containsKey('sign_messages')) {
+      context.handle(
+          _signMessagesMeta,
+          signMessages.isAcceptableOrUnknown(
+              data['sign_messages']!, _signMessagesMeta));
+    }
+    if (data.containsKey('linked_chat_id')) {
+      context.handle(
+          _linkedChatIdMeta,
+          linkedChatId.isAcceptableOrUnknown(
+              data['linked_chat_id']!, _linkedChatIdMeta));
+    }
+    if (data.containsKey('my_role')) {
+      context.handle(_myRoleMeta,
+          myRole.isAcceptableOrUnknown(data['my_role']!, _myRoleMeta));
+    }
+    if (data.containsKey('last_message_sender_id')) {
+      context.handle(
+          _lastMessageSenderIdMeta,
+          lastMessageSenderId.isAcceptableOrUnknown(
+              data['last_message_sender_id']!, _lastMessageSenderIdMeta));
+    }
+    if (data.containsKey('last_message_sender_name')) {
+      context.handle(
+          _lastMessageSenderNameMeta,
+          lastMessageSenderName.isAcceptableOrUnknown(
+              data['last_message_sender_name']!, _lastMessageSenderNameMeta));
+    }
+    if (data.containsKey('has_active_call')) {
+      context.handle(
+          _hasActiveCallMeta,
+          hasActiveCall.isAcceptableOrUnknown(
+              data['has_active_call']!, _hasActiveCallMeta));
+    }
+    if (data.containsKey('chat_permissions_json')) {
+      context.handle(
+          _chatPermissionsJsonMeta,
+          chatPermissionsJson.isAcceptableOrUnknown(
+              data['chat_permissions_json']!, _chatPermissionsJsonMeta));
+    }
+    if (data.containsKey('reaction_settings_json')) {
+      context.handle(
+          _reactionSettingsJsonMeta,
+          reactionSettingsJson.isAcceptableOrUnknown(
+              data['reaction_settings_json']!, _reactionSettingsJsonMeta));
+    }
     return context;
   }
 
@@ -447,6 +556,25 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           data['${effectivePrefix}peer_customization_json']),
       showAuthorProfiles: attachedDatabase.typeMapping.read(
           DriftSqlType.bool, data['${effectivePrefix}show_author_profiles'])!,
+      signMessages: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}sign_messages'])!,
+      linkedChatId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}linked_chat_id']),
+      myRole: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}my_role']),
+      lastMessageSenderId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}last_message_sender_id']),
+      lastMessageSenderName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}last_message_sender_name']),
+      hasActiveCall: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}has_active_call'])!,
+      chatPermissionsJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}chat_permissions_json']),
+      reactionSettingsJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}reaction_settings_json']),
     );
   }
 
@@ -483,6 +611,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final bool isArchived;
   final String? peerCustomizationJson;
   final bool showAuthorProfiles;
+  final bool signMessages;
+  final String? linkedChatId;
+  final String? myRole;
+  final String? lastMessageSenderId;
+  final String? lastMessageSenderName;
+  final bool hasActiveCall;
+  final String? chatPermissionsJson;
+  final String? reactionSettingsJson;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -509,7 +645,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       required this.isVerified,
       required this.isArchived,
       this.peerCustomizationJson,
-      required this.showAuthorProfiles});
+      required this.showAuthorProfiles,
+      required this.signMessages,
+      this.linkedChatId,
+      this.myRole,
+      this.lastMessageSenderId,
+      this.lastMessageSenderName,
+      required this.hasActiveCall,
+      this.chatPermissionsJson,
+      this.reactionSettingsJson});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -561,6 +705,26 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       map['peer_customization_json'] = Variable<String>(peerCustomizationJson);
     }
     map['show_author_profiles'] = Variable<bool>(showAuthorProfiles);
+    map['sign_messages'] = Variable<bool>(signMessages);
+    if (!nullToAbsent || linkedChatId != null) {
+      map['linked_chat_id'] = Variable<String>(linkedChatId);
+    }
+    if (!nullToAbsent || myRole != null) {
+      map['my_role'] = Variable<String>(myRole);
+    }
+    if (!nullToAbsent || lastMessageSenderId != null) {
+      map['last_message_sender_id'] = Variable<String>(lastMessageSenderId);
+    }
+    if (!nullToAbsent || lastMessageSenderName != null) {
+      map['last_message_sender_name'] = Variable<String>(lastMessageSenderName);
+    }
+    map['has_active_call'] = Variable<bool>(hasActiveCall);
+    if (!nullToAbsent || chatPermissionsJson != null) {
+      map['chat_permissions_json'] = Variable<String>(chatPermissionsJson);
+    }
+    if (!nullToAbsent || reactionSettingsJson != null) {
+      map['reaction_settings_json'] = Variable<String>(reactionSettingsJson);
+    }
     return map;
   }
 
@@ -614,6 +778,25 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ? const Value.absent()
           : Value(peerCustomizationJson),
       showAuthorProfiles: Value(showAuthorProfiles),
+      signMessages: Value(signMessages),
+      linkedChatId: linkedChatId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(linkedChatId),
+      myRole:
+          myRole == null && nullToAbsent ? const Value.absent() : Value(myRole),
+      lastMessageSenderId: lastMessageSenderId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastMessageSenderId),
+      lastMessageSenderName: lastMessageSenderName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastMessageSenderName),
+      hasActiveCall: Value(hasActiveCall),
+      chatPermissionsJson: chatPermissionsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(chatPermissionsJson),
+      reactionSettingsJson: reactionSettingsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reactionSettingsJson),
     );
   }
 
@@ -652,6 +835,18 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       peerCustomizationJson:
           serializer.fromJson<String?>(json['peerCustomizationJson']),
       showAuthorProfiles: serializer.fromJson<bool>(json['showAuthorProfiles']),
+      signMessages: serializer.fromJson<bool>(json['signMessages']),
+      linkedChatId: serializer.fromJson<String?>(json['linkedChatId']),
+      myRole: serializer.fromJson<String?>(json['myRole']),
+      lastMessageSenderId:
+          serializer.fromJson<String?>(json['lastMessageSenderId']),
+      lastMessageSenderName:
+          serializer.fromJson<String?>(json['lastMessageSenderName']),
+      hasActiveCall: serializer.fromJson<bool>(json['hasActiveCall']),
+      chatPermissionsJson:
+          serializer.fromJson<String?>(json['chatPermissionsJson']),
+      reactionSettingsJson:
+          serializer.fromJson<String?>(json['reactionSettingsJson']),
     );
   }
   @override
@@ -686,6 +881,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'peerCustomizationJson':
           serializer.toJson<String?>(peerCustomizationJson),
       'showAuthorProfiles': serializer.toJson<bool>(showAuthorProfiles),
+      'signMessages': serializer.toJson<bool>(signMessages),
+      'linkedChatId': serializer.toJson<String?>(linkedChatId),
+      'myRole': serializer.toJson<String?>(myRole),
+      'lastMessageSenderId': serializer.toJson<String?>(lastMessageSenderId),
+      'lastMessageSenderName':
+          serializer.toJson<String?>(lastMessageSenderName),
+      'hasActiveCall': serializer.toJson<bool>(hasActiveCall),
+      'chatPermissionsJson': serializer.toJson<String?>(chatPermissionsJson),
+      'reactionSettingsJson': serializer.toJson<String?>(reactionSettingsJson),
     };
   }
 
@@ -715,7 +919,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           bool? isVerified,
           bool? isArchived,
           Value<String?> peerCustomizationJson = const Value.absent(),
-          bool? showAuthorProfiles}) =>
+          bool? showAuthorProfiles,
+          bool? signMessages,
+          Value<String?> linkedChatId = const Value.absent(),
+          Value<String?> myRole = const Value.absent(),
+          Value<String?> lastMessageSenderId = const Value.absent(),
+          Value<String?> lastMessageSenderName = const Value.absent(),
+          bool? hasActiveCall,
+          Value<String?> chatPermissionsJson = const Value.absent(),
+          Value<String?> reactionSettingsJson = const Value.absent()}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -757,6 +969,23 @@ class DbChat extends DataClass implements Insertable<DbChat> {
             ? peerCustomizationJson.value
             : this.peerCustomizationJson,
         showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
+        signMessages: signMessages ?? this.signMessages,
+        linkedChatId:
+            linkedChatId.present ? linkedChatId.value : this.linkedChatId,
+        myRole: myRole.present ? myRole.value : this.myRole,
+        lastMessageSenderId: lastMessageSenderId.present
+            ? lastMessageSenderId.value
+            : this.lastMessageSenderId,
+        lastMessageSenderName: lastMessageSenderName.present
+            ? lastMessageSenderName.value
+            : this.lastMessageSenderName,
+        hasActiveCall: hasActiveCall ?? this.hasActiveCall,
+        chatPermissionsJson: chatPermissionsJson.present
+            ? chatPermissionsJson.value
+            : this.chatPermissionsJson,
+        reactionSettingsJson: reactionSettingsJson.present
+            ? reactionSettingsJson.value
+            : this.reactionSettingsJson,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -811,6 +1040,28 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       showAuthorProfiles: data.showAuthorProfiles.present
           ? data.showAuthorProfiles.value
           : this.showAuthorProfiles,
+      signMessages: data.signMessages.present
+          ? data.signMessages.value
+          : this.signMessages,
+      linkedChatId: data.linkedChatId.present
+          ? data.linkedChatId.value
+          : this.linkedChatId,
+      myRole: data.myRole.present ? data.myRole.value : this.myRole,
+      lastMessageSenderId: data.lastMessageSenderId.present
+          ? data.lastMessageSenderId.value
+          : this.lastMessageSenderId,
+      lastMessageSenderName: data.lastMessageSenderName.present
+          ? data.lastMessageSenderName.value
+          : this.lastMessageSenderName,
+      hasActiveCall: data.hasActiveCall.present
+          ? data.hasActiveCall.value
+          : this.hasActiveCall,
+      chatPermissionsJson: data.chatPermissionsJson.present
+          ? data.chatPermissionsJson.value
+          : this.chatPermissionsJson,
+      reactionSettingsJson: data.reactionSettingsJson.present
+          ? data.reactionSettingsJson.value
+          : this.reactionSettingsJson,
     );
   }
 
@@ -842,7 +1093,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('isVerified: $isVerified, ')
           ..write('isArchived: $isArchived, ')
           ..write('peerCustomizationJson: $peerCustomizationJson, ')
-          ..write('showAuthorProfiles: $showAuthorProfiles')
+          ..write('showAuthorProfiles: $showAuthorProfiles, ')
+          ..write('signMessages: $signMessages, ')
+          ..write('linkedChatId: $linkedChatId, ')
+          ..write('myRole: $myRole, ')
+          ..write('lastMessageSenderId: $lastMessageSenderId, ')
+          ..write('lastMessageSenderName: $lastMessageSenderName, ')
+          ..write('hasActiveCall: $hasActiveCall, ')
+          ..write('chatPermissionsJson: $chatPermissionsJson, ')
+          ..write('reactionSettingsJson: $reactionSettingsJson')
           ..write(')'))
         .toString();
   }
@@ -874,7 +1133,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         isVerified,
         isArchived,
         peerCustomizationJson,
-        showAuthorProfiles
+        showAuthorProfiles,
+        signMessages,
+        linkedChatId,
+        myRole,
+        lastMessageSenderId,
+        lastMessageSenderName,
+        hasActiveCall,
+        chatPermissionsJson,
+        reactionSettingsJson
       ]);
   @override
   bool operator ==(Object other) =>
@@ -905,7 +1172,15 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.isVerified == this.isVerified &&
           other.isArchived == this.isArchived &&
           other.peerCustomizationJson == this.peerCustomizationJson &&
-          other.showAuthorProfiles == this.showAuthorProfiles);
+          other.showAuthorProfiles == this.showAuthorProfiles &&
+          other.signMessages == this.signMessages &&
+          other.linkedChatId == this.linkedChatId &&
+          other.myRole == this.myRole &&
+          other.lastMessageSenderId == this.lastMessageSenderId &&
+          other.lastMessageSenderName == this.lastMessageSenderName &&
+          other.hasActiveCall == this.hasActiveCall &&
+          other.chatPermissionsJson == this.chatPermissionsJson &&
+          other.reactionSettingsJson == this.reactionSettingsJson);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -935,6 +1210,14 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<bool> isArchived;
   final Value<String?> peerCustomizationJson;
   final Value<bool> showAuthorProfiles;
+  final Value<bool> signMessages;
+  final Value<String?> linkedChatId;
+  final Value<String?> myRole;
+  final Value<String?> lastMessageSenderId;
+  final Value<String?> lastMessageSenderName;
+  final Value<bool> hasActiveCall;
+  final Value<String?> chatPermissionsJson;
+  final Value<String?> reactionSettingsJson;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -963,6 +1246,14 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isArchived = const Value.absent(),
     this.peerCustomizationJson = const Value.absent(),
     this.showAuthorProfiles = const Value.absent(),
+    this.signMessages = const Value.absent(),
+    this.linkedChatId = const Value.absent(),
+    this.myRole = const Value.absent(),
+    this.lastMessageSenderId = const Value.absent(),
+    this.lastMessageSenderName = const Value.absent(),
+    this.hasActiveCall = const Value.absent(),
+    this.chatPermissionsJson = const Value.absent(),
+    this.reactionSettingsJson = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -992,6 +1283,14 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isArchived = const Value.absent(),
     this.peerCustomizationJson = const Value.absent(),
     this.showAuthorProfiles = const Value.absent(),
+    this.signMessages = const Value.absent(),
+    this.linkedChatId = const Value.absent(),
+    this.myRole = const Value.absent(),
+    this.lastMessageSenderId = const Value.absent(),
+    this.lastMessageSenderName = const Value.absent(),
+    this.hasActiveCall = const Value.absent(),
+    this.chatPermissionsJson = const Value.absent(),
+    this.reactionSettingsJson = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -1024,6 +1323,14 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<bool>? isArchived,
     Expression<String>? peerCustomizationJson,
     Expression<bool>? showAuthorProfiles,
+    Expression<bool>? signMessages,
+    Expression<String>? linkedChatId,
+    Expression<String>? myRole,
+    Expression<String>? lastMessageSenderId,
+    Expression<String>? lastMessageSenderName,
+    Expression<bool>? hasActiveCall,
+    Expression<String>? chatPermissionsJson,
+    Expression<String>? reactionSettingsJson,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1060,6 +1367,18 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
         'peer_customization_json': peerCustomizationJson,
       if (showAuthorProfiles != null)
         'show_author_profiles': showAuthorProfiles,
+      if (signMessages != null) 'sign_messages': signMessages,
+      if (linkedChatId != null) 'linked_chat_id': linkedChatId,
+      if (myRole != null) 'my_role': myRole,
+      if (lastMessageSenderId != null)
+        'last_message_sender_id': lastMessageSenderId,
+      if (lastMessageSenderName != null)
+        'last_message_sender_name': lastMessageSenderName,
+      if (hasActiveCall != null) 'has_active_call': hasActiveCall,
+      if (chatPermissionsJson != null)
+        'chat_permissions_json': chatPermissionsJson,
+      if (reactionSettingsJson != null)
+        'reaction_settings_json': reactionSettingsJson,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1091,6 +1410,14 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<bool>? isArchived,
       Value<String?>? peerCustomizationJson,
       Value<bool>? showAuthorProfiles,
+      Value<bool>? signMessages,
+      Value<String?>? linkedChatId,
+      Value<String?>? myRole,
+      Value<String?>? lastMessageSenderId,
+      Value<String?>? lastMessageSenderName,
+      Value<bool>? hasActiveCall,
+      Value<String?>? chatPermissionsJson,
+      Value<String?>? reactionSettingsJson,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -1122,6 +1449,15 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       peerCustomizationJson:
           peerCustomizationJson ?? this.peerCustomizationJson,
       showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
+      signMessages: signMessages ?? this.signMessages,
+      linkedChatId: linkedChatId ?? this.linkedChatId,
+      myRole: myRole ?? this.myRole,
+      lastMessageSenderId: lastMessageSenderId ?? this.lastMessageSenderId,
+      lastMessageSenderName:
+          lastMessageSenderName ?? this.lastMessageSenderName,
+      hasActiveCall: hasActiveCall ?? this.hasActiveCall,
+      chatPermissionsJson: chatPermissionsJson ?? this.chatPermissionsJson,
+      reactionSettingsJson: reactionSettingsJson ?? this.reactionSettingsJson,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1211,6 +1547,34 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     if (showAuthorProfiles.present) {
       map['show_author_profiles'] = Variable<bool>(showAuthorProfiles.value);
     }
+    if (signMessages.present) {
+      map['sign_messages'] = Variable<bool>(signMessages.value);
+    }
+    if (linkedChatId.present) {
+      map['linked_chat_id'] = Variable<String>(linkedChatId.value);
+    }
+    if (myRole.present) {
+      map['my_role'] = Variable<String>(myRole.value);
+    }
+    if (lastMessageSenderId.present) {
+      map['last_message_sender_id'] =
+          Variable<String>(lastMessageSenderId.value);
+    }
+    if (lastMessageSenderName.present) {
+      map['last_message_sender_name'] =
+          Variable<String>(lastMessageSenderName.value);
+    }
+    if (hasActiveCall.present) {
+      map['has_active_call'] = Variable<bool>(hasActiveCall.value);
+    }
+    if (chatPermissionsJson.present) {
+      map['chat_permissions_json'] =
+          Variable<String>(chatPermissionsJson.value);
+    }
+    if (reactionSettingsJson.present) {
+      map['reaction_settings_json'] =
+          Variable<String>(reactionSettingsJson.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1246,6 +1610,14 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('isArchived: $isArchived, ')
           ..write('peerCustomizationJson: $peerCustomizationJson, ')
           ..write('showAuthorProfiles: $showAuthorProfiles, ')
+          ..write('signMessages: $signMessages, ')
+          ..write('linkedChatId: $linkedChatId, ')
+          ..write('myRole: $myRole, ')
+          ..write('lastMessageSenderId: $lastMessageSenderId, ')
+          ..write('lastMessageSenderName: $lastMessageSenderName, ')
+          ..write('hasActiveCall: $hasActiveCall, ')
+          ..write('chatPermissionsJson: $chatPermissionsJson, ')
+          ..write('reactionSettingsJson: $reactionSettingsJson, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1500,6 +1872,78 @@ class $MessagesTable extends Messages
   late final GeneratedColumn<String> mediaPayload = GeneratedColumn<String>(
       'media_payload', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _viewsCountMeta =
+      const VerificationMeta('viewsCount');
+  @override
+  late final GeneratedColumn<int> viewsCount = GeneratedColumn<int>(
+      'views_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _authorSignatureMeta =
+      const VerificationMeta('authorSignature');
+  @override
+  late final GeneratedColumn<String> authorSignature = GeneratedColumn<String>(
+      'author_signature', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _postAuthorIdMeta =
+      const VerificationMeta('postAuthorId');
+  @override
+  late final GeneratedColumn<String> postAuthorId = GeneratedColumn<String>(
+      'post_author_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderRoleMeta =
+      const VerificationMeta('senderRole');
+  @override
+  late final GeneratedColumn<String> senderRole = GeneratedColumn<String>(
+      'sender_role', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderAdminTitleMeta =
+      const VerificationMeta('senderAdminTitle');
+  @override
+  late final GeneratedColumn<String> senderAdminTitle = GeneratedColumn<String>(
+      'sender_admin_title', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isFromAnonymousAdminMeta =
+      const VerificationMeta('isFromAnonymousAdmin');
+  @override
+  late final GeneratedColumn<bool> isFromAnonymousAdmin = GeneratedColumn<bool>(
+      'is_from_anonymous_admin', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("is_from_anonymous_admin" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _isSilentMeta =
+      const VerificationMeta('isSilent');
+  @override
+  late final GeneratedColumn<bool> isSilent = GeneratedColumn<bool>(
+      'is_silent', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_silent" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _commentsCountMeta =
+      const VerificationMeta('commentsCount');
+  @override
+  late final GeneratedColumn<int> commentsCount = GeneratedColumn<int>(
+      'comments_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _recentRepliersJsonMeta =
+      const VerificationMeta('recentRepliersJson');
+  @override
+  late final GeneratedColumn<String> recentRepliersJson =
+      GeneratedColumn<String>('recent_repliers_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _threadRootMessageIdMeta =
+      const VerificationMeta('threadRootMessageId');
+  @override
+  late final GeneratedColumn<String> threadRootMessageId =
+      GeneratedColumn<String>('thread_root_message_id', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         localId,
@@ -1536,7 +1980,17 @@ class $MessagesTable extends Messages
         linkPreviewOptions,
         invertMedia,
         isRound,
-        mediaPayload
+        mediaPayload,
+        viewsCount,
+        authorSignature,
+        postAuthorId,
+        senderRole,
+        senderAdminTitle,
+        isFromAnonymousAdmin,
+        isSilent,
+        commentsCount,
+        recentRepliersJson,
+        threadRootMessageId
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1735,6 +2189,64 @@ class $MessagesTable extends Messages
           mediaPayload.isAcceptableOrUnknown(
               data['media_payload']!, _mediaPayloadMeta));
     }
+    if (data.containsKey('views_count')) {
+      context.handle(
+          _viewsCountMeta,
+          viewsCount.isAcceptableOrUnknown(
+              data['views_count']!, _viewsCountMeta));
+    }
+    if (data.containsKey('author_signature')) {
+      context.handle(
+          _authorSignatureMeta,
+          authorSignature.isAcceptableOrUnknown(
+              data['author_signature']!, _authorSignatureMeta));
+    }
+    if (data.containsKey('post_author_id')) {
+      context.handle(
+          _postAuthorIdMeta,
+          postAuthorId.isAcceptableOrUnknown(
+              data['post_author_id']!, _postAuthorIdMeta));
+    }
+    if (data.containsKey('sender_role')) {
+      context.handle(
+          _senderRoleMeta,
+          senderRole.isAcceptableOrUnknown(
+              data['sender_role']!, _senderRoleMeta));
+    }
+    if (data.containsKey('sender_admin_title')) {
+      context.handle(
+          _senderAdminTitleMeta,
+          senderAdminTitle.isAcceptableOrUnknown(
+              data['sender_admin_title']!, _senderAdminTitleMeta));
+    }
+    if (data.containsKey('is_from_anonymous_admin')) {
+      context.handle(
+          _isFromAnonymousAdminMeta,
+          isFromAnonymousAdmin.isAcceptableOrUnknown(
+              data['is_from_anonymous_admin']!, _isFromAnonymousAdminMeta));
+    }
+    if (data.containsKey('is_silent')) {
+      context.handle(_isSilentMeta,
+          isSilent.isAcceptableOrUnknown(data['is_silent']!, _isSilentMeta));
+    }
+    if (data.containsKey('comments_count')) {
+      context.handle(
+          _commentsCountMeta,
+          commentsCount.isAcceptableOrUnknown(
+              data['comments_count']!, _commentsCountMeta));
+    }
+    if (data.containsKey('recent_repliers_json')) {
+      context.handle(
+          _recentRepliersJsonMeta,
+          recentRepliersJson.isAcceptableOrUnknown(
+              data['recent_repliers_json']!, _recentRepliersJsonMeta));
+    }
+    if (data.containsKey('thread_root_message_id')) {
+      context.handle(
+          _threadRootMessageIdMeta,
+          threadRootMessageId.isAcceptableOrUnknown(
+              data['thread_root_message_id']!, _threadRootMessageIdMeta));
+    }
     return context;
   }
 
@@ -1816,6 +2328,27 @@ class $MessagesTable extends Messages
           .read(DriftSqlType.bool, data['${effectivePrefix}is_round'])!,
       mediaPayload: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}media_payload']),
+      viewsCount: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}views_count'])!,
+      authorSignature: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}author_signature']),
+      postAuthorId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}post_author_id']),
+      senderRole: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sender_role']),
+      senderAdminTitle: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}sender_admin_title']),
+      isFromAnonymousAdmin: attachedDatabase.typeMapping.read(DriftSqlType.bool,
+          data['${effectivePrefix}is_from_anonymous_admin'])!,
+      isSilent: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_silent'])!,
+      commentsCount: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}comments_count'])!,
+      recentRepliersJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}recent_repliers_json']),
+      threadRootMessageId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}thread_root_message_id']),
     );
   }
 
@@ -1861,6 +2394,16 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
   final bool invertMedia;
   final bool isRound;
   final String? mediaPayload;
+  final int viewsCount;
+  final String? authorSignature;
+  final String? postAuthorId;
+  final String? senderRole;
+  final String? senderAdminTitle;
+  final bool isFromAnonymousAdmin;
+  final bool isSilent;
+  final int commentsCount;
+  final String? recentRepliersJson;
+  final String? threadRootMessageId;
   const DbMessage(
       {required this.localId,
       this.serverId,
@@ -1896,7 +2439,17 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       this.linkPreviewOptions,
       required this.invertMedia,
       required this.isRound,
-      this.mediaPayload});
+      this.mediaPayload,
+      required this.viewsCount,
+      this.authorSignature,
+      this.postAuthorId,
+      this.senderRole,
+      this.senderAdminTitle,
+      required this.isFromAnonymousAdmin,
+      required this.isSilent,
+      required this.commentsCount,
+      this.recentRepliersJson,
+      this.threadRootMessageId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -1973,6 +2526,28 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
     map['is_round'] = Variable<bool>(isRound);
     if (!nullToAbsent || mediaPayload != null) {
       map['media_payload'] = Variable<String>(mediaPayload);
+    }
+    map['views_count'] = Variable<int>(viewsCount);
+    if (!nullToAbsent || authorSignature != null) {
+      map['author_signature'] = Variable<String>(authorSignature);
+    }
+    if (!nullToAbsent || postAuthorId != null) {
+      map['post_author_id'] = Variable<String>(postAuthorId);
+    }
+    if (!nullToAbsent || senderRole != null) {
+      map['sender_role'] = Variable<String>(senderRole);
+    }
+    if (!nullToAbsent || senderAdminTitle != null) {
+      map['sender_admin_title'] = Variable<String>(senderAdminTitle);
+    }
+    map['is_from_anonymous_admin'] = Variable<bool>(isFromAnonymousAdmin);
+    map['is_silent'] = Variable<bool>(isSilent);
+    map['comments_count'] = Variable<int>(commentsCount);
+    if (!nullToAbsent || recentRepliersJson != null) {
+      map['recent_repliers_json'] = Variable<String>(recentRepliersJson);
+    }
+    if (!nullToAbsent || threadRootMessageId != null) {
+      map['thread_root_message_id'] = Variable<String>(threadRootMessageId);
     }
     return map;
   }
@@ -2052,6 +2627,28 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       mediaPayload: mediaPayload == null && nullToAbsent
           ? const Value.absent()
           : Value(mediaPayload),
+      viewsCount: Value(viewsCount),
+      authorSignature: authorSignature == null && nullToAbsent
+          ? const Value.absent()
+          : Value(authorSignature),
+      postAuthorId: postAuthorId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(postAuthorId),
+      senderRole: senderRole == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderRole),
+      senderAdminTitle: senderAdminTitle == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderAdminTitle),
+      isFromAnonymousAdmin: Value(isFromAnonymousAdmin),
+      isSilent: Value(isSilent),
+      commentsCount: Value(commentsCount),
+      recentRepliersJson: recentRepliersJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recentRepliersJson),
+      threadRootMessageId: threadRootMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(threadRootMessageId),
     );
   }
 
@@ -2099,6 +2696,19 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       invertMedia: serializer.fromJson<bool>(json['invertMedia']),
       isRound: serializer.fromJson<bool>(json['isRound']),
       mediaPayload: serializer.fromJson<String?>(json['mediaPayload']),
+      viewsCount: serializer.fromJson<int>(json['viewsCount']),
+      authorSignature: serializer.fromJson<String?>(json['authorSignature']),
+      postAuthorId: serializer.fromJson<String?>(json['postAuthorId']),
+      senderRole: serializer.fromJson<String?>(json['senderRole']),
+      senderAdminTitle: serializer.fromJson<String?>(json['senderAdminTitle']),
+      isFromAnonymousAdmin:
+          serializer.fromJson<bool>(json['isFromAnonymousAdmin']),
+      isSilent: serializer.fromJson<bool>(json['isSilent']),
+      commentsCount: serializer.fromJson<int>(json['commentsCount']),
+      recentRepliersJson:
+          serializer.fromJson<String?>(json['recentRepliersJson']),
+      threadRootMessageId:
+          serializer.fromJson<String?>(json['threadRootMessageId']),
     );
   }
   @override
@@ -2141,6 +2751,16 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       'invertMedia': serializer.toJson<bool>(invertMedia),
       'isRound': serializer.toJson<bool>(isRound),
       'mediaPayload': serializer.toJson<String?>(mediaPayload),
+      'viewsCount': serializer.toJson<int>(viewsCount),
+      'authorSignature': serializer.toJson<String?>(authorSignature),
+      'postAuthorId': serializer.toJson<String?>(postAuthorId),
+      'senderRole': serializer.toJson<String?>(senderRole),
+      'senderAdminTitle': serializer.toJson<String?>(senderAdminTitle),
+      'isFromAnonymousAdmin': serializer.toJson<bool>(isFromAnonymousAdmin),
+      'isSilent': serializer.toJson<bool>(isSilent),
+      'commentsCount': serializer.toJson<int>(commentsCount),
+      'recentRepliersJson': serializer.toJson<String?>(recentRepliersJson),
+      'threadRootMessageId': serializer.toJson<String?>(threadRootMessageId),
     };
   }
 
@@ -2179,7 +2799,17 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           Value<String?> linkPreviewOptions = const Value.absent(),
           bool? invertMedia,
           bool? isRound,
-          Value<String?> mediaPayload = const Value.absent()}) =>
+          Value<String?> mediaPayload = const Value.absent(),
+          int? viewsCount,
+          Value<String?> authorSignature = const Value.absent(),
+          Value<String?> postAuthorId = const Value.absent(),
+          Value<String?> senderRole = const Value.absent(),
+          Value<String?> senderAdminTitle = const Value.absent(),
+          bool? isFromAnonymousAdmin,
+          bool? isSilent,
+          int? commentsCount,
+          Value<String?> recentRepliersJson = const Value.absent(),
+          Value<String?> threadRootMessageId = const Value.absent()}) =>
       DbMessage(
         localId: localId ?? this.localId,
         serverId: serverId.present ? serverId.value : this.serverId,
@@ -2235,6 +2865,25 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         isRound: isRound ?? this.isRound,
         mediaPayload:
             mediaPayload.present ? mediaPayload.value : this.mediaPayload,
+        viewsCount: viewsCount ?? this.viewsCount,
+        authorSignature: authorSignature.present
+            ? authorSignature.value
+            : this.authorSignature,
+        postAuthorId:
+            postAuthorId.present ? postAuthorId.value : this.postAuthorId,
+        senderRole: senderRole.present ? senderRole.value : this.senderRole,
+        senderAdminTitle: senderAdminTitle.present
+            ? senderAdminTitle.value
+            : this.senderAdminTitle,
+        isFromAnonymousAdmin: isFromAnonymousAdmin ?? this.isFromAnonymousAdmin,
+        isSilent: isSilent ?? this.isSilent,
+        commentsCount: commentsCount ?? this.commentsCount,
+        recentRepliersJson: recentRepliersJson.present
+            ? recentRepliersJson.value
+            : this.recentRepliersJson,
+        threadRootMessageId: threadRootMessageId.present
+            ? threadRootMessageId.value
+            : this.threadRootMessageId,
       );
   DbMessage copyWithCompanion(MessagesCompanion data) {
     return DbMessage(
@@ -2303,6 +2952,32 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       mediaPayload: data.mediaPayload.present
           ? data.mediaPayload.value
           : this.mediaPayload,
+      viewsCount:
+          data.viewsCount.present ? data.viewsCount.value : this.viewsCount,
+      authorSignature: data.authorSignature.present
+          ? data.authorSignature.value
+          : this.authorSignature,
+      postAuthorId: data.postAuthorId.present
+          ? data.postAuthorId.value
+          : this.postAuthorId,
+      senderRole:
+          data.senderRole.present ? data.senderRole.value : this.senderRole,
+      senderAdminTitle: data.senderAdminTitle.present
+          ? data.senderAdminTitle.value
+          : this.senderAdminTitle,
+      isFromAnonymousAdmin: data.isFromAnonymousAdmin.present
+          ? data.isFromAnonymousAdmin.value
+          : this.isFromAnonymousAdmin,
+      isSilent: data.isSilent.present ? data.isSilent.value : this.isSilent,
+      commentsCount: data.commentsCount.present
+          ? data.commentsCount.value
+          : this.commentsCount,
+      recentRepliersJson: data.recentRepliersJson.present
+          ? data.recentRepliersJson.value
+          : this.recentRepliersJson,
+      threadRootMessageId: data.threadRootMessageId.present
+          ? data.threadRootMessageId.value
+          : this.threadRootMessageId,
     );
   }
 
@@ -2343,7 +3018,17 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           ..write('linkPreviewOptions: $linkPreviewOptions, ')
           ..write('invertMedia: $invertMedia, ')
           ..write('isRound: $isRound, ')
-          ..write('mediaPayload: $mediaPayload')
+          ..write('mediaPayload: $mediaPayload, ')
+          ..write('viewsCount: $viewsCount, ')
+          ..write('authorSignature: $authorSignature, ')
+          ..write('postAuthorId: $postAuthorId, ')
+          ..write('senderRole: $senderRole, ')
+          ..write('senderAdminTitle: $senderAdminTitle, ')
+          ..write('isFromAnonymousAdmin: $isFromAnonymousAdmin, ')
+          ..write('isSilent: $isSilent, ')
+          ..write('commentsCount: $commentsCount, ')
+          ..write('recentRepliersJson: $recentRepliersJson, ')
+          ..write('threadRootMessageId: $threadRootMessageId')
           ..write(')'))
         .toString();
   }
@@ -2384,7 +3069,17 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         linkPreviewOptions,
         invertMedia,
         isRound,
-        mediaPayload
+        mediaPayload,
+        viewsCount,
+        authorSignature,
+        postAuthorId,
+        senderRole,
+        senderAdminTitle,
+        isFromAnonymousAdmin,
+        isSilent,
+        commentsCount,
+        recentRepliersJson,
+        threadRootMessageId
       ]);
   @override
   bool operator ==(Object other) =>
@@ -2424,7 +3119,17 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           other.linkPreviewOptions == this.linkPreviewOptions &&
           other.invertMedia == this.invertMedia &&
           other.isRound == this.isRound &&
-          other.mediaPayload == this.mediaPayload);
+          other.mediaPayload == this.mediaPayload &&
+          other.viewsCount == this.viewsCount &&
+          other.authorSignature == this.authorSignature &&
+          other.postAuthorId == this.postAuthorId &&
+          other.senderRole == this.senderRole &&
+          other.senderAdminTitle == this.senderAdminTitle &&
+          other.isFromAnonymousAdmin == this.isFromAnonymousAdmin &&
+          other.isSilent == this.isSilent &&
+          other.commentsCount == this.commentsCount &&
+          other.recentRepliersJson == this.recentRepliersJson &&
+          other.threadRootMessageId == this.threadRootMessageId);
 }
 
 class MessagesCompanion extends UpdateCompanion<DbMessage> {
@@ -2463,6 +3168,16 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
   final Value<bool> invertMedia;
   final Value<bool> isRound;
   final Value<String?> mediaPayload;
+  final Value<int> viewsCount;
+  final Value<String?> authorSignature;
+  final Value<String?> postAuthorId;
+  final Value<String?> senderRole;
+  final Value<String?> senderAdminTitle;
+  final Value<bool> isFromAnonymousAdmin;
+  final Value<bool> isSilent;
+  final Value<int> commentsCount;
+  final Value<String?> recentRepliersJson;
+  final Value<String?> threadRootMessageId;
   final Value<int> rowid;
   const MessagesCompanion({
     this.localId = const Value.absent(),
@@ -2500,6 +3215,16 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.invertMedia = const Value.absent(),
     this.isRound = const Value.absent(),
     this.mediaPayload = const Value.absent(),
+    this.viewsCount = const Value.absent(),
+    this.authorSignature = const Value.absent(),
+    this.postAuthorId = const Value.absent(),
+    this.senderRole = const Value.absent(),
+    this.senderAdminTitle = const Value.absent(),
+    this.isFromAnonymousAdmin = const Value.absent(),
+    this.isSilent = const Value.absent(),
+    this.commentsCount = const Value.absent(),
+    this.recentRepliersJson = const Value.absent(),
+    this.threadRootMessageId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -2538,6 +3263,16 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.invertMedia = const Value.absent(),
     this.isRound = const Value.absent(),
     this.mediaPayload = const Value.absent(),
+    this.viewsCount = const Value.absent(),
+    this.authorSignature = const Value.absent(),
+    this.postAuthorId = const Value.absent(),
+    this.senderRole = const Value.absent(),
+    this.senderAdminTitle = const Value.absent(),
+    this.isFromAnonymousAdmin = const Value.absent(),
+    this.isSilent = const Value.absent(),
+    this.commentsCount = const Value.absent(),
+    this.recentRepliersJson = const Value.absent(),
+    this.threadRootMessageId = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : localId = Value(localId),
         chatId = Value(chatId),
@@ -2580,6 +3315,16 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     Expression<bool>? invertMedia,
     Expression<bool>? isRound,
     Expression<String>? mediaPayload,
+    Expression<int>? viewsCount,
+    Expression<String>? authorSignature,
+    Expression<String>? postAuthorId,
+    Expression<String>? senderRole,
+    Expression<String>? senderAdminTitle,
+    Expression<bool>? isFromAnonymousAdmin,
+    Expression<bool>? isSilent,
+    Expression<int>? commentsCount,
+    Expression<String>? recentRepliersJson,
+    Expression<String>? threadRootMessageId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2622,6 +3367,19 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       if (invertMedia != null) 'invert_media': invertMedia,
       if (isRound != null) 'is_round': isRound,
       if (mediaPayload != null) 'media_payload': mediaPayload,
+      if (viewsCount != null) 'views_count': viewsCount,
+      if (authorSignature != null) 'author_signature': authorSignature,
+      if (postAuthorId != null) 'post_author_id': postAuthorId,
+      if (senderRole != null) 'sender_role': senderRole,
+      if (senderAdminTitle != null) 'sender_admin_title': senderAdminTitle,
+      if (isFromAnonymousAdmin != null)
+        'is_from_anonymous_admin': isFromAnonymousAdmin,
+      if (isSilent != null) 'is_silent': isSilent,
+      if (commentsCount != null) 'comments_count': commentsCount,
+      if (recentRepliersJson != null)
+        'recent_repliers_json': recentRepliersJson,
+      if (threadRootMessageId != null)
+        'thread_root_message_id': threadRootMessageId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2662,6 +3420,16 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       Value<bool>? invertMedia,
       Value<bool>? isRound,
       Value<String?>? mediaPayload,
+      Value<int>? viewsCount,
+      Value<String?>? authorSignature,
+      Value<String?>? postAuthorId,
+      Value<String?>? senderRole,
+      Value<String?>? senderAdminTitle,
+      Value<bool>? isFromAnonymousAdmin,
+      Value<bool>? isSilent,
+      Value<int>? commentsCount,
+      Value<String?>? recentRepliersJson,
+      Value<String?>? threadRootMessageId,
       Value<int>? rowid}) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -2700,6 +3468,16 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       invertMedia: invertMedia ?? this.invertMedia,
       isRound: isRound ?? this.isRound,
       mediaPayload: mediaPayload ?? this.mediaPayload,
+      viewsCount: viewsCount ?? this.viewsCount,
+      authorSignature: authorSignature ?? this.authorSignature,
+      postAuthorId: postAuthorId ?? this.postAuthorId,
+      senderRole: senderRole ?? this.senderRole,
+      senderAdminTitle: senderAdminTitle ?? this.senderAdminTitle,
+      isFromAnonymousAdmin: isFromAnonymousAdmin ?? this.isFromAnonymousAdmin,
+      isSilent: isSilent ?? this.isSilent,
+      commentsCount: commentsCount ?? this.commentsCount,
+      recentRepliersJson: recentRepliersJson ?? this.recentRepliersJson,
+      threadRootMessageId: threadRootMessageId ?? this.threadRootMessageId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2814,6 +3592,38 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     if (mediaPayload.present) {
       map['media_payload'] = Variable<String>(mediaPayload.value);
     }
+    if (viewsCount.present) {
+      map['views_count'] = Variable<int>(viewsCount.value);
+    }
+    if (authorSignature.present) {
+      map['author_signature'] = Variable<String>(authorSignature.value);
+    }
+    if (postAuthorId.present) {
+      map['post_author_id'] = Variable<String>(postAuthorId.value);
+    }
+    if (senderRole.present) {
+      map['sender_role'] = Variable<String>(senderRole.value);
+    }
+    if (senderAdminTitle.present) {
+      map['sender_admin_title'] = Variable<String>(senderAdminTitle.value);
+    }
+    if (isFromAnonymousAdmin.present) {
+      map['is_from_anonymous_admin'] =
+          Variable<bool>(isFromAnonymousAdmin.value);
+    }
+    if (isSilent.present) {
+      map['is_silent'] = Variable<bool>(isSilent.value);
+    }
+    if (commentsCount.present) {
+      map['comments_count'] = Variable<int>(commentsCount.value);
+    }
+    if (recentRepliersJson.present) {
+      map['recent_repliers_json'] = Variable<String>(recentRepliersJson.value);
+    }
+    if (threadRootMessageId.present) {
+      map['thread_root_message_id'] =
+          Variable<String>(threadRootMessageId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2858,6 +3668,16 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
           ..write('invertMedia: $invertMedia, ')
           ..write('isRound: $isRound, ')
           ..write('mediaPayload: $mediaPayload, ')
+          ..write('viewsCount: $viewsCount, ')
+          ..write('authorSignature: $authorSignature, ')
+          ..write('postAuthorId: $postAuthorId, ')
+          ..write('senderRole: $senderRole, ')
+          ..write('senderAdminTitle: $senderAdminTitle, ')
+          ..write('isFromAnonymousAdmin: $isFromAnonymousAdmin, ')
+          ..write('isSilent: $isSilent, ')
+          ..write('commentsCount: $commentsCount, ')
+          ..write('recentRepliersJson: $recentRepliersJson, ')
+          ..write('threadRootMessageId: $threadRootMessageId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3574,6 +4394,14 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isArchived,
   Value<String?> peerCustomizationJson,
   Value<bool> showAuthorProfiles,
+  Value<bool> signMessages,
+  Value<String?> linkedChatId,
+  Value<String?> myRole,
+  Value<String?> lastMessageSenderId,
+  Value<String?> lastMessageSenderName,
+  Value<bool> hasActiveCall,
+  Value<String?> chatPermissionsJson,
+  Value<String?> reactionSettingsJson,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -3603,6 +4431,14 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isArchived,
   Value<String?> peerCustomizationJson,
   Value<bool> showAuthorProfiles,
+  Value<bool> signMessages,
+  Value<String?> linkedChatId,
+  Value<String?> myRole,
+  Value<String?> lastMessageSenderId,
+  Value<String?> lastMessageSenderName,
+  Value<bool> hasActiveCall,
+  Value<String?> chatPermissionsJson,
+  Value<String?> reactionSettingsJson,
   Value<int> rowid,
 });
 
@@ -3700,6 +4536,34 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<bool> get showAuthorProfiles => $composableBuilder(
       column: $table.showAuthorProfiles,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get signMessages => $composableBuilder(
+      column: $table.signMessages, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get linkedChatId => $composableBuilder(
+      column: $table.linkedChatId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get myRole => $composableBuilder(
+      column: $table.myRole, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastMessageSenderId => $composableBuilder(
+      column: $table.lastMessageSenderId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastMessageSenderName => $composableBuilder(
+      column: $table.lastMessageSenderName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasActiveCall => $composableBuilder(
+      column: $table.hasActiveCall, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get chatPermissionsJson => $composableBuilder(
+      column: $table.chatPermissionsJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get reactionSettingsJson => $composableBuilder(
+      column: $table.reactionSettingsJson,
       builder: (column) => ColumnFilters(column));
 }
 
@@ -3799,6 +4663,37 @@ class $$ChatsTableOrderingComposer
   ColumnOrderings<bool> get showAuthorProfiles => $composableBuilder(
       column: $table.showAuthorProfiles,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get signMessages => $composableBuilder(
+      column: $table.signMessages,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get linkedChatId => $composableBuilder(
+      column: $table.linkedChatId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get myRole => $composableBuilder(
+      column: $table.myRole, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastMessageSenderId => $composableBuilder(
+      column: $table.lastMessageSenderId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastMessageSenderName => $composableBuilder(
+      column: $table.lastMessageSenderName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasActiveCall => $composableBuilder(
+      column: $table.hasActiveCall,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get chatPermissionsJson => $composableBuilder(
+      column: $table.chatPermissionsJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get reactionSettingsJson => $composableBuilder(
+      column: $table.reactionSettingsJson,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -3887,6 +4782,30 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<bool> get showAuthorProfiles => $composableBuilder(
       column: $table.showAuthorProfiles, builder: (column) => column);
+
+  GeneratedColumn<bool> get signMessages => $composableBuilder(
+      column: $table.signMessages, builder: (column) => column);
+
+  GeneratedColumn<String> get linkedChatId => $composableBuilder(
+      column: $table.linkedChatId, builder: (column) => column);
+
+  GeneratedColumn<String> get myRole =>
+      $composableBuilder(column: $table.myRole, builder: (column) => column);
+
+  GeneratedColumn<String> get lastMessageSenderId => $composableBuilder(
+      column: $table.lastMessageSenderId, builder: (column) => column);
+
+  GeneratedColumn<String> get lastMessageSenderName => $composableBuilder(
+      column: $table.lastMessageSenderName, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasActiveCall => $composableBuilder(
+      column: $table.hasActiveCall, builder: (column) => column);
+
+  GeneratedColumn<String> get chatPermissionsJson => $composableBuilder(
+      column: $table.chatPermissionsJson, builder: (column) => column);
+
+  GeneratedColumn<String> get reactionSettingsJson => $composableBuilder(
+      column: $table.reactionSettingsJson, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -3938,6 +4857,14 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isArchived = const Value.absent(),
             Value<String?> peerCustomizationJson = const Value.absent(),
             Value<bool> showAuthorProfiles = const Value.absent(),
+            Value<bool> signMessages = const Value.absent(),
+            Value<String?> linkedChatId = const Value.absent(),
+            Value<String?> myRole = const Value.absent(),
+            Value<String?> lastMessageSenderId = const Value.absent(),
+            Value<String?> lastMessageSenderName = const Value.absent(),
+            Value<bool> hasActiveCall = const Value.absent(),
+            Value<String?> chatPermissionsJson = const Value.absent(),
+            Value<String?> reactionSettingsJson = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -3967,6 +4894,14 @@ class $$ChatsTableTableManager extends RootTableManager<
             isArchived: isArchived,
             peerCustomizationJson: peerCustomizationJson,
             showAuthorProfiles: showAuthorProfiles,
+            signMessages: signMessages,
+            linkedChatId: linkedChatId,
+            myRole: myRole,
+            lastMessageSenderId: lastMessageSenderId,
+            lastMessageSenderName: lastMessageSenderName,
+            hasActiveCall: hasActiveCall,
+            chatPermissionsJson: chatPermissionsJson,
+            reactionSettingsJson: reactionSettingsJson,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3996,6 +4931,14 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isArchived = const Value.absent(),
             Value<String?> peerCustomizationJson = const Value.absent(),
             Value<bool> showAuthorProfiles = const Value.absent(),
+            Value<bool> signMessages = const Value.absent(),
+            Value<String?> linkedChatId = const Value.absent(),
+            Value<String?> myRole = const Value.absent(),
+            Value<String?> lastMessageSenderId = const Value.absent(),
+            Value<String?> lastMessageSenderName = const Value.absent(),
+            Value<bool> hasActiveCall = const Value.absent(),
+            Value<String?> chatPermissionsJson = const Value.absent(),
+            Value<String?> reactionSettingsJson = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -4025,6 +4968,14 @@ class $$ChatsTableTableManager extends RootTableManager<
             isArchived: isArchived,
             peerCustomizationJson: peerCustomizationJson,
             showAuthorProfiles: showAuthorProfiles,
+            signMessages: signMessages,
+            linkedChatId: linkedChatId,
+            myRole: myRole,
+            lastMessageSenderId: lastMessageSenderId,
+            lastMessageSenderName: lastMessageSenderName,
+            hasActiveCall: hasActiveCall,
+            chatPermissionsJson: chatPermissionsJson,
+            reactionSettingsJson: reactionSettingsJson,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -4082,6 +5033,16 @@ typedef $$MessagesTableCreateCompanionBuilder = MessagesCompanion Function({
   Value<bool> invertMedia,
   Value<bool> isRound,
   Value<String?> mediaPayload,
+  Value<int> viewsCount,
+  Value<String?> authorSignature,
+  Value<String?> postAuthorId,
+  Value<String?> senderRole,
+  Value<String?> senderAdminTitle,
+  Value<bool> isFromAnonymousAdmin,
+  Value<bool> isSilent,
+  Value<int> commentsCount,
+  Value<String?> recentRepliersJson,
+  Value<String?> threadRootMessageId,
   Value<int> rowid,
 });
 typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
@@ -4120,6 +5081,16 @@ typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
   Value<bool> invertMedia,
   Value<bool> isRound,
   Value<String?> mediaPayload,
+  Value<int> viewsCount,
+  Value<String?> authorSignature,
+  Value<String?> postAuthorId,
+  Value<String?> senderRole,
+  Value<String?> senderAdminTitle,
+  Value<bool> isFromAnonymousAdmin,
+  Value<bool> isSilent,
+  Value<int> commentsCount,
+  Value<String?> recentRepliersJson,
+  Value<String?> threadRootMessageId,
   Value<int> rowid,
 });
 
@@ -4246,6 +5217,41 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get mediaPayload => $composableBuilder(
       column: $table.mediaPayload, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get viewsCount => $composableBuilder(
+      column: $table.viewsCount, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get authorSignature => $composableBuilder(
+      column: $table.authorSignature,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get postAuthorId => $composableBuilder(
+      column: $table.postAuthorId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderRole => $composableBuilder(
+      column: $table.senderRole, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderAdminTitle => $composableBuilder(
+      column: $table.senderAdminTitle,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isFromAnonymousAdmin => $composableBuilder(
+      column: $table.isFromAnonymousAdmin,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isSilent => $composableBuilder(
+      column: $table.isSilent, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get commentsCount => $composableBuilder(
+      column: $table.commentsCount, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get recentRepliersJson => $composableBuilder(
+      column: $table.recentRepliersJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get threadRootMessageId => $composableBuilder(
+      column: $table.threadRootMessageId,
+      builder: (column) => ColumnFilters(column));
 }
 
 class $$MessagesTableOrderingComposer
@@ -4373,6 +5379,43 @@ class $$MessagesTableOrderingComposer
   ColumnOrderings<String> get mediaPayload => $composableBuilder(
       column: $table.mediaPayload,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get viewsCount => $composableBuilder(
+      column: $table.viewsCount, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get authorSignature => $composableBuilder(
+      column: $table.authorSignature,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get postAuthorId => $composableBuilder(
+      column: $table.postAuthorId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderRole => $composableBuilder(
+      column: $table.senderRole, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderAdminTitle => $composableBuilder(
+      column: $table.senderAdminTitle,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isFromAnonymousAdmin => $composableBuilder(
+      column: $table.isFromAnonymousAdmin,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isSilent => $composableBuilder(
+      column: $table.isSilent, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get commentsCount => $composableBuilder(
+      column: $table.commentsCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get recentRepliersJson => $composableBuilder(
+      column: $table.recentRepliersJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get threadRootMessageId => $composableBuilder(
+      column: $table.threadRootMessageId,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$MessagesTableAnnotationComposer
@@ -4488,6 +5531,36 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get mediaPayload => $composableBuilder(
       column: $table.mediaPayload, builder: (column) => column);
+
+  GeneratedColumn<int> get viewsCount => $composableBuilder(
+      column: $table.viewsCount, builder: (column) => column);
+
+  GeneratedColumn<String> get authorSignature => $composableBuilder(
+      column: $table.authorSignature, builder: (column) => column);
+
+  GeneratedColumn<String> get postAuthorId => $composableBuilder(
+      column: $table.postAuthorId, builder: (column) => column);
+
+  GeneratedColumn<String> get senderRole => $composableBuilder(
+      column: $table.senderRole, builder: (column) => column);
+
+  GeneratedColumn<String> get senderAdminTitle => $composableBuilder(
+      column: $table.senderAdminTitle, builder: (column) => column);
+
+  GeneratedColumn<bool> get isFromAnonymousAdmin => $composableBuilder(
+      column: $table.isFromAnonymousAdmin, builder: (column) => column);
+
+  GeneratedColumn<bool> get isSilent =>
+      $composableBuilder(column: $table.isSilent, builder: (column) => column);
+
+  GeneratedColumn<int> get commentsCount => $composableBuilder(
+      column: $table.commentsCount, builder: (column) => column);
+
+  GeneratedColumn<String> get recentRepliersJson => $composableBuilder(
+      column: $table.recentRepliersJson, builder: (column) => column);
+
+  GeneratedColumn<String> get threadRootMessageId => $composableBuilder(
+      column: $table.threadRootMessageId, builder: (column) => column);
 }
 
 class $$MessagesTableTableManager extends RootTableManager<
@@ -4548,6 +5621,16 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> invertMedia = const Value.absent(),
             Value<bool> isRound = const Value.absent(),
             Value<String?> mediaPayload = const Value.absent(),
+            Value<int> viewsCount = const Value.absent(),
+            Value<String?> authorSignature = const Value.absent(),
+            Value<String?> postAuthorId = const Value.absent(),
+            Value<String?> senderRole = const Value.absent(),
+            Value<String?> senderAdminTitle = const Value.absent(),
+            Value<bool> isFromAnonymousAdmin = const Value.absent(),
+            Value<bool> isSilent = const Value.absent(),
+            Value<int> commentsCount = const Value.absent(),
+            Value<String?> recentRepliersJson = const Value.absent(),
+            Value<String?> threadRootMessageId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion(
@@ -4586,6 +5669,16 @@ class $$MessagesTableTableManager extends RootTableManager<
             invertMedia: invertMedia,
             isRound: isRound,
             mediaPayload: mediaPayload,
+            viewsCount: viewsCount,
+            authorSignature: authorSignature,
+            postAuthorId: postAuthorId,
+            senderRole: senderRole,
+            senderAdminTitle: senderAdminTitle,
+            isFromAnonymousAdmin: isFromAnonymousAdmin,
+            isSilent: isSilent,
+            commentsCount: commentsCount,
+            recentRepliersJson: recentRepliersJson,
+            threadRootMessageId: threadRootMessageId,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4624,6 +5717,16 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> invertMedia = const Value.absent(),
             Value<bool> isRound = const Value.absent(),
             Value<String?> mediaPayload = const Value.absent(),
+            Value<int> viewsCount = const Value.absent(),
+            Value<String?> authorSignature = const Value.absent(),
+            Value<String?> postAuthorId = const Value.absent(),
+            Value<String?> senderRole = const Value.absent(),
+            Value<String?> senderAdminTitle = const Value.absent(),
+            Value<bool> isFromAnonymousAdmin = const Value.absent(),
+            Value<bool> isSilent = const Value.absent(),
+            Value<int> commentsCount = const Value.absent(),
+            Value<String?> recentRepliersJson = const Value.absent(),
+            Value<String?> threadRootMessageId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion.insert(
@@ -4662,6 +5765,16 @@ class $$MessagesTableTableManager extends RootTableManager<
             invertMedia: invertMedia,
             isRound: isRound,
             mediaPayload: mediaPayload,
+            viewsCount: viewsCount,
+            authorSignature: authorSignature,
+            postAuthorId: postAuthorId,
+            senderRole: senderRole,
+            senderAdminTitle: senderAdminTitle,
+            isFromAnonymousAdmin: isFromAnonymousAdmin,
+            isSilent: isSilent,
+            commentsCount: commentsCount,
+            recentRepliersJson: recentRepliersJson,
+            threadRootMessageId: threadRootMessageId,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

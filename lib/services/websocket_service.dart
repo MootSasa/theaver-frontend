@@ -38,6 +38,11 @@ enum WebSocketEventType {
   callbackQueryAnswer,
   callEvent,
   chatArchiveUpdated,
+  messageViewsUpdated,
+  postCommentsUpdated,
+  chatSettingsUpdated,
+  memberUpdated,
+  chatDeleted,
   rpcResult,
   rpcError,
 }
@@ -161,6 +166,16 @@ class WebSocketEvent {
         return WebSocketEventType.callbackQueryAnswer;
       case 'chat_archive_updated':
         return WebSocketEventType.chatArchiveUpdated;
+      case 'message_views_updated':
+        return WebSocketEventType.messageViewsUpdated;
+      case 'post_comments_updated':
+        return WebSocketEventType.postCommentsUpdated;
+      case 'chat_settings_updated':
+        return WebSocketEventType.chatSettingsUpdated;
+      case 'member_updated':
+        return WebSocketEventType.memberUpdated;
+      case 'chat_deleted':
+        return WebSocketEventType.chatDeleted;
       case 'rpc_result':
         return WebSocketEventType.rpcResult;
       case 'rpc_error':

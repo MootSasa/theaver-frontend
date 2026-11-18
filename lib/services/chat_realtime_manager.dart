@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../models/community_models.dart';
 import '../models/profile_customization.dart';
 import '../utils/date_time_utils.dart';
+import 'chat_service.dart';
 import 'community_service.dart';
 import 'database/app_database.dart';
 import 'peer_customization_cache.dart';
@@ -31,6 +32,11 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onMessagePinned;
   final void Function(WebSocketEvent event)? onMessageUnpinned;
   final void Function(WebSocketEvent event)? onCallbackQueryAnswer;
+  final void Function(WebSocketEvent event)? onMessageViewsUpdated;
+  final void Function(WebSocketEvent event)? onPostCommentsUpdated;
+  final void Function(WebSocketEvent event)? onChatSettingsUpdated;
+  final void Function(WebSocketEvent event)? onMemberUpdated;
+  final void Function(WebSocketEvent event)? onChatDeleted;
   final VoidCallback? onReconnect;
 
   ChatSubscription({
@@ -50,6 +56,11 @@ class ChatSubscription {
     this.onMessagePinned,
     this.onMessageUnpinned,
     this.onCallbackQueryAnswer,
+    this.onMessageViewsUpdated,
+    this.onPostCommentsUpdated,
+    this.onChatSettingsUpdated,
+    this.onMemberUpdated,
+    this.onChatDeleted,
     this.onReconnect,
   });
 
@@ -105,6 +116,11 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onMessagePinned,
     void Function(WebSocketEvent event)? onMessageUnpinned,
     void Function(WebSocketEvent event)? onCallbackQueryAnswer,
+    void Function(WebSocketEvent event)? onMessageViewsUpdated,
+    void Function(WebSocketEvent event)? onPostCommentsUpdated,
+    void Function(WebSocketEvent event)? onChatSettingsUpdated,
+    void Function(WebSocketEvent event)? onMemberUpdated,
+    void Function(WebSocketEvent event)? onChatDeleted,
     VoidCallback? onReconnect,
   }) {
     if (!_isInitialized) {
@@ -128,6 +144,11 @@ class ChatRealtimeManager {
       onMessagePinned: onMessagePinned,
       onMessageUnpinned: onMessageUnpinned,
       onCallbackQueryAnswer: onCallbackQueryAnswer,
+      onMessageViewsUpdated: onMessageViewsUpdated,
+      onPostCommentsUpdated: onPostCommentsUpdated,
+      onChatSettingsUpdated: onChatSettingsUpdated,
+      onMemberUpdated: onMemberUpdated,
+      onChatDeleted: onChatDeleted,
       onReconnect: onReconnect,
     );
 
@@ -363,6 +384,46 @@ class ChatRealtimeManager {
         _dispatchGlobal((s) => s.onUserAppearanceUpdated?.call(event));
         break;
 
+      case WebSocketEventType.messageViewsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          event.data['chat_id']?.toString(),
+          (s) => s.onMessageViewsUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.postCommentsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          event.data['chat_id']?.toString(),
+          (s) => s.onPostCommentsUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.chatSettingsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onChatSettingsUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.memberUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          event.data['chat_id']?.toString(),
+          (s) => s.onMemberUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.chatDeleted:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onChatDeleted?.call(event),
+        );
+        break;
+
       default:
         final rawNorm = (event.rawType.isNotEmpty
                 ? event.rawType
@@ -442,6 +503,10 @@ class ChatRealtimeManager {
           messageData['community_id'] != null ||
           CommunityService.isCommunityChannelId(chatId);
 
+      final threadRootId =
+          messageData['thread_root_message_id']?.toString().trim();
+      final isThreadComment = threadRootId != null && threadRootId.isNotEmpty;
+
       final existing = await AppDatabase().getChat(chatId);
       if (isCommunityChannel) {
         if (existing != null) {
@@ -452,10 +517,11 @@ class ChatRealtimeManager {
         if (!hasActiveSub) {
           CommunityService.incrementChannelUnread(chatId);
         }
-      } else if (existing == null) {
+      } else if (existing == null && !isThreadComment) {
+        final chatType = event.data['chat_type']?.toString() ?? 'private';
         await AppDatabase().saveChat(ChatsCompanion(
           chatId: drift.Value(chatId),
-          chatType: drift.Value(event.data['chat_type']?.toString() ?? 'private'),
+          chatType: drift.Value(chatType),
           name: drift.Value(messageData['sender_name']?.toString() ?? ''),
           avatarUrl: drift.Value(messageData['sender_avatar_url']?.toString()),
           lastMessage: drift.Value(content),
@@ -464,13 +530,18 @@ class ChatRealtimeManager {
           lastMessageIsRound: drift.Value(isRound),
           lastMessageFileUrl: drift.Value(fileUrl),
           lastMessageGroupedId: drift.Value(groupedId),
+          lastMessageSenderId:
+              drift.Value(messageData['sender_id']?.toString()),
+          lastMessageSenderName:
+              drift.Value(messageData['sender_name']?.toString()),
           otherUserId: drift.Value(messageData['sender_id']?.toString()),
           updatedAt: drift.Value(createdAt),
           unreadCount: const drift.Value(0),
           isOnline: const drift.Value(false),
           isPinned: const drift.Value(false),
+          showAuthorProfiles: drift.Value(chatType != 'channel'),
         ));
-      } else {
+      } else if (existing != null && !isThreadComment) {
         await AppDatabase().updateChatLastMessage(
           chatId: chatId,
           content: content,
@@ -479,6 +550,8 @@ class ChatRealtimeManager {
           isRound: isRound,
           fileUrl: fileUrl,
           groupedId: groupedId,
+          senderId: messageData['sender_id']?.toString(),
+          senderName: messageData['sender_name']?.toString(),
           incrementUnread: false,
         );
       }
@@ -541,9 +614,20 @@ class ChatRealtimeManager {
     final chatId = chatData['chat_id']?.toString() ?? chatData['id']?.toString();
     if (chatId == null) return;
     try {
+      final chatType = chatData['chat_type']?.toString() ?? 'private';
+      final showAuthor = chatData.containsKey('show_author_profiles')
+          ? (chatData['show_author_profiles'] == true ||
+              chatData['show_author_profiles'] == 1)
+          : (chatType != 'channel');
+      final perms = GroupDefaultPermissions.tryParse(
+        chatData['default_permissions'] ?? chatData['chat_permissions'],
+      );
+      final reactions = ReactionSettings.fromChatJson(chatData);
+      final linkedChatId = chatData['linked_chat_id']?.toString().trim();
+
       await AppDatabase().saveChat(ChatsCompanion(
         chatId: drift.Value(chatId),
-        chatType: drift.Value(chatData['chat_type']?.toString() ?? 'private'),
+        chatType: drift.Value(chatType),
         name: drift.Value(chatData['name']?.toString() ?? ''),
         avatarUrl: drift.Value(chatData['avatar_url']?.toString()),
         lastMessage: drift.Value(chatData['last_message']?.toString()),
@@ -558,7 +642,30 @@ class ChatRealtimeManager {
         isOnline: drift.Value(chatData['is_online'] == true),
         lastSeen: drift.Value(chatData['last_seen']?.toString()),
         isPinned: drift.Value(chatData['is_pinned'] == true),
-        showAuthorProfiles: drift.Value(chatData['show_author_profiles'] != false),
+        showAuthorProfiles: drift.Value(showAuthor),
+        signMessages: drift.Value(
+          chatData['sign_messages'] == true || chatData['sign_messages'] == 1,
+        ),
+        linkedChatId: drift.Value(
+          (linkedChatId != null && linkedChatId.isNotEmpty)
+              ? linkedChatId
+              : null,
+        ),
+        myRole: drift.Value(chatData['my_role']?.toString()),
+        lastMessageSenderId:
+            drift.Value(chatData['last_message_sender_id']?.toString()),
+        lastMessageSenderName:
+            drift.Value(chatData['last_message_sender_name']?.toString()),
+        hasActiveCall: drift.Value(
+          chatData['has_active_call'] == true ||
+              chatData['has_active_call'] == 1,
+        ),
+        chatPermissionsJson: perms != null
+            ? drift.Value(jsonEncode(perms.toJson()))
+            : const drift.Value.absent(),
+        reactionSettingsJson: reactions != null
+            ? drift.Value(jsonEncode(reactions.toJson()))
+            : const drift.Value.absent(),
         peerCustomizationJson: drift.Value(chatData['peer_customization'] is Map
             ? jsonEncode(chatData['peer_customization'])
             : chatData['peer_customization']?.toString()),
@@ -574,6 +681,12 @@ class ChatRealtimeManager {
     try {
       final existing = await AppDatabase().getChat(chatId);
       if (existing == null) return;
+
+      final perms = GroupDefaultPermissions.tryParse(
+        event.data['default_permissions'] ?? event.data['chat_permissions'],
+      );
+      final reactions = ReactionSettings.fromChatJson(event.data);
+      final rawLinked = event.data['linked_chat_id']?.toString().trim();
 
       final companion = ChatsCompanion(
         chatId: drift.Value(chatId),
@@ -597,8 +710,37 @@ class ChatRealtimeManager {
             ? drift.Value(event.data['updated_at'].toString())
             : drift.Value(existing.updatedAt),
         showAuthorProfiles: event.data.containsKey('show_author_profiles')
-            ? drift.Value(event.data['show_author_profiles'] != false)
+            ? drift.Value(
+                event.data['show_author_profiles'] == true ||
+                    event.data['show_author_profiles'] == 1,
+              )
             : drift.Value(existing.showAuthorProfiles),
+        signMessages: event.data.containsKey('sign_messages')
+            ? drift.Value(
+                event.data['sign_messages'] == true ||
+                    event.data['sign_messages'] == 1,
+              )
+            : drift.Value(existing.signMessages),
+        linkedChatId: event.data.containsKey('linked_chat_id')
+            ? drift.Value(
+                (rawLinked != null && rawLinked.isNotEmpty) ? rawLinked : null,
+              )
+            : drift.Value(existing.linkedChatId),
+        myRole: event.data.containsKey('my_role')
+            ? drift.Value(event.data['my_role']?.toString())
+            : drift.Value(existing.myRole),
+        hasActiveCall: event.data.containsKey('has_active_call')
+            ? drift.Value(
+                event.data['has_active_call'] == true ||
+                    event.data['has_active_call'] == 1,
+              )
+            : drift.Value(existing.hasActiveCall),
+        chatPermissionsJson: perms != null
+            ? drift.Value(jsonEncode(perms.toJson()))
+            : drift.Value(existing.chatPermissionsJson),
+        reactionSettingsJson: reactions != null
+            ? drift.Value(jsonEncode(reactions.toJson()))
+            : drift.Value(existing.reactionSettingsJson),
         peerCustomizationJson: event.data.containsKey('peer_customization')
             ? drift.Value(event.data['peer_customization'] is Map
                 ? jsonEncode(event.data['peer_customization'])
@@ -724,8 +866,23 @@ class ChatRealtimeManager {
     if (msgData['via_bot_username'] != null) {
       mediaPayloadMap['via_bot_username'] = msgData['via_bot_username'];
     }
+    if (msgData['can_comment'] == true) {
+      mediaPayloadMap['can_comment'] = true;
+    }
+    if (msgData['channel_post_id'] != null &&
+        msgData['channel_post_id'].toString().isNotEmpty) {
+      mediaPayloadMap['channel_post_id'] =
+          msgData['channel_post_id'].toString();
+    }
     final String? mediaPayloadStr =
         mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
+    final recentRepliersList =
+        RecentReplier.parseList(msgData['recent_repliers']);
+    final String? recentRepliersStr = recentRepliersList.isNotEmpty
+        ? jsonEncode(recentRepliersList.map((r) => r.toJson()).toList())
+        : null;
+    final String? rawThreadRootId =
+        msgData['thread_root_message_id']?.toString().trim();
 
     final String? senderCustJsonStr = () {
       final raw = msgData['sender_customization'];
@@ -788,6 +945,22 @@ class ChatRealtimeManager {
       groupedId: drift.Value(groupedId),
       forwardFromAvatarUrl: drift.Value(fwdAvatarUrl),
       senderCustomizationJson: drift.Value(senderCustJsonStr),
+      viewsCount: drift.Value((msgData['views_count'] as num?)?.toInt() ?? 0),
+      authorSignature: drift.Value(msgData['author_signature']?.toString()),
+      postAuthorId: drift.Value(msgData['post_author_id']?.toString()),
+      senderRole: drift.Value(msgData['sender_role']?.toString()),
+      senderAdminTitle: drift.Value(msgData['sender_admin_title']?.toString()),
+      isFromAnonymousAdmin:
+          drift.Value(msgData['is_from_anonymous_admin'] == true),
+      isSilent: drift.Value(msgData['is_silent'] == true),
+      commentsCount:
+          drift.Value((msgData['comments_count'] as num?)?.toInt() ?? 0),
+      recentRepliersJson: drift.Value(recentRepliersStr),
+      threadRootMessageId: drift.Value(
+        (rawThreadRootId != null && rawThreadRootId.isNotEmpty)
+            ? rawThreadRootId
+            : null,
+      ),
     ));
   }
 }

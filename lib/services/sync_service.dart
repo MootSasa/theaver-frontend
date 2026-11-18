@@ -176,6 +176,23 @@ class SyncService {
           await _db.updateUserCustomizationJson(targetUserId, cachedJson);
         }
         break;
+      case 'chat_settings_updated':
+      case 'message_views_updated':
+      case 'post_comments_updated':
+      case 'member_updated':
+        await ChatService.handleWebSocketEvent(
+          WebSocketEvent(
+            type: WebSocketEvent.fromJson({'type': eventType}).type,
+            rawType: eventType ?? '',
+            data: {
+              if (chatId != null) 'chat_id': chatId,
+              ...payload,
+            },
+            timestamp: DateTime.now().millisecondsSinceEpoch,
+          ),
+          db: _db,
+        );
+        break;
       default:
         debugPrint('SyncService: Unknown event type: $eventType');
     }
@@ -239,8 +256,25 @@ class SyncService {
     if (payload['via_bot_username'] != null) {
       mediaPayloadMap['via_bot_username'] = payload['via_bot_username'];
     }
+    if (payload['can_comment'] == true) {
+      mediaPayloadMap['can_comment'] = true;
+    }
+    if (payload['channel_post_id'] != null &&
+        payload['channel_post_id'].toString().isNotEmpty) {
+      mediaPayloadMap['channel_post_id'] =
+          payload['channel_post_id'].toString();
+    }
     final String? mediaPayloadStr =
         mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
+    final recentRepliersList =
+        RecentReplier.parseList(payload['recent_repliers']);
+    final String? recentRepliersStr = recentRepliersList.isNotEmpty
+        ? jsonEncode(recentRepliersList.map((r) => r.toJson()).toList())
+        : null;
+    final String? rawThreadRootId =
+        payload['thread_root_message_id']?.toString().trim();
+    final bool isThreadComment =
+        rawThreadRootId != null && rawThreadRootId.isNotEmpty;
 
     final String? senderCustJsonStr = () {
       final raw = payload['sender_customization'];
@@ -317,6 +351,17 @@ class SyncService {
       isRound: Value(payload['is_round'] == true ||
           payload['message_type'] == 'round'),
       groupedId: Value(groupedId),
+      viewsCount: Value((payload['views_count'] as num?)?.toInt() ?? 0),
+      authorSignature: Value(payload['author_signature']?.toString()),
+      postAuthorId: Value(payload['post_author_id']?.toString()),
+      senderRole: Value(payload['sender_role']?.toString()),
+      senderAdminTitle: Value(payload['sender_admin_title']?.toString()),
+      isFromAnonymousAdmin:
+          Value(payload['is_from_anonymous_admin'] == true),
+      isSilent: Value(payload['is_silent'] == true),
+      commentsCount: Value((payload['comments_count'] as num?)?.toInt() ?? 0),
+      recentRepliersJson: Value(recentRepliersStr),
+      threadRootMessageId: Value(isThreadComment ? rawThreadRootId : null),
     ));
 
     final isCommunityChannel =
@@ -329,6 +374,9 @@ class SyncService {
       if (chat != null) {
         await _db.deleteChat(chatId);
       }
+      return;
+    }
+    if (isThreadComment) {
       return;
     }
 
@@ -361,14 +409,17 @@ class SyncService {
           isRound: isRound,
           fileUrl: payload['file_url']?.toString(),
           groupedId: groupedId,
+          senderId: payload['sender_id']?.toString(),
+          senderName: payload['sender_name']?.toString(),
           incrementUnread: false,
         );
       }
     } else {
+      final stubChatType = payload['chat_type']?.toString() ?? 'private';
       // Upsert chat stub so it immediately appears in the chat list
       await _db.saveChat(ChatsCompanion(
         chatId: Value(chatId),
-        chatType: Value(payload['chat_type']?.toString() ?? 'private'),
+        chatType: Value(stubChatType),
         name: Value(payload['sender_name']?.toString() ?? 'Чат'),
         avatarUrl: Value(payload['sender_avatar_url']?.toString()),
         lastMessage: Value(content),
@@ -377,9 +428,12 @@ class SyncService {
         lastMessageIsRound: Value(isRound),
         lastMessageFileUrl: Value(payload['file_url']?.toString()),
         lastMessageGroupedId: Value(groupedId),
+        lastMessageSenderId: Value(payload['sender_id']?.toString()),
+        lastMessageSenderName: Value(payload['sender_name']?.toString()),
         otherUserId: Value(payload['sender_id']?.toString()),
         updatedAt: Value(safeCreatedAt),
         unreadCount: const Value(1),
+        showAuthorProfiles: Value(stubChatType != 'channel'),
       ));
     }
   }
@@ -481,6 +535,16 @@ class SyncService {
       }
     }
 
+    final showAuthor = payload.containsKey('show_author_profiles')
+        ? (payload['show_author_profiles'] == true ||
+            payload['show_author_profiles'] == 1)
+        : (chatType != 'channel');
+    final perms = GroupDefaultPermissions.tryParse(
+      payload['default_permissions'] ?? payload['chat_permissions'],
+    );
+    final reactions = ReactionSettings.fromChatJson(payload);
+    final linkedChatId = payload['linked_chat_id']?.toString().trim();
+
     await _db.saveChat(ChatsCompanion(
       chatId: Value(chatId),
       chatType: Value(chatType),
@@ -492,7 +556,23 @@ class SyncService {
       unreadCount: const Value(0),
       isOnline: const Value(false),
       isPinned: const Value(false),
-      showAuthorProfiles: Value(payload['show_author_profiles'] != false),
+      showAuthorProfiles: Value(showAuthor),
+      signMessages: Value(
+        payload['sign_messages'] == true || payload['sign_messages'] == 1,
+      ),
+      linkedChatId: Value(
+        (linkedChatId != null && linkedChatId.isNotEmpty) ? linkedChatId : null,
+      ),
+      myRole: Value(payload['my_role']?.toString()),
+      hasActiveCall: Value(
+        payload['has_active_call'] == true || payload['has_active_call'] == 1,
+      ),
+      chatPermissionsJson: perms != null
+          ? Value(jsonEncode(perms.toJson()))
+          : const Value.absent(),
+      reactionSettingsJson: reactions != null
+          ? Value(jsonEncode(reactions.toJson()))
+          : const Value.absent(),
       peerCustomizationJson: Value(payload['peer_customization'] is Map
           ? jsonEncode(payload['peer_customization'])
           : payload['peer_customization']?.toString()),
@@ -505,6 +585,12 @@ class SyncService {
 
     final chat = await _db.getChat(chatId);
     if (chat == null) return;
+
+    final perms = GroupDefaultPermissions.tryParse(
+      payload['default_permissions'] ?? payload['chat_permissions'],
+    );
+    final reactions = ReactionSettings.fromChatJson(payload);
+    final rawLinked = payload['linked_chat_id']?.toString().trim();
 
     // Build companion with only updated fields
     final companion = ChatsCompanion(
@@ -528,8 +614,34 @@ class SyncService {
           ? Value(payload['updated_at'].toString())
           : Value(chat.updatedAt),
       showAuthorProfiles: payload.containsKey('show_author_profiles')
-          ? Value(payload['show_author_profiles'] != false)
+          ? Value(
+              payload['show_author_profiles'] == true ||
+                  payload['show_author_profiles'] == 1,
+            )
           : Value(chat.showAuthorProfiles),
+      signMessages: payload.containsKey('sign_messages')
+          ? Value(
+              payload['sign_messages'] == true || payload['sign_messages'] == 1,
+            )
+          : Value(chat.signMessages),
+      linkedChatId: payload.containsKey('linked_chat_id')
+          ? Value((rawLinked != null && rawLinked.isNotEmpty) ? rawLinked : null)
+          : Value(chat.linkedChatId),
+      myRole: payload.containsKey('my_role')
+          ? Value(payload['my_role']?.toString())
+          : Value(chat.myRole),
+      hasActiveCall: payload.containsKey('has_active_call')
+          ? Value(
+              payload['has_active_call'] == true ||
+                  payload['has_active_call'] == 1,
+            )
+          : Value(chat.hasActiveCall),
+      chatPermissionsJson: perms != null
+          ? Value(jsonEncode(perms.toJson()))
+          : Value(chat.chatPermissionsJson),
+      reactionSettingsJson: reactions != null
+          ? Value(jsonEncode(reactions.toJson()))
+          : Value(chat.reactionSettingsJson),
       peerCustomizationJson: payload.containsKey('peer_customization')
           ? Value(payload['peer_customization'] is Map
               ? jsonEncode(payload['peer_customization'])
@@ -565,6 +677,8 @@ class SyncService {
     int? duration,
     String? groupedId,
     dynamic mediaPayload,
+    bool isSilent = false,
+    String? threadRootMessageId,
   }) async {
     final localId = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
@@ -617,6 +731,8 @@ class SyncService {
       invertMedia: Value(invertMedia),
       isRound: Value(isRound),
       groupedId: Value(groupedId),
+      isSilent: Value(isSilent),
+      threadRootMessageId: Value(threadRootMessageId),
     ));
 
     // Return the saved message as DbMessage
@@ -653,6 +769,16 @@ class SyncService {
       linkPreviewOptions: linkPreviewOptionsStr,
       invertMedia: invertMedia,
       isRound: isRound,
+      viewsCount: 0,
+      authorSignature: null,
+      postAuthorId: null,
+      senderRole: null,
+      senderAdminTitle: null,
+      isFromAnonymousAdmin: false,
+      isSilent: isSilent,
+      commentsCount: 0,
+      recentRepliersJson: null,
+      threadRootMessageId: threadRootMessageId,
     );
   }
 

@@ -28,7 +28,6 @@ import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/cache_service.dart';
-import '../../models/profile_customization.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
@@ -42,7 +41,6 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../services/sync_service.dart';
 import '../../services/database/app_database.dart';
-import 'package:drift/drift.dart' show Value;
 import '../../utils/swipe_back_route.dart';
 import '../../utils/date_time_utils.dart';
 import '../../services/update_service.dart';
@@ -697,53 +695,66 @@ class _MainScreenState extends State<MainScreen>
 
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
       if (chatIndex != -1) {
-        Chat? updatedChat;
-        setState(() {
-          final chat = _chats[chatIndex];
-
-          // Get unread count from provider (authoritative source)
-          int newUnreadCount = chat.unreadCount;
+        Message? parsedMsg;
+        if (messageData != null) {
           try {
-            newUnreadCount =
-                context.read<UnreadCountProvider>().getCount(chatId);
+            parsedMsg = Message.fromJson(messageData);
           } catch (_) {}
+        }
+        final isThreadComment = parsedMsg?.threadRootMessageId != null &&
+            parsedMsg!.threadRootMessageId!.isNotEmpty;
 
-          final msgType = messageData?['message_type'] as String? ?? 'text';
-          final isRound =
-              messageData?['is_round'] == true || msgType == 'round';
-          final fileUrl = messageData?['file_url'] as String?;
-          final groupedId = messageData?['grouped_id'] as String?;
-          final content = messageData?['content'] as String? ?? '';
-          List<MessageEntity> msgEntities = const [];
-          if (messageData != null) {
+        Chat? updatedChat;
+        if (!isThreadComment) {
+          final msgEntities = parsedMsg?.entities ?? const <MessageEntity>[];
+          final senderId = parsedMsg?.senderId ??
+              messageData?['sender_id']?.toString();
+          final senderName = parsedMsg?.senderName ??
+              messageData?['sender_name']?.toString();
+
+          setState(() {
+            final chat = _chats[chatIndex];
+
+            // Get unread count from provider (authoritative source)
+            int newUnreadCount = chat.unreadCount;
             try {
-              msgEntities = Message.fromJson(messageData).entities;
+              newUnreadCount =
+                  context.read<UnreadCountProvider>().getCount(chatId);
             } catch (_) {}
-          }
-          _chatLastMessageEntities[chatId] = msgEntities;
 
-          final newChat = chat.copyWith(
-            lastMessage: content,
-            lastMessageTime:
-                messageData?['created_at'] as String? ?? chat.lastMessageTime,
-            lastMessageType: msgType,
-            lastMessageIsRound: isRound,
-            lastMessageFileUrl: fileUrl,
-            lastMessageGroupedId: groupedId,
-            lastMessageEntities: msgEntities,
-            updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
-            unreadCount: newUnreadCount,
-          );
-          updatedChat = newChat;
+            final msgType = messageData?['message_type'] as String? ?? 'text';
+            final isRound =
+                messageData?['is_round'] == true || msgType == 'round';
+            final fileUrl = messageData?['file_url'] as String?;
+            final groupedId = messageData?['grouped_id'] as String?;
+            final content = messageData?['content'] as String? ?? '';
+            _chatLastMessageEntities[chatId] = msgEntities;
 
-          // Update the chat in place
-          _chats[chatIndex] = newChat;
-          // Re-sort: pinned/saved chats stay in their fixed positions,
-          // unpinned chats sort by updated_at
-          _sortChats();
-        });
-        // Save to local storage
-        _localStorage.saveChats(_chats);
+            final newChat = chat.copyWith(
+              lastMessage: content,
+              lastMessageTime:
+                  messageData?['created_at'] as String? ?? chat.lastMessageTime,
+              lastMessageType: msgType,
+              lastMessageIsRound: isRound,
+              lastMessageFileUrl: fileUrl,
+              lastMessageGroupedId: groupedId,
+              lastMessageEntities: msgEntities,
+              lastMessageSenderId: senderId,
+              lastMessageSenderName: senderName,
+              updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
+              unreadCount: newUnreadCount,
+            );
+            updatedChat = newChat;
+
+            // Update the chat in place
+            _chats[chatIndex] = newChat;
+            // Re-sort: pinned/saved chats stay in their fixed positions,
+            // unpinned chats sort by updated_at
+            _sortChats();
+          });
+          // Save to local storage
+          _localStorage.saveChats(_chats);
+        }
 
         // Сохранить в Drift только поля последнего сообщения (чтобы не затереть unreadCount и isOnline)
         final db = AppDatabase(_currentUserId);
@@ -758,14 +769,15 @@ class _MainScreenState extends State<MainScreen>
               isRound: updatedChat!.lastMessageIsRound,
               fileUrl: updatedChat!.lastMessageFileUrl,
               groupedId: updatedChat!.lastMessageGroupedId,
+              senderId: updatedChat!.lastMessageSenderId,
+              senderName: updatedChat!.lastMessageSenderName,
               incrementUnread: false,
             );
           } catch (_) {}
         }
-        if (messageData != null) {
+        if (parsedMsg != null) {
           try {
-            final msg = Message.fromJson(messageData);
-            db.saveMessage(msg.toCompanion());
+            db.saveMessage(parsedMsg.toCompanion());
           } catch (_) {}
         }
       } else {
@@ -1263,47 +1275,15 @@ class _MainScreenState extends State<MainScreen>
       effectiveLastSeen = live.lastSeen ?? model.lastSeen;
     }
 
-    final dbCust = PeerCustomization.tryParseJsonString(model.peerCustomizationJson);
-    if (model.chatType == 'private' &&
-        model.otherUserId != null &&
-        model.otherUserId!.isNotEmpty &&
-        dbCust != null) {
-      PeerCustomizationCache.instance.put(
-        model.otherUserId!,
-        dbCust,
-        notify: false,
-      );
-    }
-
-    return Chat(
-      id: model.chatId,
-      chatType: model.chatType,
+    return Chat.fromDbChat(
+      model,
+      lastMessageEntities: _chatLastMessageEntities[model.chatId] ?? const [],
+      unreadCountOverride: effectiveUnreadCount,
+      isOnlineOverride: effectiveIsOnline,
+      lastSeenOverride: effectiveLastSeen,
+    ).copyWith(
       name: name,
       avatarUrl: avatarUrl,
-      lastMessage: model.lastMessage,
-      lastMessageTime: model.lastMessageTime,
-      lastMessageType: model.lastMessageType,
-      lastMessageIsRound: model.lastMessageIsRound,
-      lastMessageFileUrl: model.lastMessageFileUrl,
-      lastMessageGroupedId: model.lastMessageGroupedId,
-      lastMessageEntities:
-          _chatLastMessageEntities[model.chatId] ?? const [],
-      otherUserId: model.otherUserId,
-      updatedAt: model.updatedAt,
-      unreadCount: effectiveUnreadCount,
-      isOnline: effectiveIsOnline,
-      lastSeen: effectiveLastSeen,
-      isPinned: model.isPinned,
-      lastReadInboxMessageId: model.lastReadInboxMessageId,
-      lastReadOutboxMessageId: model.lastReadOutboxMessageId,
-      pinnedMessageId: model.pinnedMessageId,
-      username: model.username,
-      isPublic: model.isPublic,
-      isBot: model.isBot,
-      isVerified: model.isVerified,
-      isArchived: model.isArchived,
-      showAuthorProfiles: model.showAuthorProfiles,
-      peerCustomization: dbCust,
     );
   }
 
@@ -1313,34 +1293,10 @@ class _MainScreenState extends State<MainScreen>
     if (chat.chatType == 'saved' && (avatarUrl == null || avatarUrl.isEmpty)) {
       avatarUrl = _accountManager.currentAccount?.avatarUrl;
     }
-    return ChatsCompanion(
-      chatId: Value(chat.id),
-      chatType: Value(chat.isCommunityChannel ? 'community_channel' : chat.chatType),
-      name: Value(chat.name),
-      avatarUrl: Value(avatarUrl),
-      lastMessage: Value(chat.lastMessage),
-      lastMessageTime: Value(chat.lastMessageTime),
-      lastMessageType: Value(chat.lastMessageType),
-      lastMessageIsRound: Value(chat.lastMessageIsRound),
-      lastMessageFileUrl: Value(chat.lastMessageFileUrl),
-      lastMessageGroupedId: Value(chat.lastMessageGroupedId),
-      otherUserId: Value(chat.otherUserId),
-      updatedAt: Value(chat.updatedAt),
-      unreadCount: Value(chat.unreadCount),
-      isOnline: Value(chat.isOnline),
-      lastSeen: Value(chat.lastSeen),
-      isPinned: Value(chat.isPinned),
-      lastReadInboxMessageId: Value(chat.lastReadInboxMessageId),
-      lastReadOutboxMessageId: Value(chat.lastReadOutboxMessageId),
-      pinnedMessageId: Value(chat.pinnedMessageId),
-      username: Value(chat.username),
-      isPublic: Value(chat.isPublic),
-      isBot: Value(chat.isBot),
-      isVerified: Value(chat.isVerified),
-      isArchived: Value(chat.isArchived),
-      showAuthorProfiles: Value(chat.showAuthorProfiles),
-      peerCustomizationJson: Value(chat.peerCustomization?.toJsonString()),
-    );
+    final normalized = avatarUrl != chat.avatarUrl
+        ? chat.copyWith(avatarUrl: avatarUrl)
+        : chat;
+    return normalized.toCompanion();
   }
 
   @override

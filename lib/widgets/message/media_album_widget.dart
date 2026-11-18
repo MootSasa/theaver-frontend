@@ -10,11 +10,14 @@ import '../../models/theav_theme.dart';
 import '../../services/database/app_database.dart';
 import '../../services/media_cache_manager.dart';
 import 'blurred_media_placeholder.dart';
+import 'bubble_tail_painter.dart';
+import 'group_message_avatar_row.dart' show GroupMessageAvatarRow;
 import 'media_album_layout.dart';
 import 'media_album_viewer.dart';
 import 'media_download_button.dart';
 import 'message_bubble.dart';
 import 'message_interactive_state.dart';
+import 'message_status_widget.dart';
 import 'text_message_widget.dart';
 import '../tiling/tile_viewport_scope.dart';
 
@@ -33,6 +36,13 @@ class MediaAlbumWidget extends StatelessWidget {
   final bool isSelected;
   final bool isSelectionMode;
   final String? highlightItemId;
+  final bool isFirstInCluster;
+  final bool isLastInCluster;
+  final bool isChannelCard;
+  final bool suppressMargin;
+  final bool suppressFooter;
+  final double? overrideWidth;
+  final BorderRadius? overrideBorderRadius;
 
   const MediaAlbumWidget({
     Key? key,
@@ -49,6 +59,13 @@ class MediaAlbumWidget extends StatelessWidget {
     this.isSelected = false,
     this.isSelectionMode = false,
     this.highlightItemId,
+    this.isFirstInCluster = true,
+    this.isLastInCluster = true,
+    this.isChannelCard = false,
+    this.suppressMargin = false,
+    this.suppressFooter = false,
+    this.overrideWidth,
+    this.overrideBorderRadius,
   }) : super(key: key);
 
   MediaAlbumWidget copyWithKey(Key? newKey) {
@@ -67,6 +84,13 @@ class MediaAlbumWidget extends StatelessWidget {
       isSelected: false,
       isSelectionMode: false,
       highlightItemId: null,
+      isFirstInCluster: isFirstInCluster,
+      isLastInCluster: isLastInCluster,
+      isChannelCard: isChannelCard,
+      suppressMargin: suppressMargin,
+      suppressFooter: suppressFooter,
+      overrideWidth: overrideWidth,
+      overrideBorderRadius: overrideBorderRadius,
     );
   }
 
@@ -82,12 +106,46 @@ class MediaAlbumWidget extends StatelessWidget {
     );
   }
 
+  AlbumTilePosition _resolveTilePosition({
+    required AlbumTilePosition pos,
+    required BorderRadius outerRadius,
+    required bool applyTopCorners,
+    required bool applyBottomCorners,
+  }) {
+    final BorderRadius base = pos.borderRadius;
+    final BorderRadius resolved = BorderRadius.only(
+      topLeft: applyTopCorners && base.topLeft != Radius.zero
+          ? outerRadius.topLeft
+          : base.topLeft,
+      topRight: applyTopCorners && base.topRight != Radius.zero
+          ? outerRadius.topRight
+          : base.topRight,
+      bottomLeft: applyBottomCorners && base.bottomLeft != Radius.zero
+          ? outerRadius.bottomLeft
+          : base.bottomLeft,
+      bottomRight: applyBottomCorners && base.bottomRight != Radius.zero
+          ? outerRadius.bottomRight
+          : base.bottomRight,
+    );
+    if (resolved == base) return pos;
+    return AlbumTilePosition(
+      left: pos.left,
+      top: pos.top,
+      width: pos.width,
+      height: pos.height,
+      borderRadius: resolved,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final screenWidth =
-        TileViewportScope.widthOf(context) - (hasAvatarGutter ? 38.0 : 0.0);
-    final double minAlbumWidth = math.min(220.0, math.max(180.0, screenWidth - 16.0));
-    final albumWidth = (screenWidth * 0.76).clamp(minAlbumWidth, 380.0);
+    final screenWidth = TileViewportScope.widthOf(context) -
+        (hasAvatarGutter ? GroupMessageAvatarRow.gutterWidth : 0.0);
+    final double minAlbumWidth =
+        math.min(220.0, math.max(180.0, screenWidth - 16.0));
+    final double albumWidth = (overrideWidth != null && overrideWidth! > 0)
+        ? overrideWidth!
+        : (screenWidth * 0.76).clamp(minAlbumWidth, 380.0);
     // Dynamic height based on count
     final albumHeight = album.items.length <= 2
         ? albumWidth * 0.72
@@ -104,12 +162,14 @@ class MediaAlbumWidget extends StatelessWidget {
     final themeExt = theme.extension<TheavThemeExtension>();
     final bool shouldHighlightAlbum = isSelected ||
         isHighlighted ||
-        (highlightItemId != null && album.items.any((it) => it.id == highlightItemId));
+        (highlightItemId != null &&
+            album.items.any((it) => it.id == highlightItemId));
 
-    final showSender = !isMe &&
+    final bool showSender = !isChannelCard &&
+        !isMe &&
         ((senderHeaderWidget != null) ||
             (senderName != null && senderName!.isNotEmpty));
-    final hasTextBubble = album.hasCaption || showSender;
+    final bool hasTextBubble = !isChannelCard && (album.hasCaption || showSender);
     final Color bubbleColor = hasTextBubble
         ? (shouldHighlightAlbum
             ? (isMe
@@ -128,19 +188,34 @@ class MediaAlbumWidget extends StatelessWidget {
         : (themeExt?.palette.chatBubbleIncomingText ??
             theme.colorScheme.onSecondaryContainer);
 
-    final Widget albumContent = MetaData(
+    final double baseBubbleRadius = themeExt?.bubbleRadius ?? 16.0;
+    final bool showTail = !isChannelCard &&
+        overrideBorderRadius == null &&
+        isLastInCluster &&
+        hasTextBubble;
+    final BorderRadius effectiveBorderRadius = overrideBorderRadius ??
+        (isChannelCard
+            ? const BorderRadius.vertical(top: Radius.circular(16.0))
+            : computeClusterBubbleBorderRadius(
+                isMe: isMe,
+                isFirstInCluster: isFirstInCluster,
+                isLastInCluster: isLastInCluster,
+                outerRadius: baseBubbleRadius,
+                innerRadius: 6.0,
+                tailCornerRadius: 4.0,
+                hasTail: showTail,
+              ));
+
+    final bool applyTopTileCorners = isChannelCard || !showSender;
+    final bool applyBottomTileCorners = isChannelCard || !album.hasCaption;
+
+    final Widget albumBox = MetaData(
       metaData: 'message_bubble_box',
       child: Container(
-        margin: EdgeInsets.only(
-          top: 3.0,
-          bottom: 3.0,
-          left: hasAvatarGutter ? 0.0 : 8.0,
-          right: 8.0,
-        ),
         width: albumWidth,
         decoration: BoxDecoration(
           color: bubbleColor,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: effectiveBorderRadius,
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -169,10 +244,20 @@ class MediaAlbumWidget extends StatelessWidget {
               child: Stack(
                 children: [
                   for (int i = 0; i < positions.length; i++)
-                    _buildTile(context, album.items[i], positions[i], i),
+                    _buildTile(
+                      context,
+                      album.items[i],
+                      _resolveTilePosition(
+                        pos: positions[i],
+                        outerRadius: effectiveBorderRadius,
+                        applyTopCorners: applyTopTileCorners,
+                        applyBottomCorners: applyBottomTileCorners,
+                      ),
+                      i,
+                    ),
 
                   // Floating time pill if captionless
-                  if (!album.hasCaption)
+                  if (!isChannelCard && !suppressFooter && !album.hasCaption)
                     Positioned(
                       bottom: 6,
                       right: 6,
@@ -208,8 +293,8 @@ class MediaAlbumWidget extends StatelessWidget {
               ),
             ),
 
-            // 2. Caption Text & Meta (if present)
-            if (album.hasCaption)
+            // 2. Caption Text & Meta (if present and not handled externally by ChannelPostCard)
+            if (!isChannelCard && album.hasCaption)
               Padding(
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                 child: Column(
@@ -227,23 +312,25 @@ class MediaAlbumWidget extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        Text(
-                          _getTimeString(),
-                          style: TextStyle(
-                            color: onBubbleColor.withValues(alpha: 0.7),
-                            fontSize: 11,
+                    if (!suppressFooter) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            _getTimeString(),
+                            style: TextStyle(
+                              color: onBubbleColor.withValues(alpha: 0.7),
+                              fontSize: 11,
+                            ),
                           ),
-                        ),
-                        if (isMe) ...[
-                          const SizedBox(width: 4),
-                          _buildStatusIcon(color: onBubbleColor),
+                          if (isMe) ...[
+                            const SizedBox(width: 4),
+                            _buildStatusIcon(color: onBubbleColor),
+                          ],
                         ],
-                      ],
-                    ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -251,6 +338,57 @@ class MediaAlbumWidget extends StatelessWidget {
         ),
       ),
     );
+
+    final EdgeInsets effectiveMargin = suppressMargin
+        ? EdgeInsets.zero
+        : EdgeInsets.only(
+            top: isFirstInCluster ? 4.0 : 2.0,
+            bottom: isLastInCluster ? 4.0 : 2.0,
+            left: hasAvatarGutter ? 0.0 : 8.0,
+            right: 8.0,
+          );
+
+    final Widget albumContent = Padding(
+      padding: effectiveMargin,
+      child: showTail
+          ? Stack(
+              clipBehavior: Clip.none,
+              children: [
+                albumBox,
+                Positioned(
+                  right: isMe ? -BubbleTailPainter.horizontalOutset : null,
+                  left: isMe ? null : -BubbleTailPainter.horizontalOutset,
+                  bottom: 0.0,
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      size: BubbleTailPainter.defaultSize,
+                      painter: BubbleTailPainter(
+                        color: bubbleColor,
+                        isMe: isMe,
+                        cornerRadius: math.min(baseBubbleRadius, 4.0),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : albumBox,
+    );
+
+    final primaryMsg = album.primaryMessage;
+    final String interactiveAlbumKey =
+        (primaryMsg.localId != null && primaryMsg.localId!.isNotEmpty)
+            ? primaryMsg.localId!
+            : (primaryMsg.id.isNotEmpty
+                ? primaryMsg.id
+                : 'album_${primaryMsg.createdAt}');
+
+    if (isChannelCard) {
+      return MessageInteractiveScope(
+        messageKey: interactiveAlbumKey,
+        child: albumContent,
+      );
+    }
 
     final Widget alignedAlbum = Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -277,14 +415,6 @@ class MediaAlbumWidget extends StatelessWidget {
         child: alignedAlbum,
       );
     }
-
-    final primaryMsg = album.primaryMessage;
-    final String interactiveAlbumKey =
-        (primaryMsg.localId != null && primaryMsg.localId!.isNotEmpty)
-            ? primaryMsg.localId!
-            : (primaryMsg.id.isNotEmpty
-                ? primaryMsg.id
-                : 'album_${primaryMsg.createdAt}');
 
     return MessageInteractiveScope(
       messageKey: interactiveAlbumKey,
@@ -330,15 +460,20 @@ class MediaAlbumWidget extends StatelessWidget {
 
   Widget _buildStatusIcon({Color color = Colors.white}) {
     if (album.sendStatus == MessageSendStatus.sending.index) {
-      return Icon(Icons.access_time, size: 12, color: color);
+      return iconoir.Clock(width: 12, height: 12, color: color);
     }
     if (album.sendStatus == MessageSendStatus.failed.index) {
-      return const Icon(Icons.error_outline, size: 12, color: Colors.redAccent);
+      return const iconoir.WarningCircle(
+        width: 12,
+        height: 12,
+        color: Colors.redAccent,
+      );
     }
-    if (album.isRead) {
-      return Icon(Icons.done_all, size: 13, color: color);
-    }
-    return Icon(Icons.done, size: 13, color: color);
+    return MessageStatusWidget(
+      isRead: album.isRead,
+      isOutgoing: isMe,
+      colorOverride: color,
+    );
   }
 }
 

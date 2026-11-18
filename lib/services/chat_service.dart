@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -13,6 +14,807 @@ import '../models/profile_customization.dart';
 import '../utils/emoji_utils.dart';
 import 'community_service.dart';
 import 'peer_customization_cache.dart';
+
+String? _nonEmptyString(dynamic raw) {
+  if (raw == null) return null;
+  final s = raw.toString().trim();
+  return s.isNotEmpty ? s : null;
+}
+
+bool _parseBoolFlag(dynamic raw, {bool defaultValue = false}) {
+  if (raw == null) return defaultValue;
+  if (raw is bool) return raw;
+  if (raw is num) return raw != 0;
+  final s = raw.toString().trim().toLowerCase();
+  if (s == 'true' || s == '1') return true;
+  if (s == 'false' || s == '0') return false;
+  return defaultValue;
+}
+
+int _parseIntValue(dynamic raw, {int defaultValue = 0}) {
+  if (raw == null) return defaultValue;
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return int.tryParse(raw.toString()) ?? defaultValue;
+}
+
+/// Default member permissions for a group chat.
+class GroupDefaultPermissions {
+  final bool canSendMessages;
+  final bool canSendMedia;
+  final bool canSendStickersGifs;
+  final bool canSendPolls;
+  final bool canPinMessages;
+  final bool canInviteUsers;
+  final bool canChangeInfo;
+
+  const GroupDefaultPermissions({
+    this.canSendMessages = true,
+    this.canSendMedia = true,
+    this.canSendStickersGifs = true,
+    this.canSendPolls = true,
+    this.canPinMessages = false,
+    this.canInviteUsers = true,
+    this.canChangeInfo = false,
+  });
+
+  factory GroupDefaultPermissions.fromJson(Map<String, dynamic> json) {
+    return GroupDefaultPermissions(
+      canSendMessages: json['can_send_messages'] != false,
+      canSendMedia: json['can_send_media'] != false,
+      canSendStickersGifs: json['can_send_stickers_gifs'] != false,
+      canSendPolls: json['can_send_polls'] != false,
+      canPinMessages: _parseBoolFlag(json['can_pin_messages']),
+      canInviteUsers: json['can_invite_users'] != false,
+      canChangeInfo: _parseBoolFlag(json['can_change_info']),
+    );
+  }
+
+  static GroupDefaultPermissions? tryParse(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is GroupDefaultPermissions) return raw;
+    if (raw is Map<String, dynamic>) {
+      return GroupDefaultPermissions.fromJson(raw);
+    }
+    if (raw is Map) {
+      return GroupDefaultPermissions.fromJson(Map<String, dynamic>.from(raw));
+    }
+    if (raw is String && raw.trim().isNotEmpty && raw != 'null') {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return GroupDefaultPermissions.fromJson(
+            Map<String, dynamic>.from(decoded),
+          );
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'can_send_messages': canSendMessages,
+        'can_send_media': canSendMedia,
+        'can_send_stickers_gifs': canSendStickersGifs,
+        'can_send_polls': canSendPolls,
+        'can_pin_messages': canPinMessages,
+        'can_invite_users': canInviteUsers,
+        'can_change_info': canChangeInfo,
+      };
+
+  GroupDefaultPermissions copyWith({
+    bool? canSendMessages,
+    bool? canSendMedia,
+    bool? canSendStickersGifs,
+    bool? canSendPolls,
+    bool? canPinMessages,
+    bool? canInviteUsers,
+    bool? canChangeInfo,
+  }) {
+    return GroupDefaultPermissions(
+      canSendMessages: canSendMessages ?? this.canSendMessages,
+      canSendMedia: canSendMedia ?? this.canSendMedia,
+      canSendStickersGifs: canSendStickersGifs ?? this.canSendStickersGifs,
+      canSendPolls: canSendPolls ?? this.canSendPolls,
+      canPinMessages: canPinMessages ?? this.canPinMessages,
+      canInviteUsers: canInviteUsers ?? this.canInviteUsers,
+      canChangeInfo: canChangeInfo ?? this.canChangeInfo,
+    );
+  }
+
+  /// Intersects group default permissions with individual member restrictions.
+  GroupDefaultPermissions intersectWith(MemberRestrictions? restrictions) {
+    if (restrictions == null) return this;
+    return GroupDefaultPermissions(
+      canSendMessages: canSendMessages && restrictions.canSendMessages,
+      canSendMedia: canSendMedia && restrictions.canSendMedia,
+      canSendStickersGifs:
+          canSendStickersGifs && restrictions.canSendStickersGifs,
+      canSendPolls: canSendPolls && restrictions.canSendPolls,
+      canPinMessages: canPinMessages && restrictions.canPinMessages,
+      canInviteUsers: canInviteUsers && restrictions.canInviteUsers,
+      canChangeInfo: canChangeInfo && restrictions.canChangeInfo,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GroupDefaultPermissions &&
+          runtimeType == other.runtimeType &&
+          canSendMessages == other.canSendMessages &&
+          canSendMedia == other.canSendMedia &&
+          canSendStickersGifs == other.canSendStickersGifs &&
+          canSendPolls == other.canSendPolls &&
+          canPinMessages == other.canPinMessages &&
+          canInviteUsers == other.canInviteUsers &&
+          canChangeInfo == other.canChangeInfo;
+
+  @override
+  int get hashCode => Object.hash(
+        canSendMessages,
+        canSendMedia,
+        canSendStickersGifs,
+        canSendPolls,
+        canPinMessages,
+        canInviteUsers,
+        canChangeInfo,
+      );
+}
+
+/// Granular administrator permissions in a group or channel.
+class AdminRights {
+  final bool canChangeInfo;
+  final bool canPostMessages;
+  final bool canEditMessages;
+  final bool canDeleteMessages;
+  final bool canBanUsers;
+  final bool canInviteUsers;
+  final bool canPinMessages;
+  final bool canManageCalls;
+  final bool canAddAdmins;
+
+  const AdminRights({
+    this.canChangeInfo = false,
+    this.canPostMessages = true,
+    this.canEditMessages = false,
+    this.canDeleteMessages = true,
+    this.canBanUsers = true,
+    this.canInviteUsers = true,
+    this.canPinMessages = true,
+    this.canManageCalls = false,
+    this.canAddAdmins = false,
+  });
+
+  const AdminRights.all()
+      : canChangeInfo = true,
+        canPostMessages = true,
+        canEditMessages = true,
+        canDeleteMessages = true,
+        canBanUsers = true,
+        canInviteUsers = true,
+        canPinMessages = true,
+        canManageCalls = true,
+        canAddAdmins = true;
+
+  factory AdminRights.fromJson(Map<String, dynamic> json) {
+    return AdminRights(
+      canChangeInfo: _parseBoolFlag(json['can_change_info']),
+      canPostMessages: json['can_post_messages'] != false,
+      canEditMessages: _parseBoolFlag(json['can_edit_messages']),
+      canDeleteMessages: json['can_delete_messages'] != false,
+      canBanUsers:
+          (json['can_ban_users'] ?? json['can_restrict_members']) != false,
+      canInviteUsers: json['can_invite_users'] != false,
+      canPinMessages: json['can_pin_messages'] != false,
+      canManageCalls: _parseBoolFlag(
+        json['can_manage_calls'] ?? json['can_manage_video_chats'],
+      ),
+      canAddAdmins: _parseBoolFlag(
+        json['can_add_admins'] ?? json['can_promote_members'],
+      ),
+    );
+  }
+
+  static AdminRights? tryParse(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is AdminRights) return raw;
+    if (raw is Map<String, dynamic>) return AdminRights.fromJson(raw);
+    if (raw is Map) return AdminRights.fromJson(Map<String, dynamic>.from(raw));
+    if (raw is String && raw.trim().isNotEmpty && raw != 'null') {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return AdminRights.fromJson(Map<String, dynamic>.from(decoded));
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'can_change_info': canChangeInfo,
+        'can_post_messages': canPostMessages,
+        'can_edit_messages': canEditMessages,
+        'can_delete_messages': canDeleteMessages,
+        'can_ban_users': canBanUsers,
+        'can_invite_users': canInviteUsers,
+        'can_pin_messages': canPinMessages,
+        'can_manage_calls': canManageCalls,
+        'can_add_admins': canAddAdmins,
+      };
+
+  AdminRights copyWith({
+    bool? canChangeInfo,
+    bool? canPostMessages,
+    bool? canEditMessages,
+    bool? canDeleteMessages,
+    bool? canBanUsers,
+    bool? canInviteUsers,
+    bool? canPinMessages,
+    bool? canManageCalls,
+    bool? canAddAdmins,
+  }) {
+    return AdminRights(
+      canChangeInfo: canChangeInfo ?? this.canChangeInfo,
+      canPostMessages: canPostMessages ?? this.canPostMessages,
+      canEditMessages: canEditMessages ?? this.canEditMessages,
+      canDeleteMessages: canDeleteMessages ?? this.canDeleteMessages,
+      canBanUsers: canBanUsers ?? this.canBanUsers,
+      canInviteUsers: canInviteUsers ?? this.canInviteUsers,
+      canPinMessages: canPinMessages ?? this.canPinMessages,
+      canManageCalls: canManageCalls ?? this.canManageCalls,
+      canAddAdmins: canAddAdmins ?? this.canAddAdmins,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AdminRights &&
+          runtimeType == other.runtimeType &&
+          canChangeInfo == other.canChangeInfo &&
+          canPostMessages == other.canPostMessages &&
+          canEditMessages == other.canEditMessages &&
+          canDeleteMessages == other.canDeleteMessages &&
+          canBanUsers == other.canBanUsers &&
+          canInviteUsers == other.canInviteUsers &&
+          canPinMessages == other.canPinMessages &&
+          canManageCalls == other.canManageCalls &&
+          canAddAdmins == other.canAddAdmins;
+
+  @override
+  int get hashCode => Object.hash(
+        canChangeInfo,
+        canPostMessages,
+        canEditMessages,
+        canDeleteMessages,
+        canBanUsers,
+        canInviteUsers,
+        canPinMessages,
+        canManageCalls,
+        canAddAdmins,
+      );
+}
+
+/// Per-member granular restrictions in a group chat.
+class MemberRestrictions {
+  final bool canSendMessages;
+  final bool canSendMedia;
+  final bool canSendStickersGifs;
+  final bool canSendPolls;
+  final bool canPinMessages;
+  final bool canInviteUsers;
+  final bool canChangeInfo;
+
+  const MemberRestrictions({
+    this.canSendMessages = true,
+    this.canSendMedia = true,
+    this.canSendStickersGifs = true,
+    this.canSendPolls = true,
+    this.canPinMessages = false,
+    this.canInviteUsers = true,
+    this.canChangeInfo = false,
+  });
+
+  const MemberRestrictions.readOnly()
+      : canSendMessages = false,
+        canSendMedia = false,
+        canSendStickersGifs = false,
+        canSendPolls = false,
+        canPinMessages = false,
+        canInviteUsers = false,
+        canChangeInfo = false;
+
+  bool get isReadOnly => !canSendMessages;
+
+  factory MemberRestrictions.fromJson(Map<String, dynamic> json) {
+    return MemberRestrictions(
+      canSendMessages: json['can_send_messages'] != false,
+      canSendMedia: json['can_send_media'] != false,
+      canSendStickersGifs: json['can_send_stickers_gifs'] != false,
+      canSendPolls: json['can_send_polls'] != false,
+      canPinMessages: _parseBoolFlag(json['can_pin_messages']),
+      canInviteUsers: json['can_invite_users'] != false,
+      canChangeInfo: _parseBoolFlag(json['can_change_info']),
+    );
+  }
+
+  static MemberRestrictions? tryParse(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is MemberRestrictions) return raw;
+    if (raw is Map<String, dynamic>) return MemberRestrictions.fromJson(raw);
+    if (raw is Map) {
+      return MemberRestrictions.fromJson(Map<String, dynamic>.from(raw));
+    }
+    if (raw is String && raw.trim().isNotEmpty && raw != 'null') {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return MemberRestrictions.fromJson(
+            Map<String, dynamic>.from(decoded),
+          );
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'can_send_messages': canSendMessages,
+        'can_send_media': canSendMedia,
+        'can_send_stickers_gifs': canSendStickersGifs,
+        'can_send_polls': canSendPolls,
+        'can_pin_messages': canPinMessages,
+        'can_invite_users': canInviteUsers,
+        'can_change_info': canChangeInfo,
+      };
+
+  MemberRestrictions copyWith({
+    bool? canSendMessages,
+    bool? canSendMedia,
+    bool? canSendStickersGifs,
+    bool? canSendPolls,
+    bool? canPinMessages,
+    bool? canInviteUsers,
+    bool? canChangeInfo,
+  }) {
+    return MemberRestrictions(
+      canSendMessages: canSendMessages ?? this.canSendMessages,
+      canSendMedia: canSendMedia ?? this.canSendMedia,
+      canSendStickersGifs: canSendStickersGifs ?? this.canSendStickersGifs,
+      canSendPolls: canSendPolls ?? this.canSendPolls,
+      canPinMessages: canPinMessages ?? this.canPinMessages,
+      canInviteUsers: canInviteUsers ?? this.canInviteUsers,
+      canChangeInfo: canChangeInfo ?? this.canChangeInfo,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MemberRestrictions &&
+          runtimeType == other.runtimeType &&
+          canSendMessages == other.canSendMessages &&
+          canSendMedia == other.canSendMedia &&
+          canSendStickersGifs == other.canSendStickersGifs &&
+          canSendPolls == other.canSendPolls &&
+          canPinMessages == other.canPinMessages &&
+          canInviteUsers == other.canInviteUsers &&
+          canChangeInfo == other.canChangeInfo;
+
+  @override
+  int get hashCode => Object.hash(
+        canSendMessages,
+        canSendMedia,
+        canSendStickersGifs,
+        canSendPolls,
+        canPinMessages,
+        canInviteUsers,
+        canChangeInfo,
+      );
+}
+
+/// Reaction configuration for a group or channel ('all' | 'selected' | 'none').
+class ReactionSettings {
+  final String mode; // 'all' | 'selected' | 'none'
+  final List<String> allowedReactions;
+
+  const ReactionSettings({
+    this.mode = 'all',
+    this.allowedReactions = const [],
+  });
+
+  bool get isNone => mode == 'none';
+  bool get isAll => mode == 'all';
+  bool get isSelected => mode == 'selected';
+
+  bool isReactionAllowed(String emoji) {
+    if (mode == 'none') return false;
+    if (mode == 'selected') return allowedReactions.contains(emoji);
+    return true;
+  }
+
+  factory ReactionSettings.fromJson(Map<String, dynamic> json) {
+    final rawMode = (json['mode'] ?? json['reaction_mode'] ?? 'all').toString();
+    final normalizedMode =
+        (rawMode == 'all' || rawMode == 'selected' || rawMode == 'none')
+            ? rawMode
+            : 'all';
+    final rawAllowed = json['allowed_reactions'] ?? json['allowedReactions'];
+    final allowed = <String>[];
+    if (rawAllowed is List) {
+      for (final item in rawAllowed) {
+        final s = item?.toString().trim() ?? '';
+        if (s.isNotEmpty) allowed.add(s);
+      }
+    } else if (rawAllowed is String && rawAllowed.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawAllowed);
+        if (decoded is List) {
+          for (final item in decoded) {
+            final s = item?.toString().trim() ?? '';
+            if (s.isNotEmpty) allowed.add(s);
+          }
+        }
+      } catch (_) {}
+    }
+    return ReactionSettings(
+      mode: normalizedMode,
+      allowedReactions: List<String>.unmodifiable(allowed),
+    );
+  }
+
+  static ReactionSettings? tryParse(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is ReactionSettings) return raw;
+    if (raw is Map<String, dynamic>) return ReactionSettings.fromJson(raw);
+    if (raw is Map) {
+      return ReactionSettings.fromJson(Map<String, dynamic>.from(raw));
+    }
+    if (raw is String && raw.trim().isNotEmpty && raw != 'null') {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          return ReactionSettings.fromJson(Map<String, dynamic>.from(decoded));
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  static ReactionSettings? fromChatJson(Map<String, dynamic> json) {
+    final nested = tryParse(json['reaction_settings']);
+    if (nested != null) return nested;
+    if (json.containsKey('reaction_mode') ||
+        json.containsKey('allowed_reactions')) {
+      return ReactionSettings.fromJson(json);
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'mode': mode,
+        'reaction_mode': mode,
+        'allowed_reactions': allowedReactions,
+      };
+
+  ReactionSettings copyWith({
+    String? mode,
+    List<String>? allowedReactions,
+  }) {
+    return ReactionSettings(
+      mode: mode ?? this.mode,
+      allowedReactions: allowedReactions ?? this.allowedReactions,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReactionSettings &&
+          runtimeType == other.runtimeType &&
+          mode == other.mode &&
+          listEquals(allowedReactions, other.allowedReactions);
+
+  @override
+  int get hashCode => Object.hash(mode, Object.hashAll(allowedReactions));
+}
+
+/// Compact summary of a recent commenter on a channel post.
+class RecentReplier {
+  final String userId;
+  final String displayName;
+  final String? avatarUrl;
+
+  const RecentReplier({
+    required this.userId,
+    required this.displayName,
+    this.avatarUrl,
+  });
+
+  factory RecentReplier.fromJson(Map<String, dynamic> json) {
+    return RecentReplier(
+      userId: (json['user_id'] ?? json['id'] ?? '').toString(),
+      displayName: (json['display_name'] ?? json['name'] ?? '').toString(),
+      avatarUrl: _nonEmptyString(json['avatar_url']),
+    );
+  }
+
+  static List<RecentReplier> parseList(dynamic raw) {
+    if (raw == null) return const [];
+    dynamic listVal = raw;
+    if (raw is String && raw.trim().isNotEmpty && raw != 'null') {
+      try {
+        listVal = jsonDecode(raw);
+      } catch (_) {
+        return const [];
+      }
+    }
+    if (listVal is! List) return const [];
+    final result = <RecentReplier>[];
+    for (final item in listVal) {
+      if (item is Map) {
+        result.add(RecentReplier.fromJson(Map<String, dynamic>.from(item)));
+      }
+    }
+    return result;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'user_id': userId,
+        'display_name': displayName,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RecentReplier &&
+          runtimeType == other.runtimeType &&
+          userId == other.userId &&
+          displayName == other.displayName &&
+          avatarUrl == other.avatarUrl;
+
+  @override
+  int get hashCode => Object.hash(userId, displayName, avatarUrl);
+}
+
+/// Summary of a linked discussion group (for a channel) or linked channel (for a group).
+class LinkedChatSummary {
+  final String id;
+  final String name;
+  final String? username;
+  final String? avatarUrl;
+  final String chatType;
+  final int memberCount;
+
+  const LinkedChatSummary({
+    required this.id,
+    required this.name,
+    this.username,
+    this.avatarUrl,
+    this.chatType = 'group',
+    this.memberCount = 0,
+  });
+
+  factory LinkedChatSummary.fromJson(Map<String, dynamic> json) {
+    return LinkedChatSummary(
+      id: (json['id'] ?? json['chat_id'] ?? '').toString(),
+      name: (json['name'] ?? '').toString(),
+      username: _nonEmptyString(json['username']),
+      avatarUrl: _nonEmptyString(json['avatar_url']),
+      chatType: (json['chat_type'] ?? 'group').toString(),
+      memberCount: _parseIntValue(json['member_count']),
+    );
+  }
+
+  static LinkedChatSummary? tryParse(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is LinkedChatSummary) return raw;
+    if (raw is Map<String, dynamic>) return LinkedChatSummary.fromJson(raw);
+    if (raw is Map) {
+      return LinkedChatSummary.fromJson(Map<String, dynamic>.from(raw));
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        if (username != null) 'username': username,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
+        'chat_type': chatType,
+        'member_count': memberCount,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LinkedChatSummary &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          username == other.username &&
+          avatarUrl == other.avatarUrl &&
+          chatType == other.chatType &&
+          memberCount == other.memberCount;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, name, username, avatarUrl, chatType, memberCount);
+}
+
+/// Result returned when fetching comments for a channel post.
+class PostCommentsResult {
+  final Message? rootPost;
+  final List<Message> comments;
+  final String? linkedChatId;
+  final bool hasMore;
+  final bool success;
+  final String? errorMessage;
+
+  const PostCommentsResult({
+    this.rootPost,
+    this.comments = const [],
+    this.linkedChatId,
+    this.hasMore = false,
+    this.success = true,
+    this.errorMessage,
+  });
+
+  factory PostCommentsResult.fromJson(Map<String, dynamic> json) {
+    Message? parsedRoot;
+    if (json['root_post'] is Map) {
+      parsedRoot = Message.fromJson(
+        Map<String, dynamic>.from(json['root_post'] as Map),
+      );
+    }
+    final parsedComments = <Message>[];
+    if (json['comments'] is List) {
+      for (final item in json['comments'] as List) {
+        if (item is Map) {
+          parsedComments.add(Message.fromJson(Map<String, dynamic>.from(item)));
+        }
+      }
+    }
+    return PostCommentsResult(
+      rootPost: parsedRoot,
+      comments: parsedComments,
+      linkedChatId: _nonEmptyString(json['linked_chat_id']),
+      hasMore: json['has_more'] == true,
+      success: json['success'] != false,
+      errorMessage:
+          _nonEmptyString(json['message']) ?? _nonEmptyString(json['error']),
+    );
+  }
+}
+
+/// Invite link metadata for groups and channels.
+class InviteLinkItem {
+  final int id;
+  final String link;
+  final String title;
+  final int uses;
+  final int maxUses;
+  final DateTime? expiresAt;
+  final DateTime? createdAt;
+  final bool isRevoked;
+  final bool requiresApproval;
+
+  const InviteLinkItem({
+    required this.id,
+    required this.link,
+    this.title = '',
+    this.uses = 0,
+    this.maxUses = 0,
+    this.expiresAt,
+    this.createdAt,
+    this.isRevoked = false,
+    this.requiresApproval = false,
+  });
+
+  bool get isExpired =>
+      expiresAt != null && DateTime.now().isAfter(expiresAt!);
+
+  bool get isLimitReached => maxUses > 0 && uses >= maxUses;
+
+  bool get isActive => !isRevoked && !isExpired && !isLimitReached;
+
+  factory InviteLinkItem.fromJson(Map<String, dynamic> json) {
+    return InviteLinkItem(
+      id: _parseIntValue(json['id']),
+      link: (json['link'] ?? '').toString(),
+      title: (json['title'] ?? '').toString(),
+      uses: _parseIntValue(json['uses']),
+      maxUses: _parseIntValue(json['max_uses']),
+      expiresAt: DateTimeUtils.parseUtcDateTime(json['expires_at']),
+      createdAt: DateTimeUtils.parseUtcDateTime(json['created_at']),
+      isRevoked: _parseBoolFlag(json['is_revoked']),
+      requiresApproval: _parseBoolFlag(json['requires_approval']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'link': link,
+        'title': title,
+        'uses': uses,
+        'max_uses': maxUses,
+        if (expiresAt != null)
+          'expires_at': expiresAt!.toUtc().toIso8601String(),
+        if (createdAt != null)
+          'created_at': createdAt!.toUtc().toIso8601String(),
+        'is_revoked': isRevoked,
+        'requires_approval': requiresApproval,
+      };
+
+  InviteLinkItem copyWith({
+    int? id,
+    String? link,
+    String? title,
+    int? uses,
+    int? maxUses,
+    DateTime? expiresAt,
+    bool clearExpiresAt = false,
+    DateTime? createdAt,
+    bool? isRevoked,
+    bool? requiresApproval,
+  }) {
+    return InviteLinkItem(
+      id: id ?? this.id,
+      link: link ?? this.link,
+      title: title ?? this.title,
+      uses: uses ?? this.uses,
+      maxUses: maxUses ?? this.maxUses,
+      expiresAt: clearExpiresAt ? null : (expiresAt ?? this.expiresAt),
+      createdAt: createdAt ?? this.createdAt,
+      isRevoked: isRevoked ?? this.isRevoked,
+      requiresApproval: requiresApproval ?? this.requiresApproval,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is InviteLinkItem &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          link == other.link &&
+          title == other.title &&
+          uses == other.uses &&
+          maxUses == other.maxUses &&
+          expiresAt == other.expiresAt &&
+          createdAt == other.createdAt &&
+          isRevoked == other.isRevoked &&
+          requiresApproval == other.requiresApproval;
+
+  @override
+  int get hashCode => Object.hash(
+        id,
+        link,
+        title,
+        uses,
+        maxUses,
+        expiresAt,
+        createdAt,
+        isRevoked,
+        requiresApproval,
+      );
+}
+
+/// Real-time update event emitted by [ChatService.realtimeUpdates].
+class ChatRealtimeUpdate {
+  final WebSocketEventType type;
+  final String chatId;
+  final Map<String, dynamic> data;
+
+  const ChatRealtimeUpdate({
+    required this.type,
+    required this.chatId,
+    required this.data,
+  });
+}
 
 /// Chat represents a chat conversation.
 class Chat {
@@ -45,6 +847,16 @@ class Chat {
   final bool isArchived;
   final int? communityId;
   final bool showAuthorProfiles;
+  final bool signMessages;
+  final String? linkedChatId;
+  final String? myRole;
+  final bool isMember;
+  final String? lastMessageSenderId;
+  final String? lastMessageSenderName;
+  final bool hasActiveCall;
+  final String? activeCallId;
+  final GroupDefaultPermissions? defaultPermissions;
+  final ReactionSettings? reactionSettings;
   final PeerCustomization? peerCustomization;
 
   Chat({
@@ -76,9 +888,19 @@ class Chat {
     this.isVerified = false,
     this.isArchived = false,
     this.communityId,
-    this.showAuthorProfiles = true,
+    bool? showAuthorProfiles,
+    this.signMessages = false,
+    this.linkedChatId,
+    this.myRole,
+    this.isMember = true,
+    this.lastMessageSenderId,
+    this.lastMessageSenderName,
+    this.hasActiveCall = false,
+    this.activeCallId,
+    this.defaultPermissions,
+    this.reactionSettings,
     this.peerCustomization,
-  });
+  }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   /// Whether this chat belongs to a community channel
   bool get isCommunityChannel =>
@@ -231,6 +1053,16 @@ class Chat {
       );
     }
 
+    final bool parsedShowAuthorProfiles =
+        json.containsKey('show_author_profiles')
+            ? _parseBoolFlag(json['show_author_profiles'])
+            : (parsedChatType != 'channel');
+    final parsedLinkedChatId = _nonEmptyString(json['linked_chat_id']);
+    final parsedMyRole = _nonEmptyString(json['my_role']);
+    final parsedActiveCallId = _nonEmptyString(json['active_call_id']);
+    final parsedIsMember =
+        json.containsKey('is_member') ? _parseBoolFlag(json['is_member'], defaultValue: true) : (parsedMyRole != 'guest');
+
     return Chat(
       id: json['id']?.toString() ?? json['chat_id']?.toString() ?? '',
       chatType: parsedChatType,
@@ -243,10 +1075,10 @@ class Chat {
       lastMessageFileUrl: json['last_message_file_url']?.toString() ??
           json['file_url']?.toString(),
       updatedAt: json['updated_at']?.toString() ?? '',
-      unreadCount: json['unread_count'] ?? 0,
-      isOnline: json['is_online'] ?? false,
+      unreadCount: _parseIntValue(json['unread_count']),
+      isOnline: _parseBoolFlag(json['is_online']),
       lastSeen: json['last_seen']?.toString(),
-      isPinned: json['is_pinned'] ?? false,
+      isPinned: _parseBoolFlag(json['is_pinned']),
       otherUserId: parsedOtherUserId,
       lastMessageGroupedId: json['last_message_grouped_id']?.toString(),
       lastMessageEntities: parsedLastEntities,
@@ -254,13 +1086,9 @@ class Chat {
           ? ChatDraft.fromJson(json['draft'] as Map<String, dynamic>)
           : null,
       lastReadInboxMessageId:
-          (json['last_read_inbox_message_id'] as num?)?.toInt() ??
-              int.tryParse(json['last_read_inbox_message_id']?.toString() ?? '') ??
-              0,
+          _parseIntValue(json['last_read_inbox_message_id']),
       lastReadOutboxMessageId:
-          (json['last_read_outbox_message_id'] as num?)?.toInt() ??
-              int.tryParse(json['last_read_outbox_message_id']?.toString() ?? '') ??
-              0,
+          _parseIntValue(json['last_read_outbox_message_id']),
       pinnedMessageId: parsedPinnedMessageId,
       pinnedMessage: parsedPinnedMessage,
       username: json['username']?.toString(),
@@ -270,8 +1098,132 @@ class Chat {
       isArchived: json['is_archived'] == true || json['is_archived'] == 1,
       communityId: (json['community_id'] as num?)?.toInt() ??
           int.tryParse(json['community_id']?.toString() ?? ''),
-      showAuthorProfiles: json['show_author_profiles'] != false,
+      showAuthorProfiles: parsedShowAuthorProfiles,
+      signMessages: _parseBoolFlag(json['sign_messages']),
+      linkedChatId: parsedLinkedChatId,
+      myRole: parsedMyRole,
+      isMember: parsedIsMember,
+      lastMessageSenderId: _nonEmptyString(json['last_message_sender_id']),
+      lastMessageSenderName: _nonEmptyString(json['last_message_sender_name']),
+      hasActiveCall:
+          _parseBoolFlag(json['has_active_call']) || parsedActiveCallId != null,
+      activeCallId: parsedActiveCallId,
+      defaultPermissions: GroupDefaultPermissions.tryParse(
+        json['default_permissions'] ?? json['chat_permissions'],
+      ),
+      reactionSettings: ReactionSettings.fromChatJson(json),
       peerCustomization: parsedPeerCust,
+    );
+  }
+
+  /// Creates a [Chat] from a Drift [DbChat] row.
+  factory Chat.fromDbChat(
+    DbChat model, {
+    List<MessageEntity> lastMessageEntities = const [],
+    int? unreadCountOverride,
+    bool? isOnlineOverride,
+    String? lastSeenOverride,
+    String? activeCallId,
+  }) {
+    final dbCust = PeerCustomization.tryParseJsonString(
+      model.peerCustomizationJson,
+    );
+    if (model.chatType == 'private' &&
+        model.otherUserId != null &&
+        model.otherUserId!.isNotEmpty &&
+        dbCust != null) {
+      PeerCustomizationCache.instance.put(
+        model.otherUserId!,
+        dbCust,
+        notify: false,
+      );
+    }
+    return Chat(
+      id: model.chatId,
+      chatType: model.chatType,
+      name: model.name,
+      avatarUrl: model.avatarUrl,
+      lastMessage: model.lastMessage,
+      lastMessageTime: model.lastMessageTime,
+      lastMessageType: model.lastMessageType,
+      lastMessageIsRound: model.lastMessageIsRound,
+      lastMessageFileUrl: model.lastMessageFileUrl,
+      lastMessageGroupedId: model.lastMessageGroupedId,
+      lastMessageEntities: lastMessageEntities,
+      otherUserId: model.otherUserId,
+      updatedAt: model.updatedAt,
+      unreadCount: unreadCountOverride ?? model.unreadCount,
+      isOnline: isOnlineOverride ?? model.isOnline,
+      lastSeen: lastSeenOverride ?? model.lastSeen,
+      isPinned: model.isPinned,
+      lastReadInboxMessageId: model.lastReadInboxMessageId,
+      lastReadOutboxMessageId: model.lastReadOutboxMessageId,
+      pinnedMessageId: model.pinnedMessageId,
+      username: model.username,
+      isPublic: model.isPublic,
+      isBot: model.isBot,
+      isVerified: model.isVerified,
+      isArchived: model.isArchived,
+      showAuthorProfiles: model.showAuthorProfiles,
+      signMessages: model.signMessages,
+      linkedChatId: _nonEmptyString(model.linkedChatId),
+      myRole: _nonEmptyString(model.myRole),
+      isMember: model.myRole != 'guest',
+      lastMessageSenderId: _nonEmptyString(model.lastMessageSenderId),
+      lastMessageSenderName: _nonEmptyString(model.lastMessageSenderName),
+      hasActiveCall: model.hasActiveCall,
+      activeCallId: activeCallId,
+      defaultPermissions: GroupDefaultPermissions.tryParse(
+        model.chatPermissionsJson,
+      ),
+      reactionSettings: ReactionSettings.tryParse(model.reactionSettingsJson),
+      peerCustomization: dbCust,
+    );
+  }
+
+  /// Converts this [Chat] to a Drift [ChatsCompanion].
+  ChatsCompanion toCompanion() {
+    return ChatsCompanion(
+      chatId: drift.Value(id),
+      chatType: drift.Value(
+        isCommunityChannel ? 'community_channel' : chatType,
+      ),
+      name: drift.Value(name),
+      avatarUrl: drift.Value(avatarUrl),
+      lastMessage: drift.Value(lastMessage),
+      lastMessageTime: drift.Value(lastMessageTime),
+      lastMessageType: drift.Value(lastMessageType),
+      lastMessageIsRound: drift.Value(lastMessageIsRound),
+      lastMessageFileUrl: drift.Value(lastMessageFileUrl),
+      lastMessageGroupedId: drift.Value(lastMessageGroupedId),
+      otherUserId: drift.Value(otherUserId),
+      updatedAt: drift.Value(updatedAt),
+      unreadCount: drift.Value(unreadCount),
+      isOnline: drift.Value(isOnline),
+      lastSeen: drift.Value(lastSeen),
+      isPinned: drift.Value(isPinned),
+      lastReadInboxMessageId: drift.Value(lastReadInboxMessageId),
+      lastReadOutboxMessageId: drift.Value(lastReadOutboxMessageId),
+      pinnedMessageId: drift.Value(pinnedMessageId),
+      username: drift.Value(username),
+      isPublic: drift.Value(isPublic),
+      isBot: drift.Value(isBot),
+      isVerified: drift.Value(isVerified),
+      isArchived: drift.Value(isArchived),
+      showAuthorProfiles: drift.Value(showAuthorProfiles),
+      signMessages: drift.Value(signMessages),
+      linkedChatId: drift.Value(linkedChatId),
+      myRole: drift.Value(myRole),
+      lastMessageSenderId: drift.Value(lastMessageSenderId),
+      lastMessageSenderName: drift.Value(lastMessageSenderName),
+      hasActiveCall: drift.Value(hasActiveCall),
+      chatPermissionsJson: defaultPermissions != null
+          ? drift.Value(jsonEncode(defaultPermissions!.toJson()))
+          : const drift.Value.absent(),
+      reactionSettingsJson: reactionSettings != null
+          ? drift.Value(jsonEncode(reactionSettings!.toJson()))
+          : const drift.Value.absent(),
+      peerCustomizationJson: drift.Value(peerCustomization?.toJsonString()),
     );
   }
 
@@ -305,6 +1257,18 @@ class Chat {
     bool? isArchived,
     int? communityId,
     bool? showAuthorProfiles,
+    bool? signMessages,
+    String? linkedChatId,
+    bool clearLinkedChatId = false,
+    String? myRole,
+    bool? isMember,
+    String? lastMessageSenderId,
+    String? lastMessageSenderName,
+    bool? hasActiveCall,
+    String? activeCallId,
+    bool clearActiveCallId = false,
+    GroupDefaultPermissions? defaultPermissions,
+    ReactionSettings? reactionSettings,
     PeerCustomization? peerCustomization,
   }) {
     return Chat(
@@ -339,6 +1303,19 @@ class Chat {
       isArchived: isArchived ?? this.isArchived,
       communityId: communityId ?? this.communityId,
       showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
+      signMessages: signMessages ?? this.signMessages,
+      linkedChatId:
+          clearLinkedChatId ? null : (linkedChatId ?? this.linkedChatId),
+      myRole: myRole ?? this.myRole,
+      isMember: isMember ?? this.isMember,
+      lastMessageSenderId: lastMessageSenderId ?? this.lastMessageSenderId,
+      lastMessageSenderName:
+          lastMessageSenderName ?? this.lastMessageSenderName,
+      hasActiveCall: hasActiveCall ?? this.hasActiveCall,
+      activeCallId:
+          clearActiveCallId ? null : (activeCallId ?? this.activeCallId),
+      defaultPermissions: defaultPermissions ?? this.defaultPermissions,
+      reactionSettings: reactionSettings ?? this.reactionSettings,
       peerCustomization: peerCustomization ?? this.peerCustomization,
     );
   }
@@ -672,6 +1649,20 @@ class Message {
   // Media album & message extra payload (dimensions, thumb_base64, file_size, etc.)
   final Map<String, dynamic>? mediaPayload;
 
+  // Channel posts, views, signatures, anonymous admins, silent posts & comments
+  final int viewsCount;
+  final String? authorSignature;
+  final String? postAuthorId;
+  final String? senderRole;
+  final String? senderAdminTitle;
+  final bool isFromAnonymousAdmin;
+  final bool isSilent;
+  final int commentsCount;
+  final bool canComment;
+  final List<RecentReplier> recentRepliers;
+  final String? channelPostId;
+  final String? threadRootMessageId;
+
   Message({
     required this.id,
     required this.chatId,
@@ -713,6 +1704,18 @@ class Message {
     this.waveform,
     this.duration,
     this.mediaPayload,
+    this.viewsCount = 0,
+    this.authorSignature,
+    this.postAuthorId,
+    this.senderRole,
+    this.senderAdminTitle,
+    this.isFromAnonymousAdmin = false,
+    this.isSilent = false,
+    this.commentsCount = 0,
+    this.canComment = false,
+    this.recentRepliers = const [],
+    this.channelPostId,
+    this.threadRootMessageId,
   });
 
   /// Whether this message has a reply or quote
@@ -1084,6 +2087,18 @@ class Message {
       waveform: waveform,
       duration: duration,
       mediaPayload: parsedMediaPayload,
+      viewsCount: _parseIntValue(json['views_count']),
+      authorSignature: _nonEmptyString(json['author_signature']),
+      postAuthorId: _nonEmptyString(json['post_author_id']),
+      senderRole: _nonEmptyString(json['sender_role']),
+      senderAdminTitle: _nonEmptyString(json['sender_admin_title']),
+      isFromAnonymousAdmin: _parseBoolFlag(json['is_from_anonymous_admin']),
+      isSilent: _parseBoolFlag(json['is_silent']),
+      commentsCount: _parseIntValue(json['comments_count']),
+      canComment: _parseBoolFlag(json['can_comment']),
+      recentRepliers: RecentReplier.parseList(json['recent_repliers']),
+      channelPostId: _nonEmptyString(json['channel_post_id']),
+      threadRootMessageId: _nonEmptyString(json['thread_root_message_id']),
     );
   }
 
@@ -1251,6 +2266,18 @@ class Message {
       waveform: dbWaveform,
       duration: dbDuration,
       mediaPayload: dbMediaPayload,
+      viewsCount: model.viewsCount,
+      authorSignature: _nonEmptyString(model.authorSignature),
+      postAuthorId: _nonEmptyString(model.postAuthorId),
+      senderRole: _nonEmptyString(model.senderRole),
+      senderAdminTitle: _nonEmptyString(model.senderAdminTitle),
+      isFromAnonymousAdmin: model.isFromAnonymousAdmin,
+      isSilent: model.isSilent,
+      commentsCount: model.commentsCount,
+      canComment: dbMediaPayload?['can_comment'] == true,
+      recentRepliers: RecentReplier.parseList(model.recentRepliersJson),
+      channelPostId: _nonEmptyString(dbMediaPayload?['channel_post_id']),
+      threadRootMessageId: _nonEmptyString(model.threadRootMessageId),
     );
   }
 
@@ -1267,6 +2294,9 @@ class Message {
       if (listenedAt != null && listenedAt!.isNotEmpty)
         'listened_at': listenedAt,
       if (isListened) 'is_listened': true,
+      if (canComment) 'can_comment': true,
+      if (channelPostId != null && channelPostId!.isNotEmpty)
+        'channel_post_id': channelPostId,
     };
 
     return MessagesCompanion(
@@ -1316,6 +2346,20 @@ class Message {
       mediaPayload: effectiveMediaPayload.isNotEmpty
           ? drift.Value(jsonEncode(effectiveMediaPayload))
           : const drift.Value.absent(),
+      viewsCount: drift.Value(viewsCount),
+      authorSignature: drift.Value(authorSignature),
+      postAuthorId: drift.Value(postAuthorId),
+      senderRole: drift.Value(senderRole),
+      senderAdminTitle: drift.Value(senderAdminTitle),
+      isFromAnonymousAdmin: drift.Value(isFromAnonymousAdmin),
+      isSilent: drift.Value(isSilent),
+      commentsCount: drift.Value(commentsCount),
+      recentRepliersJson: drift.Value(
+        recentRepliers.isNotEmpty
+            ? jsonEncode(recentRepliers.map((r) => r.toJson()).toList())
+            : null,
+      ),
+      threadRootMessageId: drift.Value(threadRootMessageId),
     );
   }
 
@@ -1361,6 +2405,18 @@ class Message {
     List<int>? waveform,
     int? duration,
     Map<String, dynamic>? mediaPayload,
+    int? viewsCount,
+    String? authorSignature,
+    String? postAuthorId,
+    String? senderRole,
+    String? senderAdminTitle,
+    bool? isFromAnonymousAdmin,
+    bool? isSilent,
+    int? commentsCount,
+    bool? canComment,
+    List<RecentReplier>? recentRepliers,
+    String? channelPostId,
+    String? threadRootMessageId,
   }) {
     return Message(
       id: id ?? this.id,
@@ -1403,6 +2459,18 @@ class Message {
       waveform: waveform ?? this.waveform,
       duration: duration ?? this.duration,
       mediaPayload: mediaPayload ?? this.mediaPayload,
+      viewsCount: viewsCount ?? this.viewsCount,
+      authorSignature: authorSignature ?? this.authorSignature,
+      postAuthorId: postAuthorId ?? this.postAuthorId,
+      senderRole: senderRole ?? this.senderRole,
+      senderAdminTitle: senderAdminTitle ?? this.senderAdminTitle,
+      isFromAnonymousAdmin: isFromAnonymousAdmin ?? this.isFromAnonymousAdmin,
+      isSilent: isSilent ?? this.isSilent,
+      commentsCount: commentsCount ?? this.commentsCount,
+      canComment: canComment ?? this.canComment,
+      recentRepliers: recentRepliers ?? this.recentRepliers,
+      channelPostId: channelPostId ?? this.channelPostId,
+      threadRootMessageId: threadRootMessageId ?? this.threadRootMessageId,
     );
   }
 
@@ -1434,6 +2502,22 @@ class ChatDetails {
   final bool isVerified;
   final bool showAuthorProfiles;
   final String? description;
+  final String? myRole;
+  final bool isMember;
+  final bool signMessages;
+  final String? linkedChatId;
+  final LinkedChatSummary? linkedChat;
+  final GroupDefaultPermissions? defaultPermissions;
+  final AdminRights? myAdminPermissions;
+  final MemberRestrictions? myRestrictions;
+  final DateTime? restrictedUntil;
+  final String myAdminTitle;
+  final bool myIsAnonymous;
+  final ReactionSettings? reactionSettings;
+  final int slowModeInterval;
+  final bool historyForNewMembers;
+  final bool hasActiveCall;
+  final String? activeCallId;
 
   ChatDetails({
     required this.id,
@@ -1451,15 +2535,142 @@ class ChatDetails {
     this.username,
     this.isPublic = false,
     this.isVerified = false,
-    this.showAuthorProfiles = true,
+    bool? showAuthorProfiles,
     this.description,
-  });
+    this.myRole,
+    this.isMember = true,
+    this.signMessages = false,
+    this.linkedChatId,
+    this.linkedChat,
+    this.defaultPermissions,
+    this.myAdminPermissions,
+    this.myRestrictions,
+    this.restrictedUntil,
+    this.myAdminTitle = '',
+    this.myIsAnonymous = false,
+    this.reactionSettings,
+    this.slowModeInterval = 0,
+    this.historyForNewMembers = true,
+    this.hasActiveCall = false,
+    this.activeCallId,
+  }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
+
+  bool get isOwner => myRole == 'owner';
+  bool get isAdmin => myRole == 'owner' || myRole == 'admin';
+
+  bool get canPostInChannel =>
+      chatType != 'channel' ||
+      isOwner ||
+      (myRole == 'admin' && (myAdminPermissions?.canPostMessages ?? true));
+
+  GroupDefaultPermissions get effectivePermissions {
+    if (isAdmin) {
+      return const GroupDefaultPermissions(
+        canSendMessages: true,
+        canSendMedia: true,
+        canSendStickersGifs: true,
+        canSendPolls: true,
+        canPinMessages: true,
+        canInviteUsers: true,
+        canChangeInfo: true,
+      );
+    }
+    final base = defaultPermissions ?? const GroupDefaultPermissions();
+    if (myRestrictions == null) return base;
+    if (restrictedUntil != null && DateTime.now().isAfter(restrictedUntil!)) {
+      return base;
+    }
+    return base.intersectWith(myRestrictions);
+  }
+
+  ChatDetails copyWith({
+    String? id,
+    String? chatType,
+    String? name,
+    String? avatarUrl,
+    String? createdBy,
+    String? createdAt,
+    String? updatedAt,
+    List<ChatParticipant>? participants,
+    int? lastReadInboxMessageId,
+    int? lastReadOutboxMessageId,
+    int? pinnedMessageId,
+    Message? pinnedMessage,
+    String? username,
+    bool? isPublic,
+    bool? isVerified,
+    bool? showAuthorProfiles,
+    String? description,
+    String? myRole,
+    bool? isMember,
+    bool? signMessages,
+    String? linkedChatId,
+    bool clearLinkedChatId = false,
+    LinkedChatSummary? linkedChat,
+    bool clearLinkedChat = false,
+    GroupDefaultPermissions? defaultPermissions,
+    AdminRights? myAdminPermissions,
+    MemberRestrictions? myRestrictions,
+    DateTime? restrictedUntil,
+    String? myAdminTitle,
+    bool? myIsAnonymous,
+    ReactionSettings? reactionSettings,
+    int? slowModeInterval,
+    bool? historyForNewMembers,
+    bool? hasActiveCall,
+    String? activeCallId,
+    bool clearActiveCallId = false,
+  }) {
+    return ChatDetails(
+      id: id ?? this.id,
+      chatType: chatType ?? this.chatType,
+      name: name ?? this.name,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      createdBy: createdBy ?? this.createdBy,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      participants: participants ?? this.participants,
+      lastReadInboxMessageId:
+          lastReadInboxMessageId ?? this.lastReadInboxMessageId,
+      lastReadOutboxMessageId:
+          lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
+      pinnedMessageId: pinnedMessageId ?? this.pinnedMessageId,
+      pinnedMessage: pinnedMessage ?? this.pinnedMessage,
+      username: username ?? this.username,
+      isPublic: isPublic ?? this.isPublic,
+      isVerified: isVerified ?? this.isVerified,
+      showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
+      description: description ?? this.description,
+      myRole: myRole ?? this.myRole,
+      isMember: isMember ?? this.isMember,
+      signMessages: signMessages ?? this.signMessages,
+      linkedChatId:
+          clearLinkedChatId ? null : (linkedChatId ?? this.linkedChatId),
+      linkedChat: clearLinkedChat ? null : (linkedChat ?? this.linkedChat),
+      defaultPermissions: defaultPermissions ?? this.defaultPermissions,
+      myAdminPermissions: myAdminPermissions ?? this.myAdminPermissions,
+      myRestrictions: myRestrictions ?? this.myRestrictions,
+      restrictedUntil: restrictedUntil ?? this.restrictedUntil,
+      myAdminTitle: myAdminTitle ?? this.myAdminTitle,
+      myIsAnonymous: myIsAnonymous ?? this.myIsAnonymous,
+      reactionSettings: reactionSettings ?? this.reactionSettings,
+      slowModeInterval: slowModeInterval ?? this.slowModeInterval,
+      historyForNewMembers: historyForNewMembers ?? this.historyForNewMembers,
+      hasActiveCall: hasActiveCall ?? this.hasActiveCall,
+      activeCallId:
+          clearActiveCallId ? null : (activeCallId ?? this.activeCallId),
+    );
+  }
 
   factory ChatDetails.fromJson(Map<String, dynamic> json) {
     var participantsList = <ChatParticipant>[];
     if (json['participants'] != null && json['participants'] is List) {
       for (var p in json['participants']) {
-        participantsList.add(ChatParticipant.fromJson(p));
+        if (p is Map) {
+          participantsList.add(
+            ChatParticipant.fromJson(Map<String, dynamic>.from(p)),
+          );
+        }
       }
     }
     Message? parsedPinnedMessage;
@@ -1474,9 +2685,23 @@ class ChatDetails {
       } catch (_) {}
     }
 
+    final parsedChatType = json['chat_type']?.toString() ?? 'private';
+    final bool parsedShowAuthorProfiles =
+        json.containsKey('show_author_profiles')
+            ? _parseBoolFlag(json['show_author_profiles'])
+            : (parsedChatType != 'channel');
+    final parsedLinkedChat = LinkedChatSummary.tryParse(json['linked_chat']);
+    final parsedLinkedChatId =
+        _nonEmptyString(json['linked_chat_id']) ?? parsedLinkedChat?.id;
+    final parsedMyRole = _nonEmptyString(json['my_role']);
+    final parsedActiveCallId = _nonEmptyString(json['active_call_id']);
+    final parsedIsMember = json.containsKey('is_member')
+        ? _parseBoolFlag(json['is_member'], defaultValue: true)
+        : (parsedMyRole != 'guest');
+
     return ChatDetails(
       id: json['id']?.toString() ?? '',
-      chatType: json['chat_type']?.toString() ?? 'private',
+      chatType: parsedChatType,
       name: json['name']?.toString() ?? '',
       avatarUrl: json['avatar_url']?.toString(),
       createdBy: json['created_by']?.toString() ?? '',
@@ -1484,20 +2709,38 @@ class ChatDetails {
       updatedAt: json['updated_at']?.toString() ?? '',
       participants: participantsList,
       lastReadInboxMessageId:
-          (json['last_read_inbox_message_id'] as num?)?.toInt() ??
-              int.tryParse(json['last_read_inbox_message_id']?.toString() ?? '') ??
-              0,
+          _parseIntValue(json['last_read_inbox_message_id']),
       lastReadOutboxMessageId:
-          (json['last_read_outbox_message_id'] as num?)?.toInt() ??
-              int.tryParse(json['last_read_outbox_message_id']?.toString() ?? '') ??
-              0,
+          _parseIntValue(json['last_read_outbox_message_id']),
       pinnedMessageId: parsedPinnedMessageId,
       pinnedMessage: parsedPinnedMessage,
       username: json['username']?.toString(),
       isPublic: json['is_public'] == true,
       isVerified: json['is_verified'] == true,
-      showAuthorProfiles: json['show_author_profiles'] != false,
+      showAuthorProfiles: parsedShowAuthorProfiles,
       description: json['description']?.toString(),
+      myRole: parsedMyRole,
+      isMember: parsedIsMember,
+      signMessages: _parseBoolFlag(json['sign_messages']),
+      linkedChatId: parsedLinkedChatId,
+      linkedChat: parsedLinkedChat,
+      defaultPermissions: GroupDefaultPermissions.tryParse(
+        json['default_permissions'] ?? json['chat_permissions'],
+      ),
+      myAdminPermissions: AdminRights.tryParse(json['my_admin_permissions']),
+      myRestrictions: MemberRestrictions.tryParse(json['my_restrictions']),
+      restrictedUntil: DateTimeUtils.parseUtcDateTime(
+        json['restricted_until'] ?? json['my_restricted_until'],
+      ),
+      myAdminTitle: (json['my_admin_title'] ?? '').toString(),
+      myIsAnonymous: _parseBoolFlag(json['my_is_anonymous']),
+      reactionSettings: ReactionSettings.fromChatJson(json),
+      slowModeInterval: _parseIntValue(json['slow_mode_interval']),
+      historyForNewMembers:
+          (json['history_for_new_members'] ?? json['history_for_new']) != false,
+      hasActiveCall:
+          _parseBoolFlag(json['has_active_call']) || parsedActiveCallId != null,
+      activeCallId: parsedActiveCallId,
     );
   }
 }
@@ -1513,6 +2756,12 @@ class ChatParticipant {
   final DateTime? lastSeen;
   final bool isBot;
   final bool isVerified;
+  final String adminTitle;
+  final bool isAnonymous;
+  final AdminRights? adminPermissions;
+  final MemberRestrictions? memberRestrictions;
+  final DateTime? restrictedUntil;
+  final bool isBanned;
   final PeerCustomization? peerCustomization;
 
   ChatParticipant({
@@ -1525,6 +2774,12 @@ class ChatParticipant {
     this.lastSeen,
     this.isBot = false,
     this.isVerified = false,
+    this.adminTitle = '',
+    this.isAnonymous = false,
+    this.adminPermissions,
+    this.memberRestrictions,
+    this.restrictedUntil,
+    this.isBanned = false,
     this.peerCustomization,
   });
 
@@ -1538,6 +2793,12 @@ class ChatParticipant {
     DateTime? lastSeen,
     bool? isBot,
     bool? isVerified,
+    String? adminTitle,
+    bool? isAnonymous,
+    AdminRights? adminPermissions,
+    MemberRestrictions? memberRestrictions,
+    DateTime? restrictedUntil,
+    bool? isBanned,
     PeerCustomization? peerCustomization,
   }) {
     return ChatParticipant(
@@ -1550,12 +2811,39 @@ class ChatParticipant {
       lastSeen: lastSeen ?? this.lastSeen,
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
+      adminTitle: adminTitle ?? this.adminTitle,
+      isAnonymous: isAnonymous ?? this.isAnonymous,
+      adminPermissions: adminPermissions ?? this.adminPermissions,
+      memberRestrictions: memberRestrictions ?? this.memberRestrictions,
+      restrictedUntil: restrictedUntil ?? this.restrictedUntil,
+      isBanned: isBanned ?? this.isBanned,
       peerCustomization: peerCustomization ?? this.peerCustomization,
     );
   }
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'username': username,
+        'display_name': displayName,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
+        'role': role,
+        'is_online': isOnline,
+        if (lastSeen != null) 'last_seen': lastSeen!.toUtc().toIso8601String(),
+        'is_bot': isBot,
+        'is_verified': isVerified,
+        'admin_title': adminTitle,
+        'is_anonymous': isAnonymous,
+        if (adminPermissions != null)
+          'admin_permissions': adminPermissions!.toJson(),
+        if (memberRestrictions != null)
+          'member_restrictions': memberRestrictions!.toJson(),
+        if (restrictedUntil != null)
+          'restricted_until': restrictedUntil!.toUtc().toIso8601String(),
+        'is_banned': isBanned,
+      };
+
   factory ChatParticipant.fromJson(Map<String, dynamic> json) {
-    final pid = json['id']?.toString() ?? '';
+    final pid = (json['id'] ?? json['user_id'] ?? '').toString();
     final rawCust = json['peer_customization'];
     final PeerCustomization? parsedCust = rawCust is Map
         ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawCust))
@@ -1575,6 +2863,14 @@ class ChatParticipant {
       lastSeen: DateTimeUtils.parseUtcDateTime(json['last_seen']),
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
+      adminTitle: (json['admin_title'] ?? '').toString(),
+      isAnonymous: _parseBoolFlag(json['is_anonymous']),
+      adminPermissions: AdminRights.tryParse(json['admin_permissions']),
+      memberRestrictions: MemberRestrictions.tryParse(
+        json['member_restrictions'],
+      ),
+      restrictedUntil: DateTimeUtils.parseUtcDateTime(json['restricted_until']),
+      isBanned: _parseBoolFlag(json['is_banned']),
       peerCustomization: parsedCust,
     );
   }
@@ -1735,7 +3031,9 @@ class ChatService {
       } else {
         return {
           'success': false,
-          'message': data['message'] ?? 'Failed to get chat',
+          'status_code': response.statusCode,
+          'error_code': data is Map ? (data['error'] ?? data['code']) : null,
+          'message': _extractErrorMessage(data, 'Failed to get chat'),
         };
       }
     } catch (e) {
@@ -1820,7 +3118,9 @@ class ChatService {
       } else {
         return {
           'success': false,
-          'message': data['message'] ?? 'Failed to get messages',
+          'status_code': response.statusCode,
+          'error_code': data is Map ? (data['error'] ?? data['code']) : null,
+          'message': _extractErrorMessage(data, 'Failed to get messages'),
           'messages': <Message>[],
         };
       }
@@ -1912,6 +3212,8 @@ class ChatService {
     int? duration,
     String? groupedId,
     Map<String, dynamic>? mediaPayload,
+    bool isSilent = false,
+    bool sendAsAnonymous = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -1972,6 +3274,12 @@ class ChatService {
       }
       if (invertMedia) {
         body['invert_media'] = true;
+      }
+      if (isSilent) {
+        body['is_silent'] = true;
+      }
+      if (sendAsAnonymous) {
+        body['send_as_anonymous'] = true;
       }
 
       // Try WebSocket RPC first when connected
@@ -2111,6 +3419,8 @@ class ChatService {
     List<MessageEntity>? entities,
     bool invertMedia = false,
     String? replyToMessageId,
+    bool isSilent = false,
+    bool sendAsAnonymous = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -2132,6 +3442,12 @@ class ChatService {
       }
       if (invertMedia) {
         body['invert_media'] = true;
+      }
+      if (isSilent) {
+        body['is_silent'] = true;
+      }
+      if (sendAsAnonymous) {
+        body['send_as_anonymous'] = true;
       }
       if (replyToMessageId != null && replyToMessageId.isNotEmpty) {
         body['reply_to_message_id'] = replyToMessageId;
@@ -2923,9 +4239,16 @@ class ChatService {
         };
       } else {
         debugPrint('ToggleReaction failed: ${response.statusCode} ${response.body}');
+        final errData = _tryDecodeJson(response.body);
         return {
           'success': false,
-          'message': 'Server error: ${response.statusCode}',
+          'status_code': response.statusCode,
+          'error_code':
+              errData is Map ? (errData['error'] ?? errData['code']) : null,
+          'message': _extractErrorMessage(
+            errData,
+            'Server error: ${response.statusCode}',
+          ),
         };
       }
     } catch (e) {
@@ -3315,34 +4638,923 @@ class ChatService {
     }
   }
 
-  /// Join a public group or channel by chat ID (POST /api/chats/:chatId/join)
+  static dynamic _tryDecodeJson(String raw) {
+    if (raw.trim().isEmpty) return null;
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<Map<String, String>?> _authHeaders() async {
+    final token = await AuthService.getToken();
+    if (token == null || token.isEmpty) return null;
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+  }
+
+  static Future<bool> _sendBoolRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return false;
+      final uri = Uri.parse('${AppConfig.baseUrl}$path');
+      final encodedBody = body != null ? jsonEncode(body) : null;
+      late final http.Response response;
+      switch (method) {
+        case 'POST':
+          response = await http.post(uri, headers: headers, body: encodedBody);
+          break;
+        case 'PUT':
+          response = await http.put(uri, headers: headers, body: encodedBody);
+          break;
+        case 'PATCH':
+          response = await http.patch(uri, headers: headers, body: encodedBody);
+          break;
+        case 'DELETE':
+          response = await http.delete(uri, headers: headers, body: encodedBody);
+          break;
+        default:
+          return false;
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final data = _tryDecodeJson(response.body);
+        if (data is Map) return data['success'] != false;
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('ChatService $method $path error: $e');
+      return false;
+    }
+  }
+
+  static final StreamController<ChatRealtimeUpdate> _realtimeController =
+      StreamController<ChatRealtimeUpdate>.broadcast();
+
+  /// Stream of channel/group real-time updates handled by [ChatService].
+  static Stream<ChatRealtimeUpdate> get realtimeUpdates =>
+      _realtimeController.stream;
+
+  /// Handles Telegram channel/group WebSocket events, syncs Drift, and notifies listeners.
+  static Future<void> handleWebSocketEvent(
+    WebSocketEvent event, {
+    AppDatabase? db,
+    String? currentUserId,
+  }) async {
+    final rawType = (event.rawType.isNotEmpty
+            ? event.rawType
+            : (event.data['__raw_type'] ?? event.data['type'] ?? '').toString())
+        .trim();
+    final targetDb = db ?? AppDatabase();
+    final chatId =
+        (event.data['chat_id'] ?? event.data['id'] ?? '').toString().trim();
+
+    if (event.type == WebSocketEventType.messageViewsUpdated ||
+        rawType == 'message_views_updated') {
+      final viewsMap = <String, int>{};
+      final rawViews = event.data['views'];
+      if (rawViews is List) {
+        for (final item in rawViews) {
+          if (item is Map) {
+            final msgId = (item['message_id'] ?? item['id'] ?? '').toString();
+            final count = _parseIntValue(item['views_count'], defaultValue: -1);
+            if (msgId.isNotEmpty && count >= 0) {
+              viewsMap[msgId] = count;
+            }
+          }
+        }
+      } else if (event.data['message_id'] != null) {
+        final msgId = event.data['message_id'].toString();
+        final count = _parseIntValue(
+          event.data['views_count'],
+          defaultValue: -1,
+        );
+        if (msgId.isNotEmpty && count >= 0) {
+          viewsMap[msgId] = count;
+        }
+      }
+      if (viewsMap.isNotEmpty) {
+        try {
+          await targetDb.updateMessagesViews(viewsMap);
+        } catch (e) {
+          debugPrint('ChatService WS message_views_updated DB error: $e');
+        }
+      }
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.messageViewsUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.postCommentsUpdated ||
+        rawType == 'post_comments_updated') {
+      final messageId =
+          (event.data['message_id'] ?? event.data['post_id'] ?? '').toString();
+      final hasCount = event.data.containsKey('comments_count');
+      final commentsCount =
+          hasCount ? _parseIntValue(event.data['comments_count']) : null;
+      String? recentRepliersJson;
+      if (event.data.containsKey('recent_repliers')) {
+        final parsed = RecentReplier.parseList(event.data['recent_repliers']);
+        recentRepliersJson =
+            jsonEncode(parsed.map((r) => r.toJson()).toList());
+      }
+      if (messageId.isNotEmpty) {
+        try {
+          await targetDb.updatePostCommentsMeta(
+            messageId: messageId,
+            commentsCount: commentsCount,
+            recentRepliersJson: recentRepliersJson,
+          );
+        } catch (e) {
+          debugPrint('ChatService WS post_comments_updated DB error: $e');
+        }
+      }
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.postCommentsUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.chatSettingsUpdated ||
+        rawType == 'chat_settings_updated') {
+      if (chatId.isNotEmpty) {
+        try {
+          final existing = await targetDb.getChat(chatId);
+          if (existing != null) {
+            final perms = GroupDefaultPermissions.tryParse(
+              event.data['default_permissions'] ??
+                  event.data['chat_permissions'],
+            );
+            final reactions = ReactionSettings.fromChatJson(event.data);
+            final hasLinked = event.data.containsKey('linked_chat_id');
+            final hasAvatar = event.data.containsKey('avatar_url');
+            final hasUsername = event.data.containsKey('username');
+            await targetDb.updateChatSettings(
+              chatId,
+              name: event.data.containsKey('name')
+                  ? event.data['name']?.toString()
+                  : null,
+              avatarUrl: hasAvatar ? event.data['avatar_url']?.toString() : null,
+              updateAvatarUrl: hasAvatar,
+              username: hasUsername ? event.data['username']?.toString() : null,
+              updateUsername: hasUsername,
+              isPublic: event.data.containsKey('is_public')
+                  ? _parseBoolFlag(event.data['is_public'])
+                  : null,
+              showAuthorProfiles: event.data.containsKey('show_author_profiles')
+                  ? _parseBoolFlag(event.data['show_author_profiles'])
+                  : null,
+              signMessages: event.data.containsKey('sign_messages')
+                  ? _parseBoolFlag(event.data['sign_messages'])
+                  : null,
+              linkedChatId:
+                  hasLinked ? event.data['linked_chat_id']?.toString() : null,
+              updateLinkedChatId: hasLinked,
+              myRole: event.data.containsKey('my_role')
+                  ? _nonEmptyString(event.data['my_role'])
+                  : null,
+              hasActiveCall: event.data.containsKey('has_active_call')
+                  ? _parseBoolFlag(event.data['has_active_call'])
+                  : null,
+              chatPermissionsJson:
+                  perms != null ? jsonEncode(perms.toJson()) : null,
+              reactionSettingsJson:
+                  reactions != null ? jsonEncode(reactions.toJson()) : null,
+            );
+          }
+        } catch (e) {
+          debugPrint('ChatService WS chat_settings_updated DB error: $e');
+        }
+      }
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.chatSettingsUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.memberUpdated ||
+        rawType == 'member_updated') {
+      final targetUserId = (event.data['user_id'] ?? '').toString().trim();
+      final action = (event.data['action'] ?? '').toString().trim();
+      final myUid = currentUserId ??
+          WebSocketService().currentUserId ??
+          await AuthService.getUserId();
+      if (chatId.isNotEmpty &&
+          myUid != null &&
+          myUid.isNotEmpty &&
+          targetUserId == myUid) {
+        try {
+          if (action == 'removed' || action == 'banned') {
+            await targetDb.deleteChat(chatId);
+            await targetDb.deleteMessagesForChat(chatId);
+          } else if (event.data.containsKey('role')) {
+            final newRole = _nonEmptyString(event.data['role']);
+            if (newRole != null) {
+              await targetDb.updateChatSettings(chatId, myRole: newRole);
+            }
+          }
+        } catch (e) {
+          debugPrint('ChatService WS member_updated DB error: $e');
+        }
+      }
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.memberUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.chatDeleted ||
+        rawType == 'chat_deleted') {
+      if (chatId.isNotEmpty) {
+        try {
+          await targetDb.deleteChat(chatId);
+          await targetDb.deleteMessagesForChat(chatId);
+        } catch (e) {
+          debugPrint('ChatService WS chat_deleted DB error: $e');
+        }
+      }
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.chatDeleted,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+    }
+  }
+
+  /// Join a public group or channel by chat ID (POST /api/chats/:chatId/join).
+  /// Returns a map with `'success'`, `'already_member'`, and `'chat'` ([Chat] on success).
   static Future<Map<String, dynamic>> joinPublicChat(String chatId) async {
     try {
-      final token = await AuthService.getToken();
-      if (token == null) {
+      final headers = await _authHeaders();
+      if (headers == null) {
         return {'success': false, 'message': 'Not authenticated'};
       }
 
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/join'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
+        headers: headers,
       );
 
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200 && data['success'] == true) {
-        return Map<String, dynamic>.from(data);
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        final rawChat = data['chat'];
+        final Chat? parsedChat = rawChat is Map
+            ? Chat.fromJson(Map<String, dynamic>.from(rawChat))
+            : null;
+        if (parsedChat != null) {
+          try {
+            await AppDatabase().saveChat(parsedChat.toCompanion());
+          } catch (_) {}
+        }
+        return {
+          ...Map<String, dynamic>.from(data),
+          if (parsedChat != null) 'chat': parsedChat,
+        };
       } else {
         return {
           'success': false,
+          'status_code': response.statusCode,
           'message': _extractErrorMessage(data, 'Не удалось вступить в чат'),
         };
       }
     } catch (e) {
       debugPrint('Join public chat error: $e');
       return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Typed convenience wrapper around [joinPublicChat] returning the joined [Chat] or null.
+  static Future<Chat?> joinPublicChatModel(String chatId) async {
+    final res = await joinPublicChat(chatId);
+    if (res['success'] == true && res['chat'] is Chat) {
+      return res['chat'] as Chat;
+    }
+    return null;
+  }
+
+  /// Leaves a group or channel (`POST /api/chats/:id/leave`).
+  static Future<bool> leaveChat(String chatId, {String? newOwnerId}) async {
+    final res = await leaveChatDetailed(chatId, newOwnerId: newOwnerId);
+    return res['success'] == true;
+  }
+
+  /// Leaves a group or channel (`POST /api/chats/:id/leave`) with structured error details.
+  static Future<Map<String, dynamic>> leaveChatDetailed(
+    String chatId, {
+    String? newOwnerId,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final body = <String, dynamic>{};
+      if (newOwnerId != null && newOwnerId.isNotEmpty) {
+        body['new_owner_id'] = int.tryParse(newOwnerId) ?? newOwnerId;
+      }
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/leave'),
+        headers: headers,
+        body: jsonEncode(body),
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        try {
+          await AppDatabase().deleteChat(chatId);
+          await AppDatabase().deleteMessagesForChat(chatId);
+        } catch (_) {}
+        return Map<String, dynamic>.from(data);
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'error': data is Map ? data['error']?.toString() : null,
+        'message': _extractErrorMessage(data, 'Failed to leave chat'),
+      };
+    } catch (e) {
+      debugPrint('Leave chat error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Records message views in a channel/group (`POST /api/chats/:id/messages/views`).
+  static Future<void> recordMessageViews({
+    required String chatId,
+    required List<String> messageIds,
+  }) async {
+    final cleaned = messageIds
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    if (cleaned.isEmpty) return;
+
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return;
+
+      for (var i = 0; i < cleaned.length; i += 50) {
+        final chunk = cleaned.sublist(
+          i,
+          i + 50 > cleaned.length ? cleaned.length : i + 50,
+        );
+        final response = await http.post(
+          Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/messages/views'),
+          headers: headers,
+          body: jsonEncode({'message_ids': chunk}),
+        );
+        if (response.statusCode == 200) {
+          final data = _tryDecodeJson(response.body);
+          if (data is Map && data['views'] is List) {
+            final viewsMap = <String, int>{};
+            for (final item in data['views'] as List) {
+              if (item is Map) {
+                final mid = (item['message_id'] ?? item['id'] ?? '').toString();
+                final cnt = _parseIntValue(
+                  item['views_count'],
+                  defaultValue: -1,
+                );
+                if (mid.isNotEmpty && cnt >= 0) {
+                  viewsMap[mid] = cnt;
+                }
+              }
+            }
+            if (viewsMap.isNotEmpty) {
+              try {
+                await AppDatabase().updateMessagesViews(viewsMap);
+              } catch (_) {}
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Record message views error: $e');
+    }
+  }
+
+  /// Fetches discussion thread comments for a channel post (`GET /api/chats/:id/messages/:messageId/comments`).
+  static Future<PostCommentsResult> getPostComments({
+    required String channelId,
+    required String messageId,
+    int limit = 50,
+    String? beforeId,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return const PostCommentsResult(
+          success: false,
+          errorMessage: 'Not authenticated',
+        );
+      }
+
+      var url =
+          '${AppConfig.baseUrl}/api/chats/$channelId/messages/$messageId/comments?limit=$limit';
+      if (beforeId != null && beforeId.isNotEmpty) {
+        url += '&before_id=${Uri.encodeComponent(beforeId)}';
+      }
+
+      final response = await http.get(Uri.parse(url), headers: headers);
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        final result = PostCommentsResult.fromJson(
+          Map<String, dynamic>.from(data),
+        );
+        if (result.comments.isNotEmpty) {
+          try {
+            await AppDatabase().saveMessages(
+              result.comments
+                  .map((m) => m.toCompanion(fallbackChatId: result.linkedChatId))
+                  .toList(),
+            );
+          } catch (_) {}
+        }
+        return result;
+      }
+      return PostCommentsResult(
+        success: false,
+        errorMessage: _extractErrorMessage(data, 'Failed to load comments'),
+      );
+    } catch (e) {
+      debugPrint('Get post comments error: $e');
+      return PostCommentsResult(
+        success: false,
+        errorMessage: 'Network error: ${e.toString()}',
+      );
+    }
+  }
+
+  /// Posts a comment under a channel post (`POST /api/chats/:id/messages/:messageId/comments`).
+  static Future<Message?> sendPostComment({
+    required String channelId,
+    required String messageId,
+    required String content,
+    String? replyToMessageId,
+    List<MessageEntity>? entities,
+    String? fileUrl,
+    String? fileName,
+    String messageType = 'text',
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return null;
+
+      final body = <String, dynamic>{
+        'content': content,
+        'message_type': messageType,
+        if (replyToMessageId != null && replyToMessageId.isNotEmpty)
+          'reply_to_message_id': replyToMessageId,
+        if (entities != null && entities.isNotEmpty)
+          'entities': entities.map((e) => e.toJson()).toList(),
+        if (fileUrl != null && fileUrl.isNotEmpty) 'file_url': fileUrl,
+        if (fileName != null && fileName.isNotEmpty) 'file_name': fileName,
+      };
+
+      final response = await http.post(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/chats/$channelId/messages/$messageId/comments',
+        ),
+        headers: headers,
+        body: jsonEncode(body),
+      );
+
+      final data = _tryDecodeJson(response.body);
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          data is Map &&
+          data['success'] == true) {
+        final rawMsg = data['comment'] ?? data['message'];
+        if (rawMsg is Map) {
+          final parsed = Message.fromJson(Map<String, dynamic>.from(rawMsg));
+          try {
+            await AppDatabase().saveMessage(parsed.toCompanion());
+            if (data['comments_count'] != null) {
+              await AppDatabase().updatePostCommentsMeta(
+                messageId: messageId,
+                commentsCount: _parseIntValue(data['comments_count']),
+              );
+            }
+          } catch (_) {}
+          return parsed;
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Send post comment error: $e');
+      return null;
+    }
+  }
+
+  /// Links, creates, or unlinks a channel discussion group (`PUT /api/chats/:id/discussion-group`).
+  static Future<Map<String, dynamic>> updateChannelDiscussionGroup({
+    required String channelId,
+    String? linkedChatId,
+    bool createNew = false,
+    String? newGroupName,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final body = <String, dynamic>{
+        'linked_chat_id': linkedChatId ?? '',
+        'create_new': createNew,
+        if (newGroupName != null && newGroupName.isNotEmpty)
+          'new_group_name': newGroupName,
+      };
+
+      final response = await http.put(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$channelId/discussion-group'),
+        headers: headers,
+        body: jsonEncode(body),
+      );
+
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        final updatedLinkedId = _nonEmptyString(data['linked_chat_id']) ??
+            LinkedChatSummary.tryParse(data['linked_chat'])?.id;
+        try {
+          await AppDatabase().updateChatLinkedChatId(
+            channelId,
+            updatedLinkedId,
+          );
+        } catch (_) {}
+        return Map<String, dynamic>.from(data);
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'message': _extractErrorMessage(
+          data,
+          'Failed to update discussion group',
+        ),
+      };
+    } catch (e) {
+      debugPrint('Update channel discussion group error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Fetches settings for a group or channel (`GET /api/chats/:id/group-settings`).
+  static Future<Map<String, dynamic>> getGroupSettings(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/group-settings'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        return Map<String, dynamic>.from(data);
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'message': _extractErrorMessage(data, 'Failed to get group settings'),
+      };
+    } catch (e) {
+      debugPrint('Get group settings error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Updates group or channel settings (`PUT /api/chats/:id/group-settings`).
+  static Future<Map<String, dynamic>> updateGroupSettings(
+    String chatId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final response = await http.put(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/group-settings'),
+        headers: headers,
+        body: jsonEncode(payload),
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        try {
+          final perms = GroupDefaultPermissions.tryParse(
+            payload['default_permissions'],
+          );
+          final reactions = ReactionSettings.fromChatJson(payload);
+          await AppDatabase().updateChatSettings(
+            chatId,
+            name: payload.containsKey('name')
+                ? payload['name']?.toString()
+                : null,
+            avatarUrl: payload.containsKey('avatar_url')
+                ? payload['avatar_url']?.toString()
+                : null,
+            updateAvatarUrl: payload.containsKey('avatar_url'),
+            username: payload.containsKey('username')
+                ? payload['username']?.toString()
+                : null,
+            updateUsername: payload.containsKey('username'),
+            isPublic: payload.containsKey('is_public')
+                ? _parseBoolFlag(payload['is_public'])
+                : null,
+            showAuthorProfiles: payload.containsKey('show_author_profiles')
+                ? _parseBoolFlag(payload['show_author_profiles'])
+                : null,
+            signMessages: payload.containsKey('sign_messages')
+                ? _parseBoolFlag(payload['sign_messages'])
+                : null,
+            chatPermissionsJson:
+                perms != null ? jsonEncode(perms.toJson()) : null,
+            reactionSettingsJson:
+                reactions != null ? jsonEncode(reactions.toJson()) : null,
+          );
+        } catch (_) {}
+        return Map<String, dynamic>.from(data);
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'message': _extractErrorMessage(data, 'Failed to update settings'),
+      };
+    } catch (e) {
+      debugPrint('Update group settings error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Fetches members of a group or channel (`GET /api/chats/:id/members`).
+  static Future<List<ChatParticipant>> getGroupMembers(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return [];
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/members'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['members'] is List) {
+        return (data['members'] as List)
+            .whereType<Map>()
+            .map((m) => ChatParticipant.fromJson(Map<String, dynamic>.from(m)))
+            .toList();
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Get group members error: $e');
+      return [];
+    }
+  }
+
+  /// Updates a member's admin role, granular rights, custom title, and anonymity (`PUT /api/chats/:id/members/:userId/admin-rights`).
+  static Future<bool> updateMemberAdminRights({
+    required String chatId,
+    required String userId,
+    required String role,
+    AdminRights? permissions,
+    String? adminTitle,
+    bool? isAnonymous,
+  }) {
+    return _sendBoolRequest(
+      'PUT',
+      '/api/chats/$chatId/members/$userId/admin-rights',
+      body: {
+        'role': role,
+        if (permissions != null) 'admin_permissions': permissions.toJson(),
+        if (adminTitle != null) 'admin_title': adminTitle,
+        if (isAnonymous != null) 'is_anonymous': isAnonymous,
+      },
+    );
+  }
+
+  /// Updates granular restrictions for a group member (`PUT /api/chats/:id/members/:userId/restrictions`).
+  static Future<bool> updateMemberRestrictions({
+    required String chatId,
+    required String userId,
+    required MemberRestrictions restrictions,
+    DateTime? restrictedUntil,
+  }) {
+    return _sendBoolRequest(
+      'PUT',
+      '/api/chats/$chatId/members/$userId/restrictions',
+      body: {
+        'member_restrictions': restrictions.toJson(),
+        'restricted_until': restrictedUntil?.toUtc().toIso8601String(),
+      },
+    );
+  }
+
+  /// Bans a member from a group or channel (`POST /api/chats/:id/members/:userId/ban`).
+  static Future<bool> banChatMember({
+    required String chatId,
+    required String userId,
+  }) {
+    return _sendBoolRequest('POST', '/api/chats/$chatId/members/$userId/ban');
+  }
+
+  /// Unbans a user from a group or channel (`DELETE /api/chats/:id/members/:userId/ban`).
+  static Future<bool> unbanChatMember({
+    required String chatId,
+    required String userId,
+  }) {
+    return _sendBoolRequest(
+      'DELETE',
+      '/api/chats/$chatId/members/$userId/ban',
+    );
+  }
+
+  /// Returns banned members of a group or channel (`GET /api/chats/:id/banned`).
+  static Future<List<ChatParticipant>> getBannedChatMembers(
+    String chatId,
+  ) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return [];
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/banned'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map) {
+        final rawList = data['banned'] ?? data['members'] ?? data['users'];
+        if (rawList is List) {
+          return rawList
+              .whereType<Map>()
+              .map((m) => ChatParticipant.fromJson(Map<String, dynamic>.from(m))
+                  .copyWith(isBanned: true))
+              .toList();
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Get banned chat members error: $e');
+      return [];
+    }
+  }
+
+  /// Returns all invite links for a group or channel (`GET /api/chats/:id/invite-links`).
+  static Future<List<InviteLinkItem>> getInviteLinks(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return [];
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/invite-links'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map) {
+        final rawList = data['links'] ?? data['invite_links'];
+        if (rawList is List) {
+          return rawList
+              .whereType<Map>()
+              .map((m) => InviteLinkItem.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Get invite links error: $e');
+      return [];
+    }
+  }
+
+  /// Creates a new invite link (`POST /api/chats/:id/invite-links`).
+  static Future<InviteLinkItem?> createInviteLink({
+    required String chatId,
+    String? title,
+    int maxUses = 0,
+    DateTime? expiresAt,
+    bool requiresApproval = false,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return null;
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/invite-links'),
+        headers: headers,
+        body: jsonEncode({
+          if (title != null) 'title': title,
+          'max_uses': maxUses,
+          if (expiresAt != null)
+            'expires_at': expiresAt.toUtc().toIso8601String(),
+          if (requiresApproval) 'requires_approval': requiresApproval,
+        }),
+      );
+      final data = _tryDecodeJson(response.body);
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          data is Map &&
+          data['success'] != false) {
+        final raw = data['invite_link'] is Map
+            ? Map<String, dynamic>.from(data['invite_link'] as Map)
+            : (data['link_item'] is Map
+                ? Map<String, dynamic>.from(data['link_item'] as Map)
+                : Map<String, dynamic>.from(data));
+        final parsed = InviteLinkItem.fromJson(raw);
+        if (parsed.link.isEmpty) return null;
+        return parsed.copyWith(
+          title: parsed.title.isEmpty && title != null ? title : parsed.title,
+          maxUses: parsed.maxUses == 0 && maxUses > 0 ? maxUses : parsed.maxUses,
+          expiresAt: parsed.expiresAt ?? expiresAt,
+          requiresApproval: parsed.requiresApproval || requiresApproval,
+        );
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Create invite link error: $e');
+      return null;
+    }
+  }
+
+  /// Updates or revokes an invite link (`PATCH /api/chats/:id/invite-links/:linkId`).
+  static Future<bool> updateInviteLink({
+    required String chatId,
+    required int linkId,
+    String? title,
+    int? maxUses,
+    DateTime? expiresAt,
+    bool? isRevoked,
+    bool? requiresApproval,
+  }) {
+    return _sendBoolRequest(
+      'PATCH',
+      '/api/chats/$chatId/invite-links/$linkId',
+      body: {
+        if (title != null) 'title': title,
+        if (maxUses != null) 'max_uses': maxUses,
+        if (expiresAt != null) 'expires_at': expiresAt.toUtc().toIso8601String(),
+        if (isRevoked != null) 'is_revoked': isRevoked,
+        if (requiresApproval != null) 'requires_approval': requiresApproval,
+      },
+    );
+  }
+
+  /// Permanently deletes an invite link (`DELETE /api/chats/:id/invite-links/:linkId`).
+  static Future<bool> deleteInviteLink({
+    required String chatId,
+    required int linkId,
+  }) {
+    return _sendBoolRequest(
+      'DELETE',
+      '/api/chats/$chatId/invite-links/$linkId',
+    );
+  }
+
+  /// Checks whether a chat currently has an active voice/video call (`GET /api/chats/:id/call`).
+  static Future<Map<String, dynamic>?> getChatActiveCall(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return null;
+
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/call'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final data = _tryDecodeJson(response.body);
+        if (data is Map) {
+          final rawCall = data['active_call'] ?? data['call'];
+          if (rawCall is Map) {
+            try {
+              await AppDatabase().updateChatActiveCall(chatId, true);
+            } catch (_) {}
+            return Map<String, dynamic>.from(rawCall);
+          }
+          if (data['id'] != null) {
+            try {
+              await AppDatabase().updateChatActiveCall(chatId, true);
+            } catch (_) {}
+            return Map<String, dynamic>.from(data);
+          }
+          try {
+            await AppDatabase().updateChatActiveCall(chatId, false);
+          } catch (_) {}
+        }
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Get chat active call error: $e');
+      return null;
     }
   }
 }

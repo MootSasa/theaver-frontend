@@ -18,8 +18,6 @@ import '../../services/settings_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/unread_count_provider.dart';
 import '../../services/websocket_service.dart';
-import '../../models/profile_customization.dart';
-import '../../services/peer_customization_cache.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/chat/chat_batch_dialogs.dart';
@@ -156,46 +154,14 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
         (unreadProvider != null && unreadProvider.hasAuthoritativeCount(model.chatId))
             ? unreadProvider.getCount(model.chatId)
             : model.unreadCount;
-    final dbCust = PeerCustomization.tryParseJsonString(model.peerCustomizationJson);
-    if (model.chatType == 'private' &&
-        model.otherUserId != null &&
-        model.otherUserId!.isNotEmpty &&
-        dbCust != null) {
-      PeerCustomizationCache.instance.put(
-        model.otherUserId!,
-        dbCust,
-        notify: false,
-      );
-    }
-    return Chat(
-      id: model.chatId,
-      chatType: model.chatType,
-      name: model.name.trim().isEmpty ? '?' : model.name,
-      avatarUrl: model.avatarUrl,
-      lastMessage: model.lastMessage,
-      lastMessageTime: model.lastMessageTime,
-      lastMessageType: model.lastMessageType,
-      lastMessageIsRound: model.lastMessageIsRound,
-      lastMessageFileUrl: model.lastMessageFileUrl,
-      lastMessageGroupedId: model.lastMessageGroupedId,
+    return Chat.fromDbChat(
+      model,
       lastMessageEntities:
           _chatLastMessageEntities[model.chatId] ?? const <MessageEntity>[],
-      otherUserId: model.otherUserId,
-      updatedAt: model.updatedAt,
-      unreadCount: effectiveUnread,
-      isOnline: model.isOnline,
-      lastSeen: model.lastSeen,
-      isPinned: model.isPinned,
-      lastReadInboxMessageId: model.lastReadInboxMessageId,
-      lastReadOutboxMessageId: model.lastReadOutboxMessageId,
-      pinnedMessageId: model.pinnedMessageId,
-      username: model.username,
-      isPublic: model.isPublic,
-      isBot: model.isBot,
-      isVerified: model.isVerified,
+      unreadCountOverride: effectiveUnread,
+    ).copyWith(
+      name: model.name.trim().isEmpty ? '?' : model.name,
       isArchived: true,
-      showAuthorProfiles: model.showAuthorProfiles,
-      peerCustomization: dbCust,
     );
   }
 

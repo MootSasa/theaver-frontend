@@ -4,10 +4,12 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../user/avatar_with_status.dart';
 import 'link_preview_input_bar.dart';
 import 'liquid_glass_input_field.dart';
 import 'reply_preview_bar.dart';
@@ -74,6 +76,14 @@ class ChatInputBar extends StatefulWidget {
   final bool isReplyKeyboardOpen;
   final VoidCallback? onToggleReplyKeyboard;
   final int slowmodeRemainingSeconds;
+  final bool showSilentBroadcastToggle;
+  final bool isSilentBroadcast;
+  final ValueChanged<bool>? onToggleSilentBroadcast;
+  final bool canSendMedia;
+  final bool canSendStickersGifs;
+  final bool canSendPolls;
+  final bool isAnonymousAdmin;
+  final String? anonymousGroupAvatarUrl;
 
   const ChatInputBar({
     Key? key,
@@ -127,6 +137,14 @@ class ChatInputBar extends StatefulWidget {
     this.isReplyKeyboardOpen = false,
     this.onToggleReplyKeyboard,
     this.slowmodeRemainingSeconds = 0,
+    this.showSilentBroadcastToggle = false,
+    this.isSilentBroadcast = false,
+    this.onToggleSilentBroadcast,
+    this.canSendMedia = true,
+    this.canSendStickersGifs = true,
+    this.canSendPolls = true,
+    this.isAnonymousAdmin = false,
+    this.anonymousGroupAvatarUrl,
   }) : super(key: key);
 
   @override
@@ -373,6 +391,280 @@ class _ChatInputBarState extends State<ChatInputBar> {
     );
   }
 
+  Widget _wrapContextualPill(
+    BuildContext context, {
+    required bool glassEnabled,
+    required bool isLite,
+    required Widget child,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (glassEnabled) {
+      final glassProvider = context.watch<LiquidGlassProvider?>();
+      if (glassProvider != null) {
+        final style = glassProvider.createStyle(
+          context: context,
+          cornerRadius: 16,
+          refractionIndex: 1.1,
+          refractionWidth: 24,
+          isLiteOverride: isLite,
+        );
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+          child: LiquidGlassLens(
+            style: style,
+            child: child,
+          ),
+        );
+      }
+    }
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.black.withValues(alpha: 0.68)
+                  : Colors.white.withValues(alpha: 0.72),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isDark ? Colors.white12 : Colors.black12,
+                width: 0.5,
+              ),
+            ),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnonymousAdminBanner(
+    BuildContext context,
+    bool glassEnabled,
+    bool isLite,
+  ) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final Color accentColor = isDark
+        ? const Color(0xFF66C7F4)
+        : theme.colorScheme.primary;
+    final Color textColor =
+        isDark ? Colors.white.withValues(alpha: 0.92) : const Color(0xFF1C1C1E);
+    final hasAvatar = widget.anonymousGroupAvatarUrl != null &&
+        widget.anonymousGroupAvatarUrl!.trim().isNotEmpty;
+
+    return _wrapContextualPill(
+      context,
+      glassEnabled: glassEnabled,
+      isLite: isLite,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasAvatar) ...[
+              AvatarWithStatus(
+                avatarUrl: widget.anonymousGroupAvatarUrl,
+                name: 'G',
+                radius: 10,
+                isOnline: false,
+                showDecoration: false,
+                animateDecoration: false,
+              ),
+              const SizedBox(width: 6),
+            ],
+            iconoir.ShieldCheck(
+              width: 15,
+              height: 15,
+              color: accentColor,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'От имени группы',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: textColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRestrictedStickersBanner(
+    BuildContext context,
+    bool glassEnabled,
+    bool isLite,
+  ) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final Color textColor =
+        isDark ? Colors.white.withValues(alpha: 0.9) : const Color(0xFF1C1C1E);
+
+    return _wrapContextualPill(
+      context,
+      glassEnabled: glassEnabled,
+      isLite: isLite,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            iconoir.Lock(
+              width: 14,
+              height: 14,
+              color: textColor.withValues(alpha: 0.78),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'Стикеры и GIF ограничены',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSilentBroadcastButton(
+    BuildContext context,
+    bool glassEnabled,
+    bool isLite,
+    LiquidGlassProvider? glassProvider,
+  ) {
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final isDark = theme.brightness == Brightness.dark;
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final Color activeColor =
+        themeExt?.palette.primary ?? theme.colorScheme.primary;
+    final Color inactiveColor = isDark
+        ? Colors.white.withValues(alpha: 0.8)
+        : const Color(0xFF1C1C1E).withValues(alpha: 0.75);
+
+    final Widget iconSwitcher = AnimatedSwitcher(
+      duration:
+          disableAnimations ? Duration.zero : const Duration(milliseconds: 200),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      child: widget.isSilentBroadcast
+          ? iconoir.BellOff(
+              key: const ValueKey('silent_bell_off'),
+              width: 20,
+              height: 20,
+              color: activeColor,
+            )
+          : iconoir.Bell(
+              key: const ValueKey('silent_bell_on'),
+              width: 20,
+              height: 20,
+              color: inactiveColor,
+            ),
+    );
+
+    final Widget innerTap = Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: () =>
+            widget.onToggleSilentBroadcast?.call(!widget.isSilentBroadcast),
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Center(child: iconSwitcher),
+        ),
+      ),
+    );
+
+    final Widget capsule;
+    if (glassEnabled && glassProvider != null) {
+      final style = glassProvider.createStyle(
+        context: context,
+        cornerRadius: 22,
+        refractionIndex: 1.1,
+        refractionWidth: 20,
+        isLiteOverride: isLite,
+      );
+      capsule = LiquidGlassLens(
+        style: style,
+        child: Container(
+          decoration: widget.isSilentBroadcast
+              ? BoxDecoration(
+                  color: activeColor.withValues(alpha: 0.14),
+                  shape: BoxShape.circle,
+                )
+              : null,
+          child: innerTap,
+        ),
+      );
+    } else {
+      final defaultBg = isDark
+          ? Colors.black.withValues(alpha: 0.65)
+          : Colors.white.withValues(alpha: 0.65);
+      final bg = widget.isSilentBroadcast
+          ? Color.alphaBlend(
+              activeColor.withValues(alpha: isDark ? 0.22 : 0.14),
+              themeExt?.palette.explicitChatInputBackground ?? defaultBg,
+            )
+          : (themeExt?.palette.explicitChatInputBackground ?? defaultBg);
+      capsule = ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
+          child: Container(
+            decoration: BoxDecoration(
+              color: bg,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: widget.isSilentBroadcast
+                    ? activeColor.withValues(alpha: 0.45)
+                    : (isDark ? Colors.white10 : Colors.black12),
+                width: 0.5,
+              ),
+            ),
+            child: innerTap,
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 8, bottom: 10),
+      child: Semantics(
+        button: true,
+        toggled: widget.isSilentBroadcast,
+        label: widget.isSilentBroadcast
+            ? 'Беззвучная отправка включена'
+            : 'Беззвучная отправка выключена',
+        child: Tooltip(
+          message: widget.isSilentBroadcast ? 'Без звука' : 'Со звуком',
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: capsule,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final glassProvider = context.watch<LiquidGlassProvider?>();
@@ -534,6 +826,22 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   backgroundColor: Colors.grey[300],
                 ),
 
+        // 5b. Anonymous admin banner («От имени группы»)
+        _GlassSafeAnimatedSection(
+          visible: widget.isAnonymousAdmin,
+          child: widget.isAnonymousAdmin
+              ? _buildAnonymousAdminBanner(context, glassEnabled, isLite)
+              : null,
+        ),
+
+        // 5c. Stickers/GIFs restricted notice when emoji panel is open
+        _GlassSafeAnimatedSection(
+          visible: !widget.canSendStickersGifs && widget.isEmojiPanelOpen,
+          child: (!widget.canSendStickersGifs && widget.isEmojiPanelOpen)
+              ? _buildRestrictedStickersBanner(context, glassEnabled, isLite)
+              : null,
+        ),
+
         // 6. Input field row
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -554,17 +862,25 @@ class _ChatInputBarState extends State<ChatInputBar> {
                             'Сообщение')),
                 onChanged: widget.onChanged,
                 onSend: widget.isSending ? null : _handleSend,
-                onAttach: widget.onAttach,
+                onAttach: widget.canSendMedia ? widget.onAttach : null,
                 onEmoji: widget.onEmoji,
-                onVoice: widget.onVoice,
-                onStartVoiceRecord: widget.onStartVoiceRecord,
-                onVoiceRecordMove: widget.onVoiceRecordMove,
-                onVoiceRecordEnd: widget.onVoiceRecordEnd,
-                onVoiceRecordCancel: widget.onVoiceRecordCancel,
-                onStartVideoRecord: widget.onStartVideoRecord,
-                onVideoRecordMove: widget.onVideoRecordMove,
-                onVideoRecordEnd: widget.onVideoRecordEnd,
-                onVideoRecordCancel: widget.onVideoRecordCancel,
+                onVoice: widget.canSendMedia ? widget.onVoice : null,
+                onStartVoiceRecord:
+                    widget.canSendMedia ? widget.onStartVoiceRecord : null,
+                onVoiceRecordMove:
+                    widget.canSendMedia ? widget.onVoiceRecordMove : null,
+                onVoiceRecordEnd:
+                    widget.canSendMedia ? widget.onVoiceRecordEnd : null,
+                onVoiceRecordCancel:
+                    widget.canSendMedia ? widget.onVoiceRecordCancel : null,
+                onStartVideoRecord:
+                    widget.canSendMedia ? widget.onStartVideoRecord : null,
+                onVideoRecordMove:
+                    widget.canSendMedia ? widget.onVideoRecordMove : null,
+                onVideoRecordEnd:
+                    widget.canSendMedia ? widget.onVideoRecordEnd : null,
+                onVideoRecordCancel:
+                    widget.canSendMedia ? widget.onVideoRecordCancel : null,
                 isSending: widget.isSending,
                 hasAttachments: widget.attachedFiles.isNotEmpty,
                 onEditLastMessage: widget.isEditing ? null : widget.onEditLastMessage,
@@ -579,6 +895,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 slowmodeRemainingSeconds: widget.slowmodeRemainingSeconds,
               ),
             ),
+            if (widget.showSilentBroadcastToggle)
+              _buildSilentBroadcastButton(
+                context,
+                glassEnabled,
+                isLite,
+                glassProvider,
+              ),
             if (widget.trailing != null) widget.trailing!,
           ],
         ),
