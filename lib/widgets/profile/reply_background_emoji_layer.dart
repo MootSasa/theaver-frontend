@@ -120,94 +120,126 @@ class _ReplyEmojiGlyphState extends State<ReplyEmojiGlyph> {
 
 class _ReplyWatermarkSlot {
   final double right;
-  final double topFrac;
+  final double top;
   final double size;
   final double angle;
   final double alpha;
   final double minWidth;
+  final bool isTopRightCorner;
 
   const _ReplyWatermarkSlot({
     required this.right,
-    required this.topFrac,
+    required this.top,
     required this.size,
     required this.angle,
     required this.alpha,
     required this.minWidth,
+    this.isTopRightCorner = false,
   });
 }
 
-/// Renders Telegram Premium-style scattered monotone background emojis on the
-/// right side of a reply quote block, fading inward so text stays readable.
+/// Renders Telegram Premium-style fixed-spacing monotone background emojis in
+/// the upper right area of a reply/quote block, fading inward and clipping
+/// excess lower rows cleanly when the container is short.
 class ReplyBackgroundEmojiLayer extends StatelessWidget {
+  static const double _kBottomClipAllowance = 2.0;
+
   final ReplyEmojiData? emoji;
   final Color color;
   final int maxSlots;
   final double opacityScale;
+  final bool avoidTopRightCorner;
 
   const ReplyBackgroundEmojiLayer({
     super.key,
     required this.emoji,
     required this.color,
-    this.maxSlots = 7,
+    this.maxSlots = 10,
     this.opacityScale = 1.0,
+    this.avoidTopRightCorner = false,
   });
 
   static const List<_ReplyWatermarkSlot> _slots = <_ReplyWatermarkSlot>[
     _ReplyWatermarkSlot(
-      right: 10,
-      topFrac: 0.08,
+      right: 9,
+      top: 4.0,
       size: 16.0,
       angle: 0.0,
       alpha: 0.55,
       minWidth: 96,
+      isTopRightCorner: true,
     ),
     _ReplyWatermarkSlot(
-      right: 6,
-      topFrac: 0.88,
-      size: 14.5,
+      right: 5,
+      top: 26.0,
+      size: 14.0,
       angle: 0.0,
-      alpha: 0.48,
+      alpha: 0.44,
       minWidth: 96,
     ),
     _ReplyWatermarkSlot(
-      right: 34,
-      topFrac: 0.42,
-      size: 15.0,
+      right: 35,
+      top: 13.5,
+      size: 14.5,
       angle: 0.0,
-      alpha: 0.42,
+      alpha: 0.46,
+      minWidth: 96,
+    ),
+    _ReplyWatermarkSlot(
+      right: 28,
+      top: 38.5,
+      size: 13.5,
+      angle: 0.0,
+      alpha: 0.30,
+      minWidth: 104,
+    ),
+    _ReplyWatermarkSlot(
+      right: 61,
+      top: 3.0,
+      size: 13.5,
+      angle: 0.0,
+      alpha: 0.38,
+      minWidth: 115,
+    ),
+    _ReplyWatermarkSlot(
+      right: 56,
+      top: 25.0,
+      size: 14.0,
+      angle: 0.0,
+      alpha: 0.32,
       minWidth: 120,
     ),
     _ReplyWatermarkSlot(
-      right: 58,
-      topFrac: 0.06,
-      size: 13.5,
+      right: 88,
+      top: 12.0,
+      size: 13.0,
       angle: 0.0,
-      alpha: 0.36,
+      alpha: 0.25,
       minWidth: 150,
     ),
     _ReplyWatermarkSlot(
-      right: 62,
-      topFrac: 0.90,
-      size: 15.0,
-      angle: 0.0,
-      alpha: 0.30,
-      minWidth: 160,
-    ),
-    _ReplyWatermarkSlot(
-      right: 88,
-      topFrac: 0.46,
-      size: 14.0,
-      angle: 0.0,
-      alpha: 0.24,
-      minWidth: 195,
-    ),
-    _ReplyWatermarkSlot(
-      right: 114,
-      topFrac: 0.22,
+      right: 80,
+      top: 39.5,
       size: 12.5,
       angle: 0.0,
+      alpha: 0.19,
+      minWidth: 150,
+    ),
+    _ReplyWatermarkSlot(
+      right: 109,
+      top: 27.0,
+      size: 12.0,
+      angle: 0.0,
       alpha: 0.18,
-      minWidth: 235,
+      minWidth: 180,
+    ),
+    _ReplyWatermarkSlot(
+      right: 118,
+      top: 4.5,
+      size: 12.0,
+      angle: 0.0,
+      alpha: 0.15,
+      minWidth: 190,
     ),
   ];
 
@@ -228,17 +260,17 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
             builder: (context, constraints) {
               final w = constraints.maxWidth;
               final h = constraints.maxHeight;
-              if (!w.isFinite || !h.isFinite || w < 96 || h < 20) {
+              if (!w.isFinite || !h.isFinite || w < 96 || h < 18.5) {
                 return const SizedBox.shrink();
               }
 
               final children = <Widget>[];
               final limit = maxSlots.clamp(0, _slots.length);
-              for (int i = 0; i < limit; i++) {
+              for (int i = 0; i < _slots.length && children.length < limit; i++) {
                 final slot = _slots[i];
+                if (avoidTopRightCorner && slot.isTopRightCorner) continue;
                 if (w < slot.minWidth) continue;
-                final verticalSlack = (h - slot.size - 4.0).clamp(0.0, 200.0);
-                final top = 2.0 + slot.topFrac * verticalSlack;
+                if (slot.top + slot.size > h + _kBottomClipAllowance) continue;
                 final slotColor = color.withValues(
                   alpha: (color.a * slot.alpha * opacityScale).clamp(0.0, 1.0),
                 );
@@ -250,7 +282,7 @@ class ReplyBackgroundEmojiLayer extends StatelessWidget {
                 children.add(
                   Positioned(
                     right: slot.right,
-                    top: top,
+                    top: slot.top,
                     child: slot.angle == 0.0
                         ? glyph
                         : Transform.rotate(

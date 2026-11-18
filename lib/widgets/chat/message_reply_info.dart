@@ -575,6 +575,7 @@ class MessageReplyInfo extends StatelessWidget {
                 child: ReplyBackgroundEmojiLayer(
                   emoji: effectiveReplyEmoji,
                   color: accentColor,
+                  avoidTopRightCorner: isQuote && !isDeleted,
                 ),
               ),
             Padding(

@@ -1167,4 +1167,164 @@ void main() {
       expect(find.byType(ReplyBackgroundEmojiLayer), findsOneWidget);
     },
   );
+
+  testWidgets(
+    'ReplyBackgroundEmojiLayer keeps fixed top-band coordinates and spacing across heights, clips excess rows, and avoids QuoteSolid/footer overlap',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(420, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      const testEmoji = ReplyEmojiData(
+        stickerId: 303,
+        stickerUrl: '/stickers/fixed_emoji.webp',
+        thumbnailUrl: '/stickers/fixed_emoji_thumb.webp',
+        stickerFormat: 'webp',
+      );
+
+      Future<List<Rect>> measureRelativeGlyphRects(Size boxSize) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: boxSize.width,
+                  height: boxSize.height,
+                  child: const ReplyBackgroundEmojiLayer(
+                    emoji: testEmoji,
+                    color: Colors.teal,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final layerTopLeft = tester.getTopLeft(
+          find.byType(ReplyBackgroundEmojiLayer),
+        );
+        final glyphFinder = find.byType(ReplyEmojiGlyph);
+        final rects = <Rect>[];
+        for (int i = 0; i < glyphFinder.evaluate().length; i++) {
+          rects.add(
+            tester.getRect(glyphFinder.at(i)).shift(-layerTopLeft),
+          );
+        }
+        return rects;
+      }
+
+      // 1. Fixed top-band coordinates without vertical stretching (64dp vs 280dp)
+      final normalRects = await measureRelativeGlyphRects(const Size(250, 64));
+      final tallRects = await measureRelativeGlyphRects(const Size(250, 280));
+
+      expect(normalRects, hasLength(10));
+      expect(tallRects, hasLength(10));
+      for (int i = 0; i < normalRects.length; i++) {
+        expect(tallRects[i].left, closeTo(normalRects[i].left, 0.01));
+        expect(tallRects[i].top, closeTo(normalRects[i].top, 0.01));
+        expect(tallRects[i].bottom, lessThanOrEqualTo(54.0));
+      }
+
+      // 2. Organic scatter & comfortable pairwise spacing (no aligned rows/columns, no overlaps)
+      expect(normalRects.map((r) => r.top).toSet(), hasLength(10));
+      expect(normalRects.map((r) => r.left).toSet(), hasLength(10));
+      for (int i = 0; i < normalRects.length; i++) {
+        for (int j = i + 1; j < normalRects.length; j++) {
+          expect(normalRects[i].overlaps(normalRects[j]), isFalse);
+          final dx = normalRects[i].center.dx - normalRects[j].center.dx;
+          final dy = normalRects[i].center.dy - normalRects[j].center.dy;
+          expect(dx * dx + dy * dy, greaterThanOrEqualTo(21.0 * 21.0 - 0.1));
+        }
+      }
+
+      // 3. Small container heights cut off lower glyphs without vertical compression
+      final shortRects = await measureRelativeGlyphRects(const Size(250, 28));
+      expect(shortRects, hasLength(5));
+      for (final r in shortRects) {
+        expect(
+          normalRects.any(
+            (nr) => (nr.left - r.left).abs() < 0.01 && (nr.top - r.top).abs() < 0.01,
+          ),
+          isTrue,
+        );
+      }
+
+      final mediumRects = await measureRelativeGlyphRects(const Size(250, 42));
+      expect(mediumRects, hasLength(8));
+      for (final r in mediumRects) {
+        expect(
+          normalRects.any(
+            (nr) => (nr.left - r.left).abs() < 0.01 && (nr.top - r.top).abs() < 0.01,
+          ),
+          isTrue,
+        );
+      }
+
+      // 4. CollapsibleBlockquoteWidget keeps emojis out of QuoteSolid & footer toggle
+      final themeProvider = ProfileThemeProvider();
+      final preloadedL10n = (await tester.runAsync(
+        () => AppLocalizations.delegate.load(const Locale('en')),
+      ))!;
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<ProfileThemeProvider>.value(
+          value: themeProvider,
+          child: MaterialApp(
+            locale: const Locale('en'),
+            supportedLocales: const [Locale('en')],
+            localizationsDelegates: [
+              _PreloadedAppLocalizationsDelegate(preloadedL10n),
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: const Scaffold(
+              body: SizedBox(
+                width: 340,
+                child: CollapsibleBlockquoteWidget(
+                  text: 'First line of a very long collapsible quote block.\n'
+                      'Second line that keeps going across the bubble width.\n'
+                      'Third line to trigger collapsible blockquote mode.\n'
+                      'Fourth line visible when expanded by the user.\n'
+                      'Fifth line further down in the quote body.',
+                  isCollapsible: true,
+                  isDark: true,
+                  isMe: false,
+                  replyEmoji: testEmoji,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final blockquoteFinder = find.byType(CollapsibleBlockquoteWidget);
+      final glyphsInBlockquote = find.descendant(
+        of: blockquoteFinder,
+        matching: find.byType(ReplyEmojiGlyph),
+      );
+      expect(glyphsInBlockquote, findsWidgets);
+
+      final quoteIconRect = tester.getRect(
+        find.descendant(
+          of: blockquoteFinder,
+          matching: find.byType(iconoir.QuoteSolid),
+        ),
+      );
+      final footerInkWellRect = tester.getRect(
+        find.descendant(
+          of: blockquoteFinder,
+          matching: find.byType(InkWell),
+        ),
+      );
+
+      for (int i = 0; i < glyphsInBlockquote.evaluate().length; i++) {
+        final glyphRect = tester.getRect(glyphsInBlockquote.at(i));
+        expect(glyphRect.overlaps(quoteIconRect), isFalse);
+        expect(glyphRect.overlaps(footerInkWellRect), isFalse);
+      }
+    },
+  );
 }

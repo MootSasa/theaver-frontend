@@ -232,18 +232,9 @@ class _CollapsibleBlockquoteWidgetState
               borderRadius: BorderRadius.circular(6),
             ),
             clipBehavior: Clip.antiAlias,
-            child: Stack(
-              children: [
-                if (effectiveReplyEmoji != null)
-                  Positioned.fill(
-                    child: ReplyBackgroundEmojiLayer(
-                      emoji: effectiveReplyEmoji,
-                      color: primaryColor,
-                    ),
-                  ),
-                AnimatedBuilder(
-                  animation: _curvedAnimation,
-                  builder: (context, child) {
+            child: AnimatedBuilder(
+              animation: _curvedAnimation,
+              builder: (context, child) {
                 final double progress = showToggle ? _curvedAnimation.value : 1.0;
                 final double currentTextHeight = showToggle
                     ? ui.lerpDouble(collapsedHeight, fullHeight, progress)!
@@ -267,9 +258,19 @@ class _CollapsibleBlockquoteWidgetState
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     // Main Quote Content
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-                      child: Stack(
+                    Stack(
+                      children: [
+                        if (effectiveReplyEmoji != null)
+                          Positioned.fill(
+                            child: ReplyBackgroundEmojiLayer(
+                              emoji: effectiveReplyEmoji,
+                              color: primaryColor,
+                              avoidTopRightCorner: true,
+                            ),
+                          ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                          child: Stack(
                         children: [
                           Positioned(
                             top: 0,
@@ -357,6 +358,8 @@ class _CollapsibleBlockquoteWidgetState
                         ],
                       ),
                     ),
+                      ],
+                    ),
 
                     // Firmly docked expand/collapse footer button
                     if (showToggle)
@@ -416,10 +419,8 @@ class _CollapsibleBlockquoteWidgetState
                 );
               },
             ),
-          ],
-        ),
-      ),
-    );
+          ),
+        );
       },
     );
   }
