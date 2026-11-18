@@ -1337,4 +1337,182 @@ void main() {
       }
     },
   );
+
+  testWidgets(
+    'Chat Name tab adapts panel text & background emoji contrast without altering preview card, shows grey strip mini-pills, and crossfades tab background smoothly over 850ms',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final themeProvider = ProfileThemeProvider()
+        ..seedOwnCustomizationForTest(
+          const PeerCustomization(
+            replyEmoji: ReplyEmojiData(
+              stickerId: 404,
+              stickerUrl: '/uploads/stickers/adaptive.webp',
+              thumbnailUrl: '/uploads/stickers/adaptive_thumb.webp',
+              stickerFormat: 'webp',
+            ),
+            profileBannerUrl: '/uploads/banners/test.jpg',
+          ),
+          userId: 'u_contrast_test',
+        );
+      final glassProvider = LiquidGlassProvider();
+      await glassProvider.setMode(GlassMode.disabled);
+
+      // 1. Dark cover preset on Chat Name tab -> white contrast panel text & white emoji in row,
+      //    while ReplyMessagePreviewCard still renders ReplyBackgroundEmojiLayer in namePreset.primaryColor.
+      await tester.pumpWidget(
+        _buildTestHarness(
+          themeProvider: themeProvider,
+          glassProvider: glassProvider,
+          initialTab: 1,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final emojiRowFinder = find.byKey(
+        const ValueKey<String>('customization_reply_emoji_row'),
+      );
+      expect(emojiRowFinder, findsOneWidget);
+
+      final darkRowTitle = tester.widget<Text>(
+        find.descendant(
+          of: emojiRowFinder,
+          matching: find.text('Background Emoji'),
+        ),
+      );
+      expect(darkRowTitle.style?.color, equals(Colors.white));
+
+      final darkRowGlyph = tester.widget<ReplyEmojiGlyph>(
+        find.descendant(
+          of: emojiRowFinder,
+          matching: find.byType(ReplyEmojiGlyph),
+        ),
+      );
+      expect(darkRowGlyph.color, equals(Colors.white));
+      expect(
+        darkRowGlyph.color,
+        isNot(equals(themeProvider.currentNameColorPreset.primaryColor)),
+      );
+
+      final previewWatermarks = tester
+          .widgetList<ReplyBackgroundEmojiLayer>(
+            find.descendant(
+              of: find.byType(ReplyMessagePreviewCard),
+              matching: find.byType(ReplyBackgroundEmojiLayer),
+            ),
+          )
+          .toList();
+      expect(previewWatermarks, hasLength(2));
+      for (final layer in previewWatermarks) {
+        expect(
+          layer.color,
+          equals(themeProvider.currentNameColorPreset.primaryColor),
+        );
+      }
+
+      // 2. Verify grey contrast mini-pills under strip-style buttons
+      final stripSelectorFinder = find.byType(ReplyStripStyleSelector);
+      expect(stripSelectorFinder, findsOneWidget);
+      for (final style in ReplyStripStyle.values) {
+        final pillFinder = find.descendant(
+          of: stripSelectorFinder,
+          matching: find.byKey(
+            ValueKey<String>('reply_strip_pill_${style.name}'),
+          ),
+        );
+        expect(pillFinder, findsOneWidget);
+        final pillBox = tester.widget<DecoratedBox>(pillFinder);
+        final pillDeco = pillBox.decoration as BoxDecoration;
+        expect(pillDeco.color, isNotNull);
+        expect(pillDeco.color!.a, greaterThan(0.0));
+        expect(pillDeco.border, isNotNull);
+      }
+      final selectedPillFinder = find.descendant(
+        of: stripSelectorFinder,
+        matching: find.byKey(const ValueKey<String>('reply_strip_pill_selected')),
+      );
+      expect(selectedPillFinder, findsOneWidget);
+
+      // 3. Switch to bright light cover preset -> panel text & trailing emoji adapt to dark #141619
+      await themeProvider.setPreset(
+        ProfileColorPreset.fromCustomColor(const Color(0xFFF7F5EE)),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final lightRowTitle = tester.widget<Text>(
+        find.descendant(
+          of: emojiRowFinder,
+          matching: find.text('Background Emoji'),
+        ),
+      );
+      expect(lightRowTitle.style?.color, equals(const Color(0xFF141619)));
+
+      final lightRowGlyph = tester.widget<ReplyEmojiGlyph>(
+        find.descendant(
+          of: emojiRowFinder,
+          matching: find.byType(ReplyEmojiGlyph),
+        ),
+      );
+      expect(lightRowGlyph.color, equals(const Color(0xFF141619)));
+
+      // 4. Switch from Profile tab to Chat Name tab -> banner stays mounted and both banner & dim overlay crossfade smoothly over 850ms
+      await themeProvider.setPreset(ProfileColorPresets.blue);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await tester.pumpWidget(
+        _buildTestHarness(
+          themeProvider: themeProvider,
+          glassProvider: glassProvider,
+          initialTab: 0,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        find.byKey(const ValueKey<String>('profile_customization_banner')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Chat Name'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        find.byKey(const ValueKey<String>('profile_customization_banner')),
+        findsOneWidget,
+      );
+
+      final dimFadeMid = tester.widget<FadeTransition>(
+        find.descendant(
+          of: find.byKey(
+            const ValueKey<String>('profile_customization_tab_dim_overlay'),
+          ),
+          matching: find.byType(FadeTransition),
+        ),
+      );
+      final bannerFadeMid = tester.widget<FadeTransition>(
+        find.descendant(
+          of: find.byKey(
+            const ValueKey<String>('profile_customization_banner_fade'),
+          ),
+          matching: find.byType(FadeTransition),
+        ),
+      );
+      expect(dimFadeMid.opacity.value, inExclusiveRange(0.05, 0.40));
+      expect(bannerFadeMid.opacity.value, inExclusiveRange(0.60, 0.95));
+
+      // Finish 850ms transition cleanly
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(dimFadeMid.opacity.value, closeTo(1.0, 0.001));
+      expect(bannerFadeMid.opacity.value, closeTo(0.0, 0.001));
+
+      // Flush PeerCustomizationCache debounce timer
+      await tester.pump(const Duration(milliseconds: 600));
+    },
+  );
 }

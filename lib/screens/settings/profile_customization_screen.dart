@@ -45,6 +45,10 @@ import 'profile_banner_editor_screen.dart';
 /// - Свободная прокрутка 120fps без лишних вложенных двойных панелей;
 /// - Выбор эмодзи-статуса и длительности без текстовой заметки.
 class ProfileCustomizationScreen extends StatefulWidget {
+  static const Duration backgroundTabTransitionDuration =
+      Duration(milliseconds: 850);
+  static const Curve backgroundTabTransitionCurve = Curves.easeInOutSine;
+
   final int initialTab;
 
   const ProfileCustomizationScreen({
@@ -99,6 +103,30 @@ class _ProfileCustomizationScreenState
     return preset.backgroundColor.computeLuminance();
   }
 
+  static Color _representativeCoverColor(ProfileColorPreset preset) {
+    if (preset.isGradient &&
+        preset.gradientColors != null &&
+        preset.gradientColors!.isNotEmpty) {
+      final colors = preset.gradientColors!;
+      double r = 0.0;
+      double g = 0.0;
+      double b = 0.0;
+      for (final c in colors) {
+        r += c.r;
+        g += c.g;
+        b += c.b;
+      }
+      final n = colors.length;
+      return Color.from(
+        alpha: 1.0,
+        red: (r / n).clamp(0.0, 1.0),
+        green: (g / n).clamp(0.0, 1.0),
+        blue: (b / n).clamp(0.0, 1.0),
+      );
+    }
+    return preset.backgroundColor.withValues(alpha: 1.0);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -141,15 +169,18 @@ class _ProfileCustomizationScreenState
   void _onTabSelectedFromBar(int index) {
     if (index < 0 || index > 1 || _activeTab == index) return;
     HapticUtils.selection();
-    if (_profileScrollController.hasClients &&
-        _profileScrollController.offset > 0.0) {
-      _profileScrollController.jumpTo(0.0);
+    if (index == 0) {
+      if (_profileScrollController.hasClients &&
+          _profileScrollController.offset > 0.0) {
+        _profileScrollController.jumpTo(0.0);
+      }
+      _bannerScrollOffset.value = 0.0;
+    } else {
+      if (_nameScrollController.hasClients &&
+          _nameScrollController.offset > 0.0) {
+        _nameScrollController.jumpTo(0.0);
+      }
     }
-    if (_nameScrollController.hasClients &&
-        _nameScrollController.offset > 0.0) {
-      _nameScrollController.jumpTo(0.0);
-    }
-    _bannerScrollOffset.value = 0.0;
     setState(() => _activeTab = index);
     if (_pageController.hasClients) {
       _isAnimatingTabFromBar = true;
@@ -161,6 +192,19 @@ class _ProfileCustomizationScreenState
           )
           .whenComplete(() {
         _isAnimatingTabFromBar = false;
+        if (!mounted || _activeTab != index) return;
+        if (index == 1) {
+          if (_profileScrollController.hasClients &&
+              _profileScrollController.offset > 0.0) {
+            _profileScrollController.jumpTo(0.0);
+          }
+          _bannerScrollOffset.value = 0.0;
+        } else {
+          if (_nameScrollController.hasClients &&
+              _nameScrollController.offset > 0.0) {
+            _nameScrollController.jumpTo(0.0);
+          }
+        }
       });
     }
   }
@@ -1401,11 +1445,30 @@ class _ProfileCustomizationScreenState
     final isNonDefault = namePreset.id != NameColorPresets.red.id ||
         stripStyle != ReplyStripStyle.solid ||
         currentReplyEmoji != null;
-    final secondaryForeground = isDarkBackdrop
-        ? Colors.white.withValues(alpha: 0.62)
-        : const Color(0xFF6C6C70);
-    final sectionAccent =
-        isDarkBackdrop ? coverPreset.ringColor : const Color(0xFF0088CC);
+
+    final tab1DimOverlay = Colors.black.withValues(
+      alpha: isDarkBackdrop ? 0.38 : 0.16,
+    );
+    final nameTabBackdropColor = Color.alphaBlend(
+      tab1DimOverlay,
+      _representativeCoverColor(coverPreset),
+    );
+    final tentativeDarkPanel = nameTabBackdropColor.computeLuminance() < 0.42;
+    final resolvedPanelSurface = Color.alphaBlend(
+      tentativeDarkPanel
+          ? Colors.black.withValues(alpha: 0.34)
+          : Colors.white.withValues(alpha: 0.86),
+      nameTabBackdropColor,
+    );
+    final panelIsDark = resolvedPanelSurface.computeLuminance() < 0.42;
+    final panelPrimaryText =
+        panelIsDark ? Colors.white : const Color(0xFF141619);
+    final backdropDescriptionColor =
+        nameTabBackdropColor.computeLuminance() < 0.42
+            ? Colors.white.withValues(alpha: 0.80)
+            : const Color(0xFF24272D);
+    final panelAccent =
+        panelIsDark ? coverPreset.ringColor : const Color(0xFF0088CC);
 
     return ListView(
       key: const PageStorageKey<String>('profile_customization_tab_name'),
@@ -1433,8 +1496,8 @@ class _ProfileCustomizationScreenState
         // 2. Единая аккуратная панель выбора цвета имени, стиля полоски и фонового эмодзи
         ProfileGlassSection(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          isDarkBackdrop: isDarkBackdrop,
-          accentColor: sectionAccent,
+          isDarkBackdrop: panelIsDark,
+          accentColor: panelAccent,
           dividerIndent: 16,
           children: [
             Padding(
@@ -1442,7 +1505,7 @@ class _ProfileCustomizationScreenState
               child: NameColorPaletteRow(
                 selectedPreset: namePreset,
                 selectedStyle: stripStyle,
-                isDarkOverride: isDarkBackdrop,
+                isDarkOverride: panelIsDark,
                 onPresetSelected: (preset) =>
                     _applyNameColorImmediate(preset, stripStyle),
                 onPickCustomColor: _pickCustomNameColor,
@@ -1454,7 +1517,7 @@ class _ProfileCustomizationScreenState
                 selectedPreset: namePreset,
                 selectedStyle: stripStyle,
                 flatInCard: true,
-                isDarkOverride: isDarkBackdrop,
+                isDarkOverride: panelIsDark,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 onStyleSelected: (style) =>
                     _applyNameColorImmediate(namePreset, style),
@@ -1468,14 +1531,18 @@ class _ProfileCustomizationScreenState
                   'customizationReplyEmoji',
                   'Background Emoji',
                 ),
-                style: const TextStyle(fontSize: 15),
+                style: TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w500,
+                  color: panelPrimaryText,
+                ),
               ),
               trailing: KeyedSubtree(
                 key: _replyEmojiAnchorKey,
                 child: currentReplyEmoji != null
                     ? ReplyEmojiGlyph(
                         emoji: currentReplyEmoji,
-                        color: namePreset.primaryColor,
+                        color: panelPrimaryText,
                         size: 26,
                         animate: true,
                         repeat: true,
@@ -1483,7 +1550,7 @@ class _ProfileCustomizationScreenState
                     : iconoir.Emoji(
                         width: 22,
                         height: 22,
-                        color: secondaryForeground,
+                        color: panelPrimaryText,
                       ),
               ),
               onTap: () => _openReplyEmojiMenu(context),
@@ -1493,13 +1560,18 @@ class _ProfileCustomizationScreenState
                 leading: iconoir.RefreshDouble(
                   width: 20,
                   height: 20,
-                  color: secondaryForeground,
+                  color: panelPrimaryText,
                 ),
                 title: Text(
                   translateOrFallback(
                     context,
                     'customizationResetNameColor',
                     'Reset Name Color',
+                  ),
+                  style: TextStyle(
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w500,
+                    color: panelPrimaryText,
                   ),
                 ),
                 onTap: _resetNameColor,
@@ -1517,7 +1589,7 @@ class _ProfileCustomizationScreenState
             style: TextStyle(
               fontSize: 13,
               height: 1.35,
-              color: secondaryForeground,
+              color: backdropDescriptionColor,
             ),
           ),
         ),
@@ -1540,8 +1612,7 @@ class _ProfileCustomizationScreenState
         : coverPreset.backgroundColor;
 
     final bannerUrl = AppConfig.resolveMediaUrl(themeProvider.currentBannerUrl);
-    final showBanner =
-        _activeTab == 0 && bannerUrl != null && bannerUrl.isNotEmpty;
+    final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
 
     final statusBarHeight = MediaQuery.paddingOf(context).top;
     final headerTopY = statusBarHeight + 8.0;
@@ -1594,10 +1665,16 @@ class _ProfileCustomizationScreenState
         Positioned.fill(
           child: IgnorePointer(
             child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 450),
-              curve: Curves.easeInOutCubic,
+              key: const ValueKey<String>(
+                'profile_customization_tab_dim_overlay',
+              ),
+              duration:
+                  ProfileCustomizationScreen.backgroundTabTransitionDuration,
+              curve: ProfileCustomizationScreen.backgroundTabTransitionCurve,
               opacity: _activeTab == 1 ? 1.0 : 0.0,
-              child: Container(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 450),
+                curve: Curves.easeInOutCubic,
                 color: Colors.black.withValues(
                   alpha: isDarkBackdrop ? 0.38 : 0.16,
                 ),
@@ -1607,7 +1684,7 @@ class _ProfileCustomizationScreenState
         ),
 
         // 2. Растворяющийся верхний баннер профиля (без setState во время скролла)
-        if (showBanner)
+        if (hasBanner)
           Positioned(
             key: const ValueKey<String>('profile_customization_banner'),
             top: 0,
@@ -1620,8 +1697,12 @@ class _ProfileCustomizationScreenState
                 ),
             child: IgnorePointer(
               child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 450),
-                curve: Curves.easeInOutCubic,
+                key: const ValueKey<String>(
+                  'profile_customization_banner_fade',
+                ),
+                duration:
+                    ProfileCustomizationScreen.backgroundTabTransitionDuration,
+                curve: ProfileCustomizationScreen.backgroundTabTransitionCurve,
                 opacity: _activeTab == 0 ? 1.0 : 0.0,
                 child: ValueListenableBuilder<double>(
                   valueListenable: _bannerScrollOffset,

@@ -505,18 +505,22 @@ class ProfileGlassSection extends StatelessWidget {
 
     final baseTheme = Theme.of(context);
     final primaryText =
-        isDarkBackdrop ? Colors.white : const Color(0xFF1C1C1E);
+        isDarkBackdrop ? Colors.white : const Color(0xFF141619);
     final secondaryText = isDarkBackdrop
-        ? Colors.white.withValues(alpha: 0.62)
-        : const Color(0xFF6C6C70);
+        ? Colors.white.withValues(alpha: 0.74)
+        : const Color(0xFF4E525A);
     final sectionHeaderColor = isDarkBackdrop
-        ? Colors.white.withValues(alpha: 0.78)
-        : const Color(0xFF5C5C62);
+        ? Colors.white.withValues(alpha: 0.82)
+        : const Color(0xFF3E424A);
     final dividerColor = isDarkBackdrop
-        ? Colors.white.withValues(alpha: 0.09)
-        : Colors.black.withValues(alpha: 0.07);
+        ? Colors.white.withValues(alpha: 0.11)
+        : Colors.black.withValues(alpha: 0.08);
     final effectiveAccent = accentColor ??
         (isDarkBackdrop ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
+    final effectiveTextTheme = baseTheme.textTheme.apply(
+      bodyColor: primaryText,
+      displayColor: primaryText,
+    );
 
     final rowsColumn = IconTheme(
       data: IconThemeData(color: primaryText),
@@ -526,6 +530,7 @@ class ProfileGlassSection extends StatelessWidget {
           textColor: primaryText,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          leadingAndTrailingTextStyle: TextStyle(color: primaryText),
           titleTextStyle: baseTheme.textTheme.bodyLarge?.copyWith(
             fontSize: 15.5,
             fontWeight: FontWeight.w500,
@@ -538,22 +543,25 @@ class ProfileGlassSection extends StatelessWidget {
         ),
         child: Material(
           type: MaterialType.transparency,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (int i = 0; i < children.length; i++) ...[
-                children[i],
-                if (i < children.length - 1)
-                  Divider(
-                    height: 1,
-                    thickness: 0.5,
-                    indent: dividerIndent,
-                    endIndent: 16,
-                    color: dividerColor,
-                  ),
+          child: DefaultTextStyle.merge(
+            style: TextStyle(color: primaryText),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (int i = 0; i < children.length; i++) ...[
+                  children[i],
+                  if (i < children.length - 1)
+                    Divider(
+                      height: 1,
+                      thickness: 0.5,
+                      indent: dividerIndent,
+                      endIndent: 16,
+                      color: dividerColor,
+                    ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -562,8 +570,8 @@ class ProfileGlassSection extends StatelessWidget {
     final card = DecoratedBox(
       decoration: BoxDecoration(
         color: isDarkBackdrop
-            ? Colors.black.withValues(alpha: 0.25)
-            : Colors.white.withValues(alpha: 0.80),
+            ? Colors.black.withValues(alpha: 0.34)
+            : Colors.white.withValues(alpha: 0.86),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: isDarkBackdrop
@@ -574,18 +582,19 @@ class ProfileGlassSection extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(20),
-        child: DefaultTextStyle.merge(
-          style: TextStyle(color: primaryText),
-          child: Theme(
-            data: baseTheme.copyWith(
-              colorScheme: baseTheme.colorScheme.copyWith(
-                primary: effectiveAccent,
-                onSurface: primaryText,
-                onSurfaceVariant: secondaryText,
-              ),
+        child: Theme(
+          data: baseTheme.copyWith(
+            brightness: isDarkBackdrop ? Brightness.dark : Brightness.light,
+            textTheme: effectiveTextTheme,
+            primaryTextTheme: effectiveTextTheme,
+            colorScheme: baseTheme.colorScheme.copyWith(
+              brightness: isDarkBackdrop ? Brightness.dark : Brightness.light,
+              primary: effectiveAccent,
+              onSurface: primaryText,
+              onSurfaceVariant: secondaryText,
             ),
-            child: rowsColumn,
           ),
+          child: rowsColumn,
         ),
       ),
     );

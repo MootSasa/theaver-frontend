@@ -256,12 +256,50 @@ class ReplyStripStyleSelector extends StatelessWidget {
           ? 0.0
           : (selectedIndex / (styles.length - 1)) * 2.0 - 1.0;
 
+      final pillBgColor = isDark
+          ? const Color(0xFF8E8E98).withValues(alpha: 0.24)
+          : const Color(0xFF767680).withValues(alpha: 0.15);
+      final pillBorderColor = isDark
+          ? Colors.white.withValues(alpha: 0.14)
+          : Colors.black.withValues(alpha: 0.09);
+      final selectedPillBgColor = isDark
+          ? const Color(0xFFA8A8B3).withValues(alpha: 0.34)
+          : const Color(0xFF767680).withValues(alpha: 0.26);
+      final selectedPillBorderColor = isDark
+          ? Colors.white.withValues(alpha: 0.62)
+          : const Color(0xFF1C1C1E).withValues(alpha: 0.52);
+
       return Padding(
         padding: padding,
         child: SizedBox(
           height: 46,
           child: Stack(
             children: [
+              Row(
+                children: [
+                  for (final style in styles)
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: SizedBox.expand(
+                          child: DecoratedBox(
+                            key: ValueKey<String>(
+                              'reply_strip_pill_${style.name}',
+                            ),
+                            decoration: BoxDecoration(
+                              color: pillBgColor,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: pillBorderColor,
+                                width: 1.0,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
               AnimatedAlign(
                 duration: const Duration(milliseconds: 220),
                 curve: Curves.easeOutCubic,
@@ -270,12 +308,16 @@ class ReplyStripStyleSelector extends StatelessWidget {
                   widthFactor: 1.0 / styles.length,
                   heightFactor: 1.0,
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: DecoratedBox(
+                      key: const ValueKey<String>('reply_strip_pill_selected'),
                       decoration: BoxDecoration(
-                        color: selectedPreset.primaryColor
-                            .withValues(alpha: isDark ? 0.22 : 0.14),
+                        color: selectedPillBgColor,
                         borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: selectedPillBorderColor,
+                          width: 1.5,
+                        ),
                       ),
                     ),
                   ),
