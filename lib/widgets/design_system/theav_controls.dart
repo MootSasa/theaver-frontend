@@ -174,6 +174,8 @@ class TheavSwitch extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
   final Color? activeColor;
+  final Color? inactiveColor;
+  final Color? thumbColor;
   final String? semanticLabel;
 
   const TheavSwitch({
@@ -181,6 +183,8 @@ class TheavSwitch extends StatelessWidget {
     required this.value,
     required this.onChanged,
     this.activeColor,
+    this.inactiveColor,
+    this.thumbColor,
     this.semanticLabel,
   });
 
@@ -190,37 +194,63 @@ class TheavSwitch extends StatelessWidget {
     final palette = style.palette;
     final bool enabled = onChanged != null;
 
-    if (style.isGlass && enabled) {
+    if (style.isGlass) {
+      final Color resolvedActive = activeColor ?? palette.primary;
+      final Color resolvedInactive =
+          inactiveColor ?? (style.isDark ? Colors.white24 : Colors.black12);
+      final Color resolvedThumb = thumbColor ?? palette.onPrimary;
+
       Widget glassToggle = LiquidGlassSwitch(
         value: value,
-        onChanged: (next) {
-          HapticUtils.selection();
-          onChanged!(next);
-        },
-        activeColor: activeColor ?? palette.primary,
-        inactiveColor: style.isDark ? Colors.white24 : Colors.black12,
-        thumbColor: palette.onPrimary,
+        onChanged: enabled
+            ? (next) {
+                HapticUtils.selection();
+                onChanged!(next);
+              }
+            : (_) {},
+        activeColor:
+            enabled ? resolvedActive : resolvedActive.withValues(alpha: 0.38),
+        inactiveColor: enabled
+            ? resolvedInactive
+            : (style.isDark ? Colors.white : Colors.black)
+                .withValues(alpha: style.isDark ? 0.10 : 0.06),
+        thumbColor: enabled
+            ? resolvedThumb
+            : (thumbColor ?? Colors.white)
+                .withValues(alpha: style.isDark ? 0.42 : 0.68),
       );
+      if (!enabled) {
+        glassToggle = IgnorePointer(
+          ignoring: true,
+          child: glassToggle,
+        );
+      }
       if (semanticLabel != null) {
         glassToggle = Semantics(
           label: semanticLabel,
           toggled: value,
-          enabled: true,
+          enabled: enabled,
           child: glassToggle,
         );
       }
-      return glassToggle;
+      return Center(
+        widthFactor: 1.0,
+        heightFactor: 1.0,
+        child: glassToggle,
+      );
     }
 
     final Color activeTrack = activeColor ?? palette.primary;
-    final Color inactiveTrack = Color.alphaBlend(
-      palette.onSurface.withValues(alpha: style.isDark ? 0.22 : 0.16),
-      palette.surface,
-    );
+    final Color inactiveTrack = inactiveColor ??
+        Color.alphaBlend(
+          palette.onSurface.withValues(alpha: style.isDark ? 0.22 : 0.16),
+          palette.surface,
+        );
     final Color trackColor = value ? activeTrack : inactiveTrack;
-    final Color thumbColor = value
-        ? palette.onPrimary
-        : (style.isDark ? palette.onSurface : Colors.white);
+    final Color resolvedThumbColor = thumbColor ??
+        (value
+            ? palette.onPrimary
+            : (style.isDark ? palette.onSurface : Colors.white));
 
     Widget toggle = AnimatedContainer(
       duration: const Duration(milliseconds: 180),
@@ -246,7 +276,9 @@ class TheavSwitch extends StatelessWidget {
           width: 22,
           height: 22,
           decoration: BoxDecoration(
-            color: enabled ? thumbColor : thumbColor.withValues(alpha: 0.72),
+            color: enabled
+                ? resolvedThumbColor
+                : resolvedThumbColor.withValues(alpha: 0.72),
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
@@ -368,7 +400,7 @@ class TheavCheckCircle extends StatelessWidget {
 class TheavSteppedSlider extends StatelessWidget {
   final int selectedIndex;
   final List<String> labels;
-  final ValueChanged<int> onChanged;
+  final ValueChanged<int>? onChanged;
   final String? title;
   final Color? activeColor;
 
@@ -389,6 +421,7 @@ class TheavSteppedSlider extends StatelessWidget {
     final int safeIndex = selectedIndex.clamp(0, labels.length - 1);
     final Color accent = activeColor ?? palette.primary;
     final int maxIdx = labels.length - 1;
+    final bool enabled = onChanged != null;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -414,7 +447,7 @@ class TheavSteppedSlider extends StatelessWidget {
                   labels[safeIndex],
                   key: ValueKey<int>(safeIndex),
                   style: TextStyle(
-                    color: accent,
+                    color: enabled ? accent : accent.withValues(alpha: 0.45),
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
@@ -427,41 +460,58 @@ class TheavSteppedSlider extends StatelessWidget {
             builder: (context, constraints) {
               final double totalWidth = constraints.maxWidth.clamp(48.0, 2000.0);
               if (style.isGlass && maxIdx > 0) {
-                return LiquidGlassSlider(
+                Widget glassSlider = LiquidGlassSlider(
                   value: safeIndex.toDouble(),
                   minimumValue: 0.0,
                   maximumValue: maxIdx.toDouble(),
                   width: totalWidth,
-                  activeColor: accent,
-                  inactiveColor: style.isDark ? Colors.white24 : Colors.black12,
-                  thumbColor: Colors.white,
-                  onChanged: (v) {
-                    final int nextIdx = v.round().clamp(0, maxIdx);
-                    if (nextIdx != safeIndex) {
-                      HapticUtils.selection();
-                      onChanged(nextIdx);
-                    }
-                  },
+                  activeColor:
+                      enabled ? accent : accent.withValues(alpha: 0.38),
+                  inactiveColor: enabled
+                      ? (style.isDark ? Colors.white24 : Colors.black12)
+                      : (style.isDark ? Colors.white : Colors.black)
+                          .withValues(alpha: style.isDark ? 0.10 : 0.06),
+                  thumbColor: enabled
+                      ? Colors.white
+                      : Colors.white
+                          .withValues(alpha: style.isDark ? 0.45 : 0.70),
+                  onChanged: enabled
+                      ? (v) {
+                          final int nextIdx = v.round().clamp(0, maxIdx);
+                          if (nextIdx != safeIndex) {
+                            HapticUtils.selection();
+                            onChanged!(nextIdx);
+                          }
+                        }
+                      : (_) {},
                 );
+                if (!enabled) {
+                  glassSlider = IgnorePointer(
+                    ignoring: true,
+                    child: glassSlider,
+                  );
+                }
+                return glassSlider;
               }
               final double usableWidth = (totalWidth - 20.0).clamp(1.0, totalWidth);
               final double fraction = maxIdx > 0 ? safeIndex / maxIdx : 0.0;
               final double activeWidth = usableWidth * fraction;
 
               void pickFromDx(double dx) {
-                if (maxIdx <= 0) return;
+                if (!enabled || maxIdx <= 0) return;
                 final double clamped = ((dx - 10.0) / usableWidth).clamp(0.0, 1.0);
                 final int nextIdx = (clamped * maxIdx).round().clamp(0, maxIdx);
                 if (nextIdx != safeIndex) {
                   HapticUtils.selection();
-                  onChanged(nextIdx);
+                  onChanged!(nextIdx);
                 }
               }
 
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTapDown: (d) => pickFromDx(d.localPosition.dx),
-                onHorizontalDragUpdate: (d) => pickFromDx(d.localPosition.dx),
+                onTapDown: enabled ? (d) => pickFromDx(d.localPosition.dx) : null,
+                onHorizontalDragUpdate:
+                    enabled ? (d) => pickFromDx(d.localPosition.dx) : null,
                 child: SizedBox(
                   height: 30,
                   child: Stack(
@@ -488,7 +538,9 @@ class TheavSteppedSlider extends StatelessWidget {
                           width: activeWidth,
                           height: 4,
                           decoration: BoxDecoration(
-                            color: accent,
+                            color: enabled
+                                ? accent
+                                : accent.withValues(alpha: 0.42),
                             borderRadius: BorderRadius.circular(2),
                           ),
                         ),
@@ -504,7 +556,9 @@ class TheavSteppedSlider extends StatelessWidget {
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: i <= safeIndex
-                                    ? accent
+                                    ? (enabled
+                                        ? accent
+                                        : accent.withValues(alpha: 0.42))
                                     : palette.onSurface.withValues(alpha: 0.28),
                               ),
                             ),
@@ -520,7 +574,12 @@ class TheavSteppedSlider extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: palette.surface,
                             shape: BoxShape.circle,
-                            border: Border.all(color: accent, width: 2.5),
+                            border: Border.all(
+                              color: enabled
+                                  ? accent
+                                  : accent.withValues(alpha: 0.42),
+                              width: 2.5,
+                            ),
                             boxShadow: [
                               BoxShadow(
                                 color: Colors.black.withValues(alpha: 0.16),
@@ -544,12 +603,14 @@ class TheavSteppedSlider extends StatelessWidget {
               final bool active = i == safeIndex;
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  if (i != safeIndex) {
-                    HapticUtils.selection();
-                    onChanged(i);
-                  }
-                },
+                onTap: enabled
+                    ? () {
+                        if (i != safeIndex) {
+                          HapticUtils.selection();
+                          onChanged!(i);
+                        }
+                      }
+                    : null,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
                   child: Text(

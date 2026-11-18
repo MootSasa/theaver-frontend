@@ -10,6 +10,7 @@ import '../../models/theav_theme.dart';
 import '../../services/theav_theme_service.dart';
 import '../../services/wallpaper_provider.dart';
 import '../../theme/theme_provider.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/theme/chat_preview_card.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
@@ -310,7 +311,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
               ),
               child: Material(
                 type: MaterialType.transparency,
-                child: SwitchListTile(
+                child: AdaptiveSwitchListTile(
                   title: Text(
                   l10n.translate('wallpaper_motion'),
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
@@ -434,7 +435,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
                     Text('${(_currentWallpaper.patternOpacity * 100).round()}%'),
                   ],
                 ),
-                Slider(
+                AdaptiveSlider(
                   value: _currentWallpaper.patternOpacity.clamp(0.04, 0.50),
                   min: 0.04,
                   max: 0.50,
@@ -522,7 +523,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
               Text('${_currentWallpaper.blurRadius.toStringAsFixed(1)} px'),
             ],
           ),
-          Slider(
+          AdaptiveSlider(
             value: _currentWallpaper.blurRadius.clamp(0.0, 25.0),
             min: 0.0,
             max: 25.0,
@@ -543,7 +544,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
               Text('${(_currentWallpaper.dimming * 100).round()}%'),
             ],
           ),
-          Slider(
+          AdaptiveSlider(
             value: _currentWallpaper.dimming.clamp(0.0, 0.75),
             min: 0.0,
             max: 0.75,

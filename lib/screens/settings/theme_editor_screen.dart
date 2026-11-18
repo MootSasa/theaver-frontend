@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter/services.dart';
 import '../../services/glass_toast_service.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/theme_editor_floating_app_bar.dart';
 import '../../models/theav_theme.dart';
 import '../../services/theav_theme_service.dart';
@@ -240,7 +241,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 ),
                 child: Material(
                   type: MaterialType.transparency,
-                  child: SwitchListTile(
+                  child: AdaptiveSwitchListTile(
                     title: Text(
                       _currentTheme.isDark ? l10n.translate('theme_dark') : l10n.translate('theme_light'),
                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
@@ -292,7 +293,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                         Text('${_currentTheme.bubbleRadius.round()} px'),
                       ],
                     ),
-                    Slider(
+                    AdaptiveSlider(
                       value: _currentTheme.bubbleRadius.clamp(0.0, 24.0),
                       min: 0,
                       max: 24,
@@ -975,22 +976,16 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 children: [
                   const iconoir.ColorWheel(width: 16, height: 16, color: Colors.grey),
                   Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 2,
-                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                      ),
-                      child: Slider(
-                        value: stopColor.a.clamp(0.1, 1.0),
-                        min: 0.1,
-                        max: 1.0,
-                        divisions: 18,
-                        onChanged: (val) {
-                          final newColors = List<Color>.from(allColors);
-                          newColors[index] = stopColor.withValues(alpha: val);
-                          onGradientChanged(newColors);
-                        },
-                      ),
+                    child: AdaptiveSlider(
+                      value: stopColor.a.clamp(0.1, 1.0),
+                      min: 0.1,
+                      max: 1.0,
+                      divisions: 18,
+                      onChanged: (val) {
+                        final newColors = List<Color>.from(allColors);
+                        newColors[index] = stopColor.withValues(alpha: val);
+                        onGradientChanged(newColors);
+                      },
                     ),
                   ),
                   Text(

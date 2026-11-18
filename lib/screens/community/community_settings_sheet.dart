@@ -5,6 +5,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/community_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/community_service.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
@@ -676,7 +677,7 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
                           ),
                         ),
                         const SizedBox(height: 8),
-                        SwitchListTile.adaptive(
+                        AdaptiveSwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           value: _isPublic,
                           activeTrackColor: primaryColor,
@@ -933,7 +934,7 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
                           final enabled =
                               ((_selectedRole?.permissions ?? 0) & flag.bit) !=
                                   0;
-                          return SwitchListTile.adaptive(
+                          return AdaptiveSwitchListTile(
                             value: enabled,
                             activeTrackColor: primaryColor,
                             title: Text(

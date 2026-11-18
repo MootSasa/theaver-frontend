@@ -24,23 +24,12 @@ class AdaptiveSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final glassMode = LiquidGlassProvider.glassModeOf(context);
-    final palette = context.theav;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    if (glassMode != GlassMode.disabled && onChanged != null) {
-      return LiquidGlassSwitch(
-        value: value,
-        onChanged: onChanged!,
-        activeColor: activeColor ?? palette.primary,
-        inactiveColor:
-            inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
-        thumbColor: thumbColor ?? palette.onPrimary,
-      );
-    }
     return TheavSwitch(
       value: value,
       onChanged: onChanged,
       activeColor: activeColor,
+      inactiveColor: inactiveColor,
+      thumbColor: thumbColor,
     );
   }
 }
@@ -75,28 +64,61 @@ class AdaptiveSlider extends StatelessWidget {
     this.label,
   });
 
+  double _snapValue(double raw) {
+    final double clamped = raw.clamp(min, max).toDouble();
+    if (divisions == null || divisions! <= 0 || max <= min) {
+      return clamped;
+    }
+    final double step = (max - min) / divisions!;
+    final double snapped = min + ((clamped - min) / step).round() * step;
+    return snapped.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
     final glassMode = LiquidGlassProvider.glassModeOf(context);
     final palette = context.theav;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    if (glassMode != GlassMode.disabled && onChanged != null) {
+    final bool enabled = onChanged != null;
+    if (glassMode != GlassMode.disabled) {
+      final Color resolvedActive = activeColor ?? palette.primary;
+      final Color resolvedInactive =
+          inactiveColor ?? (isDark ? Colors.white24 : Colors.black12);
+      final Color resolvedThumb = thumbColor ?? Colors.white;
+
       return LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.hasBoundedWidth ? constraints.maxWidth : 280.0;
-          return LiquidGlassSlider(
-            value: value.clamp(min, max),
-            onChanged: onChanged!,
-            onChangeStart: onChangeStart,
-            onChangeEnd: onChangeEnd,
+          Widget slider = LiquidGlassSlider(
+            value: value.clamp(min, max).toDouble(),
+            onChanged: enabled ? (v) => onChanged!(_snapValue(v)) : (_) {},
+            onChangeStart: enabled ? onChangeStart : null,
+            onChangeEnd: enabled
+                ? (v) {
+                    onChangeEnd?.call(_snapValue(v));
+                  }
+                : null,
             minimumValue: min,
             maximumValue: max,
             width: width,
-            activeColor: activeColor ?? palette.primary,
-            inactiveColor:
-                inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
-            thumbColor: thumbColor ?? Colors.white,
+            activeColor: enabled
+                ? resolvedActive
+                : resolvedActive.withValues(alpha: 0.38),
+            inactiveColor: enabled
+                ? resolvedInactive
+                : (isDark ? Colors.white : Colors.black)
+                    .withValues(alpha: isDark ? 0.10 : 0.06),
+            thumbColor: enabled
+                ? resolvedThumb
+                : resolvedThumb.withValues(alpha: isDark ? 0.45 : 0.70),
           );
+          if (!enabled) {
+            slider = IgnorePointer(
+              ignoring: true,
+              child: slider,
+            );
+          }
+          return slider;
         },
       );
     }
@@ -158,6 +180,7 @@ class AdaptiveSwitchListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      enabled: onChanged != null,
       title: title,
       subtitle: subtitle,
       leading: secondary,

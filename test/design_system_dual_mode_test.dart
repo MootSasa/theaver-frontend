@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
+import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
 
 class _TestLiquidGlassProvider extends LiquidGlassProvider {
@@ -309,7 +310,62 @@ void main() {
       });
 
       testWidgets(
-          'TheavModalSheet stretches upward on pull, rebounds smoothly, and dismisses on downward fling',
+          'disabled TheavSwitch, AdaptiveSwitch, and AdaptiveSlider still use liquid_glass_easy in glass modes',
+          (tester) async {
+        await tester.pumpWidget(
+          _buildHost(
+            glassMode: mode,
+            child: const SingleChildScrollView(
+              padding: EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TheavSwitch(
+                    value: false,
+                    onChanged: null,
+                    semanticLabel: 'Disabled off',
+                  ),
+                  SizedBox(height: 8),
+                  TheavSwitch(
+                    value: true,
+                    onChanged: null,
+                    semanticLabel: 'Disabled on',
+                  ),
+                  SizedBox(height: 8),
+                  AdaptiveSwitch(
+                    value: false,
+                    onChanged: null,
+                  ),
+                  SizedBox(height: 12),
+                  AdaptiveSlider(
+                    value: 0.5,
+                    onChanged: null,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final expectGlassControls =
+            mode == GlassMode.lite || mode == GlassMode.full;
+        expect(
+          find.byType(LiquidGlassSwitch),
+          expectGlassControls ? findsNWidgets(3) : findsNothing,
+        );
+        expect(
+          find.byType(LiquidGlassSlider),
+          expectGlassControls ? findsOneWidget : findsNothing,
+        );
+
+        await tester.tap(find.byType(TheavSwitch).first, warnIfMissed: false);
+        await tester.tap(find.byType(AdaptiveSwitch), warnIfMissed: false);
+        await tester.pump();
+      });
+
+      testWidgets(
+          'TheavModalSheet stretches ONLY via drag handle bar, settles without spring overshoot, and dismisses on handle fling',
           (tester) async {
         await tester.pumpWidget(
           _buildHost(
@@ -320,7 +376,7 @@ void main() {
                   onPressed: () {
                     showTheavModalSheet<void>(
                       context: context,
-                      title: 'Пружинящая панель',
+                      title: 'Панель без пружины',
                       showCloseButton: true,
                       builder: (_) => const SizedBox(
                         height: 160,
@@ -328,14 +384,14 @@ void main() {
                       ),
                     );
                   },
-                  child: const Text('OpenSpringSheet'),
+                  child: const Text('OpenHandleSheet'),
                 ),
               ),
             ),
           ),
         );
 
-        await tester.tap(find.text('OpenSpringSheet'));
+        await tester.tap(find.text('OpenHandleSheet'));
         await tester.pumpAndSettle();
         expect(find.byType(TheavModalSheet), findsOneWidget);
 
@@ -350,9 +406,31 @@ void main() {
 
         final Rect restRect = tester.getRect(cardFinder);
 
-        // Pull upward: sheet stretches upward while bottom stays anchored.
+        // Dragging body or header must NOT stretch or drag the sheet.
+        final bodyGesture = await tester.startGesture(
+          tester.getCenter(find.text('Контент панели')),
+        );
+        await bodyGesture.moveBy(const Offset(0, -60));
+        await tester.pump();
+        expect(tester.getRect(cardFinder).top, closeTo(restRect.top, 0.1));
+        await bodyGesture.up();
+        await tester.pumpAndSettle();
+
+        final headerGesture = await tester.startGesture(
+          tester.getCenter(find.text('Панель без пружины')),
+        );
+        await headerGesture.moveBy(const Offset(0, -60));
+        await tester.pump();
+        expect(tester.getRect(cardFinder).top, closeTo(restRect.top, 0.1));
+        await headerGesture.up();
+        await tester.pumpAndSettle();
+
+        // Pulling upward ONLY on the handle bar stretches the sheet upward.
+        final handleFinder =
+            find.byKey(const ValueKey('theav_sheet_drag_handle'));
+        expect(handleFinder, findsOneWidget);
         final gesture = await tester.startGesture(
-          tester.getCenter(find.text('Пружинящая панель')),
+          tester.getCenter(handleFinder),
         );
         for (int i = 0; i < 4; i++) {
           await gesture.moveBy(const Offset(0, -30));
@@ -362,15 +440,23 @@ void main() {
         expect(stretchedRect.top, lessThan(restRect.top));
         expect(stretchedRect.bottom, closeTo(restRect.bottom, 1.0));
 
-        // Release: springs back to rest position cleanly.
+        // Release: settles monotonically back to rest with zero spring overshoot.
         await gesture.up();
+        double prevTop = stretchedRect.top;
+        for (int i = 0; i < 15; i++) {
+          await tester.pump(const Duration(milliseconds: 20));
+          final Rect frameRect = tester.getRect(cardFinder);
+          expect(frameRect.top, lessThanOrEqualTo(restRect.top + 0.05));
+          expect(frameRect.top, greaterThanOrEqualTo(prevTop - 0.05));
+          prevTop = frameRect.top;
+        }
         await tester.pumpAndSettle();
         final Rect settledRect = tester.getRect(cardFinder);
         expect(settledRect.top, closeTo(restRect.top, 0.5));
 
-        // Fling downward: dismisses cleanly.
+        // Fling downward on the handle bar: dismisses cleanly.
         await tester.fling(
-          find.text('Пружинящая панель'),
+          handleFinder,
           const Offset(0, 320),
           1200,
         );

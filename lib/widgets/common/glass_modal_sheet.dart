@@ -37,6 +37,11 @@ Future<T?> showTheavGlassModalSheet<T>({
     isScrollControlled: isScrollControlled,
     title: title,
     showCloseButton: showCloseButton,
+    customSheetBuilder: (ctx) => TheavGlassModalSheet(
+      title: title,
+      showCloseButton: showCloseButton,
+      child: Builder(builder: builder),
+    ),
   );
 }
 

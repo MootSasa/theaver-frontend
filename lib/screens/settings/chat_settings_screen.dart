@@ -418,7 +418,7 @@ class ChatSettingsScreen extends StatelessWidget {
                         Text('${activeTheme.bubbleRadius.round()} px'),
                       ],
                     ),
-                    Slider(
+                    AdaptiveSlider(
                       value: activeTheme.bubbleRadius.clamp(0.0, 24.0),
                       min: 0,
                       max: 24,
@@ -444,7 +444,7 @@ class ChatSettingsScreen extends StatelessWidget {
                         Text('${themeProvider.messageFontSize.round()} px'),
                       ],
                     ),
-                    Slider(
+                    AdaptiveSlider(
                       value: themeProvider.messageFontSize.clamp(12.0, 24.0),
                       min: 12,
                       max: 24,

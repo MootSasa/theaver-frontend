@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../models/call_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../common/adaptive_switch.dart';
 
 /// Bottom sheet for configuring High-FPS Screen Share / Go Live quality
 /// (Smart Presets + Progressive Disclosure for Resolution: 720p/1080p/1440p/4K,
@@ -524,20 +525,14 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
                         ),
                       ],
                     ),
-                    SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        activeTrackColor: primaryColor,
-                        thumbColor: primaryColor,
-                        overlayColor: primaryColor.withValues(alpha: 0.15),
-                      ),
-                      child: Slider(
-                        value: _bitrateKbps.toDouble().clamp(1500.0, 25000.0),
-                        min: 1500,
-                        max: 25000,
-                        divisions: 47,
-                        onChanged: (v) =>
-                            setState(() => _bitrateKbps = v.round()),
-                      ),
+                    AdaptiveSlider(
+                      value: _bitrateKbps.toDouble().clamp(1500.0, 25000.0),
+                      min: 1500,
+                      max: 25000,
+                      divisions: 47,
+                      activeColor: primaryColor,
+                      onChanged: (v) =>
+                          setState(() => _bitrateKbps = v.round()),
                     ),
                   ],
                 ),
@@ -548,7 +543,7 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
 
             // System audio & Server recording toggles
             if (!_isMobilePlatform || !Platform.isAndroid)
-              SwitchListTile.adaptive(
+              AdaptiveSwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 value: _includeAudio,
                 activeTrackColor: primaryColor,
@@ -567,7 +562,7 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
                 onChanged: (v) => setState(() => _includeAudio = v),
               ),
             if (!widget.isUpdatingActiveStream)
-              SwitchListTile.adaptive(
+              AdaptiveSwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 value: _enableRecording,
                 activeTrackColor: Colors.redAccent,

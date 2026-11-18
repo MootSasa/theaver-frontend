@@ -1,58 +1,18 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../utils/haptic_utils.dart';
 import 'theav_design_system.dart';
 
-class _TheavSpringCurve extends Curve {
-  const _TheavSpringCurve();
-
-  static final SpringSimulation _sim = SpringSimulation(
-    const SpringDescription(mass: 1.0, stiffness: 360.0, damping: 28.0),
-    0.0,
-    1.0,
-    0.0,
-  );
-
-  @override
-  double transformInternal(double t) {
-    if (t <= 0.0) return 0.0;
-    if (t >= 1.0) return 1.0;
-    final double raw = _sim.x(t * 0.52);
-    // Smoothly blend to exact 1.0 near the end of the normalized duration.
-    final double blend = ((t - 0.82) / 0.18).clamp(0.0, 1.0);
-    return raw * (1.0 - blend) + 1.0 * blend;
-  }
-}
-
-class _SheetScrollBehavior extends ScrollBehavior {
-  const _SheetScrollBehavior();
-
-  @override
-  ScrollPhysics getScrollPhysics(BuildContext context) {
-    return const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
-  }
-
-  @override
-  Widget buildOverscrollIndicator(
-    BuildContext context,
-    Widget child,
-    ScrollableDetails details,
-  ) {
-    return child;
-  }
-}
-
-/// Opens a dual-mode, spring-animated [TheavModalSheet] that responds to
-/// upward rubber-band stretch and velocity-based downward dismissal while
-/// rendering crisp frosted glass blur in `full`/`lite` modes and M3 tonal
-/// surface when disabled.
+/// Opens a dual-mode [TheavModalSheet] that can be stretched or dismissed via its
+/// top handle bar while rendering crisp frosted glass blur in `full`/`lite`
+/// modes and an M3 tonal surface when disabled.
 Future<T?> showTheavModalSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
+  WidgetBuilder? customSheetBuilder,
   String? title,
   Widget? trailing,
   EdgeInsetsGeometry padding = const EdgeInsets.fromLTRB(16, 10, 16, 20),
@@ -64,8 +24,9 @@ Future<T?> showTheavModalSheet<T>({
   bool useRootNavigator = false,
 }) {
   return Navigator.of(context, rootNavigator: useRootNavigator).push<T>(
-    _TheavSpringModalSheetRoute<T>(
+    _TheavModalSheetRoute<T>(
       builder: builder,
+      customSheetBuilder: customSheetBuilder,
       title: title,
       trailing: trailing,
       padding: padding,
@@ -82,8 +43,9 @@ Future<T?> showTheavModalSheet<T>({
   );
 }
 
-class _TheavSpringModalSheetRoute<T> extends PopupRoute<T> {
+class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   final WidgetBuilder builder;
+  final WidgetBuilder? customSheetBuilder;
   final String? title;
   final Widget? trailing;
   final EdgeInsetsGeometry padding;
@@ -95,8 +57,9 @@ class _TheavSpringModalSheetRoute<T> extends PopupRoute<T> {
   @override
   final String? barrierLabel;
 
-  _TheavSpringModalSheetRoute({
+  _TheavModalSheetRoute({
     required this.builder,
+    this.customSheetBuilder,
     this.title,
     this.trailing,
     required this.padding,
@@ -114,10 +77,10 @@ class _TheavSpringModalSheetRoute<T> extends PopupRoute<T> {
   bool get opaque => false;
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 360);
+  Duration get transitionDuration => const Duration(milliseconds: 280);
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 230);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 220);
 
   @override
   Widget buildPage(
@@ -127,15 +90,17 @@ class _TheavSpringModalSheetRoute<T> extends PopupRoute<T> {
   ) {
     return Align(
       alignment: Alignment.bottomCenter,
-      child: TheavModalSheet(
-        title: title,
-        trailing: trailing,
-        padding: padding,
-        showCloseButton: showCloseButton,
-        maxHeightFactor: maxHeightFactor,
-        enableDrag: enableDrag,
-        child: Builder(builder: builder),
-      ),
+      child: customSheetBuilder != null
+          ? customSheetBuilder!(context)
+          : TheavModalSheet(
+              title: title,
+              trailing: trailing,
+              padding: padding,
+              showCloseButton: showCloseButton,
+              maxHeightFactor: maxHeightFactor,
+              enableDrag: enableDrag,
+              child: Builder(builder: builder),
+            ),
     );
   }
 
@@ -149,47 +114,24 @@ class _TheavSpringModalSheetRoute<T> extends PopupRoute<T> {
     final disableAnim = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     if (disableAnim) return child;
 
-    if (animation.status == AnimationStatus.reverse) {
-      final rev = CurvedAnimation(
-        parent: animation,
-        curve: Curves.easeOutCubic,
-      );
-      return FractionalTranslation(
-        translation: Offset(0.0, 1.0 - rev.value),
-        child: child,
-      );
-    }
-
-    return AnimatedBuilder(
-      animation: animation,
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    return SlideTransition(
+      position: Tween<Offset>(
+        begin: const Offset(0.0, 1.0),
+        end: Offset.zero,
+      ).animate(curved),
       child: child,
-      builder: (context, childWidget) {
-        final double springVal = const _TheavSpringCurve().transform(
-          animation.value.clamp(0.0, 1.0),
-        );
-        final double dy = math.max(0.0, 1.0 - springVal);
-        final double overshoot = math.max(0.0, springVal - 1.0);
-        Widget current = FractionalTranslation(
-          translation: Offset(0.0, dy),
-          child: childWidget,
-        );
-        if (overshoot > 0.0001) {
-          current = Transform.scale(
-            alignment: Alignment.bottomCenter,
-            scaleY: 1.0 + overshoot * 0.55,
-            scaleX: 1.0 - overshoot * 0.10,
-            child: current,
-          );
-        }
-        return current;
-      },
     );
   }
 }
 
-/// Dual-mode modal bottom sheet container with spring rubber-band stretch,
-/// drag handle, optional header bar, safe keyboard inset handling, and
-/// [TheavPalette] styling.
+/// Dual-mode modal bottom sheet container with handle-only drag/stretch,
+/// optional header bar, safe keyboard inset handling, and [TheavPalette]
+/// styling.
 class TheavModalSheet extends StatefulWidget {
   final Widget child;
   final String? title;
@@ -216,32 +158,36 @@ class TheavModalSheet extends StatefulWidget {
 
 class _TheavModalSheetState extends State<TheavModalSheet>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _springController;
+  late final AnimationController _reboundController;
   double _dragOffset = 0.0;
+  double _reboundFrom = 0.0;
   bool _didHapticThreshold = false;
   bool _isDismissing = false;
 
   @override
   void initState() {
     super.initState();
-    _springController = AnimationController.unbounded(vsync: this)
-      ..addListener(() {
+    _reboundController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 210),
+    )..addListener(() {
         if (!mounted) return;
+        final t = Curves.easeOutCubic.transform(_reboundController.value);
         setState(() {
-          _dragOffset = _springController.value;
+          _dragOffset = _reboundFrom * (1.0 - t);
         });
       });
   }
 
   @override
   void dispose() {
-    _springController.dispose();
+    _reboundController.dispose();
     super.dispose();
   }
 
   void _onDragStart() {
     if (!widget.enableDrag || _isDismissing) return;
-    _springController.stop();
+    _reboundController.stop();
     _didHapticThreshold = false;
   }
 
@@ -271,24 +217,16 @@ class _TheavModalSheetState extends State<TheavModalSheet>
       return;
     }
 
-    if (_dragOffset.abs() < 0.5 && velocityY.abs() < 20.0) {
+    if (_dragOffset.abs() < 0.5) {
       if (_dragOffset != 0.0) {
         setState(() => _dragOffset = 0.0);
       }
       return;
     }
 
-    final SpringDescription spring = _dragOffset < 0
-        ? const SpringDescription(mass: 1.0, stiffness: 520.0, damping: 24.0)
-        : const SpringDescription(mass: 1.0, stiffness: 460.0, damping: 26.0);
-    final sim = SpringSimulation(
-      spring,
-      _dragOffset,
-      0.0,
-      velocityY.clamp(-2000.0, 2000.0),
-    );
-    _springController.animateWith(sim).whenComplete(() {
-      if (mounted && _dragOffset.abs() < 0.05) {
+    _reboundFrom = _dragOffset;
+    _reboundController.forward(from: 0.0).whenComplete(() {
+      if (mounted && _dragOffset != 0.0) {
         setState(() => _dragOffset = 0.0);
       }
     });
@@ -303,9 +241,11 @@ class _TheavModalSheetState extends State<TheavModalSheet>
     final bool hasHeader = (widget.title != null && widget.title!.isNotEmpty) ||
         widget.trailing != null ||
         widget.showCloseButton;
+    final EdgeInsets resolvedPadding =
+        widget.padding.resolve(Directionality.of(context));
 
-    // Asymmetric rubber-band stretch when pulling up (_dragOffset < 0) vs 1:1 pull down.
-    const double maxStretch = 38.0;
+    // Handle-only rubber-band stretch when pulling up (_dragOffset < 0) vs 1:1 pull down.
+    const double maxStretch = 56.0;
     final double rawPullUp = _dragOffset < 0 ? -_dragOffset : 0.0;
     final double dampedStretch = rawPullUp > 0
         ? maxStretch * (1.0 - math.exp(-rawPullUp / 95.0))
@@ -313,9 +253,6 @@ class _TheavModalSheetState extends State<TheavModalSheet>
     final double stretchProgress =
         (dampedStretch / maxStretch).clamp(0.0, 1.0);
     final double translateY = _dragOffset > 0 ? _dragOffset : 0.0;
-    final double scaleY = 1.0 + stretchProgress * 0.042;
-    final double scaleX = 1.0 - stretchProgress * 0.010;
-    final double extraBottomSkirt = dampedStretch * 0.35;
     final double handleWidth = _dragOffset > 0
         ? 36.0 + (_dragOffset / 120.0).clamp(0.0, 1.0) * 10.0
         : 36.0 + stretchProgress * 8.0;
@@ -327,9 +264,13 @@ class _TheavModalSheetState extends State<TheavModalSheet>
         : style.hairlineBorder;
     final double borderWidth = style.isGlass ? 0.6 : 0.5;
 
+    final double baseMaxHeight = mq.size.height * widget.maxHeightFactor;
+    final double effectiveMaxHeight =
+        math.min(mq.size.height * 0.97, baseMaxHeight + dampedStretch);
+
     Widget sheet = Container(
       constraints: BoxConstraints(
-        maxHeight: mq.size.height * widget.maxHeightFactor,
+        maxHeight: effectiveMaxHeight,
       ),
       decoration: BoxDecoration(
         color: style.overlayFill,
@@ -346,23 +287,52 @@ class _TheavModalSheetState extends State<TheavModalSheet>
           top: false,
           child: Padding(
             padding: EdgeInsets.only(
-              bottom: mq.viewInsets.bottom + extraBottomSkirt,
+              bottom: mq.viewInsets.bottom + dampedStretch,
             ),
             child: Padding(
-              padding: widget.padding,
+              padding: EdgeInsets.only(
+                left: resolvedPadding.left,
+                right: resolvedPadding.right,
+                bottom: resolvedPadding.bottom,
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Center(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 90),
-                      width: handleWidth,
-                      height: 4,
-                      margin: EdgeInsets.only(bottom: hasHeader ? 12 : 14),
-                      decoration: BoxDecoration(
-                        color: palette.onSurface.withValues(alpha: 0.24),
-                        borderRadius: BorderRadius.circular(2),
+                    child: GestureDetector(
+                      key: const ValueKey('theav_sheet_drag_handle'),
+                      behavior: HitTestBehavior.opaque,
+                      onVerticalDragStart:
+                          widget.enableDrag ? (_) => _onDragStart() : null,
+                      onVerticalDragUpdate: widget.enableDrag
+                          ? (d) => _onDragDelta(d.delta.dy)
+                          : null,
+                      onVerticalDragEnd: widget.enableDrag
+                          ? (d) => _onDragEnd(d.velocity.pixelsPerSecond.dy)
+                          : null,
+                      onVerticalDragCancel:
+                          widget.enableDrag ? () => _onDragEnd(0.0) : null,
+                      child: SizedBox(
+                        width: 112,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            top: math.max(10.0, resolvedPadding.top),
+                            bottom: hasHeader ? 12.0 : 14.0,
+                          ),
+                          child: Center(
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 90),
+                              width: handleWidth,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color:
+                                    palette.onSurface.withValues(alpha: 0.24),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -405,10 +375,7 @@ class _TheavModalSheetState extends State<TheavModalSheet>
                     ),
                   ],
                   Flexible(
-                    child: ScrollConfiguration(
-                      behavior: const _SheetScrollBehavior(),
-                      child: widget.child,
-                    ),
+                    child: widget.child,
                   ),
                 ],
               ),
@@ -428,45 +395,9 @@ class _TheavModalSheetState extends State<TheavModalSheet>
       );
     }
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onVerticalDragStart: widget.enableDrag ? (_) => _onDragStart() : null,
-      onVerticalDragUpdate:
-          widget.enableDrag ? (d) => _onDragDelta(d.delta.dy) : null,
-      onVerticalDragEnd: widget.enableDrag
-          ? (d) => _onDragEnd(d.velocity.pixelsPerSecond.dy)
-          : null,
-      onVerticalDragCancel: widget.enableDrag ? () => _onDragEnd(0.0) : null,
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (notification) {
-          if (!widget.enableDrag || _isDismissing) return false;
-          if (notification.metrics.axis != Axis.vertical) return false;
-          if (notification is ScrollStartNotification &&
-              notification.dragDetails != null) {
-            _onDragStart();
-          } else if (notification is OverscrollNotification &&
-              notification.dragDetails != null) {
-            // Overscroll < 0 at top edge pulls the sheet down; > 0 at bottom edge stretches up.
-            _onDragDelta(-notification.overscroll);
-          } else if (notification is ScrollEndNotification) {
-            if (_dragOffset != 0.0) {
-              _onDragEnd(
-                notification.dragDetails?.velocity.pixelsPerSecond.dy ?? 0.0,
-              );
-            }
-          }
-          return false;
-        },
-        child: Transform.translate(
-          offset: Offset(0.0, translateY),
-          child: Transform.scale(
-            alignment: Alignment.bottomCenter,
-            scaleY: scaleY,
-            scaleX: scaleX,
-            child: sheet,
-          ),
-        ),
-      ),
+    return Transform.translate(
+      offset: Offset(0.0, translateY),
+      child: sheet,
     );
   }
 }
@@ -523,7 +454,7 @@ Future<T?> showTheavDialog<T>({
       final isReversing = animation.status == AnimationStatus.reverse;
       final curved = CurvedAnimation(
         parent: animation,
-        curve: isReversing ? Curves.easeInCubic : Curves.easeOutBack,
+        curve: isReversing ? Curves.easeInCubic : Curves.easeOutCubic,
       );
       return FadeTransition(
         opacity: CurvedAnimation(

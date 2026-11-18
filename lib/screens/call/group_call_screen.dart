@@ -15,6 +15,7 @@ import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/soundboard_sheet.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/whiteboard/interactive_whiteboard.dart';
 
 /// Group Voice/Video Call, Go Live Screen Share Stage, and Community Stage Room Screen.
@@ -430,7 +431,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       ),
                     ],
                   ),
-                  Slider(
+                  AdaptiveSlider(
                     value: vol.toDouble(),
                     min: 0,
                     max: 200,

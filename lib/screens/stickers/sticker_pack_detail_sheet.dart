@@ -26,7 +26,14 @@ class StickerPackDetailSheet extends StatefulWidget {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
+      sheetAnimationStyle: const AnimationStyle(
+        duration: Duration(milliseconds: 280),
+        reverseDuration: Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      ),
       builder: (ctx) => StickerPackDetailSheet(
         packIdOrSlug: packIdOrSlug.toString(),
         initialPack: initialPack,
@@ -39,7 +46,19 @@ class StickerPackDetailSheet extends StatefulWidget {
   State<StickerPackDetailSheet> createState() => _StickerPackDetailSheetState();
 }
 
-class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
+class _StickerPackDetailSheetState extends State<StickerPackDetailSheet>
+    with SingleTickerProviderStateMixin {
+  static const double _initialSheetFraction = 0.68;
+  static const double _minSheetFraction = 0.36;
+  static const double _maxSheetFraction = 0.92;
+
+  final ScrollController _gridScrollController = ScrollController();
+  late final AnimationController _snapController;
+  double _sheetFraction = _initialSheetFraction;
+  double _snapFrom = _initialSheetFraction;
+  double _snapTo = _initialSheetFraction;
+  bool _isDismissing = false;
+
   StickerPack? _pack;
   bool _loading = true;
   bool _togglingInstall = false;
@@ -47,11 +66,60 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
   @override
   void initState() {
     super.initState();
+    _snapController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )..addListener(() {
+        if (!mounted) return;
+        final t = Curves.easeOutCubic.transform(_snapController.value);
+        setState(() {
+          _sheetFraction = _snapFrom + (_snapTo - _snapFrom) * t;
+        });
+      });
     _pack = widget.initialPack;
     if (_pack != null && _pack!.items.isNotEmpty) {
       _loading = false;
     }
     _fetchPack();
+  }
+
+  @override
+  void dispose() {
+    _snapController.dispose();
+    _gridScrollController.dispose();
+    super.dispose();
+  }
+
+  void _onHandleDragStart() {
+    if (_isDismissing) return;
+    _snapController.stop();
+  }
+
+  void _onHandleDragUpdate(double deltaY, double screenHeight) {
+    if (_isDismissing || screenHeight <= 0) return;
+    setState(() {
+      _sheetFraction = (_sheetFraction - deltaY / screenHeight)
+          .clamp(_minSheetFraction, _maxSheetFraction);
+    });
+  }
+
+  void _onHandleDragEnd(double velocityY) {
+    if (_isDismissing) return;
+    if (_sheetFraction < 0.45 ||
+        (velocityY > 750 && _sheetFraction < 0.78) ||
+        velocityY > 1400) {
+      _isDismissing = true;
+      Navigator.of(context).maybePop();
+      return;
+    }
+
+    final double target =
+        (velocityY < -500 || (_sheetFraction > 0.80 && velocityY <= 500))
+            ? _maxSheetFraction
+            : _initialSheetFraction;
+    _snapFrom = _sheetFraction;
+    _snapTo = target;
+    _snapController.forward(from: 0.0);
   }
 
   Future<void> _fetchPack() async {
@@ -128,14 +196,13 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
     final isEmojiPack = pack?.isCustomEmoji ?? false;
     final items = pack?.items ?? const <StickerItem>[];
     final count = items.isNotEmpty ? items.length : (pack?.stickerCount ?? 0);
+    final double screenHeight = MediaQuery.sizeOf(context).height;
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.68,
-      minChildSize: 0.45,
-      maxChildSize: 0.92,
-      expand: false,
-      builder: (context, scrollController) {
-        return Container(
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: SizedBox(
+        height: screenHeight * _sheetFraction,
+        child: Container(
           decoration: BoxDecoration(
             color: theme.secondaryBg,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -146,16 +213,34 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
           ),
           child: Column(
             children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.dividerColor,
-                  borderRadius: BorderRadius.circular(2),
+              Center(
+                child: GestureDetector(
+                  key: const ValueKey('sticker_pack_sheet_drag_handle'),
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragStart: (_) => _onHandleDragStart(),
+                  onVerticalDragUpdate: (d) =>
+                      _onHandleDragUpdate(d.delta.dy, screenHeight),
+                  onVerticalDragEnd: (d) =>
+                      _onHandleDragEnd(d.velocity.pixelsPerSecond.dy),
+                  onVerticalDragCancel: () => _onHandleDragEnd(0.0),
+                  child: SizedBox(
+                    width: 112,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 10, bottom: 12),
+                      child: Center(
+                        child: Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: theme.dividerColor,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
@@ -267,7 +352,7 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
                             ),
                           )
                         : GridView.builder(
-                            controller: scrollController,
+                            controller: _gridScrollController,
                             padding: const EdgeInsets.all(14),
                             gridDelegate:
                                 SliverGridDelegateWithFixedCrossAxisCount(
@@ -376,8 +461,8 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet> {
                 ),
             ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
