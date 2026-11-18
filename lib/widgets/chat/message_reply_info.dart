@@ -144,8 +144,9 @@ class MessageReplyInfo extends StatelessWidget {
       if (quoteLength > 0 &&
           quoteOffset >= 0 &&
           quoteOffset + quoteLength <= origText.length) {
-        sliceStart = quoteOffset;
-        sliceEnd = quoteOffset + quoteLength;
+        sliceStart = EntityParser.snapUtf16Offset(origText, quoteOffset);
+        sliceEnd =
+            EntityParser.snapUtf16Offset(origText, quoteOffset + quoteLength);
       } else if (origText.isNotEmpty) {
         final cleanQuote = EntityParser.parseMarkdown(quoteText).cleanText;
         if (cleanQuote.isNotEmpty) {
@@ -227,7 +228,8 @@ class MessageReplyInfo extends StatelessWidget {
     String singleLine = sb.toString().trimRight();
     final bool isTruncated = singleLine.length > effectiveMaxLen;
     if (isTruncated) {
-      singleLine = singleLine.substring(0, effectiveMaxLen);
+      final cut = EntityParser.snapUtf16Offset(singleLine, effectiveMaxLen);
+      singleLine = singleLine.substring(0, cut);
     }
     for (int i = 0; i <= sourceText.length; i++) {
       if (indexMap[i] > singleLine.length) {
@@ -237,8 +239,14 @@ class MessageReplyInfo extends StatelessWidget {
 
     final mappedEntities = <MessageEntity>[];
     for (final e in sourceEntities) {
-      final s = indexMap[e.offset.clamp(0, sourceText.length)];
-      final end = indexMap[(e.offset + e.length).clamp(0, sourceText.length)];
+      final s = EntityParser.snapUtf16Offset(
+        singleLine,
+        indexMap[e.offset.clamp(0, sourceText.length)],
+      );
+      final end = EntityParser.snapUtf16Offset(
+        singleLine,
+        indexMap[(e.offset + e.length).clamp(0, sourceText.length)],
+      );
       if (s < end) {
         mappedEntities.add(e.copyWith(offset: s, length: end - s));
       }

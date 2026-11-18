@@ -2,7 +2,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/link_metadata_service.dart';
@@ -93,7 +92,7 @@ class _LinkPreviewInputBarState extends State<LinkPreviewInputBar> {
   Widget build(BuildContext context) {
     final content = _buildInnerContent(context);
     if (widget.enabled) {
-      final glassProvider = context.watch<LiquidGlassProvider?>();
+      final glassProvider = LiquidGlassProvider.maybeOf(context);
       if (glassProvider != null) {
         final style = glassProvider.createStyle(
           context: context,

@@ -732,10 +732,18 @@ class StickerPeekPopOverlay extends StatefulWidget {
     HapticFeedback.mediumImpact();
 
     late OverlayEntry entry;
+    LocalHistoryEntry? historyEntry;
     bool removed = false;
     void close() {
       if (!removed) {
         removed = true;
+        final h = historyEntry;
+        historyEntry = null;
+        if (h != null) {
+          try {
+            h.remove();
+          } catch (_) {}
+        }
         try {
           entry.remove();
         } catch (_) {}
@@ -759,6 +767,16 @@ class StickerPeekPopOverlay extends StatefulWidget {
       ),
     );
     overlay.insert(entry);
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      historyEntry = LocalHistoryEntry(
+        onRemove: () {
+          historyEntry = null;
+          close();
+        },
+      );
+      route.addLocalHistoryEntry(historyEntry!);
+    }
   }
 
   @override
@@ -1064,10 +1082,18 @@ class GifPeekPopOverlay extends StatefulWidget {
     HapticFeedback.mediumImpact();
 
     late OverlayEntry entry;
+    LocalHistoryEntry? historyEntry;
     bool removed = false;
     void close() {
       if (!removed) {
         removed = true;
+        final h = historyEntry;
+        historyEntry = null;
+        if (h != null) {
+          try {
+            h.remove();
+          } catch (_) {}
+        }
         try {
           entry.remove();
         } catch (_) {}
@@ -1085,6 +1111,16 @@ class GifPeekPopOverlay extends StatefulWidget {
       ),
     );
     overlay.insert(entry);
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      historyEntry = LocalHistoryEntry(
+        onRemove: () {
+          historyEntry = null;
+          close();
+        },
+      );
+      route.addLocalHistoryEntry(historyEntry!);
+    }
   }
 
   @override

@@ -778,8 +778,8 @@ class EntityParser {
     final rawInlineEntities = <MessageEntity>[];
 
     for (final e in validEntities) {
-      int start = e.offset.clamp(0, cleanText.length);
-      int end = (e.offset + e.length).clamp(start, cleanText.length);
+      int start = _snapUtf16Offset(cleanText, e.offset);
+      int end = _snapUtf16Offset(cleanText, e.offset + e.length);
       if (start >= end) continue;
 
       if (_isBlockType(e.type)) {
@@ -1151,10 +1151,10 @@ class EntityParser {
       case 'url':
       case 'text_link':
       case 'link':
+        final safeStart = _snapUtf16Offset(cleanText, entity.offset);
+        final safeEnd = _snapUtf16Offset(cleanText, entity.offset + entity.length);
         final rawUrl = entity.url ??
-            (entity.offset + entity.length <= cleanText.length
-                ? cleanText.substring(entity.offset, entity.offset + entity.length)
-                : '');
+            (safeStart < safeEnd ? cleanText.substring(safeStart, safeEnd) : '');
         final targetUrl = normalizeUrl(rawUrl);
         return ']($targetUrl)';
       default:
@@ -1180,13 +1180,13 @@ class EntityParser {
       end = text.length;
       selectedText = '';
     } else if (selection.isCollapsed) {
-      start = selection.baseOffset.clamp(0, text.length);
+      start = _snapUtf16Offset(text, selection.baseOffset);
       end = start;
       selectedText = '';
     } else {
-      start = selection.start;
-      end = selection.end;
-      selectedText = text.substring(start, end);
+      start = _snapUtf16Offset(text, selection.start);
+      end = _snapUtf16Offset(text, selection.end);
+      selectedText = start < end ? text.substring(start, end) : '';
     }
 
     String prefix = '';
@@ -1285,11 +1285,26 @@ class EntityParser {
   static final Map<int, ParsedMessage> _resolvedMessageCache =
       <int, ParsedMessage>{};
 
+  /// Snaps a UTF-16 offset to a safe boundary inside [text] so a surrogate pair
+  /// (`0xD800..0xDBFF` followed by `0xDC00..0xDFFF`) is never split in half.
+  static int snapUtf16Offset(String text, int index) =>
+      _snapUtf16Offset(text, index);
+
+  /// Safely extracts a UTF-16 boundary-aligned substring from [text].
+  static String safeSubstring(String text, int start, [int? end]) {
+    if (text.isEmpty) return '';
+    final s = _snapUtf16Offset(text, start);
+    final e = end != null ? _snapUtf16Offset(text, end) : text.length;
+    if (e <= s) return '';
+    return text.substring(s, e);
+  }
+
   static int _snapUtf16Offset(String text, int index) {
     final clamped = index.clamp(0, text.length);
     if (clamped > 0 && clamped < text.length) {
       final cu = text.codeUnitAt(clamped);
-      if (cu >= 0xDC00 && cu <= 0xDFFF) {
+      final prev = text.codeUnitAt(clamped - 1);
+      if (cu >= 0xDC00 && cu <= 0xDFFF && prev >= 0xD800 && prev <= 0xDBFF) {
         return clamped - 1;
       }
     }
@@ -1334,8 +1349,9 @@ class EntityParser {
       // Guard against edge-case callers that passed Markdown-serialized text
       // alongside cleanText entity offsets.
       final bool looksLikeUnstrippedMarkdown = existingEntities.any((e) {
-        if (e.offset < 0 || e.offset >= candidateText.length) return false;
-        final tail = candidateText.substring(e.offset);
+        final safeOffset = _snapUtf16Offset(candidateText, e.offset);
+        if (safeOffset < 0 || safeOffset >= candidateText.length) return false;
+        final tail = candidateText.substring(safeOffset);
         if (_isQuoteType(e.type) &&
             (tail.startsWith('> ') || tail.startsWith('**>'))) {
           return true;

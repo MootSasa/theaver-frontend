@@ -3,6 +3,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 import 'rich_text_editing_controller.dart';
 
 /// Floating Liquid Glass Formatting Toolbar for message input.
@@ -44,30 +45,24 @@ class FormattingToolbar extends StatelessWidget {
 
   void _showLinkDialog(BuildContext context) {
     final textController = TextEditingController(text: 'https://');
-    showDialog(
+    final title = context.l10n.translate('chat_action_link') != 'chat_action_link'
+        ? context.l10n.translate('chat_action_link')
+        : 'Ссылка';
+    showTheavDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(ctx.l10n.translate('chat_action_link') != 'chat_action_link'
-            ? ctx.l10n.translate('chat_action_link')
-            : 'Ссылка'),
-        content: TextField(
-          controller: textController,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'https://example.com',
-            border: OutlineInputBorder(),
-          ),
-          keyboardType: TextInputType.url,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(ctx.l10n.translate('cancel')),
-          ),
-          TextButton(
-            onPressed: () {
+      title: title,
+      content: TheavInsetGroup(
+        children: [
+          TheavInlineTextField(
+            controller: textController,
+            label: 'URL',
+            placeholder: 'https://example.com',
+            autofocus: true,
+            keyboardType: TextInputType.url,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) {
               final url = textController.text.trim();
-              Navigator.pop(ctx);
+              Navigator.of(context, rootNavigator: true).maybePop();
               if (url.isNotEmpty && url != 'https://') {
                 if (controller is RichTextEditingController) {
                   (controller as RichTextEditingController).applyFormat('link', url: url);
@@ -80,11 +75,38 @@ class FormattingToolbar extends StatelessWidget {
                 }
               }
             },
-            child: const Text('OK'),
           ),
         ],
       ),
-    );
+      actions: [
+        TheavDialogAction<void>(
+          label: context.l10n.translate('cancel') != 'cancel'
+              ? context.l10n.translate('cancel')
+              : 'Отмена',
+        ),
+        TheavDialogAction<void>(
+          label: 'OK',
+          isPrimary: true,
+          onPressed: () {
+            final url = textController.text.trim();
+            Navigator.of(context, rootNavigator: true).maybePop();
+            if (url.isNotEmpty && url != 'https://') {
+              if (controller is RichTextEditingController) {
+                (controller as RichTextEditingController).applyFormat('link', url: url);
+              } else {
+                EntityParser.applyFormatting(
+                  controller: controller,
+                  formatType: 'link',
+                  url: url,
+                );
+              }
+            }
+          },
+        ),
+      ],
+    ).whenComplete(() {
+      Future.delayed(const Duration(milliseconds: 250), textController.dispose);
+    });
   }
 
   @override

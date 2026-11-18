@@ -12,12 +12,14 @@ class FullscreenPhotoViewer extends StatefulWidget {
   final String url;
   final String? tag;
   final String? localFilePath;
+  final bool hasProtectedContent;
 
   const FullscreenPhotoViewer({
     Key? key,
     required this.url,
     this.tag,
     this.localFilePath,
+    this.hasProtectedContent = false,
   }) : super(key: key);
 
   /// Open the viewer as a full-screen dialog
@@ -26,6 +28,7 @@ class FullscreenPhotoViewer extends StatefulWidget {
     String url, {
     String? tag,
     String? localFilePath,
+    bool hasProtectedContent = false,
   }) {
     return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder(
@@ -34,7 +37,12 @@ class FullscreenPhotoViewer extends StatefulWidget {
         transitionDuration: const Duration(milliseconds: 250),
         reverseTransitionDuration: const Duration(milliseconds: 200),
         pageBuilder: (context, animation, secondaryAnimation) =>
-            FullscreenPhotoViewer(url: url, tag: tag, localFilePath: localFilePath),
+            FullscreenPhotoViewer(
+              url: url,
+              tag: tag,
+              localFilePath: localFilePath,
+              hasProtectedContent: hasProtectedContent,
+            ),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(
             opacity: animation,
@@ -117,6 +125,20 @@ class _FullscreenPhotoViewerState extends State<FullscreenPhotoViewer> {
           icon: const iconoir.Xmark(color: Colors.white, width: 24, height: 24),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          if (widget.hasProtectedContent)
+            const Padding(
+              padding: EdgeInsets.only(right: 12),
+              child: Tooltip(
+                message: 'Защищённый контент',
+                child: iconoir.Lock(
+                  color: Colors.white70,
+                  width: 18,
+                  height: 18,
+                ),
+              ),
+            ),
+        ],
       ),
       body: GestureDetector(
         onVerticalDragEnd: (details) {

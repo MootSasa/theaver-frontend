@@ -8,13 +8,24 @@ import '../../models/call_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/chat_service.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/power_saving_provider.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../screens/call/group_call_screen.dart';
+import '../design_system/theav_design_system.dart';
 import 'telegram_avatar_stack.dart';
+
+CallStateProvider? _maybeCallProvider(
+  BuildContext context, {
+  bool listen = true,
+}) {
+  try {
+    return Provider.of<CallStateProvider>(context, listen: listen);
+  } catch (_) {
+    return null;
+  }
+}
 
 /// Floating Liquid Glass / Matte banner shown right below `FloatingGlassAppBar`
 /// when a group voice chat or channel livestream is currently active.
@@ -92,7 +103,7 @@ class _LiveChatCallBannerState extends State<LiveChatCallBanner>
     final disableAnimations = MediaQuery.disableAnimationsOf(context) ||
         !PowerSavingProvider.instance.allowAnimations;
     final hasCall = _hasEffectiveActiveCall(
-      context.read<CallStateProvider?>()?.activeCall,
+      _maybeCallProvider(context, listen: false)?.activeCall,
     );
     if (disableAnimations || !hasCall) {
       if (_pulseController.isAnimating) {
@@ -340,13 +351,10 @@ class _LiveChatCallBannerState extends State<LiveChatCallBanner>
     required bool isAlreadyInCall,
   }) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final palette = theme.extension<TheavThemeExtension>()?.palette;
-    final accentColor = palette?.accent ?? theme.colorScheme.primary;
-    final titleColor = isDark ? Colors.white : const Color(0xFF0F172A);
-    final subtitleColor = isDark
-        ? Colors.white.withValues(alpha: 0.74)
-        : const Color(0xFF334155);
+    final palette = theme.extension<TheavThemeExtension>()?.palette ?? context.theav;
+    final accentColor = palette.accent;
+    final titleColor = palette.onSurface;
+    final subtitleColor = palette.subtext;
 
     final titleText =
         widget.isChannel ? 'Прямая трансляция' : 'Голосовой чат';
@@ -446,7 +454,7 @@ class _LiveChatCallBannerState extends State<LiveChatCallBanner>
                         child: Text(
                           buttonLabel,
                           style: TextStyle(
-                            color: palette?.onPrimary ?? theme.colorScheme.onPrimary,
+                            color: palette.onPrimary,
                             fontSize: 12.5,
                             fontWeight: FontWeight.w700,
                             height: 1.0,
@@ -472,7 +480,8 @@ class _LiveChatCallBannerState extends State<LiveChatCallBanner>
     required CallStateProvider? callProvider,
     required bool isAlreadyInCall,
   }) {
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final surfaceStyle = TheavSurfaceStyle.of(context);
+    final glassProvider = surfaceStyle.glassProvider;
     final glassEnabled = glassProvider?.enabled ?? false;
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
@@ -522,41 +531,56 @@ class _LiveChatCallBannerState extends State<LiveChatCallBanner>
       );
     }
 
-    final defaultBg = isDark
-        ? const Color(0xBF141820)
-        : Colors.white.withValues(alpha: 0.86);
-    final matteBg = themeExt?.palette.explicitChatInputBackground ?? defaultBg;
+    final matteBg = themeExt?.palette.explicitChatInputBackground ??
+        surfaceStyle.hudFill;
+    final blurFilter = surfaceStyle.allowBlur
+        ? BlurUtils.createDownsampledBlur(15)
+        : null;
+
+    Widget card = Container(
+      decoration: BoxDecoration(
+        color: matteBg,
+        borderRadius: BorderRadius.circular(_kCornerRadius),
+        border: Border.all(
+          color: surfaceStyle.isGlass
+              ? (isDark
+                  ? Colors.white.withValues(alpha: 0.14)
+                  : Colors.black.withValues(alpha: 0.10))
+              : surfaceStyle.hairlineBorder,
+          width: 0.5,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(_kCornerRadius),
+          onTap: () => _openCallScreen(
+            callId: effectiveCallId,
+            callProvider: callProvider,
+            isAlreadyInCall: isAlreadyInCall,
+          ),
+          child: inner,
+        ),
+      ),
+    );
+
+    if (blurFilter != null) {
+      card = BackdropFilter.grouped(
+        filter: blurFilter,
+        child: card,
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(_kCornerRadius),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: matteBg,
-              borderRadius: BorderRadius.circular(_kCornerRadius),
-              border: Border.all(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.14)
-                    : Colors.black.withValues(alpha: 0.10),
-                width: 0.5,
-              ),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(_kCornerRadius),
-                onTap: () => _openCallScreen(
-                  callId: effectiveCallId,
-                  callProvider: callProvider,
-                  isAlreadyInCall: isAlreadyInCall,
-                ),
-                child: inner,
-              ),
-            ),
-          ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(_kCornerRadius),
+          boxShadow: surfaceStyle.floatingShadow,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(_kCornerRadius),
+          child: card,
         ),
       ),
     );
@@ -564,7 +588,7 @@ class _LiveChatCallBannerState extends State<LiveChatCallBanner>
 
   @override
   Widget build(BuildContext context) {
-    final callProvider = context.watch<CallStateProvider?>();
+    final callProvider = _maybeCallProvider(context);
     final providerCall = callProvider?.activeCall;
     final bool isCurrentCallInProvider = providerCall != null &&
         providerCall.chatId == widget.chatId &&

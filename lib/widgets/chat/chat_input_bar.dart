@@ -2,13 +2,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../design_system/theav_design_system.dart';
 import '../user/avatar_with_status.dart';
 import 'link_preview_input_bar.dart';
 import 'liquid_glass_input_field.dart';
@@ -84,6 +84,10 @@ class ChatInputBar extends StatefulWidget {
   final bool canSendPolls;
   final bool isAnonymousAdmin;
   final String? anonymousGroupAvatarUrl;
+  final VoidCallback? onSendLongPress;
+  final Widget? forwardPreviewBanner;
+  final int scheduledCount;
+  final VoidCallback? onOpenScheduled;
 
   const ChatInputBar({
     Key? key,
@@ -145,6 +149,10 @@ class ChatInputBar extends StatefulWidget {
     this.canSendPolls = true,
     this.isAnonymousAdmin = false,
     this.anonymousGroupAvatarUrl,
+    this.onSendLongPress,
+    this.forwardPreviewBanner,
+    this.scheduledCount = 0,
+    this.onOpenScheduled,
   }) : super(key: key);
 
   @override
@@ -348,7 +356,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     );
 
     if (glassEnabled) {
-      final glassProvider = context.watch<LiquidGlassProvider?>();
+      final glassProvider = LiquidGlassProvider.maybeOf(context);
       if (glassProvider != null) {
         final style = glassProvider.createStyle(
           context: context,
@@ -399,7 +407,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     if (glassEnabled) {
-      final glassProvider = context.watch<LiquidGlassProvider?>();
+      final glassProvider = LiquidGlassProvider.maybeOf(context);
       if (glassProvider != null) {
         final style = glassProvider.createStyle(
           context: context,
@@ -451,8 +459,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     final Color accentColor = isDark
         ? const Color(0xFF66C7F4)
         : theme.colorScheme.primary;
-    final Color textColor =
-        isDark ? Colors.white.withValues(alpha: 0.92) : const Color(0xFF1C1C1E);
+    final Color textColor = theme.colorScheme.onSurface.withValues(alpha: 0.92);
     final hasAvatar = widget.anonymousGroupAvatarUrl != null &&
         widget.anonymousGroupAvatarUrl!.trim().isNotEmpty;
 
@@ -506,9 +513,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     bool isLite,
   ) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final Color textColor =
-        isDark ? Colors.white.withValues(alpha: 0.9) : const Color(0xFF1C1C1E);
+    final Color textColor = theme.colorScheme.onSurface.withValues(alpha: 0.9);
 
     return _wrapContextualPill(
       context,
@@ -555,9 +560,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final Color activeColor =
         themeExt?.palette.primary ?? theme.colorScheme.primary;
-    final Color inactiveColor = isDark
-        ? Colors.white.withValues(alpha: 0.8)
-        : const Color(0xFF1C1C1E).withValues(alpha: 0.75);
+    final Color inactiveColor =
+        theme.colorScheme.onSurface.withValues(alpha: isDark ? 0.8 : 0.75);
 
     final Widget iconSwitcher = AnimatedSwitcher(
       duration:
@@ -667,7 +671,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
   @override
   Widget build(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
 
@@ -712,7 +716,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
               : null,
         ),
 
-        // 3. Reply/Quote preview bar
+        // 3a. Staged forward preview bar
+        _GlassSafeAnimatedSection(
+          visible: widget.forwardPreviewBanner != null,
+          child: widget.forwardPreviewBanner,
+        ),
+
+        // 3b. Reply/Quote preview bar
         _GlassSafeAnimatedSection(
           visible: widget.replyToMessage != null,
           child: widget.replyToMessage != null
@@ -862,6 +872,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
                             'Сообщение')),
                 onChanged: widget.onChanged,
                 onSend: widget.isSending ? null : _handleSend,
+                onSendLongPress: widget.isSending ? null : widget.onSendLongPress,
                 onAttach: widget.canSendMedia ? widget.onAttach : null,
                 onEmoji: widget.onEmoji,
                 onVoice: widget.canSendMedia ? widget.onVoice : null,
@@ -895,6 +906,22 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 slowmodeRemainingSeconds: widget.slowmodeRemainingSeconds,
               ),
             ),
+            if (widget.scheduledCount > 0 && widget.onOpenScheduled != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 6, bottom: 10),
+                child: TheavHeaderIconButton(
+                  tooltip: 'Отложенные сообщения',
+                  badgeCount: widget.scheduledCount,
+                  onTap: widget.onOpenScheduled,
+                  icon: iconoir.Calendar(
+                    width: 20,
+                    height: 20,
+                    color: context.theav.appBarForeground != Colors.transparent
+                        ? context.theav.appBarForeground
+                        : context.theav.onSurface,
+                  ),
+                ),
+              ),
             if (widget.showSilentBroadcastToggle)
               _buildSilentBroadcastButton(
                 context,

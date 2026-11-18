@@ -5,7 +5,6 @@ import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../screens/stickers/create_sticker_pack_screen.dart';
 import '../../screens/stickers/sticker_pack_detail_sheet.dart';
@@ -626,7 +625,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildPanelContent(bool isSearching) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final glassEnabled = glassProvider?.enabled ?? false;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
@@ -660,7 +660,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                 widget.onClose();
               }
             },
-      child: (glassProvider.enabled && !isSearching)
+      child: (glassEnabled && !isSearching)
           ? LayoutBuilder(
               builder: (context, constraints) {
                 final double panelW =
@@ -692,7 +692,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                         bottom: bottomMargin,
                       );
 
-                final barStyle = glassProvider.createStyle(
+                final barStyle = glassProvider!.createStyle(
                   context: context,
                   cornerRadius: barHeight / 2,
                   refractionIndex: 1.1,
@@ -789,7 +789,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final clampedOpacity = opacity.clamp(0.0, 1.0);
 
     if (!isGrouped && clampedOpacity <= 0.01) {
@@ -858,7 +858,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       ),
     );
 
-    if (glassProvider.enabled) {
+    if (glassProvider != null && glassProvider.enabled) {
       final searchStyle = glassProvider.createStyle(
         context: context,
         cornerRadius: 24,
@@ -995,8 +995,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildEmojiTopControls() {
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final sharedStyle = glassProvider.enabled
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final bool glassEnabled = glassProvider?.enabled ?? false;
+    final sharedStyle = (glassProvider != null && glassEnabled)
         ? glassProvider.createStyle(
             context: context,
             cornerRadius: 24,
@@ -1035,7 +1036,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   _onEmojiQueryChanged,
                   _emojiSearchFocusNode,
                   isGrouped: true,
-                  opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+                  opacity: glassEnabled ? textOpacity : fallbackOpacity,
                   lensVisible: isSearchLensVisible,
                 ),
               ),
@@ -1051,7 +1052,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           ],
         );
 
-        if (glassProvider.enabled && sharedStyle != null) {
+        if (glassEnabled && sharedStyle != null) {
           return SizedBox(
             height: _kEmojiSelectorHeight + _kSearchHeight,
             child: LiquidGlassBlender(
@@ -1071,8 +1072,9 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildStickerTopControls() {
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final sharedStyle = glassProvider.enabled
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final bool glassEnabled = glassProvider?.enabled ?? false;
+    final sharedStyle = (glassProvider != null && glassEnabled)
         ? glassProvider.createStyle(
             context: context,
             cornerRadius: 24,
@@ -1111,7 +1113,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   _onStickerQueryChanged,
                   _stickerSearchFocusNode,
                   isGrouped: true,
-                  opacity: glassProvider.enabled ? textOpacity : fallbackOpacity,
+                  opacity: glassEnabled ? textOpacity : fallbackOpacity,
                   lensVisible: isSearchLensVisible,
                 ),
               ),
@@ -1127,7 +1129,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           ],
         );
 
-        if (glassProvider.enabled && sharedStyle != null) {
+        if (glassEnabled && sharedStyle != null) {
           return SizedBox(
             height: _kEmojiSelectorHeight + _kSearchHeight,
             child: LiquidGlassBlender(
@@ -1637,7 +1639,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     final theme = Theme.of(context);
     final theavTheme = TheavTheme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
 
     final sortedPacks = List<CustomEmojiPack>.from(_customPacks)
       ..sort((a, b) {
@@ -1697,7 +1699,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
     final theme = Theme.of(context);
     final theavTheme = TheavTheme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final installedStickerPacks = StickerService.instance.installedStickerPacks;
 
     final selectorContent = SingleChildScrollView(
@@ -1747,7 +1749,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
 
   Widget _wrapCapsuleSelector(
     bool isDark,
-    LiquidGlassProvider glassProvider,
+    LiquidGlassProvider? glassProvider,
     Widget selectorContent,
   ) {
     final boxDecoration = BoxDecoration(
@@ -1761,16 +1763,18 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           : Colors.white.withValues(alpha: 0.92),
     );
 
-    final selectorStyle = glassProvider.createStyle(
-      context: context,
-      cornerRadius: 24,
-      refractionWidth: 24,
-    );
+    final selectorStyle = (glassProvider != null && glassProvider.enabled)
+        ? glassProvider.createStyle(
+            context: context,
+            cornerRadius: 24,
+            refractionWidth: 24,
+          )
+        : null;
 
     return Container(
       height: 40 + 8,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: glassProvider.enabled
+      child: selectorStyle != null
           ? LiquidGlassLens(
               style: selectorStyle,
               child: SizedBox(
@@ -2792,14 +2796,15 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildClassicNav(bool isDark, ThemeData theme) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final glassEnabled = glassProvider?.enabled ?? false;
     final indicatorColor = isDark
         ? Colors.white.withValues(alpha: 0.15)
         : Colors.black.withValues(alpha: 0.08);
 
     final navContent = Container(
       height: 40,
-      decoration: glassProvider.enabled
+      decoration: glassEnabled
           ? null
           : BoxDecoration(
               color: isDark
@@ -2877,7 +2882,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       ),
     );
 
-    if (glassProvider.enabled) {
+    if (glassProvider != null && glassEnabled) {
       final navStyle = glassProvider.createStyle(
         context: context,
         cornerRadius: 32,
@@ -2903,7 +2908,8 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
   }
 
   Widget _buildBackspaceButton(bool isDark, ThemeData theme) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final glassEnabled = glassProvider?.enabled ?? false;
 
     final backspaceContent = GestureDetector(
       onTap: () {
@@ -2916,7 +2922,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       child: Container(
         width: 40,
         height: 40,
-        decoration: glassProvider.enabled
+        decoration: glassEnabled
             ? null
             : BoxDecoration(
                 color: isDark
@@ -2940,7 +2946,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
       ),
     );
 
-    if (glassProvider.enabled) {
+    if (glassProvider != null && glassEnabled) {
       final buttonStyle = glassProvider.createStyle(
         context: context,
         cornerRadius: 20,

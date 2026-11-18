@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/bot_service.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -188,7 +187,7 @@ class BotStartBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final glassEnabled = context.watch<LiquidGlassProvider?>()?.enabled ?? false;
+    final glassEnabled = LiquidGlassProvider.maybeOf(context)?.enabled ?? false;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
 
     return Container(

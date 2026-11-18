@@ -42,6 +42,21 @@ class _InlineVideoPlayerState extends State<InlineVideoPlayer> {
     }
   }
 
+  @override
+  void didUpdateWidget(covariant InlineVideoPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      final prev = _controller;
+      _controller = null;
+      prev?.removeListener(_onVideoUpdate);
+      prev?.dispose();
+      _isInitialized = false;
+      _isPlaying = false;
+      _error = null;
+      _initController();
+    }
+  }
+
   Future<void> _initController() async {
     final currentUrl = widget.url;
     try {
@@ -87,29 +102,24 @@ class _InlineVideoPlayerState extends State<InlineVideoPlayer> {
 
   void _onVideoUpdate() {
     if (!mounted) return;
-    setState(() {
-      _isPlaying = _controller?.value.isPlaying ?? false;
-    });
+    final nextPlaying = _controller?.value.isPlaying ?? false;
+    if (nextPlaying != _isPlaying) {
+      setState(() {
+        _isPlaying = nextPlaying;
+      });
+    }
   }
 
   @override
   void dispose() {
     MediaPlaybackCoordinator.instance.removeListener(_onCoordinatorChanged);
-    _controller?.removeListener(_onVideoUpdate);
-    _controller?.dispose();
+    final prev = _controller;
+    _controller = null;
+    prev?.removeListener(_onVideoUpdate);
+    try {
+      prev?.dispose();
+    } catch (_) {}
     super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(InlineVideoPlayer oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.url != widget.url) {
-      _controller?.removeListener(_onVideoUpdate);
-      _controller?.dispose();
-      _isInitialized = false;
-      _error = null;
-      _initController();
-    }
   }
 
   void _togglePlayPause() {

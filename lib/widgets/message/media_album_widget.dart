@@ -15,6 +15,7 @@ import 'group_message_avatar_row.dart' show GroupMessageAvatarRow;
 import 'media_album_layout.dart';
 import 'media_album_viewer.dart';
 import 'media_download_button.dart';
+import 'media_spoiler_overlay.dart';
 import 'message_bubble.dart';
 import 'message_interactive_state.dart';
 import 'message_status_widget.dart';
@@ -43,6 +44,7 @@ class MediaAlbumWidget extends StatelessWidget {
   final bool suppressFooter;
   final double? overrideWidth;
   final BorderRadius? overrideBorderRadius;
+  final bool hasProtectedContent;
 
   const MediaAlbumWidget({
     Key? key,
@@ -66,6 +68,7 @@ class MediaAlbumWidget extends StatelessWidget {
     this.suppressFooter = false,
     this.overrideWidth,
     this.overrideBorderRadius,
+    this.hasProtectedContent = false,
   }) : super(key: key);
 
   MediaAlbumWidget copyWithKey(Key? newKey) {
@@ -91,6 +94,7 @@ class MediaAlbumWidget extends StatelessWidget {
       suppressFooter: suppressFooter,
       overrideWidth: overrideWidth,
       overrideBorderRadius: overrideBorderRadius,
+      hasProtectedContent: hasProtectedContent,
     );
   }
 
@@ -101,6 +105,7 @@ class MediaAlbumWidget extends StatelessWidget {
         builder: (_) => MediaAlbumViewer(
           album: album,
           initialIndex: index,
+          hasProtectedContent: hasProtectedContent,
         ),
       ),
     );
@@ -243,18 +248,29 @@ class MediaAlbumWidget extends StatelessWidget {
               height: albumHeight,
               child: Stack(
                 children: [
-                  for (int i = 0; i < positions.length; i++)
-                    _buildTile(
-                      context,
-                      album.items[i],
-                      _resolveTilePosition(
-                        pos: positions[i],
-                        outerRadius: effectiveBorderRadius,
-                        applyTopCorners: applyTopTileCorners,
-                        applyBottomCorners: applyBottomTileCorners,
+                  Positioned.fill(
+                    child: MediaSpoilerOverlay(
+                      messageId: album.primaryMessage.id,
+                      hasSpoiler: album.hasMediaSpoiler,
+                      borderRadius: 0.0,
+                      child: Stack(
+                        children: [
+                          for (int i = 0; i < positions.length; i++)
+                            _buildTile(
+                              context,
+                              album.items[i],
+                              _resolveTilePosition(
+                                pos: positions[i],
+                                outerRadius: effectiveBorderRadius,
+                                applyTopCorners: applyTopTileCorners,
+                                applyBottomCorners: applyBottomTileCorners,
+                              ),
+                              i,
+                            ),
+                        ],
                       ),
-                      i,
                     ),
+                  ),
 
                   // Floating time pill if captionless
                   if (!isChannelCard && !suppressFooter && !album.hasCaption)

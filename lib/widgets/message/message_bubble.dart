@@ -30,6 +30,7 @@ import 'theme_link_preview_card.dart';
 import '../../services/theav_theme_service.dart';
 import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
+import 'media_spoiler_overlay.dart';
 import '../../services/media_cache_manager.dart';
 import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
@@ -720,6 +721,7 @@ class MessageBubble extends StatelessWidget {
   final bool isFirstInCluster;
   final bool isLastInCluster;
   final VoidCallback? onThreadRootTap;
+  final bool hasProtectedContent;
 
   const MessageBubble({
     Key? key,
@@ -745,6 +747,7 @@ class MessageBubble extends StatelessWidget {
     this.isFirstInCluster = true,
     this.isLastInCluster = true,
     this.onThreadRootTap,
+    this.hasProtectedContent = false,
   }) : super(key: key);
 
   MessageBubble copyWithKey(Key? newKey) {
@@ -772,6 +775,7 @@ class MessageBubble extends StatelessWidget {
       isFirstInCluster: isFirstInCluster,
       isLastInCluster: isLastInCluster,
       onThreadRootTap: onThreadRootTap,
+      hasProtectedContent: hasProtectedContent,
     );
   }
 
@@ -1990,25 +1994,35 @@ class MessageBubble extends StatelessWidget {
         messageType: 'image',
         fileSize: message.mediaFileSize,
       );
+      final double effectiveRadius = math.max(
+        4.0,
+        (Theme.of(context).extension<TheavThemeExtension>()?.bubbleRadius ?? 16.0) - 2.0,
+      );
 
-      return _SingleMediaBubbleWidget(
-        key: ValueKey('single_img_${message.id}_$resolvedUrl'),
-        url: resolvedUrl,
-        thumbBase64: thumbBase64,
-        fileSize: message.mediaFileSize,
-        isVideo: false,
-        maxWidth: maxWidth,
-        height: mediaHeight,
-        autoDownload: autoDownload,
-        heroTag: heroTag,
-        onTap: ([localPath]) {
-          FullscreenPhotoViewer.open(
-            context,
-            resolvedUrl,
-            tag: heroTag,
-            localFilePath: localPath,
-          );
-        },
+      return MediaSpoilerOverlay(
+        messageId: message.id,
+        hasSpoiler: message.hasMediaSpoiler,
+        borderRadius: effectiveRadius,
+        child: _SingleMediaBubbleWidget(
+          key: ValueKey('single_img_${message.id}_$resolvedUrl'),
+          url: resolvedUrl,
+          thumbBase64: thumbBase64,
+          fileSize: message.mediaFileSize,
+          isVideo: false,
+          maxWidth: maxWidth,
+          height: mediaHeight,
+          autoDownload: autoDownload,
+          heroTag: heroTag,
+          onTap: ([localPath]) {
+            FullscreenPhotoViewer.open(
+              context,
+              resolvedUrl,
+              tag: heroTag,
+              localFilePath: localPath,
+              hasProtectedContent: hasProtectedContent,
+            );
+          },
+        ),
       );
     }
 
@@ -2017,26 +2031,35 @@ class MessageBubble extends StatelessWidget {
         messageType: 'video',
         fileSize: message.mediaFileSize,
       );
+      final double effectiveRadius = math.max(
+        4.0,
+        (Theme.of(context).extension<TheavThemeExtension>()?.bubbleRadius ?? 16.0) - 2.0,
+      );
 
-      return _SingleMediaBubbleWidget(
-        key: ValueKey('single_vid_${message.id}_$resolvedUrl'),
-        url: resolvedUrl,
-        thumbBase64: message.thumbBase64,
-        thumbUrl: message.thumbUrl,
-        fileSize: message.mediaFileSize,
-        duration: message.mediaDuration ?? message.duration,
-        isVideo: true,
-        maxWidth: maxWidth,
-        height: mediaHeight,
-        autoDownload: autoDownload,
-        heroTag: 'msg_video_${message.id}_$resolvedUrl',
-        onTap: ([localPath]) {
-          onFileTap?.call(
-            localPath ?? resolvedUrl,
-            message.fileName ?? 'video.mp4',
-            'video',
-          );
-        },
+      return MediaSpoilerOverlay(
+        messageId: message.id,
+        hasSpoiler: message.hasMediaSpoiler,
+        borderRadius: effectiveRadius,
+        child: _SingleMediaBubbleWidget(
+          key: ValueKey('single_vid_${message.id}_$resolvedUrl'),
+          url: resolvedUrl,
+          thumbBase64: message.thumbBase64,
+          thumbUrl: message.thumbUrl,
+          fileSize: message.mediaFileSize,
+          duration: message.mediaDuration ?? message.duration,
+          isVideo: true,
+          maxWidth: maxWidth,
+          height: mediaHeight,
+          autoDownload: autoDownload,
+          heroTag: 'msg_video_${message.id}_$resolvedUrl',
+          onTap: ([localPath]) {
+            onFileTap?.call(
+              localPath ?? resolvedUrl,
+              message.fileName ?? 'video.mp4',
+              'video',
+            );
+          },
+        ),
       );
     }
 

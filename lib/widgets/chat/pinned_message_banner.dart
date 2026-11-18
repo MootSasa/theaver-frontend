@@ -1,13 +1,13 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Compact floating capsule banner displayed directly below the chat AppBar
 /// when the chat has one or more pinned messages.
@@ -25,6 +25,7 @@ class PinnedMessageBanner extends StatefulWidget {
   final int currentPinnedIndex;
   final VoidCallback onTap;
   final VoidCallback? onUnpin;
+  final VoidCallback? onOpenPinnedList;
   final bool canUnpin;
 
   const PinnedMessageBanner({
@@ -34,6 +35,7 @@ class PinnedMessageBanner extends StatefulWidget {
     this.currentPinnedIndex = 0,
     required this.onTap,
     this.onUnpin,
+    this.onOpenPinnedList,
     this.canUnpin = true,
   });
 
@@ -63,6 +65,7 @@ class _PinnedMessageBannerState extends State<PinnedMessageBanner>
     _appearController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 240),
+      value: widget.message != null ? 1.0 : 0.0,
     );
     final curved = CurvedAnimation(
       parent: _appearController,
@@ -74,10 +77,6 @@ class _PinnedMessageBannerState extends State<PinnedMessageBanner>
       begin: const Offset(0.0, -0.35),
       end: Offset.zero,
     ).animate(curved);
-
-    if (widget.message != null) {
-      _appearController.forward();
-    }
   }
 
   @override
@@ -109,20 +108,91 @@ class _PinnedMessageBannerState extends State<PinnedMessageBanner>
     switch (msg.messageType) {
       case 'image':
       case 'photo':
-        return '📷 Фотография';
+        return 'Фото';
       case 'video':
-        return msg.isRound ? '🎥 Видеосообщение' : '🎬 Видео';
+        return msg.isRound ? 'Видеосообщение' : 'Видео';
       case 'voice':
-        return '🎤 Голосовое сообщение';
+        return 'Голосовое сообщение';
       case 'audio':
-        return '🎵 Аудиозапись';
+        return 'Аудиозапись';
       case 'poll':
-        return '📊 Опрос';
+        return 'Опрос';
+      case 'gif':
+        return 'Гифка';
+      case 'sticker':
+        return 'Стикер';
       case 'file':
       case 'document':
-        return '📎 ${msg.fileName ?? 'Файл'}';
+        return msg.fileName ?? 'Файл';
       default:
         return 'Сообщение';
+    }
+  }
+
+  Widget? _buildLeadingMediaBadge(Message msg, Color iconColor) {
+    final type = msg.messageType;
+    final b64 = msg.thumbBase64;
+    if (!msg.hasMediaSpoiler &&
+        (type == 'image' || type == 'photo' || type == 'video' || type == 'gif')) {
+      if (b64 != null && b64.isNotEmpty) {
+        try {
+          final raw = b64.contains(',') ? b64.split(',').last : b64;
+          final bytes = base64Decode(raw);
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Image.memory(
+              bytes,
+              width: 18,
+              height: 18,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => iconoir.MediaImage(
+                width: 14,
+                height: 14,
+                color: iconColor,
+              ),
+            ),
+          );
+        } catch (_) {}
+      }
+      final thumbUrl = msg.thumbUrl;
+      if (thumbUrl != null && thumbUrl.isNotEmpty) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Image.network(
+            thumbUrl,
+            width: 18,
+            height: 18,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => iconoir.MediaImage(
+              width: 14,
+              height: 14,
+              color: iconColor,
+            ),
+          ),
+        );
+      }
+    }
+
+    switch (type) {
+      case 'image':
+      case 'photo':
+      case 'gif':
+        return iconoir.MediaImage(width: 14, height: 14, color: iconColor);
+      case 'video':
+        return iconoir.VideoCamera(width: 14, height: 14, color: iconColor);
+      case 'voice':
+        return iconoir.Microphone(width: 14, height: 14, color: iconColor);
+      case 'audio':
+        return iconoir.MusicDoubleNote(width: 14, height: 14, color: iconColor);
+      case 'poll':
+        return iconoir.StatsReport(width: 14, height: 14, color: iconColor);
+      case 'sticker':
+        return iconoir.Emoji(width: 14, height: 14, color: iconColor);
+      case 'file':
+      case 'document':
+        return iconoir.Page(width: 14, height: 14, color: iconColor);
+      default:
+        return null;
     }
   }
 
@@ -233,21 +303,48 @@ class _PinnedMessageBannerState extends State<PinnedMessageBanner>
                         ],
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        _formatPreview(msg),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: textColor,
-                          height: 1.15,
-                        ),
+                      Row(
+                        children: [
+                          if (_buildLeadingMediaBadge(msg, textColor)
+                              case final leadingBadge?) ...[
+                            leadingBadge,
+                            const SizedBox(width: 5),
+                          ],
+                          Expanded(
+                            child: Text(
+                              _formatPreview(msg),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: textColor,
+                                height: 1.15,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
               ),
             ),
+            if (widget.onOpenPinnedList != null &&
+                (widget.totalPinnedCount > 1 || !widget.canUnpin))
+              IconButton(
+                key: const ValueKey<String>('pinned_banner_list_btn'),
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Все закреплённые сообщения',
+                icon: iconoir.List(
+                  width: 18,
+                  height: 18,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
+                ),
+                onPressed: () {
+                  HapticUtils.tap();
+                  widget.onOpenPinnedList?.call();
+                },
+              ),
             if (widget.canUnpin && widget.onUnpin != null)
               IconButton(
                 visualDensity: VisualDensity.compact,
@@ -269,7 +366,8 @@ class _PinnedMessageBannerState extends State<PinnedMessageBanner>
   }
 
   Widget _buildCapsule(BuildContext context, Message msg) {
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final surfaceStyle = TheavSurfaceStyle.of(context);
+    final glassProvider = surfaceStyle.glassProvider;
     final glassEnabled = glassProvider?.enabled ?? false;
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
@@ -308,39 +406,54 @@ class _PinnedMessageBannerState extends State<PinnedMessageBanner>
       );
     }
 
-    // Material / Classic (Matte) mode
-    final defaultBg = isDark
-        ? Colors.black.withValues(alpha: 0.68)
-        : Colors.white.withValues(alpha: 0.76);
-    final matteBg = themeExt?.palette.explicitChatInputBackground ?? defaultBg;
+    // Material / Classic / Lite mode
+    final matteBg = themeExt?.palette.explicitChatInputBackground ??
+        surfaceStyle.hudFill;
+    final blurFilter = surfaceStyle.allowBlur
+        ? BlurUtils.createDownsampledBlur(15)
+        : null;
+
+    Widget cardBody = Container(
+      decoration: BoxDecoration(
+        color: matteBg,
+        borderRadius: BorderRadius.circular(_kCornerRadius),
+        border: Border.all(
+          color: surfaceStyle.isGlass
+              ? (isDark ? Colors.white12 : Colors.black12)
+              : surfaceStyle.hairlineBorder,
+          width: 0.5,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(_kCornerRadius),
+          onTap: () {
+            HapticUtils.tap();
+            widget.onTap();
+          },
+          child: inner,
+        ),
+      ),
+    );
+
+    if (blurFilter != null) {
+      cardBody = BackdropFilter.grouped(
+        filter: blurFilter,
+        child: cardBody,
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(_kCornerRadius),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: matteBg,
-              borderRadius: BorderRadius.circular(_kCornerRadius),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(_kCornerRadius),
-                onTap: () {
-                  HapticUtils.tap();
-                  widget.onTap();
-                },
-                child: inner,
-              ),
-            ),
-          ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(_kCornerRadius),
+          boxShadow: surfaceStyle.floatingShadow,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(_kCornerRadius),
+          child: cardBody,
         ),
       ),
     );

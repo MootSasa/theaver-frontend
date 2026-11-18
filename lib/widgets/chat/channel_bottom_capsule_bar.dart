@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../services/chat_actions_helper.dart';
@@ -75,6 +74,10 @@ class ChannelBottomCapsuleBar extends StatefulWidget {
   final ValueChanged<LinkPreviewOptions?>? onLinkPreviewOptionsChanged;
   final bool invertMedia;
   final ValueChanged<bool>? onInvertMediaChanged;
+  final VoidCallback? onSendLongPress;
+  final Widget? forwardPreviewBanner;
+  final int scheduledCount;
+  final VoidCallback? onOpenScheduled;
 
   const ChannelBottomCapsuleBar({
     super.key,
@@ -131,6 +134,10 @@ class ChannelBottomCapsuleBar extends StatefulWidget {
     this.onLinkPreviewOptionsChanged,
     this.invertMedia = false,
     this.onInvertMediaChanged,
+    this.onSendLongPress,
+    this.forwardPreviewBanner,
+    this.scheduledCount = 0,
+    this.onOpenScheduled,
   });
 
   @override
@@ -323,17 +330,20 @@ class _ChannelBottomCapsuleBarState extends State<ChannelBottomCapsuleBar> {
         showSilentBroadcastToggle: true,
         isSilentBroadcast: _effectiveSilent,
         onToggleSilentBroadcast: _handleToggleSilent,
+        onSendLongPress: widget.onSendLongPress,
+        forwardPreviewBanner: widget.forwardPreviewBanner,
+        scheduledCount: widget.scheduledCount,
+        onOpenScheduled: widget.onOpenScheduled,
       );
     }
 
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
 
     final Color foregroundColor =
-        themeExt?.palette.appBarForeground ??
-        (isDark ? Colors.white : const Color(0xFF1C1C1E));
+        themeExt?.palette.appBarForeground ?? theme.colorScheme.onSurface;
     final Color accentTextColor = isDark
         ? const Color(0xFF64C4FF)
         : Color.lerp(

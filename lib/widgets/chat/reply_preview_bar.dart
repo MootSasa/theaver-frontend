@@ -103,7 +103,10 @@ class ReplyPreviewBar extends StatelessWidget {
   }
 
   Widget _buildGlassBar(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    if (glassProvider == null || !glassProvider.enabled) {
+      return _buildClassicBar(context);
+    }
 
     final style = glassProvider.createStyle(
       context: context,

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
+import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../design_system/theav_controls.dart';
 
 /// Адаптивный переключатель (Switch), использующий [LiquidGlassSwitch]
-/// из библиотеки liquid_glass_easy при включённом Liquid Glass дизайне,
-/// и стандартный Material [Switch] при выключенном.
+/// при включённом Liquid Glass дизайне и [TheavSwitch] при выключенном.
 class AdaptiveSwitch extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
@@ -24,29 +24,29 @@ class AdaptiveSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isGlass = context.watch<LiquidGlassProvider>().enabled;
-    if (isGlass && onChanged != null) {
-      final theme = Theme.of(context);
-      final isDark = theme.brightness == Brightness.dark;
+    final glassMode = LiquidGlassProvider.glassModeOf(context);
+    final palette = context.theav;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (glassMode != GlassMode.disabled && onChanged != null) {
       return LiquidGlassSwitch(
         value: value,
         onChanged: onChanged!,
-        activeColor: activeColor ?? (isDark ? const Color(0xFF0088CC) : const Color(0xFF34C759)),
-        inactiveColor: inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
-        thumbColor: thumbColor ?? Colors.white,
+        activeColor: activeColor ?? palette.primary,
+        inactiveColor:
+            inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
+        thumbColor: thumbColor ?? palette.onPrimary,
       );
     }
-    return Switch(
+    return TheavSwitch(
       value: value,
       onChanged: onChanged,
-      activeThumbColor: activeColor,
+      activeColor: activeColor,
     );
   }
 }
 
 /// Адаптивный ползунок (Slider), использующий [LiquidGlassSlider]
-/// из библиотеки liquid_glass_easy при включённом Liquid Glass дизайне,
-/// и стандартный Material [Slider] при выключенном.
+/// при включённом Liquid Glass дизайне и стилизованный [Slider] при выключенном.
 class AdaptiveSlider extends StatelessWidget {
   final double value;
   final ValueChanged<double>? onChanged;
@@ -77,10 +77,10 @@ class AdaptiveSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isGlass = context.watch<LiquidGlassProvider>().enabled;
-    if (isGlass && onChanged != null) {
-      final theme = Theme.of(context);
-      final isDark = theme.brightness == Brightness.dark;
+    final glassMode = LiquidGlassProvider.glassModeOf(context);
+    final palette = context.theav;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (glassMode != GlassMode.disabled && onChanged != null) {
       return LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.hasBoundedWidth ? constraints.maxWidth : 280.0;
@@ -92,29 +92,29 @@ class AdaptiveSlider extends StatelessWidget {
             minimumValue: min,
             maximumValue: max,
             width: width,
-            activeColor: activeColor ?? (isDark ? const Color(0xFF0088CC) : theme.colorScheme.primary),
-            inactiveColor: inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
+            activeColor: activeColor ?? palette.primary,
+            inactiveColor:
+                inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
             thumbColor: thumbColor ?? Colors.white,
           );
         },
       );
     }
     return Slider(
-      value: value,
+      value: value.clamp(min, max),
       onChanged: onChanged,
       onChangeStart: onChangeStart,
       onChangeEnd: onChangeEnd,
       min: min,
       max: max,
       divisions: divisions,
-      activeColor: activeColor,
+      activeColor: activeColor ?? palette.primary,
       label: label,
     );
   }
 }
 
-/// Адаптивный SwitchListTile, использующий [AdaptiveSwitch] (с [LiquidGlassSwitch])
-/// при включённом Liquid Glass дизайне, и стандартный Material [SwitchListTile] при выключенном.
+/// Адаптивный SwitchListTile, использующий [AdaptiveSwitch].
 class AdaptiveSwitchListTile extends StatelessWidget {
   final Widget? title;
   final Widget? subtitle;
@@ -157,34 +157,19 @@ class AdaptiveSwitchListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isGlass = context.watch<LiquidGlassProvider>().enabled;
-    if (isGlass) {
-      return ListTile(
-        title: title,
-        subtitle: subtitle,
-        leading: secondary,
-        contentPadding: contentPadding,
-        dense: dense,
-        isThreeLine: isThreeLine,
-        trailing: AdaptiveSwitch(
-          value: value,
-          onChanged: onChanged,
-          activeColor: activeColor ?? activeTrackColor,
-        ),
-        onTap: onChanged != null ? () => onChanged!(!value) : null,
-      );
-    }
-    return SwitchListTile(
+    return ListTile(
       title: title,
       subtitle: subtitle,
-      secondary: secondary,
-      value: value,
-      onChanged: onChanged,
+      leading: secondary,
       contentPadding: contentPadding,
       dense: dense,
       isThreeLine: isThreeLine,
-      activeThumbColor: activeColor,
-      activeTrackColor: activeTrackColor,
+      trailing: AdaptiveSwitch(
+        value: value,
+        onChanged: onChanged,
+        activeColor: activeColor ?? activeTrackColor,
+      ),
+      onTap: onChanged != null ? () => onChanged!(!value) : null,
     );
   }
 }

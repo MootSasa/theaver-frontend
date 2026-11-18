@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'liquid_glass_provider.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
-/// Service to show beautiful glass toasts ("clouds") throughout the app.
+import '../widgets/design_system/theav_design_system.dart';
+
+/// Dual-mode floating toast ("cloud") overlay using [TheavSurfaceStyle]
+/// (`context.theav` palette) and safe GPU animations (no [Opacity] around
+/// [LiquidGlassLens]).
 class GlassToastService {
   static final GlassToastService _instance = GlassToastService._internal();
   factory GlassToastService() => _instance;
@@ -14,29 +15,50 @@ class GlassToastService {
   OverlayEntry? _overlayEntry;
   Timer? _timer;
 
-  /// Shows a glass toast with the given [message], [icon], or [iconWidget].
+  /// Shows a floating toast with optional icon, action button, or error styling.
   void show(
     BuildContext context,
     String message, {
     IconData? icon,
     Widget? iconWidget,
     Duration duration = const Duration(seconds: 3),
+    String? actionLabel,
+    VoidCallback? onAction,
+    bool isError = false,
   }) {
     _hide();
 
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+
     _overlayEntry = OverlayEntry(
-      builder: (context) => _GlassToastWidget(
+      builder: (ctx) => _GlassToastWidget(
         message: message,
         icon: icon,
         iconWidget: iconWidget,
+        actionLabel: actionLabel,
+        onAction: onAction,
+        isError: isError,
         onDismiss: _hide,
       ),
     );
 
-    final overlay = Overlay.of(context);
     overlay.insert(_overlayEntry!);
-
     _timer = Timer(duration, _hide);
+  }
+
+  /// Convenience helper for error notifications.
+  void showError(
+    BuildContext context,
+    String message, {
+    Duration duration = const Duration(seconds: 3),
+  }) {
+    show(
+      context,
+      message,
+      isError: true,
+      duration: duration,
+    );
   }
 
   /// Hides the currently visible toast overlay, if any.
@@ -54,12 +76,18 @@ class _GlassToastWidget extends StatefulWidget {
   final String message;
   final IconData? icon;
   final Widget? iconWidget;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+  final bool isError;
   final VoidCallback onDismiss;
 
   const _GlassToastWidget({
     required this.message,
     this.icon,
     this.iconWidget,
+    this.actionLabel,
+    this.onAction,
+    required this.isError,
     required this.onDismiss,
   });
 
@@ -67,22 +95,22 @@ class _GlassToastWidget extends StatefulWidget {
   State<_GlassToastWidget> createState() => _GlassToastWidgetState();
 }
 
-class _GlassToastWidgetState extends State<_GlassToastWidget> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _opacity;
+class _GlassToastWidgetState extends State<_GlassToastWidget>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _progress;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 200),
+      duration: const Duration(milliseconds: 220),
     );
-
-    _opacity = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeIn),
+    _progress = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
     );
-
     _controller.forward();
   }
 
@@ -92,120 +120,131 @@ class _GlassToastWidgetState extends State<_GlassToastWidget> with SingleTickerP
     super.dispose();
   }
 
-  LiquidGlassProvider? _maybeGlassProvider(BuildContext context) {
-    try {
-      return Provider.of<LiquidGlassProvider>(context, listen: false);
-    } catch (_) {
-      return null;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final style = TheavSurfaceStyle.of(context, listen: false);
+    final palette = style.palette;
 
-    // We use context.read because we don't expect the mode to change while the toast is visible
-    final glassProvider = _maybeGlassProvider(context);
-    final isGlassEnabled = glassProvider?.enabled ?? false;
+    final Color? fillOverride = widget.isError
+        ? Color.alphaBlend(
+            palette.error.withValues(alpha: style.isDark ? 0.24 : 0.14),
+            style.hudFill,
+          )
+        : null;
+
+    final Widget pill = GestureDetector(
+      onTap: widget.onDismiss,
+      child: TheavFloatingSurface(
+        borderRadius: 24,
+        refractionIndex: 1.08,
+        refractionWidth: 18,
+        colorOverride: fillOverride,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            child: _buildContent(palette),
+          ),
+        ),
+      ),
+    );
+
+    final Animation<Offset> slide = Tween<Offset>(
+      begin: const Offset(0, 0.32),
+      end: Offset.zero,
+    ).animate(_progress);
+
+    // Never wrap shader-backed LiquidGlassLens in Opacity or FadeTransition.
+    final Widget animatedPill = style.isFull
+        ? SlideTransition(
+            position: slide,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.92, end: 1.0).animate(_progress),
+              child: pill,
+            ),
+          )
+        : SlideTransition(
+            position: slide,
+            child: FadeTransition(
+              opacity: _progress,
+              child: pill,
+            ),
+          );
 
     return SafeArea(
       child: Align(
         alignment: Alignment.bottomCenter,
         child: Padding(
-          padding: const EdgeInsets.only(bottom: 100), // Positioned above the input field
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              return Opacity(
-                opacity: _opacity.value,
-                child: child,
-              );
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 96),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: animatedPill,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent(TheavPalette palette) {
+    final Color iconColor =
+        widget.isError ? palette.error : palette.primary;
+
+    final Widget? leadingIcon = widget.iconWidget ??
+        (widget.icon != null
+            ? Icon(widget.icon, color: iconColor, size: 19)
+            : (widget.isError
+                ? iconoir.WarningTriangle(
+                    width: 19,
+                    height: 19,
+                    color: palette.error,
+                  )
+                : null));
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (leadingIcon != null) ...[
+          leadingIcon,
+          const SizedBox(width: 10),
+        ],
+        Flexible(
+          child: Text(
+            widget.message,
+            style: TextStyle(
+              color: palette.onSurface,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w500,
+              height: 1.3,
+            ),
+          ),
+        ),
+        if (widget.actionLabel != null &&
+            widget.actionLabel!.isNotEmpty &&
+            widget.onAction != null) ...[
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: () {
+              widget.onDismiss();
+              widget.onAction?.call();
             },
-            child: Material(
-              color: Colors.transparent,
-              child: IntrinsicWidth(
-                child: IntrinsicHeight(
-                  child: (isGlassEnabled && glassProvider != null)
-                    ? _buildMatteGlass(isDark, theme, glassProvider)
-                    : _buildClassicBlur(isDark, theme),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: palette.primary.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                widget.actionLabel!,
+                style: TextStyle(
+                  color: palette.primary,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  /// Matte glass effect using LiquidGlass (for Glass design)
-  Widget _buildMatteGlass(bool isDark, ThemeData theme, LiquidGlassProvider glassProvider) {
-    final style = glassProvider.createStyle(
-      blur: 25.0,
-      refractionIndex: 1.05,
-      refractionWidth: 15.0,
-      color: isDark 
-          ? Colors.black.withValues(alpha: 0.5) 
-          : Colors.white.withValues(alpha: 0.5),
-      shape: const LiquidGlassShape.continuousRoundedRectangle(
-        cornerRadius: 24,
-      ),
-    );
-
-    return LiquidGlassLens(
-      style: style,
-      child: _buildContent(theme),
-    );
-  }
-
-  /// Classic blur effect using BackdropFilter (for Classic design)
-  Widget _buildClassicBlur(bool isDark, ThemeData theme) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark 
-                ? Colors.black.withValues(alpha: 0.6) 
-                : Colors.white.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: isDark ? Colors.white10 : Colors.black12,
-              width: 0.5,
-            ),
-          ),
-          child: _buildContent(theme),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildContent(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (widget.iconWidget != null) ...[
-            widget.iconWidget!,
-            const SizedBox(width: 12),
-          ] else if (widget.icon != null) ...[
-            Icon(widget.icon, color: theme.colorScheme.onSurface, size: 20),
-            const SizedBox(width: 12),
-          ],
-          Flexible(
-            child: Text(
-              widget.message,
-              style: TextStyle(
-                color: theme.colorScheme.onSurface,
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
         ],
-      ),
+      ],
     );
   }
 }

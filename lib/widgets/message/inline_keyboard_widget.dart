@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../services/bot_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Renders a Telegram-style `inline_keyboard` grid directly beneath a
 /// [MessageBubble].
@@ -105,20 +106,15 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
 
       if (answerText != null && answerText.isNotEmpty && mounted) {
         if (showAlert) {
-          await showDialog<void>(
+          await showTheavDialog<void>(
             context: context,
-            builder: (ctx) => AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
+            message: answerText,
+            actions: const [
+              TheavDialogAction<void>(
+                label: 'ОК',
+                isPrimary: true,
               ),
-              content: Text(answerText),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('ОК'),
-                ),
-              ],
-            ),
+            ],
           );
         } else {
           GlassToastService().show(context, answerText);

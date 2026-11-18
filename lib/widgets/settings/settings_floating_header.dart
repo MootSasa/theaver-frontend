@@ -1,23 +1,17 @@
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Safely resolves [LiquidGlassProvider] when present in the widget tree.
 LiquidGlassProvider? maybeLiquidGlassProvider(
   BuildContext context, {
   bool listen = true,
 }) {
-  try {
-    return Provider.of<LiquidGlassProvider>(context, listen: listen);
-  } catch (_) {
-    return null;
-  }
+  return LiquidGlassProvider.maybeOf(context, listen: listen);
 }
 
 /// Action descriptor rendered in the trailing floating pill/circle of
@@ -70,66 +64,10 @@ class SettingsFloatingSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final isGlassEnabled = glassProvider?.enabled ?? false;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final content =
-        padding != null ? Padding(padding: padding!, child: child) : child;
-
-    if (isGlassEnabled && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        cornerRadius: borderRadius,
-        refractionIndex: 1.12,
-        refractionWidth: 22.0,
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: content,
-      );
-    }
-
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final defaultBg = isDark
-        ? const Color(0xFF1E1E22)
-        : Colors.white;
-    final baseColor = themeExt?.palette.appBarBackground;
-    final effectiveBg = (baseColor != null && baseColor != Colors.transparent
-            ? baseColor
-            : defaultBg)
-        .withValues(alpha: isDark ? 0.78 : 0.84);
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(borderRadius),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.08),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(borderRadius),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: effectiveBg,
-              borderRadius: BorderRadius.circular(borderRadius),
-              border: Border.all(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.12)
-                    : Colors.black.withValues(alpha: 0.08),
-                width: 0.5,
-              ),
-            ),
-            child: content,
-          ),
-        ),
-      ),
+    return TheavFloatingSurface(
+      borderRadius: borderRadius,
+      padding: padding,
+      child: child,
     );
   }
 }
@@ -230,10 +168,8 @@ class SettingsFloatingHeader extends StatelessWidget {
   /// Resolves the foreground color matching [TheavThemeExtension] or brightness.
   static Color foregroundColorOf(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final themeExt = theme.extension<TheavThemeExtension>();
-    return themeExt?.palette.appBarForeground ??
-        (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    return themeExt?.palette.appBarForeground ?? theme.colorScheme.onSurface;
   }
 
   @override
@@ -583,20 +519,58 @@ class SettingsAttachedSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final isGlassEnabled = glassProvider?.enabled ?? false;
-    final baseBg = themeExt?.palette.surface ??
-        (isDark ? const Color(0xFF171C24) : Colors.white);
-    final sheetBg = baseBg.withValues(alpha: isDark ? 0.90 : 0.94);
-    final dividerColor = themeExt?.palette.divider ??
-        (isDark
-            ? Colors.white.withValues(alpha: 0.10)
-            : Colors.black.withValues(alpha: 0.08));
+    final style = TheavSurfaceStyle.of(context);
+    final blurFilter = style.getBlurFilter(sigma: style.isGlass ? 22.0 : 0.0);
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final maxHeight = MediaQuery.sizeOf(context).height * maxHeightFactor;
+
+    Widget sheetContainer = Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: style.overlayFill,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(
+          top: BorderSide(color: style.hairlineBorder, width: 0.8),
+          left: BorderSide(color: style.hairlineBorder, width: 0.5),
+          right: BorderSide(color: style.hairlineBorder, width: 0.5),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 10, bottom: 4),
+            child: Container(
+              width: 38,
+              height: 4,
+              decoration: BoxDecoration(
+                color: style.palette.onSurface.withValues(alpha: 0.22),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Flexible(
+            child: Padding(
+              padding: padding ??
+                  EdgeInsets.fromLTRB(
+                    20,
+                    10,
+                    20,
+                    math.max(20.0, bottomInset + 12.0),
+                  ),
+              child: child,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (blurFilter != null) {
+      sheetContainer = BackdropFilter(
+        filter: blurFilter,
+        child: sheetContainer,
+      );
+    }
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -609,54 +583,7 @@ class SettingsAttachedSheet extends StatelessWidget {
           type: MaterialType.transparency,
           child: ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: isGlassEnabled ? 24 : 18,
-                sigmaY: isGlassEnabled ? 24 : 18,
-              ),
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: sheetBg,
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(24)),
-                  border: Border(
-                    top: BorderSide(color: dividerColor, width: 0.8),
-                    left: BorderSide(color: dividerColor, width: 0.5),
-                    right: BorderSide(color: dividerColor, width: 0.5),
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(top: 10, bottom: 4),
-                      child: Container(
-                        width: 38,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: (isDark ? Colors.white : Colors.black)
-                              .withValues(alpha: 0.20),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                    Flexible(
-                      child: Padding(
-                        padding: padding ??
-                            EdgeInsets.fromLTRB(
-                              20,
-                              10,
-                              20,
-                              math.max(20.0, bottomInset + 12.0),
-                            ),
-                        child: child,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            child: sheetContainer,
           ),
         ),
       ),

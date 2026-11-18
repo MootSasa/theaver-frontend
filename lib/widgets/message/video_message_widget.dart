@@ -90,6 +90,9 @@ class VideoNoteControllerPool {
         }
       }
       if (oldCtrl != null) {
+        try {
+          oldCtrl.pause();
+        } catch (_) {}
         WidgetsBinding.instance.addPostFrameCallback((_) {
           try {
             oldCtrl.dispose();
@@ -957,7 +960,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                                   ? _buildPlaceholder(effectiveDiameter)
                                    : isFloatingActive
                                        ? Container(
-                                           color: const Color(0xFF1C1C1E),
+                                           color: Theme.of(context).colorScheme.surfaceContainerHighest,
                                            child: const Center(
                                              child: Icon(
                                                Icons.picture_in_picture_alt_rounded,

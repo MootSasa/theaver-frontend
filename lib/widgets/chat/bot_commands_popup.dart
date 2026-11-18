@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/bot_service.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -304,7 +303,7 @@ class _BotCommandsPopupState extends State<BotCommandsPopup>
     final isDark = theme.brightness == Brightness.dark;
     final ext = theme.extension<TheavThemeExtension>();
     final colorScheme = theme.colorScheme;
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
 

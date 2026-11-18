@@ -18,6 +18,8 @@ import '../../services/settings_service.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 import '../message/spoiler_text_widget.dart';
 import 'rich_text_editing_controller.dart';
 export 'rich_text_editing_controller.dart';
@@ -84,6 +86,7 @@ class LiquidGlassInputField extends StatefulWidget {
   final bool isReplyKeyboardOpen;
   final VoidCallback? onToggleReplyKeyboard;
   final int slowmodeRemainingSeconds;
+  final VoidCallback? onSendLongPress;
 
   const LiquidGlassInputField({
     Key? key,
@@ -119,6 +122,7 @@ class LiquidGlassInputField extends StatefulWidget {
     this.isReplyKeyboardOpen = false,
     this.onToggleReplyKeyboard,
     this.slowmodeRemainingSeconds = 0,
+    this.onSendLongPress,
   }) : super(key: key);
 
   @override
@@ -547,7 +551,10 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   }
 
   Widget _buildGlassInput(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    if (glassProvider == null || !glassProvider.enabled) {
+      return _buildClassicInput(context);
+    }
 
     final style = glassProvider.createStyle(
       context: context,
@@ -1038,7 +1045,14 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressStart: (details) {
-            if (canSend || widget.isSending || isSlowmodeLocked) return;
+            if (widget.isSending || isSlowmodeLocked) return;
+            if (canSend) {
+              if (widget.onSendLongPress != null) {
+                HapticUtils.impact();
+                widget.onSendLongPress!();
+              }
+              return;
+            }
             if (_isVideoMode) {
               widget.onStartVideoRecord?.call();
             } else {
@@ -1254,8 +1268,8 @@ class InputQuotePainter extends CustomPainter {
 
       final isMidLineStart = start > 0 && text[start - 1] != '\n';
       final isMidLineEnd = end < text.length && text[end] != '\n';
-      final isSingleLineMidQuote =
-          (isMidLineStart || isMidLineEnd) && !text.substring(start, end).contains('\n');
+      final isSingleLineMidQuote = (isMidLineStart || isMidLineEnd) &&
+          !EntityParser.safeSubstring(text, start, end).contains('\n');
 
       final double rectLeft = isSingleLineMidQuote && isMidLineStart
           ? (minLeft - 10.0).clamp(2.0, math.max(2.0, size.width - 28.0))
@@ -1596,12 +1610,14 @@ class _TelegramTextSelectionToolbarState
     }
     final sel = widget.controller.selection;
     if (!sel.isValid || sel.isCollapsed) return;
-    final text = widget.controller.text.substring(sel.start, sel.end);
+    final start = EntityParser.snapUtf16Offset(widget.controller.text, sel.start);
+    final end = EntityParser.snapUtf16Offset(widget.controller.text, sel.end);
+    final text = EntityParser.safeSubstring(widget.controller.text, start, end);
     Clipboard.setData(ClipboardData(text: text));
-    final newText = widget.controller.text.replaceRange(sel.start, sel.end, '');
+    final newText = widget.controller.text.replaceRange(start, end, '');
     widget.controller.value = TextEditingValue(
       text: newText,
-      selection: TextSelection.collapsed(offset: sel.start),
+      selection: TextSelection.collapsed(offset: start),
     );
   }
 
@@ -1615,7 +1631,8 @@ class _TelegramTextSelectionToolbarState
     }
     final sel = widget.controller.selection;
     if (!sel.isValid || sel.isCollapsed) return;
-    final text = widget.controller.text.substring(sel.start, sel.end);
+    final text =
+        EntityParser.safeSubstring(widget.controller.text, sel.start, sel.end);
     Clipboard.setData(ClipboardData(text: text));
   }
 
@@ -1975,92 +1992,85 @@ class TextFormattingUtils {
   static void showCodeDialog(
       BuildContext context, TextEditingController controller) {
     final sel = controller.selection;
-    final start = sel.isValid ? math.min(sel.start, sel.end) : controller.text.length;
-    final end = sel.isValid ? math.max(sel.start, sel.end) : start;
-    final String selectedText = (start < end)
-        ? controller.text.substring(start, end)
-        : '';
+    final start = sel.isValid
+        ? EntityParser.snapUtf16Offset(controller.text, math.min(sel.start, sel.end))
+        : controller.text.length;
+    final end = sel.isValid
+        ? EntityParser.snapUtf16Offset(controller.text, math.max(sel.start, sel.end))
+        : start;
+    final String selectedText =
+        (start < end) ? EntityParser.safeSubstring(controller.text, start, end) : '';
 
     final langController = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    showDialog(
+    void submitCode() {
+      final lang = langController.text.trim();
+      Navigator.of(context, rootNavigator: false).maybePop();
+
+      final codeBlock = '```$lang\n$selectedText\n```';
+      final newText = controller.text.replaceRange(start, end, codeBlock);
+
+      final cursorOffset = selectedText.isEmpty
+          ? start + 4 + lang.length
+          : start + codeBlock.length;
+
+      controller.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: cursorOffset),
+      );
+    }
+
+    showTheavDialog<bool>(
       context: context,
-      builder: (ctx) {
-        void submitCode() {
-          final lang = langController.text.trim();
-          Navigator.of(ctx).pop();
-
-          final codeBlock = '```$lang\n$selectedText\n```';
-          final newText = controller.text.replaceRange(start, end, codeBlock);
-
-          final cursorOffset = selectedText.isEmpty
-              ? start + 4 + lang.length
-              : start + codeBlock.length;
-
-          controller.value = TextEditingValue(
-            text: newText,
-            selection: TextSelection.collapsed(offset: cursorOffset),
-          );
-        }
-
-        return AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF1E2225) : null,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text(
-            'Создать блок кода',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
+      title: 'Создать блок кода',
+      content: TheavInsetGroup(
+        children: [
+          TheavInlineTextField(
+            controller: langController,
+            label: 'Язык программирования',
+            placeholder: 'например: dart, python, js...',
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => submitCode(),
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                controller: langController,
-                autofocus: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => submitCode(),
-                style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                decoration: const InputDecoration(
-                  labelText: 'Язык программирования',
-                  hintText: 'например: dart, python, js...',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Отмена'),
-            ),
-            ElevatedButton(
-              onPressed: submitCode,
-              child: const Text('Создать'),
-            ),
-          ],
-        );
-      },
-    );
+        ],
+      ),
+      actions: [
+        const TheavDialogAction<bool>(
+          label: 'Отмена',
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: 'Создать',
+          result: true,
+          isPrimary: true,
+          onPressed: submitCode,
+        ),
+      ],
+    ).whenComplete(() {
+      Future.delayed(const Duration(milliseconds: 250), langController.dispose);
+    });
   }
 
   static void showLinkDialog(
       BuildContext context, TextEditingController controller) {
     final sel = controller.selection;
-    RichSpan? existingLink;
+    RichSpan? targetLink;
     if (controller is RichTextEditingController) {
-      existingLink = controller.getLinkSpanForSelection(sel);
+      targetLink = controller.getLinkSpanForSelection(sel);
     }
 
-    final bool isEditingExisting = existingLink != null;
+    
+    final bool isEditingExisting = targetLink != null;
     final String initialUrl = isEditingExisting
-        ? (existingLink.url ?? 'https://')
+        ? (targetLink.url ?? 'https://')
         : (sel.isValid && !sel.isCollapsed
-            ? (EntityParser.urlRegex.hasMatch(controller.text.substring(
+            ? (EntityParser.urlRegex.hasMatch(EntityParser.safeSubstring(
+                    controller.text,
                     math.min(sel.start, sel.end),
                     math.max(sel.start, sel.end)))
-                ? EntityParser.normalizeUrl(controller.text.substring(
+                ? EntityParser.normalizeUrl(EntityParser.safeSubstring(
+                    controller.text,
                     math.min(sel.start, sel.end),
                     math.max(sel.start, sel.end)))
                 : 'https://')
@@ -2071,110 +2081,102 @@ class TextFormattingUtils {
 
     final urlController = TextEditingController(text: initialUrl);
     final textController = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    showDialog(
+    void submitLink() {
+      final url = urlController.text.trim();
+      final label = textController.text.trim();
+      Navigator.of(context).maybePop();
+      if (url.isNotEmpty && url != 'https://') {
+        if (controller is RichTextEditingController) {
+          if (isEditingExisting) {
+            
+            controller.applyLinkToSelection(
+              url,
+              start: targetLink!.start,
+              end: targetLink.end,
+            );
+          } else if (showTextField && label.isNotEmpty) {
+            controller.applyLinkToSelection(
+              url,
+              replacementText: label,
+            );
+          } else {
+            controller.applyLinkToSelection(url);
+          }
+        } else {
+          applyFormatting(controller, 'link', url: url);
+        }
+      }
+    }
+
+    bool routeDisposalHooked = false;
+    showTheavDialog<bool>(
       context: context,
-      builder: (ctx) {
-        void submitLink() {
-          final url = urlController.text.trim();
-          final label = textController.text.trim();
-          Navigator.pop(ctx);
-          if (url.isNotEmpty && url != 'https://') {
-            if (controller is RichTextEditingController) {
-              if (isEditingExisting) {
-                final targetLink = existingLink!;
-                controller.applyLinkToSelection(
-                  url,
-                  start: targetLink.start,
-                  end: targetLink.end,
-                );
-              } else if (showTextField && label.isNotEmpty) {
-                controller.applyLinkToSelection(
-                  url,
-                  replacementText: label,
-                );
-              } else {
-                controller.applyLinkToSelection(url);
-              }
-            } else {
-              applyFormatting(controller, 'link', url: url);
+      title: isEditingExisting
+          ? 'Редактировать ссылку'
+          : (AppLocalizations.of(context)?.translate('chat_action_link') ??
+              'Ссылка'),
+      content: Builder(
+        builder: (dialogCtx) {
+          if (!routeDisposalHooked) {
+            routeDisposalHooked = true;
+            final route = ModalRoute.of(dialogCtx);
+            if (route != null) {
+              route.completed.whenComplete(() {
+                urlController.dispose();
+                textController.dispose();
+              });
             }
           }
-        }
-
-        return AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF1E2225) : null,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text(
-            isEditingExisting
-                ? 'Редактировать ссылку'
-                : (AppLocalizations.of(ctx)?.translate('chat_action_link') ??
-                    'Ссылка'),
-            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
+          return TheavInsetGroup(
             children: [
-              if (showTextField) ...[
-                TextField(
+              if (showTextField)
+                TheavInlineTextField(
                   controller: textController,
+                  label: 'Текст ссылки',
+                  placeholder: 'Название ссылки',
                   autofocus: true,
                   textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(
-                    labelText: 'Текст ссылки',
-                    hintText: 'Название ссылки',
-                    border: OutlineInputBorder(),
-                  ),
                 ),
-                const SizedBox(height: 12),
-              ],
-              TextField(
+              TheavInlineTextField(
                 controller: urlController,
+                label: isEditingExisting ? 'URL' : 'Адрес ссылки',
+                placeholder: 'https://example.com',
                 autofocus: !showTextField,
+                keyboardType: TextInputType.url,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => submitLink(),
-                decoration: InputDecoration(
-                  labelText: isEditingExisting ? 'URL' : null,
-                  hintText: 'https://example.com',
-                  border: const OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.url,
               ),
             ],
-          ),
-          actions: [
-            if (isEditingExisting) ...[
-              Builder(builder: (c) {
-                final targetLink = existingLink!;
-                return TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    if (controller is RichTextEditingController) {
-                      controller.removeLinkFromSelection(
-                        start: targetLink.start,
-                        end: targetLink.end,
-                      );
-                    }
-                  },
-                  child: const Text('Удалить ссылку',
-                      style: TextStyle(color: Colors.redAccent)),
+          );
+        },
+      ),
+      actions: [
+        if (isEditingExisting)
+          TheavDialogAction<bool>(
+            label: 'Удалить ссылку',
+            isDestructive: true,
+            onPressed: () {
+              
+              Navigator.of(context).maybePop();
+              if (controller is RichTextEditingController) {
+                controller.removeLinkFromSelection(
+                  start: targetLink!.start,
+                  end: targetLink.end,
                 );
-              }),
-            ],
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(
-                  AppLocalizations.of(ctx)?.translate('cancel') ?? 'Отмена'),
-            ),
-            TextButton(
-              onPressed: submitLink,
-              child: Text(isEditingExisting ? 'Сохранить' : 'OK'),
-            ),
-          ],
-        );
-      },
+              }
+            },
+          ),
+        TheavDialogAction<bool>(
+          label: AppLocalizations.of(context)?.translate('cancel') ?? 'Отмена',
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: isEditingExisting ? 'Сохранить' : 'OK',
+          isPrimary: true,
+          onPressed: submitLink,
+        ),
+      ],
     );
   }
 }

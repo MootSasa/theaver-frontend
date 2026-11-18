@@ -36,6 +36,16 @@ class UnreadCountProvider extends ChangeNotifier {
 
   /// Stream subscription for WebSocket events
   StreamSubscription<WebSocketEvent>? _wsSubscription;
+  bool _disposed = false;
+
+  static int _normalizeCount(int count) =>
+      count == -1 ? -1 : (count < 0 ? 0 : count);
+
+  void _safeNotify() {
+    if (!_disposed) {
+      notifyListeners();
+    }
+  }
 
   /// Whether the provider has authoritative count data for [chatId]
   bool hasAuthoritativeCount(String chatId) =>
@@ -132,6 +142,9 @@ class UnreadCountProvider extends ChangeNotifier {
 
   /// Initialize: load counts from server and subscribe to WebSocket
   Future<void> initialize() async {
+    await _wsSubscription?.cancel();
+    _wsService.unsubscribe(WebSocketEventType.unreadCountUpdated, _onUnreadCountUpdated);
+    _wsService.unsubscribe(WebSocketEventType.newMessage, _onNewMessage);
     // Subscribe to WebSocket events
     _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
     _wsService.subscribe(WebSocketEventType.unreadCountUpdated, _onUnreadCountUpdated);
@@ -151,7 +164,7 @@ class UnreadCountProvider extends ChangeNotifier {
         _counts[chat.id] = chat.unreadCount;
       }
     }
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Reset in-memory unread counts when switching accounts
@@ -162,42 +175,51 @@ class UnreadCountProvider extends ChangeNotifier {
     _hasLoadedInitialChats = false;
     _openChatCounts.clear();
     _lastSetOpenChatId = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Set count for a specific chat (from server response)
   void setCount(String chatId, int count) {
+    if (chatId.isEmpty) return;
+    final safeCount = _normalizeCount(count);
     _knownChatIds.add(chatId);
-    if (count == 0) {
+    if (safeCount == 0) {
       _counts.remove(chatId);
     } else {
-      _counts[chatId] = count;
+      _counts[chatId] = safeCount;
     }
-    _persistCountToDb(chatId, count);
-    notifyListeners();
+    _persistCountToDb(chatId, safeCount);
+    _safeNotify();
   }
 
   /// Optimistically increment unread count for a chat (when new message arrives)
   void increment(String chatId) {
     // Don't increment if user has this chat open in any tile
-    if (isChatOpen(chatId)) return;
+    if (chatId.isEmpty || isChatOpen(chatId)) return;
     _knownChatIds.add(chatId);
     final current = _counts[chatId] ?? 0;
     final nextCount = current == -1 ? 1 : current + 1;
     _counts[chatId] = nextCount;
     _persistCountToDb(chatId, nextCount);
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Optimistically decrement unread count for a chat (when messages marked as read)
   void decrement(String chatId, int count) {
+    if (chatId.isEmpty || count <= 0) return;
     _knownChatIds.add(chatId);
     final current = _counts[chatId] ?? 0;
     if (current == -1) {
       _counts.remove(chatId);
       _persistCountToDb(chatId, 0);
       NotificationService().cancelChatNotifications(chatId);
-      notifyListeners();
+      _safeNotify();
+      return;
+    }
+    if (current <= 0) {
+      _counts.remove(chatId);
+      _persistCountToDb(chatId, 0);
+      _safeNotify();
       return;
     }
     final newCount = (current - count).clamp(0, current);
@@ -208,16 +230,17 @@ class UnreadCountProvider extends ChangeNotifier {
       _counts[chatId] = newCount;
     }
     _persistCountToDb(chatId, newCount);
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Clear unread count for a chat (optimistically)
   void clear(String chatId) {
+    if (chatId.isEmpty) return;
     _knownChatIds.add(chatId);
     _counts.remove(chatId);
     _persistCountToDb(chatId, 0);
     NotificationService().cancelChatNotifications(chatId);
-    notifyListeners();
+    _safeNotify();
   }
 
   /// Handle WebSocket events
@@ -228,9 +251,12 @@ class UnreadCountProvider extends ChangeNotifier {
   /// Handle unread_count_updated from server — AUTHORITATIVE source
   void _onUnreadCountUpdated(WebSocketEvent event) {
     final chatId = event.data['chat_id']?.toString();
-    final unreadCount = event.data['unread_count'] as int? ?? 0;
+    final rawCount = event.data['unread_count'];
+    final unreadCount = _normalizeCount(
+      rawCount is num ? rawCount.toInt() : (int.tryParse(rawCount?.toString() ?? '') ?? 0),
+    );
 
-    if (chatId != null) {
+    if (chatId != null && chatId.isNotEmpty) {
       _knownChatIds.add(chatId);
       if (unreadCount == 0) {
         _counts.remove(chatId);
@@ -239,20 +265,20 @@ class UnreadCountProvider extends ChangeNotifier {
         _counts[chatId] = unreadCount;
       }
       _persistCountToDb(chatId, unreadCount);
-      notifyListeners();
+      _safeNotify();
     }
   }
 
   /// Handle new_message — authoritative count is managed by unread_count_updated event
   void _onNewMessage(WebSocketEvent event) {
     final chatId = event.data['chat_id']?.toString();
-    if (chatId == null) return;
+    if (chatId == null || chatId.isEmpty) return;
 
     // If payload contains authoritative unread_count, apply it.
     // Do NOT blindly increment here, as the server broadcasts unread_count_updated
     // with the exact count from PostgreSQL on every new message.
-    if (event.data.containsKey('unread_count') && event.data['unread_count'] is int) {
-      final unreadCount = event.data['unread_count'] as int;
+    if (event.data.containsKey('unread_count') && event.data['unread_count'] is num) {
+      final unreadCount = _normalizeCount((event.data['unread_count'] as num).toInt());
       _knownChatIds.add(chatId);
       if (unreadCount == 0) {
         _counts.remove(chatId);
@@ -260,7 +286,7 @@ class UnreadCountProvider extends ChangeNotifier {
         _counts[chatId] = unreadCount;
       }
       _persistCountToDb(chatId, unreadCount);
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -285,6 +311,7 @@ class UnreadCountProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _wsSubscription?.cancel();
     _wsService.unsubscribe(WebSocketEventType.unreadCountUpdated, _onUnreadCountUpdated);
     _wsService.unsubscribe(WebSocketEventType.newMessage, _onNewMessage);

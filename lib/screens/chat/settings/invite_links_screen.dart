@@ -3,19 +3,20 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../../models/theav_theme.dart';
 import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
-import '../../../services/liquid_glass_provider.dart';
+import '../../../services/websocket_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
+import '../../../widgets/user/avatar_with_status.dart';
 
-/// Invite link management screen: primary link actions (copy, share, QR, reset),
-/// custom secondary invite links (title, max uses, expiry, approval), and revocation.
+/// Invite link & join requests management screen: primary link actions,
+/// pending join requests queue (live WS updated), custom secondary links,
+/// and revocation.
 class InviteLinksScreen extends StatefulWidget {
   final String chatId;
   final String chatType;
@@ -35,6 +36,8 @@ class InviteLinksScreen extends StatefulWidget {
 class _InviteLinksScreenState extends State<InviteLinksScreen> {
   String _primaryLink = '';
   List<InviteLinkItem> _links = [];
+  List<ChatJoinRequest> _joinRequests = [];
+  StreamSubscription<WebSocketEvent>? _joinRequestsSub;
   bool _isLoading = true;
   bool _isBusy = false;
 
@@ -45,6 +48,25 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     super.initState();
     _primaryLink = (widget.primaryInviteLink ?? '').trim();
     unawaited(_loadLinks());
+    _joinRequestsSub = WebSocketService().eventStream.listen((event) {
+      if (!mounted) return;
+      if (event.type == WebSocketEventType.joinRequestsUpdated &&
+          event.data['chat_id']?.toString() == widget.chatId) {
+        unawaited(_refreshJoinRequests());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _joinRequestsSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshJoinRequests() async {
+    final requests = await ChatService.getJoinRequests(widget.chatId);
+    if (!mounted) return;
+    setState(() => _joinRequests = requests);
   }
 
   Future<void> _loadLinks() async {
@@ -55,11 +77,13 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
           ChatService.getGroupSettings(widget.chatId)
         else
           Future.value(const <String, dynamic>{}),
+        ChatService.getJoinRequests(widget.chatId),
       ]);
 
       if (!mounted) return;
       final fetchedLinks = results[0] as List<InviteLinkItem>;
       final settingsRes = results[1] as Map<String, dynamic>;
+      final fetchedRequests = results[2] as List<ChatJoinRequest>;
 
       var resolvedPrimary = _primaryLink;
       if (resolvedPrimary.isEmpty && settingsRes['success'] == true) {
@@ -75,6 +99,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
 
       setState(() {
         _links = fetchedLinks;
+        _joinRequests = fetchedRequests;
         _primaryLink = resolvedPrimary;
         _isLoading = false;
       });
@@ -98,6 +123,50 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
 
   List<InviteLinkItem> get _inactiveLinks {
     return _links.where((l) => !l.isActive).toList();
+  }
+
+  Future<void> _approveRequest(ChatJoinRequest req) async {
+    if (_isBusy) return;
+    HapticUtils.selection();
+    setState(() => _isBusy = true);
+    final ok = await ChatService.approveJoinRequest(
+      chatId: widget.chatId,
+      userId: req.userId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _isBusy = false;
+      if (ok) {
+        _joinRequests.removeWhere((r) => r.userId == req.userId);
+      }
+    });
+    if (ok) {
+      GlassToastService().show(context, 'Заявка одобрена');
+    } else {
+      GlassToastService().showError(context, 'Не удалось одобрить заявку');
+    }
+  }
+
+  Future<void> _declineRequest(ChatJoinRequest req) async {
+    if (_isBusy) return;
+    HapticUtils.selection();
+    setState(() => _isBusy = true);
+    final ok = await ChatService.declineJoinRequest(
+      chatId: widget.chatId,
+      userId: req.userId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _isBusy = false;
+      if (ok) {
+        _joinRequests.removeWhere((r) => r.userId == req.userId);
+      }
+    });
+    if (ok) {
+      GlassToastService().show(context, 'Заявка отклонена');
+    } else {
+      GlassToastService().showError(context, 'Не удалось отклонить заявку');
+    }
   }
 
   void _copyLink(String link) {
@@ -124,38 +193,22 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
   void _showQrBottomSheet(String link, {String? title}) {
     if (link.isEmpty) return;
     HapticUtils.tap();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
+    final palette = context.theav;
 
-    showModalBottomSheet<void>(
+    showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => SettingsAttachedSheet(
+      title: (title != null && title.isNotEmpty) ? title : 'QR-код ссылки',
+      builder: (ctx) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              (title != null && title.isNotEmpty) ? title : 'QR-код ссылки',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: textColor,
-              ),
-            ),
-            const SizedBox(height: 6),
             Text(
               _isChannel
                   ? 'Отсканируйте QR-код, чтобы открыть канал'
                   : 'Отсканируйте QR-код, чтобы вступить в группу',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13.5, color: subColor),
+              style: TextStyle(fontSize: 13.5, color: palette.subtext),
             ),
             const SizedBox(height: 18),
             Container(
@@ -179,7 +232,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
                   errorCorrectLevel: QrErrorCorrectLevel.H,
                   decoration: const PrettyQrDecoration(
                     shape: PrettyQrSmoothSymbol(
-                      color: Color(0xFF1C1C1E),
+                      color: Colors.black87,
                       roundFactor: 1,
                     ),
                     background: Colors.white,
@@ -191,9 +244,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.06)
-                    : Colors.black.withValues(alpha: 0.04),
+                color: palette.onSurface.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Text(
@@ -202,7 +253,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
                 style: TextStyle(
                   fontSize: 13.5,
                   fontWeight: FontWeight.w500,
-                  color: accentColor,
+                  color: palette.primary,
                 ),
               ),
             ),
@@ -210,52 +261,32 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _copyLink(link);
-                    },
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 46),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
+                  child: TheavFloatingPillButton(
                     icon: iconoir.Copy(
                       width: 18,
                       height: 18,
-                      color: accentColor,
+                      color: palette.onSurface,
                     ),
-                    label: const Text('Копировать'),
+                    label: 'Копировать',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _copyLink(link);
+                    },
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Builder(
-                    builder: (_) {
-                      final buttonFg = accentColor.computeLuminance() > 0.35
-                          ? const Color(0xFF0F172A)
-                          : Colors.white;
-                      return FilledButton.icon(
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _shareLink(link);
-                        },
-                        style: FilledButton.styleFrom(
-                          backgroundColor: accentColor,
-                          foregroundColor: buttonFg,
-                          minimumSize: const Size(0, 46),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        icon: iconoir.ShareIos(
-                          width: 18,
-                          height: 18,
-                          color: buttonFg,
-                        ),
-                        label: const Text('Поделиться'),
-                      );
+                  child: TheavFloatingPillButton(
+                    isPrimary: true,
+                    icon: iconoir.ShareIos(
+                      width: 18,
+                      height: 18,
+                      color: palette.onPrimary,
+                    ),
+                    label: 'Поделиться',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _shareLink(link);
                     },
                   ),
                 ),
@@ -269,35 +300,19 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
 
   Future<void> _resetPrimaryLink() async {
     if (_isBusy) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          'Сбросить основную ссылку?',
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: Text(
+      title: 'Сбросить основную ссылку?',
+      message:
           'Текущая ссылка-приглашение перестанет работать, а вместо неё будет создана новая.',
-          style: TextStyle(
-            color: isDark ? Colors.white70 : const Color(0xFF475569),
-          ),
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Сбросить',
+          result: true,
+          isDestructive: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Сбросить',
-              style: TextStyle(color: Colors.redAccent),
-            ),
-          ),
-        ],
-      ),
+      ],
     );
     if (confirmed != true || !mounted) return;
 
@@ -325,16 +340,15 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
       GlassToastService().show(context, 'Создана новая основная ссылка');
       await _loadLinks();
     } else {
-      GlassToastService().show(context, 'Не удалось сбросить ссылку');
+      GlassToastService().showError(context, 'Не удалось сбросить ссылку');
     }
   }
 
   Future<void> _openCreateLinkSheet() async {
-    final created = await showModalBottomSheet<InviteLinkItem?>(
+    final created = await showTheavModalSheet<InviteLinkItem?>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _CreateInviteLinkSheet(chatId: widget.chatId),
+      title: 'Новая ссылка-приглашение',
+      builder: (_) => _CreateInviteLinkSheetContent(chatId: widget.chatId),
     );
 
     if (created != null && mounted) {
@@ -358,7 +372,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
       GlassToastService().show(context, 'Ссылка отозвана');
       await _loadLinks();
     } else {
-      GlassToastService().show(context, 'Не удалось отозвать ссылку');
+      GlassToastService().showError(context, 'Не удалось отозвать ссылку');
     }
   }
 
@@ -379,7 +393,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
       GlassToastService().show(context, 'Ссылка удалена');
       await _loadLinks();
     } else {
-      GlassToastService().show(context, 'Не удалось удалить ссылку');
+      GlassToastService().showError(context, 'Не удалось удалить ссылку');
     }
   }
 
@@ -414,21 +428,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final bgColor = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F7);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.08);
-
+    final palette = context.theav;
     final activeAdditional = _activeAdditionalLinks;
     final inactive = _inactiveLinks;
 
@@ -439,72 +439,107 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
       },
       child: SettingsFloatingScaffold(
         title: 'Пригласительные ссылки',
-        backgroundColor: bgColor,
+        backgroundColor: palette.background,
         onBack: () => Navigator.pop(context, _primaryLink),
         body: ListView(
           padding: EdgeInsets.fromLTRB(
-            16,
+            0,
             SettingsFloatingHeader.topClearanceOf(context) + 12,
-            16,
-            36,
+            0,
+            MediaQuery.paddingOf(context).bottom + 36,
           ),
           children: [
-            Padding(
-              padding: const EdgeInsets.only(left: 14, bottom: 8),
-              child: Text(
-                'ОСНОВНАЯ ССЫЛКА',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.4,
-                  color: subColor,
+            _buildPrimaryLinkGroup(context, palette: palette),
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              children: [
+                TheavListRow(
+                  leading: Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: palette.primary.withValues(alpha: 0.14),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: iconoir.Plus(
+                      width: 18,
+                      height: 18,
+                      color: palette.primary,
+                    ),
+                  ),
+                  title: 'Создать новую ссылку',
+                  subtitle: 'С ограничением по времени, количеству или заявкам',
+                  enabled: !_isBusy,
+                  onTap: _openCreateLinkSheet,
                 ),
+              ],
+            ),
+            if (_joinRequests.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              TheavInsetGroup(
+                header: 'ЗАЯВКИ НА ВСТУПЛЕНИЕ (${_joinRequests.length})',
+                children: [
+                  for (final req in _joinRequests)
+                    TheavListRow(
+                      leading: AvatarWithStatus(
+                        userId: req.userId,
+                        avatarUrl: req.avatarUrl,
+                        name: req.displayName,
+                        radius: 20,
+                      ),
+                      title: req.displayName.isNotEmpty
+                          ? req.displayName
+                          : '@${req.username}',
+                      subtitle: req.username.isNotEmpty
+                          ? '@${req.username}'
+                          : 'Ожидает одобрения',
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _isBusy ? null : () => _declineRequest(req),
+                            child: Container(
+                              width: 34,
+                              height: 34,
+                              decoration: BoxDecoration(
+                                color: palette.error.withValues(alpha: 0.14),
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: iconoir.Xmark(
+                                width: 17,
+                                height: 17,
+                                color: palette.error,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _isBusy ? null : () => _approveRequest(req),
+                            child: Container(
+                              width: 34,
+                              height: 34,
+                              decoration: BoxDecoration(
+                                color: palette.primary,
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: iconoir.Check(
+                                width: 17,
+                                height: 17,
+                                color: palette.onPrimary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
-            ),
-            _buildPrimaryLinkCard(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              accentColor: accentColor,
-              textColor: textColor,
-              subColor: subColor,
-            ),
-            const SizedBox(height: 18),
-            _buildSurfaceCard(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              child: ListTile(
-                minTileHeight: 54,
-                leading: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: accentColor.withValues(alpha: 0.14),
-                    shape: BoxShape.circle,
-                  ),
-                  alignment: Alignment.center,
-                  child: iconoir.Plus(
-                    width: 20,
-                    height: 20,
-                    color: accentColor,
-                  ),
-                ),
-                title: Text(
-                  'Создать новую ссылку',
-                  style: TextStyle(
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.w600,
-                    color: accentColor,
-                  ),
-                ),
-                subtitle: Text(
-                  'С ограничением по времени, количеству или заявкам',
-                  style: TextStyle(fontSize: 12.5, color: subColor),
-                ),
-                onTap: _isBusy ? null : _openCreateLinkSheet,
-              ),
-            ),
+            ],
             if (_isLoading)
               const Padding(
                 padding: EdgeInsets.all(28),
@@ -512,54 +547,22 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
               )
             else ...[
               if (activeAdditional.isNotEmpty) ...[
-                const SizedBox(height: 20),
-                Padding(
-                  padding: const EdgeInsets.only(left: 14, bottom: 8),
-                  child: Text(
-                    'ДОПОЛНИТЕЛЬНЫЕ ССЫЛКИ',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.4,
-                      color: subColor,
-                    ),
-                  ),
-                ),
-                _buildLinksListCard(
+                const SizedBox(height: 8),
+                _buildLinksGroup(
                   context,
+                  header: 'ДОПОЛНИТЕЛЬНЫЕ ССЫЛКИ',
                   items: activeAdditional,
-                  glassProvider: glassProvider,
-                  isDark: isDark,
-                  accentColor: accentColor,
-                  textColor: textColor,
-                  subColor: subColor,
-                  dividerColor: dividerColor,
+                  palette: palette,
                   allowRevoke: true,
                 ),
               ],
               if (inactive.isNotEmpty) ...[
-                const SizedBox(height: 20),
-                Padding(
-                  padding: const EdgeInsets.only(left: 14, bottom: 8),
-                  child: Text(
-                    'ОТОЗВАННЫЕ И ИСТЁКШИЕ',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.4,
-                      color: subColor,
-                    ),
-                  ),
-                ),
-                _buildLinksListCard(
+                const SizedBox(height: 8),
+                _buildLinksGroup(
                   context,
+                  header: 'ОТОЗВАННЫЕ И ИСТЁКШИЕ',
                   items: inactive,
-                  glassProvider: glassProvider,
-                  isDark: isDark,
-                  accentColor: accentColor,
-                  textColor: textColor,
-                  subColor: subColor,
-                  dividerColor: dividerColor,
+                  palette: palette,
                   allowRevoke: false,
                 ),
               ],
@@ -570,113 +573,114 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     );
   }
 
-  Widget _buildPrimaryLinkCard(
+  Widget _buildPrimaryLinkGroup(
     BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
+    required TheavPalette palette,
   }) {
     final hasLink = _primaryLink.isNotEmpty;
     final primaryItem = _primaryLinkItem;
 
-    return _buildSurfaceCard(
-      context,
-      glassProvider: glassProvider,
-      isDark: isDark,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.06)
-                    : Colors.black.withValues(alpha: 0.04),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Row(
-                children: [
-                  iconoir.Link(width: 18, height: 18, color: accentColor),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      hasLink ? _primaryLink : 'Основная ссылка не создана',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        color: hasLink ? textColor : subColor,
+    return TheavInsetGroup(
+      header: 'ОСНОВНАЯ ССЫЛКА',
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: palette.onSurface.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    iconoir.Link(width: 18, height: 18, color: palette.primary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        hasLink ? _primaryLink : 'Основная ссылка не создана',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          color: hasLink ? palette.onSurface : palette.subtext,
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+              if (primaryItem != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Использований: ${primaryItem.uses}',
+                  style: TextStyle(fontSize: 12.5, color: palette.subtext),
+                ),
+              ],
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  _primaryActionBtn(
+                    icon: iconoir.Copy(
+                      width: 18,
+                      height: 18,
+                      color: palette.primary,
+                    ),
+                    label: 'Копировать',
+                    textColor: palette.onSurface,
+                    accentColor: palette.primary,
+                    onTap: hasLink ? () => _copyLink(_primaryLink) : null,
+                  ),
+                  const SizedBox(width: 8),
+                  _primaryActionBtn(
+                    icon: iconoir.ShareIos(
+                      width: 18,
+                      height: 18,
+                      color: palette.primary,
+                    ),
+                    label: 'Поделиться',
+                    textColor: palette.onSurface,
+                    accentColor: palette.primary,
+                    onTap: hasLink ? () => _shareLink(_primaryLink) : null,
+                  ),
+                  const SizedBox(width: 8),
+                  _primaryActionBtn(
+                    icon: iconoir.QrCode(
+                      width: 18,
+                      height: 18,
+                      color: palette.primary,
+                    ),
+                    label: 'QR-код',
+                    textColor: palette.onSurface,
+                    accentColor: palette.primary,
+                    onTap: hasLink
+                        ? () => _showQrBottomSheet(_primaryLink)
+                        : null,
+                  ),
+                  const SizedBox(width: 8),
+                  _primaryActionBtn(
+                    icon: iconoir.RefreshDouble(
+                      width: 18,
+                      height: 18,
+                      color: palette.error,
+                    ),
+                    label: 'Сбросить',
+                    textColor: palette.error,
+                    accentColor: palette.error,
+                    onTap: _isBusy ? null : _resetPrimaryLink,
                   ),
                 ],
               ),
-            ),
-            if (primaryItem != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Использований: ${primaryItem.uses}',
-                style: TextStyle(fontSize: 12.5, color: subColor),
-              ),
             ],
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                _primaryActionBtn(
-                  icon: iconoir.Copy(width: 18, height: 18, color: accentColor),
-                  label: 'Копировать',
-                  textColor: textColor,
-                  accentColor: accentColor,
-                  onTap: hasLink ? () => _copyLink(_primaryLink) : null,
-                ),
-                const SizedBox(width: 8),
-                _primaryActionBtn(
-                  icon: iconoir.ShareIos(
-                    width: 18,
-                    height: 18,
-                    color: accentColor,
-                  ),
-                  label: 'Поделиться',
-                  textColor: textColor,
-                  accentColor: accentColor,
-                  onTap: hasLink ? () => _shareLink(_primaryLink) : null,
-                ),
-                const SizedBox(width: 8),
-                _primaryActionBtn(
-                  icon: iconoir.QrCode(
-                    width: 18,
-                    height: 18,
-                    color: accentColor,
-                  ),
-                  label: 'QR-код',
-                  textColor: textColor,
-                  accentColor: accentColor,
-                  onTap: hasLink
-                      ? () => _showQrBottomSheet(_primaryLink)
-                      : null,
-                ),
-                const SizedBox(width: 8),
-                _primaryActionBtn(
-                  icon: const iconoir.RefreshDouble(
-                    width: 18,
-                    height: 18,
-                    color: Colors.redAccent,
-                  ),
-                  label: 'Сбросить',
-                  textColor: Colors.redAccent,
-                  accentColor: Colors.redAccent,
-                  onTap: _isBusy ? null : _resetPrimaryLink,
-                ),
-              ],
-            ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -721,177 +725,109 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     );
   }
 
-  Widget _buildLinksListCard(
+  Widget _buildLinksGroup(
     BuildContext context, {
+    required String header,
     required List<InviteLinkItem> items,
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-    required Color dividerColor,
+    required TheavPalette palette,
     required bool allowRevoke,
   }) {
-    return _buildSurfaceCard(
-      context,
-      glassProvider: glassProvider,
-      isDark: isDark,
-      child: Column(
-        children: [
-          for (int i = 0; i < items.length; i++) ...[
-            ListTile(
-              minTileHeight: 62,
-              leading: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: (items[i].isActive ? accentColor : subColor)
-                      .withValues(alpha: 0.14),
-                  shape: BoxShape.circle,
-                ),
-                alignment: Alignment.center,
-                child: iconoir.Link(
-                  width: 19,
-                  height: 19,
-                  color: items[i].isActive ? accentColor : subColor,
-                ),
+    return TheavInsetGroup(
+      header: header,
+      dividerIndent: 68,
+      children: [
+        for (final item in items)
+          TheavListRow(
+            leading: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: (item.isActive ? palette.primary : palette.subtext)
+                    .withValues(alpha: 0.14),
+                shape: BoxShape.circle,
               ),
-              title: Text(
-                items[i].title.isNotEmpty ? items[i].title : items[i].link,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
-                ),
+              alignment: Alignment.center,
+              child: iconoir.Link(
+                width: 18,
+                height: 18,
+                color: item.isActive ? palette.primary : palette.subtext,
               ),
-              subtitle: Text(
-                items[i].title.isNotEmpty
-                    ? '${items[i].link}\n${_describeLinkMeta(items[i])}'
-                    : _describeLinkMeta(items[i]),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12.5, color: subColor),
-              ),
-              trailing: PopupMenuButton<String>(
-                icon: iconoir.MoreVert(width: 20, height: 20, color: subColor),
-                onSelected: (action) {
-                  switch (action) {
-                    case 'copy':
-                      _copyLink(items[i].link);
-                      break;
-                    case 'share':
-                      _shareLink(items[i].link);
-                      break;
-                    case 'qr':
-                      _showQrBottomSheet(
-                        items[i].link,
-                        title: items[i].title,
-                      );
-                      break;
-                    case 'revoke':
-                      _revokeLink(items[i]);
-                      break;
-                    case 'delete':
-                      _deleteLink(items[i]);
-                      break;
-                  }
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(
-                    value: 'copy',
-                    child: Text('Копировать'),
-                  ),
-                  const PopupMenuItem(
-                    value: 'share',
-                    child: Text('Поделиться'),
-                  ),
-                  const PopupMenuItem(
-                    value: 'qr',
-                    child: Text('QR-код'),
-                  ),
-                  if (allowRevoke)
-                    const PopupMenuItem(
-                      value: 'revoke',
-                      child: Text('Отозвать'),
-                    ),
-                  const PopupMenuItem(
-                    value: 'delete',
-                    child: Text(
-                      'Удалить',
-                      style: TextStyle(color: Colors.redAccent),
-                    ),
-                  ),
-                ],
-              ),
-              onTap: () => _copyLink(items[i].link),
             ),
-            if (i < items.length - 1)
-              Divider(height: 1, indent: 68, color: dividerColor),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSurfaceCard(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Widget child,
-  }) {
-    if ((glassProvider?.enabled ?? false) && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 20,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: isDark
-              ? null
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
+            title: item.title.isNotEmpty ? item.title : item.link,
+            subtitle: item.title.isNotEmpty
+                ? '${item.link}\n${_describeLinkMeta(item)}'
+                : _describeLinkMeta(item),
+            trailing: PopupMenuButton<String>(
+              icon: iconoir.MoreVert(
+                width: 20,
+                height: 20,
+                color: palette.subtext,
+              ),
+              onSelected: (action) {
+                switch (action) {
+                  case 'copy':
+                    _copyLink(item.link);
+                    break;
+                  case 'share':
+                    _shareLink(item.link);
+                    break;
+                  case 'qr':
+                    _showQrBottomSheet(item.link, title: item.title);
+                    break;
+                  case 'revoke':
+                    _revokeLink(item);
+                    break;
+                  case 'delete':
+                    _deleteLink(item);
+                    break;
+                }
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'copy',
+                  child: Text('Копировать'),
+                ),
+                const PopupMenuItem(
+                  value: 'share',
+                  child: Text('Поделиться'),
+                ),
+                const PopupMenuItem(
+                  value: 'qr',
+                  child: Text('QR-код'),
+                ),
+                if (allowRevoke)
+                  const PopupMenuItem(
+                    value: 'revoke',
+                    child: Text('Отозвать'),
+                  ),
+                PopupMenuItem(
+                  value: 'delete',
+                  child: Text(
+                    'Удалить',
+                    style: TextStyle(color: palette.error),
                   ),
                 ),
-          child: Material(type: MaterialType.transparency, child: child),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.black.withValues(alpha: 0.08),
-          width: 0.5,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(type: MaterialType.transparency, child: child),
+              ],
+            ),
+            onTap: () => _copyLink(item.link),
+          ),
+      ],
     );
   }
 }
 
-class _CreateInviteLinkSheet extends StatefulWidget {
+class _CreateInviteLinkSheetContent extends StatefulWidget {
   final String chatId;
 
-  const _CreateInviteLinkSheet({required this.chatId});
+  const _CreateInviteLinkSheetContent({required this.chatId});
 
   @override
-  State<_CreateInviteLinkSheet> createState() => _CreateInviteLinkSheetState();
+  State<_CreateInviteLinkSheetContent> createState() =>
+      _CreateInviteLinkSheetContentState();
 }
 
-class _CreateInviteLinkSheetState extends State<_CreateInviteLinkSheet> {
+class _CreateInviteLinkSheetContentState
+    extends State<_CreateInviteLinkSheetContent> {
   static final List<({String label, Duration? duration})> _expiryOptions = [
     (label: 'Без срока', duration: null),
     (label: '1 час', duration: const Duration(hours: 1)),
@@ -932,162 +868,110 @@ class _CreateInviteLinkSheetState extends State<_CreateInviteLinkSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final buttonFg = accentColor.computeLuminance() > 0.35
-        ? const Color(0xFF0F172A)
-        : Colors.white;
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
+    final palette = context.theav;
 
-    return SettingsAttachedSheet(
-      child: Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Новая ссылка-приглашение',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: textColor,
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TheavInsetGroup(
+              dividerIndent: 16,
+              children: [
+                TheavInlineTextField(
+                  controller: _titleController,
+                  label: 'Название (необязательно)',
+                  placeholder: 'Например: Для подписчиков',
+                  maxLength: 64,
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _titleController,
-                maxLength: 64,
-                style: TextStyle(color: textColor, fontSize: 15),
-                decoration: InputDecoration(
-                  labelText: 'Название (необязательно)',
-                  hintText: 'Например: Для подписчиков',
-                  filled: true,
-                  fillColor: isDark
-                      ? Colors.white.withValues(alpha: 0.06)
-                      : Colors.black.withValues(alpha: 0.04),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none,
+                TheavListRow(
+                  title: 'Одобрение администратором',
+                  subtitle: 'Участники подают заявку на вступление',
+                  trailing: TheavSwitch(
+                    value: _requiresApproval,
+                    onChanged: (v) => setState(() => _requiresApproval = v),
+                  ),
+                  onTap: () => setState(
+                    () => _requiresApproval = !_requiresApproval,
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              Text(
+              ],
+            ),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 22),
+              child: Text(
                 'СРОК ДЕЙСТВИЯ',
                 style: TextStyle(
                   fontSize: 11.5,
                   fontWeight: FontWeight.w600,
-                  color: subColor,
+                  color: palette.subtext,
                 ),
               ),
-              const SizedBox(height: 8),
-              Wrap(
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
                   for (final opt in _expiryOptions)
-                    ChoiceChip(
-                      label: Text(opt.label),
-                      selected: _selectedExpiry == opt.duration,
-                      onSelected: (_) =>
+                    TheavFloatingPillButton(
+                      height: 36,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      label: opt.label,
+                      isPrimary: _selectedExpiry == opt.duration,
+                      onTap: () =>
                           setState(() => _selectedExpiry = opt.duration),
-                      selectedColor: accentColor.withValues(alpha: 0.22),
-                      labelStyle: TextStyle(
-                        color: _selectedExpiry == opt.duration
-                            ? accentColor
-                            : textColor,
-                        fontWeight: FontWeight.w600,
-                      ),
                     ),
                 ],
               ),
-              const SizedBox(height: 14),
-              Text(
+            ),
+            const SizedBox(height: 14),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 22),
+              child: Text(
                 'ЛИМИТ ИСПОЛЬЗОВАНИЙ',
                 style: TextStyle(
                   fontSize: 11.5,
                   fontWeight: FontWeight.w600,
-                  color: subColor,
+                  color: palette.subtext,
                 ),
               ),
-              const SizedBox(height: 8),
-              Wrap(
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
                   for (final u in _usesOptions)
-                    ChoiceChip(
-                      label: Text(u == 0 ? 'Без лимита' : '$u'),
-                      selected: _selectedMaxUses == u,
-                      onSelected: (_) => setState(() => _selectedMaxUses = u),
-                      selectedColor: accentColor.withValues(alpha: 0.22),
-                      labelStyle: TextStyle(
-                        color: _selectedMaxUses == u ? accentColor : textColor,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    TheavFloatingPillButton(
+                      height: 36,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      label: u == 0 ? 'Без лимита' : '$u',
+                      isPrimary: _selectedMaxUses == u,
+                      onTap: () => setState(() => _selectedMaxUses = u),
                     ),
                 ],
               ),
-              const SizedBox(height: 10),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                minTileHeight: 48,
-                title: Text(
-                  'Заявки на вступление',
-                  style: TextStyle(color: textColor, fontSize: 15),
-                ),
-                subtitle: Text(
-                  'Администраторы должны одобрить заявку',
-                  style: TextStyle(color: subColor, fontSize: 12.5),
-                ),
-                trailing: Switch.adaptive(
-                  value: _requiresApproval,
-                  activeThumbColor: accentColor,
-                  onChanged: (v) => setState(() => _requiresApproval = v),
-                ),
-                onTap: () =>
-                    setState(() => _requiresApproval = !_requiresApproval),
+            ),
+            const SizedBox(height: 18),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TheavFloatingPillButton(
+                isPrimary: true,
+                enabled: !_creating,
+                label: _creating ? 'Создание...' : 'Создать ссылку',
+                onTap: _submit,
               ),
-              const SizedBox(height: 14),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: FilledButton(
-                  onPressed: _creating ? null : _submit,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: accentColor,
-                    foregroundColor: buttonFg,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  child: _creating
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: buttonFg,
-                          ),
-                        )
-                      : const Text(
-                          'Создать ссылку',
-                          style: TextStyle(
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

@@ -152,8 +152,9 @@ class TextMessageWidget extends StatelessWidget {
   ) {
     final points = <int>{0, cleanText.length};
     for (final e in entities) {
-      final s = e.offset.clamp(0, cleanText.length);
-      final end = (e.offset + e.length).clamp(s, cleanText.length);
+      final s = EntityParser.snapUtf16Offset(cleanText, e.offset);
+      final end = EntityParser.snapUtf16Offset(cleanText, e.offset + e.length)
+          .clamp(s, cleanText.length);
       if (s < end) {
         points.add(s);
         points.add(end);
@@ -530,8 +531,9 @@ class _DirectEntityMessageRendererState
     final blockEntities = <MessageEntity>[];
     for (final e in entities) {
       if (!TextMessageWidget._isBlockType(e.type)) continue;
-      final s = e.offset.clamp(0, text.length);
-      final end = (e.offset + e.length).clamp(s, text.length);
+      final s = EntityParser.snapUtf16Offset(text, e.offset);
+      final end =
+          EntityParser.snapUtf16Offset(text, e.offset + e.length).clamp(s, text.length);
       if (s >= end) continue;
       // Ignore if overlapping a previously accepted outer block
       final overlaps = blockEntities.any((b) {
@@ -667,12 +669,14 @@ class _DirectEntityMessageRendererState
     InlineSpan buildSpanTree(Set<int> hiddenSpoilerIds) {
       final points = <int>{0, segmentText.length};
       for (final e in localEntities) {
-        points.add(e.offset.clamp(0, segmentText.length));
-        points.add((e.offset + e.length).clamp(0, segmentText.length));
+        points.add(EntityParser.snapUtf16Offset(segmentText, e.offset));
+        points.add(
+          EntityParser.snapUtf16Offset(segmentText, e.offset + e.length),
+        );
       }
       for (final sr in spoilerRanges) {
-        points.add(sr.start.clamp(0, segmentText.length));
-        points.add(sr.end.clamp(0, segmentText.length));
+        points.add(EntityParser.snapUtf16Offset(segmentText, sr.start));
+        points.add(EntityParser.snapUtf16Offset(segmentText, sr.end));
       }
       final sortedPoints = points.toList()..sort();
       final children = <InlineSpan>[];
@@ -715,10 +719,14 @@ class _DirectEntityMessageRendererState
         }
 
         if (inlineLatex != null) {
-          final latexEnd = (inlineLatex.offset + inlineLatex.length)
-              .clamp(sliceEnd, segmentText.length);
+          final latexStart =
+              EntityParser.snapUtf16Offset(segmentText, inlineLatex.offset);
+          final latexEnd = EntityParser.snapUtf16Offset(
+            segmentText,
+            inlineLatex.offset + inlineLatex.length,
+          ).clamp(sliceEnd, segmentText.length);
           final formulaRaw = inlineLatex.language ??
-              segmentText.substring(inlineLatex.offset, latexEnd);
+              EntityParser.safeSubstring(segmentText, latexStart, latexEnd);
 
           Widget mathChild = _buildLatexWidget(
             formulaRaw,
@@ -744,10 +752,14 @@ class _DirectEntityMessageRendererState
         }
 
         if (inlineCustomEmoji != null) {
-          final emojiEnd = (inlineCustomEmoji.offset + inlineCustomEmoji.length)
-              .clamp(sliceEnd, segmentText.length);
+          final emojiStart =
+              EntityParser.snapUtf16Offset(segmentText, inlineCustomEmoji.offset);
+          final emojiEnd = EntityParser.snapUtf16Offset(
+            segmentText,
+            inlineCustomEmoji.offset + inlineCustomEmoji.length,
+          ).clamp(sliceEnd, segmentText.length);
           final fallbackChar =
-              segmentText.substring(inlineCustomEmoji.offset, emojiEnd);
+              EntityParser.safeSubstring(segmentText, emojiStart, emojiEnd);
           Widget emojiChild = Padding(
             padding: const EdgeInsets.symmetric(horizontal: 1.0),
             child: InlineCustomEmojiWidget(
@@ -808,7 +820,11 @@ class _DirectEntityMessageRendererState
               case 'text_link':
                 linkUrl = (e.url != null && e.url!.isNotEmpty)
                     ? e.url!
-                    : segmentText.substring(e.offset, e.offset + e.length);
+                    : EntityParser.safeSubstring(
+                        segmentText,
+                        e.offset,
+                        e.offset + e.length,
+                      );
                 break;
             }
           }

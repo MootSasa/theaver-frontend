@@ -3,18 +3,16 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../models/theav_theme.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
-import '../../services/liquid_glass_provider.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
@@ -185,66 +183,40 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final palette = context.theav;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlass = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
-    final primaryColor = theme.colorScheme.primary;
+    final primaryColor = palette.primary;
     final trimmedName = _nameController.text.trim();
 
-    return Scaffold(
+    return SettingsFloatingScaffold(
+      title: _tr('chat_new_channel', 'Новый канал'),
       backgroundColor: palette.bgBase,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          onPressed: () => Navigator.maybePop(context),
-          icon: iconoir.NavArrowLeft(
-            width: 24,
-            height: 24,
-            color: palette.textPrimary,
-          ),
-        ),
-        title: Text(
-          _tr('chat_new_channel', 'Новый канал'),
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: palette.textPrimary,
-            letterSpacing: -0.2,
-          ),
-        ),
-        actions: [
-          if (_isLoading)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            )
-          else
-            IconButton(
-              onPressed: _createChannel,
-              tooltip: _tr('create', 'Создать'),
-              icon: iconoir.Check(
-                width: 24,
-                height: 24,
+      actions: [
+        if (_isLoading)
+          SettingsHeaderAction(
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
                 color: primaryColor,
               ),
             ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+          )
+        else
+          SettingsHeaderAction(
+            tooltip: _tr('create', 'Создать'),
+            foregroundColor: primaryColor,
+            icon: iconoir.Check(width: 22, height: 22, color: primaryColor),
+            onTap: _createChannel,
+          ),
+      ],
+      body: ListView(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          SettingsFloatingHeader.topClearanceOf(context) + 12,
+          16,
+          MediaQuery.paddingOf(context).bottom + 28,
+        ),
               children: [
                 // 1. Герой-блок выбора аватара канала
                 Center(
@@ -348,9 +320,6 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 const SizedBox(height: 8),
                 _buildSurfaceCard(
                   context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
@@ -412,9 +381,6 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 const SizedBox(height: 8),
                 _buildSurfaceCard(
                   context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
                   child: Column(
                     children: [
                       _buildTypeOptionTile(
@@ -507,9 +473,6 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 const SizedBox(height: 8),
                 _buildSurfaceCard(
                   context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
                   child: Column(
                     children: [
                       AdaptiveSwitchListTile(
@@ -609,7 +572,11 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: primaryColor.withValues(alpha: isDark ? 0.12 : 0.08),
+                    color: primaryColor.withValues(
+                      alpha: Theme.of(context).brightness == Brightness.dark
+                          ? 0.12
+                          : 0.08,
+                    ),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: primaryColor.withValues(alpha: 0.25),
@@ -641,52 +608,6 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                   ),
                 ),
               ],
-            ),
-          ),
-
-          // Нижняя кнопка создания
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-              child: SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton.icon(
-                  onPressed: _isLoading ? null : _createChannel,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                  icon: _isLoading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const iconoir.Megaphone(
-                          width: 20,
-                          height: 20,
-                          color: Colors.white,
-                        ),
-                  label: Text(
-                    _tr('chat_new_channel', 'Создать канал'),
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -776,56 +697,13 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
 
   Widget _buildSurfaceCard(
     BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
     required Widget child,
     double cornerRadius = 20,
   }) {
-    if (isGlass) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
-      final style = glassProvider.createStyle(
-        context: context,
-        isLiteOverride: isLite,
-        shape: LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: cornerRadius,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(cornerRadius),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.10)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.6,
-            ),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: child,
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(cornerRadius),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.black.withValues(alpha: 0.06),
-          width: 0.6,
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: child,
-      ),
+    return TheavInsetGroup(
+      margin: EdgeInsets.zero,
+      borderRadius: cornerRadius,
+      children: [child],
     );
   }
 }

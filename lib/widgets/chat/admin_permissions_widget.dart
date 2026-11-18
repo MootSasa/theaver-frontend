@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
-import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../utils/haptic_utils.dart';
-import '../common/adaptive_switch.dart';
-import '../settings/settings_floating_header.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Granular Telegram-style administrator permissions editor, supporting custom
 /// rank title (`adminTitle`, up to 16 chars) and anonymous group admin mode.
@@ -248,269 +244,98 @@ class AdminPermissionsWidgetState extends State<AdminPermissionsWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.08);
+    final palette = context.theav;
     final items = _buildRightItems();
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 14, bottom: 8),
-          child: Text(
-            'ЧТО МОЖЕТ ДЕЛАТЬ АДМИНИСТРАТОР',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.4,
-              color: subColor,
-            ),
-          ),
-        ),
-        _buildSurfaceCard(
-          context,
-          glassProvider: glassProvider,
-          isDark: isDark,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (int i = 0; i < items.length; i++) ...[
-                _buildToggleRow(
-                  context,
-                  item: items[i],
-                  hasGlass: glassProvider != null,
-                  accentColor: accentColor,
-                  textColor: textColor,
-                  subColor: subColor,
+        TheavInsetGroup(
+          header: 'ЧТО МОЖЕТ ДЕЛАТЬ АДМИНИСТРАТОР',
+          children: [
+            for (final item in items)
+              TheavListRow(
+                leading: item.iconBuilder(
+                  item.enabled ? palette.primary : palette.subtext,
                 ),
-                if (i < items.length - 1)
-                  Divider(height: 1, indent: 54, color: dividerColor),
-              ],
-            ],
-          ),
+                title: item.title,
+                subtitle: item.subtitle,
+                enabled: item.enabled,
+                trailing: TheavSwitch(
+                  value: item.value,
+                  onChanged: item.enabled
+                      ? (nextVal) {
+                          HapticUtils.selection();
+                          _updateRights(item.updater(_rights, nextVal));
+                        }
+                      : null,
+                ),
+                onTap: item.enabled
+                    ? () {
+                        HapticUtils.selection();
+                        _updateRights(item.updater(_rights, !item.value));
+                      }
+                    : null,
+              ),
+          ],
         ),
         if (!_isChannel && widget.showAnonymousToggle) ...[
-          const SizedBox(height: 16),
-          _buildSurfaceCard(
-            context,
-            glassProvider: glassProvider,
-            isDark: isDark,
-            child: _buildSwitchTile(
-              context,
-              hasGlass: glassProvider != null,
-              icon: iconoir.EyeClosed(
-                width: 20,
-                height: 20,
-                color: accentColor,
+          const SizedBox(height: 8),
+          TheavInsetGroup(
+            children: [
+              TheavListRow(
+                leading: iconoir.EyeClosed(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                title: 'Анонимность',
+                subtitle: 'Сообщения будут отправляться от имени группы',
+                trailing: TheavSwitch(
+                  value: _isAnonymous,
+                  onChanged: (v) {
+                    HapticUtils.selection();
+                    setState(() => _isAnonymous = v);
+                    widget.onIsAnonymousChanged?.call(v);
+                  },
+                ),
+                onTap: () {
+                  HapticUtils.selection();
+                  final next = !_isAnonymous;
+                  setState(() => _isAnonymous = next);
+                  widget.onIsAnonymousChanged?.call(next);
+                },
               ),
-              title: 'Анонимность',
-              subtitle: 'Сообщения будут отправляться от имени группы',
-              value: _isAnonymous,
-              accentColor: accentColor,
-              textColor: textColor,
-              subColor: subColor,
-              onChanged: (v) {
-                HapticUtils.selection();
-                setState(() => _isAnonymous = v);
-                widget.onIsAnonymousChanged?.call(v);
-              },
-            ),
+            ],
           ),
         ],
         if (widget.showCustomTitle) ...[
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.only(left: 14, bottom: 8),
-            child: Text(
-              'ДОЛЖНОСТЬ',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.4,
-                color: subColor,
-              ),
-            ),
-          ),
-          _buildSurfaceCard(
-            context,
-            glassProvider: glassProvider,
-            isDark: isDark,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: TextField(
+          const SizedBox(height: 8),
+          TheavInsetGroup(
+            header: 'ДОЛЖНОСТЬ',
+            footer:
+                'Должность отображается справа от имени в сообщениях группы (до 16 символов).',
+            children: [
+              TheavInlineTextField(
                 controller: _titleController,
+                placeholder: 'Например: Модератор',
                 maxLength: 16,
+                showCounter: true,
                 inputFormatters: [LengthLimitingTextInputFormatter(16)],
-                style: TextStyle(fontSize: 15.5, color: textColor),
+                prefix: iconoir.ShieldCheck(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
                 onChanged: (value) {
                   widget.onAdminTitleChanged?.call(value);
                 },
-                decoration: InputDecoration(
-                  hintText: 'Например: Модератор',
-                  hintStyle: TextStyle(color: subColor),
-                  border: InputBorder.none,
-                  counterStyle: TextStyle(fontSize: 11.5, color: subColor),
-                  prefixIconConstraints: const BoxConstraints(
-                    minWidth: 34,
-                    minHeight: 34,
-                  ),
-                  prefixIcon: Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: iconoir.ShieldCheck(
-                      width: 20,
-                      height: 20,
-                      color: accentColor,
-                    ),
-                  ),
-                ),
               ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 14, top: 6),
-            child: Text(
-              'Должность отображается справа от имени в сообщениях группы (до 16 символов).',
-              style: TextStyle(fontSize: 12.5, color: subColor, height: 1.35),
-            ),
+            ],
           ),
         ],
       ],
-    );
-  }
-
-  Widget _buildToggleRow(
-    BuildContext context, {
-    required _AdminRightItem item,
-    required bool hasGlass,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-  }) {
-    final iconColor = item.enabled ? accentColor : subColor;
-    return _buildSwitchTile(
-      context,
-      hasGlass: hasGlass,
-      icon: item.iconBuilder(iconColor),
-      title: item.title,
-      subtitle: item.subtitle,
-      value: item.value,
-      accentColor: accentColor,
-      textColor: item.enabled ? textColor : subColor,
-      subColor: subColor,
-      onChanged: item.enabled
-          ? (nextVal) {
-              HapticUtils.selection();
-              _updateRights(item.updater(_rights, nextVal));
-            }
-          : null,
-    );
-  }
-
-  Widget _buildSwitchTile(
-    BuildContext context, {
-    required bool hasGlass,
-    required Widget icon,
-    required String title,
-    String? subtitle,
-    required bool value,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-    required ValueChanged<bool>? onChanged,
-  }) {
-    final switchWidget = hasGlass
-        ? AdaptiveSwitch(
-            value: value,
-            onChanged: onChanged,
-            activeColor: accentColor,
-          )
-        : Switch.adaptive(
-            value: value,
-            onChanged: onChanged,
-            activeThumbColor: accentColor,
-          );
-
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 52),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        leading: SizedBox(width: 28, child: Center(child: icon)),
-        title: Text(
-          title,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
-            color: textColor,
-          ),
-        ),
-        subtitle: subtitle != null
-            ? Text(
-                subtitle,
-                style: TextStyle(fontSize: 12.5, color: subColor),
-              )
-            : null,
-        trailing: switchWidget,
-        onTap: onChanged != null ? () => onChanged(!value) : null,
-      ),
-    );
-  }
-
-  Widget _buildSurfaceCard(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Widget child,
-  }) {
-    final isGlass = glassProvider?.enabled ?? false;
-    if (isGlass && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 20,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: isDark
-              ? null
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
-          child: Material(type: MaterialType.transparency, child: child),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.black.withValues(alpha: 0.08),
-          width: 0.5,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(type: MaterialType.transparency, child: child),
     );
   }
 }

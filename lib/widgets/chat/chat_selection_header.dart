@@ -3,12 +3,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 import '../tiling/tile_viewport_scope.dart';
 
 String _tr(
@@ -333,7 +333,8 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final isGlassEnabled = glassProvider?.enabled ?? false;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -345,8 +346,12 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
             (rawWidth.isFinite && rawWidth > 0) ? rawWidth : 390.0;
 
         final theme = Theme.of(context);
+        final palette = context.theav;
         final isDark = theme.brightness == Brightness.dark;
-        final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+        final textColor =
+            palette.appBarForeground != Colors.transparent
+                ? palette.appBarForeground
+                : theme.colorScheme.onSurface;
 
         final double edgePadding = totalWidth < 380.0 ? 12.0 : 16.0;
         final double normalGap = totalWidth < 360.0 ? 6.0 : 8.0;
@@ -560,7 +565,7 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
 
         final bool anyMenuOpen = centerMenuActive || isRightMenuActive;
 
-        if (glassProvider.enabled) {
+        if (isGlassEnabled && glassProvider != null) {
           final morphStyle = glassProvider.createStyle(
             context: context,
             cornerRadius: _barRadius,
@@ -1174,8 +1179,8 @@ class _AdaptiveMorphMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final defaultColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final palette = context.theav;
+    final defaultColor = palette.onSurface;
     final totalHeight = items.length * 44.0 + 12.0;
 
     return SizedBox(
@@ -1241,4 +1246,230 @@ class _AdaptiveMorphMenu extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Telegram Variant A 2-island `44dp` floating header for message multi-select mode.
+///
+/// Renders strictly two floating islands without a middle chat-title pill:
+/// 1. Left pill (`44dp` height): `[✕  Выбрано: N]` (tapping cancels selection)
+/// 2. Right pill (`44dp` height): `[Reply? | Copy? | Pin? | Forward? | Delete]`
+///
+/// When [hasProtectedContent] is `true`, both `Copy` and `Forward` actions are omitted.
+class ChatMessageSelectionHeader extends StatelessWidget {
+  final int selectedCount;
+  final VoidCallback onCancel;
+  final VoidCallback? onReply;
+  final VoidCallback? onCopy;
+  final VoidCallback? onPin;
+  final VoidCallback? onForward;
+  final VoidCallback? onDelete;
+  final bool hasProtectedContent;
+
+  const ChatMessageSelectionHeader({
+    super.key,
+    required this.selectedCount,
+    required this.onCancel,
+    this.onReply,
+    this.onCopy,
+    this.onPin,
+    this.onForward,
+    this.onDelete,
+    this.hasProtectedContent = false,
+  });
+
+  static const double barHeight = 44.0;
+  static const double _actionBtnWidth = 40.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.theav;
+    final primaryFg = palette.appBarForeground != Colors.transparent
+        ? palette.appBarForeground
+        : palette.onSurface;
+    final deleteFg = palette.error;
+
+    final effectiveCopy = hasProtectedContent ? null : onCopy;
+    final effectiveForward = hasProtectedContent ? null : onForward;
+
+    final actions = <_SelectionHeaderActionSpec>[
+      if (onReply != null)
+        _SelectionHeaderActionSpec(
+          key: const ValueKey<String>('msg_sel_action_reply'),
+          tooltip: _tr(context, 'reply', 'Ответить'),
+          onTap: onReply!,
+          icon: iconoir.Reply(
+            width: 20,
+            height: 20,
+            color: primaryFg,
+          ),
+        ),
+      if (effectiveCopy != null)
+        _SelectionHeaderActionSpec(
+          key: const ValueKey<String>('msg_sel_action_copy'),
+          tooltip: _tr(context, 'copy', 'Копировать'),
+          onTap: effectiveCopy,
+          icon: iconoir.Copy(
+            width: 20,
+            height: 20,
+            color: primaryFg,
+          ),
+        ),
+      if (onPin != null)
+        _SelectionHeaderActionSpec(
+          key: const ValueKey<String>('msg_sel_action_pin'),
+          tooltip: _tr(context, 'selection_pin', 'Закрепить'),
+          onTap: onPin!,
+          icon: iconoir.Pin(
+            width: 20,
+            height: 20,
+            color: primaryFg,
+          ),
+        ),
+      if (effectiveForward != null)
+        _SelectionHeaderActionSpec(
+          key: const ValueKey<String>('msg_sel_action_forward'),
+          tooltip: _tr(context, 'forward', 'Переслать'),
+          onTap: effectiveForward,
+          icon: iconoir.ForwardMessage(
+            width: 20,
+            height: 20,
+            color: primaryFg,
+          ),
+        ),
+      if (onDelete != null)
+        _SelectionHeaderActionSpec(
+          key: const ValueKey<String>('msg_sel_action_delete'),
+          tooltip: _tr(context, 'selection_delete', 'Удалить'),
+          onTap: onDelete!,
+          icon: iconoir.Trash(
+            width: 20,
+            height: 20,
+            color: deleteFg,
+          ),
+        ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final fallbackWidth = TileViewportScope.widthOf(context);
+        final maxWidth = constraints.hasBoundedWidth && constraints.maxWidth > 0
+            ? constraints.maxWidth
+            : fallbackWidth;
+
+        final rightCapsuleWidth = actions.isEmpty
+            ? barHeight
+            : math.max(barHeight, actions.length * _actionBtnWidth + 12.0);
+        final remainingForLeft = math.max(88.0, maxWidth - rightCapsuleWidth - 10.0);
+        final bool useCompactLeft = remainingForLeft < 152.0;
+
+        return SizedBox(
+          height: barHeight,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: remainingForLeft),
+                child: SizedBox(
+                  key: const ValueKey<String>('chat_message_selection_left_island'),
+                  height: barHeight,
+                  child: TheavFloatingSurface(
+                    borderRadius: barHeight / 2,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(barHeight / 2),
+                        onTap: () {
+                          HapticUtils.tap();
+                          onCancel();
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 12, right: 16),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              iconoir.Xmark(
+                                width: 20,
+                                height: 20,
+                                color: primaryFg,
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: AnimatedRollingCountText(
+                                  count: selectedCount,
+                                  compact: useCompactLeft,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: -0.2,
+                                    color: primaryFg,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (actions.isNotEmpty)
+                SizedBox(
+                  key: const ValueKey<String>('chat_message_selection_right_island'),
+                  height: barHeight,
+                  child: TheavFloatingSurface(
+                    borderRadius: barHeight / 2,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (final action in actions)
+                          Tooltip(
+                            message: action.tooltip,
+                            child: Semantics(
+                              button: true,
+                              label: action.tooltip,
+                              child: Material(
+                                key: action.key,
+                                type: MaterialType.transparency,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(barHeight / 2),
+                                  onTap: () {
+                                    HapticUtils.tap();
+                                    action.onTap();
+                                  },
+                                  child: SizedBox(
+                                    width: _actionBtnWidth,
+                                    height: barHeight,
+                                    child: Center(child: action.icon),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SelectionHeaderActionSpec {
+  final Key key;
+  final String tooltip;
+  final VoidCallback onTap;
+  final Widget icon;
+
+  const _SelectionHeaderActionSpec({
+    required this.key,
+    required this.tooltip,
+    required this.onTap,
+    required this.icon,
+  });
 }

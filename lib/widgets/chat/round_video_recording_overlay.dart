@@ -11,6 +11,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/media_playback_coordinator.dart';
 import '../../services/video_note_recorder_service.dart';
 import '../tiling/static_tile_cache_boundary.dart';
@@ -309,14 +310,10 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
     if (file != null && mounted) {
       widget.onSend(file);
     } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            AppLocalizations.of(context)?.translate('chat_upload_error') ??
-                'Failed to record video note',
-          ),
-          duration: const Duration(seconds: 2),
-        ),
+      GlassToastService().showError(
+        context,
+        AppLocalizations.of(context)?.translate('chat_upload_error') ??
+            'Failed to record video note',
       );
       widget.onCancel();
     }

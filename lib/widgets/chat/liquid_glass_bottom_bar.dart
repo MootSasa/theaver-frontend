@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:motor/motor.dart';
-import 'package:provider/provider.dart';
 
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/haptic_utils.dart';
@@ -113,9 +112,9 @@ class _LiquidGlassBottomBarState extends State<LiquidGlassBottomBar> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final effectiveStyle = widget.glassStyle ??
-        glassProvider.createStyle(
+        (glassProvider ?? LiquidGlassProvider()).createStyle(
           context: context,
           cornerRadius: 32,
           refractionIndex: 1.21,
@@ -499,21 +498,23 @@ class _TabIndicatorState extends State<_TabIndicator>
                       tabCount: widget.tabCount,
                       alignment: alignment,
                       thickness: thickness,
-                      child: Opacity(
-                        opacity: thickness.clamp(0.0, 1.0),
-                        child: LiquidGlassLens(
-                          style: widget.glassStyle.copyWith(
-                            color: const Color.fromARGB(25, 255, 255, 255),
-                            refractionIndex: 1.15,
-                            refractionWidth: 24.0,
-                            blur: 0.0,
-                            shape:
-                                const LiquidGlassShape.continuousRoundedRectangle(
-                              cornerRadius: 64,
-                            ),
+                      child: LiquidGlassLens(
+                        style: widget.glassStyle.copyWith(
+                          color: Color.fromARGB(
+                            (25 * thickness.clamp(0.0, 1.0)).round(),
+                            255,
+                            255,
+                            255,
                           ),
-                          child: const SizedBox.expand(),
+                          refractionIndex: 1.15,
+                          refractionWidth: 24.0,
+                          blur: 0.0,
+                          shape:
+                              const LiquidGlassShape.continuousRoundedRectangle(
+                            cornerRadius: 64,
+                          ),
                         ),
+                        child: const SizedBox.expand(),
                       ),
                     ),
                 ],

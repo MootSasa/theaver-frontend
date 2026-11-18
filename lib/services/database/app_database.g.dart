@@ -254,6 +254,22 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
   late final GeneratedColumn<String> reactionSettingsJson =
       GeneratedColumn<String>('reaction_settings_json', aliasedName, true,
           type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _hasProtectedContentMeta =
+      const VerificationMeta('hasProtectedContent');
+  @override
+  late final GeneratedColumn<bool> hasProtectedContent = GeneratedColumn<bool>(
+      'has_protected_content', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("has_protected_content" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _pinnedMessageIdsJsonMeta =
+      const VerificationMeta('pinnedMessageIdsJson');
+  @override
+  late final GeneratedColumn<String> pinnedMessageIdsJson =
+      GeneratedColumn<String>('pinned_message_ids_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -289,7 +305,9 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         lastMessageSenderName,
         hasActiveCall,
         chatPermissionsJson,
-        reactionSettingsJson
+        reactionSettingsJson,
+        hasProtectedContent,
+        pinnedMessageIdsJson
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -491,6 +509,18 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           reactionSettingsJson.isAcceptableOrUnknown(
               data['reaction_settings_json']!, _reactionSettingsJsonMeta));
     }
+    if (data.containsKey('has_protected_content')) {
+      context.handle(
+          _hasProtectedContentMeta,
+          hasProtectedContent.isAcceptableOrUnknown(
+              data['has_protected_content']!, _hasProtectedContentMeta));
+    }
+    if (data.containsKey('pinned_message_ids_json')) {
+      context.handle(
+          _pinnedMessageIdsJsonMeta,
+          pinnedMessageIdsJson.isAcceptableOrUnknown(
+              data['pinned_message_ids_json']!, _pinnedMessageIdsJsonMeta));
+    }
     return context;
   }
 
@@ -575,6 +605,11 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
       reactionSettingsJson: attachedDatabase.typeMapping.read(
           DriftSqlType.string,
           data['${effectivePrefix}reaction_settings_json']),
+      hasProtectedContent: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}has_protected_content'])!,
+      pinnedMessageIdsJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}pinned_message_ids_json']),
     );
   }
 
@@ -619,6 +654,8 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final bool hasActiveCall;
   final String? chatPermissionsJson;
   final String? reactionSettingsJson;
+  final bool hasProtectedContent;
+  final String? pinnedMessageIdsJson;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -653,7 +690,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       this.lastMessageSenderName,
       required this.hasActiveCall,
       this.chatPermissionsJson,
-      this.reactionSettingsJson});
+      this.reactionSettingsJson,
+      required this.hasProtectedContent,
+      this.pinnedMessageIdsJson});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -724,6 +763,10 @@ class DbChat extends DataClass implements Insertable<DbChat> {
     }
     if (!nullToAbsent || reactionSettingsJson != null) {
       map['reaction_settings_json'] = Variable<String>(reactionSettingsJson);
+    }
+    map['has_protected_content'] = Variable<bool>(hasProtectedContent);
+    if (!nullToAbsent || pinnedMessageIdsJson != null) {
+      map['pinned_message_ids_json'] = Variable<String>(pinnedMessageIdsJson);
     }
     return map;
   }
@@ -797,6 +840,10 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       reactionSettingsJson: reactionSettingsJson == null && nullToAbsent
           ? const Value.absent()
           : Value(reactionSettingsJson),
+      hasProtectedContent: Value(hasProtectedContent),
+      pinnedMessageIdsJson: pinnedMessageIdsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(pinnedMessageIdsJson),
     );
   }
 
@@ -847,6 +894,10 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           serializer.fromJson<String?>(json['chatPermissionsJson']),
       reactionSettingsJson:
           serializer.fromJson<String?>(json['reactionSettingsJson']),
+      hasProtectedContent:
+          serializer.fromJson<bool>(json['hasProtectedContent']),
+      pinnedMessageIdsJson:
+          serializer.fromJson<String?>(json['pinnedMessageIdsJson']),
     );
   }
   @override
@@ -890,6 +941,8 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'hasActiveCall': serializer.toJson<bool>(hasActiveCall),
       'chatPermissionsJson': serializer.toJson<String?>(chatPermissionsJson),
       'reactionSettingsJson': serializer.toJson<String?>(reactionSettingsJson),
+      'hasProtectedContent': serializer.toJson<bool>(hasProtectedContent),
+      'pinnedMessageIdsJson': serializer.toJson<String?>(pinnedMessageIdsJson),
     };
   }
 
@@ -927,7 +980,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           Value<String?> lastMessageSenderName = const Value.absent(),
           bool? hasActiveCall,
           Value<String?> chatPermissionsJson = const Value.absent(),
-          Value<String?> reactionSettingsJson = const Value.absent()}) =>
+          Value<String?> reactionSettingsJson = const Value.absent(),
+          bool? hasProtectedContent,
+          Value<String?> pinnedMessageIdsJson = const Value.absent()}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -986,6 +1041,10 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         reactionSettingsJson: reactionSettingsJson.present
             ? reactionSettingsJson.value
             : this.reactionSettingsJson,
+        hasProtectedContent: hasProtectedContent ?? this.hasProtectedContent,
+        pinnedMessageIdsJson: pinnedMessageIdsJson.present
+            ? pinnedMessageIdsJson.value
+            : this.pinnedMessageIdsJson,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -1062,6 +1121,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       reactionSettingsJson: data.reactionSettingsJson.present
           ? data.reactionSettingsJson.value
           : this.reactionSettingsJson,
+      hasProtectedContent: data.hasProtectedContent.present
+          ? data.hasProtectedContent.value
+          : this.hasProtectedContent,
+      pinnedMessageIdsJson: data.pinnedMessageIdsJson.present
+          ? data.pinnedMessageIdsJson.value
+          : this.pinnedMessageIdsJson,
     );
   }
 
@@ -1101,7 +1166,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('lastMessageSenderName: $lastMessageSenderName, ')
           ..write('hasActiveCall: $hasActiveCall, ')
           ..write('chatPermissionsJson: $chatPermissionsJson, ')
-          ..write('reactionSettingsJson: $reactionSettingsJson')
+          ..write('reactionSettingsJson: $reactionSettingsJson, ')
+          ..write('hasProtectedContent: $hasProtectedContent, ')
+          ..write('pinnedMessageIdsJson: $pinnedMessageIdsJson')
           ..write(')'))
         .toString();
   }
@@ -1141,7 +1208,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         lastMessageSenderName,
         hasActiveCall,
         chatPermissionsJson,
-        reactionSettingsJson
+        reactionSettingsJson,
+        hasProtectedContent,
+        pinnedMessageIdsJson
       ]);
   @override
   bool operator ==(Object other) =>
@@ -1180,7 +1249,9 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.lastMessageSenderName == this.lastMessageSenderName &&
           other.hasActiveCall == this.hasActiveCall &&
           other.chatPermissionsJson == this.chatPermissionsJson &&
-          other.reactionSettingsJson == this.reactionSettingsJson);
+          other.reactionSettingsJson == this.reactionSettingsJson &&
+          other.hasProtectedContent == this.hasProtectedContent &&
+          other.pinnedMessageIdsJson == this.pinnedMessageIdsJson);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -1218,6 +1289,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<bool> hasActiveCall;
   final Value<String?> chatPermissionsJson;
   final Value<String?> reactionSettingsJson;
+  final Value<bool> hasProtectedContent;
+  final Value<String?> pinnedMessageIdsJson;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -1254,6 +1327,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.hasActiveCall = const Value.absent(),
     this.chatPermissionsJson = const Value.absent(),
     this.reactionSettingsJson = const Value.absent(),
+    this.hasProtectedContent = const Value.absent(),
+    this.pinnedMessageIdsJson = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -1291,6 +1366,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.hasActiveCall = const Value.absent(),
     this.chatPermissionsJson = const Value.absent(),
     this.reactionSettingsJson = const Value.absent(),
+    this.hasProtectedContent = const Value.absent(),
+    this.pinnedMessageIdsJson = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -1331,6 +1408,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<bool>? hasActiveCall,
     Expression<String>? chatPermissionsJson,
     Expression<String>? reactionSettingsJson,
+    Expression<bool>? hasProtectedContent,
+    Expression<String>? pinnedMessageIdsJson,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1379,6 +1458,10 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
         'chat_permissions_json': chatPermissionsJson,
       if (reactionSettingsJson != null)
         'reaction_settings_json': reactionSettingsJson,
+      if (hasProtectedContent != null)
+        'has_protected_content': hasProtectedContent,
+      if (pinnedMessageIdsJson != null)
+        'pinned_message_ids_json': pinnedMessageIdsJson,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1418,6 +1501,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<bool>? hasActiveCall,
       Value<String?>? chatPermissionsJson,
       Value<String?>? reactionSettingsJson,
+      Value<bool>? hasProtectedContent,
+      Value<String?>? pinnedMessageIdsJson,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -1458,6 +1543,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       hasActiveCall: hasActiveCall ?? this.hasActiveCall,
       chatPermissionsJson: chatPermissionsJson ?? this.chatPermissionsJson,
       reactionSettingsJson: reactionSettingsJson ?? this.reactionSettingsJson,
+      hasProtectedContent: hasProtectedContent ?? this.hasProtectedContent,
+      pinnedMessageIdsJson: pinnedMessageIdsJson ?? this.pinnedMessageIdsJson,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1575,6 +1662,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       map['reaction_settings_json'] =
           Variable<String>(reactionSettingsJson.value);
     }
+    if (hasProtectedContent.present) {
+      map['has_protected_content'] = Variable<bool>(hasProtectedContent.value);
+    }
+    if (pinnedMessageIdsJson.present) {
+      map['pinned_message_ids_json'] =
+          Variable<String>(pinnedMessageIdsJson.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1618,6 +1712,8 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('hasActiveCall: $hasActiveCall, ')
           ..write('chatPermissionsJson: $chatPermissionsJson, ')
           ..write('reactionSettingsJson: $reactionSettingsJson, ')
+          ..write('hasProtectedContent: $hasProtectedContent, ')
+          ..write('pinnedMessageIdsJson: $pinnedMessageIdsJson, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1944,6 +2040,16 @@ class $MessagesTable extends Messages
   late final GeneratedColumn<String> threadRootMessageId =
       GeneratedColumn<String>('thread_root_message_id', aliasedName, true,
           type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _hasMediaSpoilerMeta =
+      const VerificationMeta('hasMediaSpoiler');
+  @override
+  late final GeneratedColumn<bool> hasMediaSpoiler = GeneratedColumn<bool>(
+      'has_media_spoiler', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("has_media_spoiler" IN (0, 1))'),
+      defaultValue: const Constant(false));
   @override
   List<GeneratedColumn> get $columns => [
         localId,
@@ -1990,7 +2096,8 @@ class $MessagesTable extends Messages
         isSilent,
         commentsCount,
         recentRepliersJson,
-        threadRootMessageId
+        threadRootMessageId,
+        hasMediaSpoiler
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2247,6 +2354,12 @@ class $MessagesTable extends Messages
           threadRootMessageId.isAcceptableOrUnknown(
               data['thread_root_message_id']!, _threadRootMessageIdMeta));
     }
+    if (data.containsKey('has_media_spoiler')) {
+      context.handle(
+          _hasMediaSpoilerMeta,
+          hasMediaSpoiler.isAcceptableOrUnknown(
+              data['has_media_spoiler']!, _hasMediaSpoilerMeta));
+    }
     return context;
   }
 
@@ -2349,6 +2462,8 @@ class $MessagesTable extends Messages
       threadRootMessageId: attachedDatabase.typeMapping.read(
           DriftSqlType.string,
           data['${effectivePrefix}thread_root_message_id']),
+      hasMediaSpoiler: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}has_media_spoiler'])!,
     );
   }
 
@@ -2404,6 +2519,7 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
   final int commentsCount;
   final String? recentRepliersJson;
   final String? threadRootMessageId;
+  final bool hasMediaSpoiler;
   const DbMessage(
       {required this.localId,
       this.serverId,
@@ -2449,7 +2565,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       required this.isSilent,
       required this.commentsCount,
       this.recentRepliersJson,
-      this.threadRootMessageId});
+      this.threadRootMessageId,
+      required this.hasMediaSpoiler});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -2549,6 +2666,7 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
     if (!nullToAbsent || threadRootMessageId != null) {
       map['thread_root_message_id'] = Variable<String>(threadRootMessageId);
     }
+    map['has_media_spoiler'] = Variable<bool>(hasMediaSpoiler);
     return map;
   }
 
@@ -2649,6 +2767,7 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       threadRootMessageId: threadRootMessageId == null && nullToAbsent
           ? const Value.absent()
           : Value(threadRootMessageId),
+      hasMediaSpoiler: Value(hasMediaSpoiler),
     );
   }
 
@@ -2709,6 +2828,7 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           serializer.fromJson<String?>(json['recentRepliersJson']),
       threadRootMessageId:
           serializer.fromJson<String?>(json['threadRootMessageId']),
+      hasMediaSpoiler: serializer.fromJson<bool>(json['hasMediaSpoiler']),
     );
   }
   @override
@@ -2761,6 +2881,7 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       'commentsCount': serializer.toJson<int>(commentsCount),
       'recentRepliersJson': serializer.toJson<String?>(recentRepliersJson),
       'threadRootMessageId': serializer.toJson<String?>(threadRootMessageId),
+      'hasMediaSpoiler': serializer.toJson<bool>(hasMediaSpoiler),
     };
   }
 
@@ -2809,7 +2930,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           bool? isSilent,
           int? commentsCount,
           Value<String?> recentRepliersJson = const Value.absent(),
-          Value<String?> threadRootMessageId = const Value.absent()}) =>
+          Value<String?> threadRootMessageId = const Value.absent(),
+          bool? hasMediaSpoiler}) =>
       DbMessage(
         localId: localId ?? this.localId,
         serverId: serverId.present ? serverId.value : this.serverId,
@@ -2884,6 +3006,7 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         threadRootMessageId: threadRootMessageId.present
             ? threadRootMessageId.value
             : this.threadRootMessageId,
+        hasMediaSpoiler: hasMediaSpoiler ?? this.hasMediaSpoiler,
       );
   DbMessage copyWithCompanion(MessagesCompanion data) {
     return DbMessage(
@@ -2978,6 +3101,9 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       threadRootMessageId: data.threadRootMessageId.present
           ? data.threadRootMessageId.value
           : this.threadRootMessageId,
+      hasMediaSpoiler: data.hasMediaSpoiler.present
+          ? data.hasMediaSpoiler.value
+          : this.hasMediaSpoiler,
     );
   }
 
@@ -3028,7 +3154,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           ..write('isSilent: $isSilent, ')
           ..write('commentsCount: $commentsCount, ')
           ..write('recentRepliersJson: $recentRepliersJson, ')
-          ..write('threadRootMessageId: $threadRootMessageId')
+          ..write('threadRootMessageId: $threadRootMessageId, ')
+          ..write('hasMediaSpoiler: $hasMediaSpoiler')
           ..write(')'))
         .toString();
   }
@@ -3079,7 +3206,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         isSilent,
         commentsCount,
         recentRepliersJson,
-        threadRootMessageId
+        threadRootMessageId,
+        hasMediaSpoiler
       ]);
   @override
   bool operator ==(Object other) =>
@@ -3129,7 +3257,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           other.isSilent == this.isSilent &&
           other.commentsCount == this.commentsCount &&
           other.recentRepliersJson == this.recentRepliersJson &&
-          other.threadRootMessageId == this.threadRootMessageId);
+          other.threadRootMessageId == this.threadRootMessageId &&
+          other.hasMediaSpoiler == this.hasMediaSpoiler);
 }
 
 class MessagesCompanion extends UpdateCompanion<DbMessage> {
@@ -3178,6 +3307,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
   final Value<int> commentsCount;
   final Value<String?> recentRepliersJson;
   final Value<String?> threadRootMessageId;
+  final Value<bool> hasMediaSpoiler;
   final Value<int> rowid;
   const MessagesCompanion({
     this.localId = const Value.absent(),
@@ -3225,6 +3355,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.commentsCount = const Value.absent(),
     this.recentRepliersJson = const Value.absent(),
     this.threadRootMessageId = const Value.absent(),
+    this.hasMediaSpoiler = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -3273,6 +3404,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.commentsCount = const Value.absent(),
     this.recentRepliersJson = const Value.absent(),
     this.threadRootMessageId = const Value.absent(),
+    this.hasMediaSpoiler = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : localId = Value(localId),
         chatId = Value(chatId),
@@ -3325,6 +3457,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     Expression<int>? commentsCount,
     Expression<String>? recentRepliersJson,
     Expression<String>? threadRootMessageId,
+    Expression<bool>? hasMediaSpoiler,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -3380,6 +3513,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
         'recent_repliers_json': recentRepliersJson,
       if (threadRootMessageId != null)
         'thread_root_message_id': threadRootMessageId,
+      if (hasMediaSpoiler != null) 'has_media_spoiler': hasMediaSpoiler,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -3430,6 +3564,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       Value<int>? commentsCount,
       Value<String?>? recentRepliersJson,
       Value<String?>? threadRootMessageId,
+      Value<bool>? hasMediaSpoiler,
       Value<int>? rowid}) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -3478,6 +3613,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       commentsCount: commentsCount ?? this.commentsCount,
       recentRepliersJson: recentRepliersJson ?? this.recentRepliersJson,
       threadRootMessageId: threadRootMessageId ?? this.threadRootMessageId,
+      hasMediaSpoiler: hasMediaSpoiler ?? this.hasMediaSpoiler,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -3624,6 +3760,9 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       map['thread_root_message_id'] =
           Variable<String>(threadRootMessageId.value);
     }
+    if (hasMediaSpoiler.present) {
+      map['has_media_spoiler'] = Variable<bool>(hasMediaSpoiler.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -3678,6 +3817,7 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
           ..write('commentsCount: $commentsCount, ')
           ..write('recentRepliersJson: $recentRepliersJson, ')
           ..write('threadRootMessageId: $threadRootMessageId, ')
+          ..write('hasMediaSpoiler: $hasMediaSpoiler, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4402,6 +4542,8 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<bool> hasActiveCall,
   Value<String?> chatPermissionsJson,
   Value<String?> reactionSettingsJson,
+  Value<bool> hasProtectedContent,
+  Value<String?> pinnedMessageIdsJson,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -4439,6 +4581,8 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<bool> hasActiveCall,
   Value<String?> chatPermissionsJson,
   Value<String?> reactionSettingsJson,
+  Value<bool> hasProtectedContent,
+  Value<String?> pinnedMessageIdsJson,
   Value<int> rowid,
 });
 
@@ -4564,6 +4708,14 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<String> get reactionSettingsJson => $composableBuilder(
       column: $table.reactionSettingsJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasProtectedContent => $composableBuilder(
+      column: $table.hasProtectedContent,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get pinnedMessageIdsJson => $composableBuilder(
+      column: $table.pinnedMessageIdsJson,
       builder: (column) => ColumnFilters(column));
 }
 
@@ -4694,6 +4846,14 @@ class $$ChatsTableOrderingComposer
   ColumnOrderings<String> get reactionSettingsJson => $composableBuilder(
       column: $table.reactionSettingsJson,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasProtectedContent => $composableBuilder(
+      column: $table.hasProtectedContent,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get pinnedMessageIdsJson => $composableBuilder(
+      column: $table.pinnedMessageIdsJson,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -4806,6 +4966,12 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<String> get reactionSettingsJson => $composableBuilder(
       column: $table.reactionSettingsJson, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasProtectedContent => $composableBuilder(
+      column: $table.hasProtectedContent, builder: (column) => column);
+
+  GeneratedColumn<String> get pinnedMessageIdsJson => $composableBuilder(
+      column: $table.pinnedMessageIdsJson, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -4865,6 +5031,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> hasActiveCall = const Value.absent(),
             Value<String?> chatPermissionsJson = const Value.absent(),
             Value<String?> reactionSettingsJson = const Value.absent(),
+            Value<bool> hasProtectedContent = const Value.absent(),
+            Value<String?> pinnedMessageIdsJson = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -4902,6 +5070,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             hasActiveCall: hasActiveCall,
             chatPermissionsJson: chatPermissionsJson,
             reactionSettingsJson: reactionSettingsJson,
+            hasProtectedContent: hasProtectedContent,
+            pinnedMessageIdsJson: pinnedMessageIdsJson,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4939,6 +5109,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> hasActiveCall = const Value.absent(),
             Value<String?> chatPermissionsJson = const Value.absent(),
             Value<String?> reactionSettingsJson = const Value.absent(),
+            Value<bool> hasProtectedContent = const Value.absent(),
+            Value<String?> pinnedMessageIdsJson = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -4976,6 +5148,8 @@ class $$ChatsTableTableManager extends RootTableManager<
             hasActiveCall: hasActiveCall,
             chatPermissionsJson: chatPermissionsJson,
             reactionSettingsJson: reactionSettingsJson,
+            hasProtectedContent: hasProtectedContent,
+            pinnedMessageIdsJson: pinnedMessageIdsJson,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -5043,6 +5217,7 @@ typedef $$MessagesTableCreateCompanionBuilder = MessagesCompanion Function({
   Value<int> commentsCount,
   Value<String?> recentRepliersJson,
   Value<String?> threadRootMessageId,
+  Value<bool> hasMediaSpoiler,
   Value<int> rowid,
 });
 typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
@@ -5091,6 +5266,7 @@ typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
   Value<int> commentsCount,
   Value<String?> recentRepliersJson,
   Value<String?> threadRootMessageId,
+  Value<bool> hasMediaSpoiler,
   Value<int> rowid,
 });
 
@@ -5251,6 +5427,10 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get threadRootMessageId => $composableBuilder(
       column: $table.threadRootMessageId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasMediaSpoiler => $composableBuilder(
+      column: $table.hasMediaSpoiler,
       builder: (column) => ColumnFilters(column));
 }
 
@@ -5416,6 +5596,10 @@ class $$MessagesTableOrderingComposer
   ColumnOrderings<String> get threadRootMessageId => $composableBuilder(
       column: $table.threadRootMessageId,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasMediaSpoiler => $composableBuilder(
+      column: $table.hasMediaSpoiler,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$MessagesTableAnnotationComposer
@@ -5561,6 +5745,9 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get threadRootMessageId => $composableBuilder(
       column: $table.threadRootMessageId, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasMediaSpoiler => $composableBuilder(
+      column: $table.hasMediaSpoiler, builder: (column) => column);
 }
 
 class $$MessagesTableTableManager extends RootTableManager<
@@ -5631,6 +5818,7 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<int> commentsCount = const Value.absent(),
             Value<String?> recentRepliersJson = const Value.absent(),
             Value<String?> threadRootMessageId = const Value.absent(),
+            Value<bool> hasMediaSpoiler = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion(
@@ -5679,6 +5867,7 @@ class $$MessagesTableTableManager extends RootTableManager<
             commentsCount: commentsCount,
             recentRepliersJson: recentRepliersJson,
             threadRootMessageId: threadRootMessageId,
+            hasMediaSpoiler: hasMediaSpoiler,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -5727,6 +5916,7 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<int> commentsCount = const Value.absent(),
             Value<String?> recentRepliersJson = const Value.absent(),
             Value<String?> threadRootMessageId = const Value.absent(),
+            Value<bool> hasMediaSpoiler = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion.insert(
@@ -5775,6 +5965,7 @@ class $$MessagesTableTableManager extends RootTableManager<
             commentsCount: commentsCount,
             recentRepliersJson: recentRepliersJson,
             threadRootMessageId: threadRootMessageId,
+            hasMediaSpoiler: hasMediaSpoiler,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

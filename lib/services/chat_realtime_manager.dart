@@ -37,6 +37,8 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onChatSettingsUpdated;
   final void Function(WebSocketEvent event)? onMemberUpdated;
   final void Function(WebSocketEvent event)? onChatDeleted;
+  final void Function(WebSocketEvent event)? onScheduledMessagesUpdated;
+  final void Function(WebSocketEvent event)? onJoinRequestsUpdated;
   final VoidCallback? onReconnect;
 
   ChatSubscription({
@@ -61,6 +63,8 @@ class ChatSubscription {
     this.onChatSettingsUpdated,
     this.onMemberUpdated,
     this.onChatDeleted,
+    this.onScheduledMessagesUpdated,
+    this.onJoinRequestsUpdated,
     this.onReconnect,
   });
 
@@ -121,6 +125,8 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onChatSettingsUpdated,
     void Function(WebSocketEvent event)? onMemberUpdated,
     void Function(WebSocketEvent event)? onChatDeleted,
+    void Function(WebSocketEvent event)? onScheduledMessagesUpdated,
+    void Function(WebSocketEvent event)? onJoinRequestsUpdated,
     VoidCallback? onReconnect,
   }) {
     if (!_isInitialized) {
@@ -149,6 +155,8 @@ class ChatRealtimeManager {
       onChatSettingsUpdated: onChatSettingsUpdated,
       onMemberUpdated: onMemberUpdated,
       onChatDeleted: onChatDeleted,
+      onScheduledMessagesUpdated: onScheduledMessagesUpdated,
+      onJoinRequestsUpdated: onJoinRequestsUpdated,
       onReconnect: onReconnect,
     );
 
@@ -293,9 +301,16 @@ class ChatRealtimeManager {
         final pinId = rawPinId is num
             ? rawPinId.toInt()
             : int.tryParse(rawPinId?.toString() ?? '');
+        final hasPinIds = event.data.containsKey('pinned_message_ids');
+        final pinIds = _extractPinnedIds(event.data['pinned_message_ids']);
         if (pinChatId != null) {
           try {
-            await AppDatabase().updateChatPinnedMessageId(pinChatId, pinId);
+            await AppDatabase().updateChatPinnedMessageId(
+              pinChatId,
+              pinId,
+              pinnedMessageIds: pinIds,
+              updatePinnedMessageIds: hasPinIds,
+            );
           } catch (_) {}
         }
         _dispatchForChat(pinChatId, (s) => s.onMessagePinned?.call(event));
@@ -307,10 +322,16 @@ class ChatRealtimeManager {
         final nextPinId = rawNextPinId is num
             ? rawNextPinId.toInt()
             : int.tryParse(rawNextPinId?.toString() ?? '');
+        final hasUnpinIds = event.data.containsKey('pinned_message_ids');
+        final unpinIds = _extractPinnedIds(event.data['pinned_message_ids']);
         if (unpinChatId != null) {
           try {
-            await AppDatabase()
-                .updateChatPinnedMessageId(unpinChatId, nextPinId);
+            await AppDatabase().updateChatPinnedMessageId(
+              unpinChatId,
+              nextPinId,
+              pinnedMessageIds: unpinIds,
+              updatePinnedMessageIds: hasUnpinIds,
+            );
           } catch (_) {}
         }
         _dispatchForChat(
@@ -421,6 +442,22 @@ class ChatRealtimeManager {
         _dispatchForChat(
           (event.data['chat_id'] ?? event.data['id'])?.toString(),
           (s) => s.onChatDeleted?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.scheduledMessagesUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onScheduledMessagesUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.joinRequestsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onJoinRequestsUpdated?.call(event),
         );
         break;
 
@@ -562,6 +599,16 @@ class ChatRealtimeManager {
     _dispatchForChat(chatId, (s) => s.onNewMessage?.call(event));
   }
 
+  List<int> _extractPinnedIds(dynamic raw) {
+    if (raw is! List) return const [];
+    final ids = <int>[];
+    for (final item in raw) {
+      final parsed = item is num ? item.toInt() : int.tryParse(item.toString());
+      if (parsed != null && parsed > 0) ids.add(parsed);
+    }
+    return ids;
+  }
+
   Future<void> _handleMessageEdited(WebSocketEvent event) async {
     final chatId = event.data['chat_id']?.toString();
     final messageId =
@@ -575,9 +622,25 @@ class ChatRealtimeManager {
             ? event.data['entities'] as String
             : jsonEncode(event.data['entities']);
       }
+      String? mediaPayloadStr;
+      if (event.data['media_payload'] != null) {
+        mediaPayloadStr = event.data['media_payload'] is String
+            ? event.data['media_payload'] as String
+            : jsonEncode(event.data['media_payload']);
+      }
+      final bool? hasMediaSpoiler = event.data.containsKey('has_media_spoiler')
+          ? (event.data['has_media_spoiler'] == true ||
+              event.data['has_media_spoiler'] == 1)
+          : null;
       try {
-        await AppDatabase()
-            .updateMessageContent(messageId, content, entitiesStr);
+        await AppDatabase().updateMessageContent(
+          messageId,
+          content,
+          entitiesStr,
+          mediaPayloadStr,
+          true,
+          hasMediaSpoiler,
+        );
         if (chatId != null) {
           await AppDatabase().refreshChatLastMessageFromDb(chatId);
         }
@@ -593,10 +656,20 @@ class ChatRealtimeManager {
     final chatId = event.data['chat_id']?.toString();
     final messageId =
         event.data['message_id']?.toString() ?? event.data['id']?.toString();
+    final rawBatch = event.data['message_ids'];
+    final batchIds = <String>[
+      if (rawBatch is List)
+        ...rawBatch.map((e) => e.toString()).where((e) => e.isNotEmpty),
+      if (messageId != null && messageId.isNotEmpty) messageId,
+    ];
 
-    if (messageId != null) {
+    if (batchIds.isNotEmpty) {
       try {
-        await AppDatabase().deleteMessage(messageId);
+        if (batchIds.length == 1) {
+          await AppDatabase().deleteMessage(batchIds.first);
+        } else {
+          await AppDatabase().deleteMessagesBatch(batchIds);
+        }
         if (chatId != null) {
           await AppDatabase().refreshChatLastMessageFromDb(chatId);
         }
@@ -669,6 +742,14 @@ class ChatRealtimeManager {
         peerCustomizationJson: drift.Value(chatData['peer_customization'] is Map
             ? jsonEncode(chatData['peer_customization'])
             : chatData['peer_customization']?.toString()),
+        hasProtectedContent: drift.Value(
+          chatData['has_protected_content'] == true ||
+              chatData['has_protected_content'] == 1,
+        ),
+        pinnedMessageIdsJson: chatData['pinned_message_ids'] is List
+            ? drift.Value(jsonEncode(
+                _extractPinnedIds(chatData['pinned_message_ids'])))
+            : const drift.Value.absent(),
       ));
     } catch (e) {
       debugPrint('ChatRealtimeManager: Error saving new chat to Drift: $e');
@@ -746,6 +827,16 @@ class ChatRealtimeManager {
                 ? jsonEncode(event.data['peer_customization'])
                 : event.data['peer_customization']?.toString())
             : drift.Value(existing.peerCustomizationJson),
+        hasProtectedContent: event.data.containsKey('has_protected_content')
+            ? drift.Value(
+                event.data['has_protected_content'] == true ||
+                    event.data['has_protected_content'] == 1,
+              )
+            : drift.Value(existing.hasProtectedContent),
+        pinnedMessageIdsJson: event.data.containsKey('pinned_message_ids')
+            ? drift.Value(jsonEncode(
+                _extractPinnedIds(event.data['pinned_message_ids'])))
+            : drift.Value(existing.pinnedMessageIdsJson),
       );
       await AppDatabase().saveChat(companion);
     } catch (e) {
@@ -960,6 +1051,11 @@ class ChatRealtimeManager {
         (rawThreadRootId != null && rawThreadRootId.isNotEmpty)
             ? rawThreadRootId
             : null,
+      ),
+      hasMediaSpoiler: drift.Value(
+        msgData['has_media_spoiler'] == true ||
+            msgData['has_media_spoiler'] == 1 ||
+            mediaPayloadMap['has_media_spoiler'] == true,
       ),
     ));
   }

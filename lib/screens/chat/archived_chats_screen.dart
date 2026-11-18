@@ -12,6 +12,7 @@ import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/draft_service.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/settings_service.dart';
@@ -324,7 +325,6 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
 
   Future<void> _batchUnarchive(List<Chat> chats) async {
     if (chats.isEmpty) return;
-    final messenger = ScaffoldMessenger.maybeOf(context);
     final toastText = _tr(
       context,
       'archive_restored_toast',
@@ -354,26 +354,24 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
       await db.batchSetArchived(failedIds, true);
     }
 
+    if (!mounted) return;
     if (anyFailure) {
-      messenger?.showSnackBar(SnackBar(content: Text(errorText)));
+      GlassToastService().showError(context, errorText);
       return;
     }
 
-    messenger?.showSnackBar(
-      SnackBar(
-        content: Text(toastText),
-        action: SnackBarAction(
-          label: undoLabel,
-          onPressed: () {
-            unawaited(() async {
-              await db.batchSetArchived(ids, true);
-              for (final chat in chats) {
-                await ChatService.archiveChat(chatId: chat.id);
-              }
-            }());
-          },
-        ),
-      ),
+    GlassToastService().show(
+      context,
+      toastText,
+      actionLabel: undoLabel,
+      onAction: () {
+        unawaited(() async {
+          await db.batchSetArchived(ids, true);
+          for (final chat in chats) {
+            await ChatService.archiveChat(chatId: chat.id);
+          }
+        }());
+      },
     );
   }
 
@@ -963,7 +961,8 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final glassEnabled = glassProvider?.enabled ?? false;
     UnreadCountProvider? unreadProvider;
     NotificationSettingsProvider? notifProvider;
     try {
@@ -1031,7 +1030,7 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
             topPadding,
           );
 
-          if (glassProvider.enabled) {
+          if (glassEnabled) {
             return LiquidGlassScaffold(
               pixelRatio: 1.0,
               useSync: true,

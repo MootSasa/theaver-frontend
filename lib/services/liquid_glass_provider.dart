@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:provider/provider.dart';
 import 'glass_mode.dart';
 import 'power_saving_provider.dart';
 import 'settings_service.dart';
@@ -190,5 +191,31 @@ class LiquidGlassProvider extends ChangeNotifier {
     _blur = clamped;
     await _settingsService.saveGlassBlur(clamped);
     notifyListeners();
+  }
+
+  /// Safely looks up [LiquidGlassProvider] in [context] without throwing
+  /// [ProviderNotFoundException] when rendered outside the main provider tree.
+  static LiquidGlassProvider? maybeOf(
+    BuildContext context, {
+    bool listen = true,
+  }) {
+    try {
+      return Provider.of<LiquidGlassProvider>(context, listen: listen);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns the effective [GlassMode] for [context], falling back to
+  /// [GlassMode.disabled] if no provider exists or hardware glass is unsupported.
+  static GlassMode glassModeOf(
+    BuildContext context, {
+    bool listen = true,
+  }) {
+    final provider = maybeOf(context, listen: listen);
+    if (provider == null || !provider.isSupported) {
+      return GlassMode.disabled;
+    }
+    return provider.mode;
   }
 }

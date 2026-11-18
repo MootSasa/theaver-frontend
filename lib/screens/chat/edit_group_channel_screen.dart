@@ -5,20 +5,17 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../l10n/app_localizations.dart';
-import '../../models/theav_theme.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import 'settings/admin_rights_screen.dart';
@@ -45,6 +42,7 @@ class EditGroupChannelScreen extends StatefulWidget {
   final GroupDefaultPermissions? initialDefaultPermissions;
   final ReactionSettings? initialReactionSettings;
   final String? inviteLink;
+  final bool initialHasProtectedContent;
 
   const EditGroupChannelScreen({
     super.key,
@@ -64,6 +62,7 @@ class EditGroupChannelScreen extends StatefulWidget {
     this.initialDefaultPermissions,
     this.initialReactionSettings,
     this.inviteLink,
+    this.initialHasProtectedContent = false,
   });
 
   @override
@@ -84,6 +83,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   late int _slowModeInterval;
   late bool _signMessages;
   late bool _showAuthorProfiles;
+  late bool _hasProtectedContent;
   String? _linkedChatId;
   LinkedChatSummary? _linkedChat;
   late GroupDefaultPermissions _defaultPermissions;
@@ -109,6 +109,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     _isPublic = widget.initialIsPublic;
     _historyForNew = widget.initialHistoryForNew;
     _slowModeInterval = widget.initialSlowModeInterval;
+    _hasProtectedContent = widget.initialHasProtectedContent;
     _signMessages = widget.initialSignMessages ?? false;
     _showAuthorProfiles = widget.isChannel
         ? (_signMessages && (widget.initialShowAuthorProfiles ?? false))
@@ -199,6 +200,12 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           final rawInvite = res['invite_link']?.toString().trim();
           if (rawInvite != null && rawInvite.isNotEmpty) {
             _inviteLink = rawInvite;
+          }
+          final protectedRaw = res['has_protected_content'];
+          if (protectedRaw != null) {
+            _hasProtectedContent = protectedRaw == true ||
+                protectedRaw == 1 ||
+                protectedRaw == 'true';
           }
           if (res['my_role'] != null) {
             _myRole = res['my_role'].toString();
@@ -351,6 +358,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         'username': _isPublic ? cleanUsername : '',
         if (!widget.isChannel) 'history_for_new': _historyForNew,
         if (!widget.isChannel) 'slow_mode_interval': _slowModeInterval,
+        'has_protected_content': _hasProtectedContent,
         if (widget.isChannel) 'sign_messages': _signMessages,
         if (widget.isChannel)
           'show_author_profiles': _signMessages ? _showAuthorProfiles : false,
@@ -401,6 +409,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
       if (widget.isChannel)
         'show_author_profiles': _signMessages ? _showAuthorProfiles : false,
       'linked_chat_id': _linkedChatId ?? '',
+      'has_protected_content': _hasProtectedContent,
       if (_linkedChat != null) 'linked_chat': _linkedChat,
       'default_permissions': _defaultPermissions,
       'reaction_settings': _reactionSettings,
@@ -511,66 +520,37 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
 
   Future<void> _showHistoryVisibilitySheet() async {
     HapticUtils.tap();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
+    final palette = context.theav;
 
-    final selected = await showModalBottomSheet<bool>(
+    final selected = await showTheavModalSheet<bool>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => SettingsAttachedSheet(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+      title: 'История чата для новых участников',
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+        child: TheavInsetGroup(
           children: [
-            Text(
-              'История чата для новых участников',
-              style: TextStyle(
-                fontSize: 17.5,
-                fontWeight: FontWeight.w700,
-                color: textColor,
+            TheavListRow(
+              leading: iconoir.Eye(
+                width: 20,
+                height: 20,
+                color: palette.primary,
               ),
-            ),
-            const SizedBox(height: 8),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              minTileHeight: 54,
-              leading: iconoir.Eye(width: 22, height: 22, color: accentColor),
-              title: Text(
-                'Видна',
-                style: TextStyle(fontWeight: FontWeight.w600, color: textColor),
-              ),
-              subtitle: Text(
-                'Новые участники увидят сообщения, отправленные до их вступления',
-                style: TextStyle(fontSize: 12.5, color: subColor),
-              ),
-              trailing: _historyForNew
-                  ? iconoir.Check(width: 20, height: 20, color: accentColor)
-                  : null,
+              title: 'Видна',
+              subtitle:
+                  'Новые участники увидят сообщения, отправленные до их вступления',
+              trailing: TheavCheckCircle(selected: _historyForNew),
               onTap: () => Navigator.pop(ctx, true),
             ),
-            const Divider(height: 1),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              minTileHeight: 54,
-              leading:
-                  iconoir.EyeClosed(width: 22, height: 22, color: accentColor),
-              title: Text(
-                'Скрыта',
-                style: TextStyle(fontWeight: FontWeight.w600, color: textColor),
+            TheavListRow(
+              leading: iconoir.EyeClosed(
+                width: 20,
+                height: 20,
+                color: palette.primary,
               ),
-              subtitle: Text(
-                'Новые участники увидят переписку только с момента вступления',
-                style: TextStyle(fontSize: 12.5, color: subColor),
-              ),
-              trailing: !_historyForNew
-                  ? iconoir.Check(width: 20, height: 20, color: accentColor)
-                  : null,
+              title: 'Скрыта',
+              subtitle:
+                  'Новые участники увидят переписку только с момента вступления',
+              trailing: TheavCheckCircle(selected: !_historyForNew),
               onTap: () => Navigator.pop(ctx, false),
             ),
           ],
@@ -591,14 +571,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     }
     if (!mounted) return;
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
+    final palette = context.theav;
     final currentUserId = AccountManager().currentAccount?.userId;
     final canAddAdmins =
         _myRole == 'owner' || (_myAdminPermissions?.canAddAdmins ?? false);
@@ -610,108 +583,67 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         .where((m) => m.role != 'owner' && m.role != 'admin')
         .toList();
 
-    final picked = await showModalBottomSheet<ChatParticipant>(
+    final picked = await showTheavModalSheet<ChatParticipant>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => SettingsAttachedSheet(
+      title: 'Администраторы',
+      builder: (ctx) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Администраторы',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: textColor,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
+            if (admins.isNotEmpty)
+              TheavInsetGroup(
                 children: [
                   for (final admin in admins)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      minTileHeight: 54,
+                    TheavListRow(
                       leading: AvatarWithStatus(
                         userId: admin.id,
                         avatarUrl: admin.avatarUrl,
                         name: admin.displayName,
                         radius: 20,
                       ),
-                      title: Text(
-                        admin.displayName.isNotEmpty
-                            ? admin.displayName
-                            : '@${admin.username}',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: textColor,
-                        ),
-                      ),
-                      subtitle: Text(
-                        admin.adminTitle.isNotEmpty
-                            ? admin.adminTitle
-                            : (admin.role == 'owner'
-                                ? 'Владелец'
-                                : 'Администратор'),
-                        style: TextStyle(fontSize: 12.5, color: subColor),
-                      ),
-                      trailing: (admin.role != 'owner' ||
-                              admin.id == currentUserId)
-                          ? iconoir.NavArrowRight(
-                              width: 18,
-                              height: 18,
-                              color: subColor,
-                            )
-                          : null,
+                      title: admin.displayName.isNotEmpty
+                          ? admin.displayName
+                          : '@${admin.username}',
+                      subtitle: admin.adminTitle.isNotEmpty
+                          ? admin.adminTitle
+                          : (admin.role == 'owner'
+                              ? 'Владелец'
+                              : 'Администратор'),
+                      showChevron:
+                          admin.role != 'owner' || admin.id == currentUserId,
                       onTap: (admin.role != 'owner' || admin.id == currentUserId)
                           ? () => Navigator.pop(ctx, admin)
                           : null,
                     ),
-                  if (canAddAdmins && regularMembers.isNotEmpty) ...[
-                    const Divider(height: 20),
-                    Text(
-                      'НАЗНАЧИТЬ ИЗ УЧАСТНИКОВ',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: subColor,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    for (final member in regularMembers)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        minTileHeight: 52,
-                        leading: AvatarWithStatus(
-                          userId: member.id,
-                          avatarUrl: member.avatarUrl,
-                          name: member.displayName,
-                          radius: 19,
-                        ),
-                        title: Text(
-                          member.displayName.isNotEmpty
-                              ? member.displayName
-                              : '@${member.username}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w500,
-                            color: textColor,
-                          ),
-                        ),
-                        trailing: iconoir.Plus(
-                          width: 18,
-                          height: 18,
-                          color: accentColor,
-                        ),
-                        onTap: () => Navigator.pop(ctx, member),
-                      ),
-                  ],
                 ],
               ),
-            ),
+            if (canAddAdmins && regularMembers.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              TheavInsetGroup(
+                header: 'НАЗНАЧИТЬ ИЗ УЧАСТНИКОВ',
+                children: [
+                  for (final member in regularMembers)
+                    TheavListRow(
+                      leading: AvatarWithStatus(
+                        userId: member.id,
+                        avatarUrl: member.avatarUrl,
+                        name: member.displayName,
+                        radius: 19,
+                      ),
+                      title: member.displayName.isNotEmpty
+                          ? member.displayName
+                          : '@${member.username}',
+                      trailing: iconoir.Plus(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      onTap: () => Navigator.pop(ctx, member),
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -739,23 +671,9 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final bgColor = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F7);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.08);
+    final palette = context.theav;
     final disableAnim = MediaQuery.disableAnimationsOf(context);
     final validAvatar = getValidAvatarUrl(_avatarUrl);
-
     final slowBadge = _slowModeBadge(_slowModeInterval);
 
     return PopScope(
@@ -767,34 +685,36 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         title: widget.isChannel
             ? _tr('edit_channel_title', 'Изменить канал')
             : _tr('edit_group_title', 'Изменить группу'),
-        backgroundColor: bgColor,
+        backgroundColor: palette.background,
         onBack: _handleBack,
         actions: [
           if (_isSaving)
-            const SettingsHeaderAction(
+            SettingsHeaderAction(
               child: SizedBox(
                 width: 18,
                 height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: palette.primary,
+                ),
               ),
             )
           else
             SettingsHeaderAction(
               tooltip: 'Сохранить',
-              foregroundColor: accentColor,
-              icon: iconoir.Check(width: 22, height: 22, color: accentColor),
+              foregroundColor: palette.primary,
+              icon: iconoir.Check(width: 22, height: 22, color: palette.primary),
               onTap: _saveChanges,
             ),
         ],
         body: ListView(
           padding: EdgeInsets.fromLTRB(
-            16,
+            0,
             SettingsFloatingHeader.topClearanceOf(context) + 12,
-            16,
-            36,
+            0,
+            MediaQuery.paddingOf(context).bottom + 36,
           ),
           children: [
-            // 1. Аватар
             Center(
               child: GestureDetector(
                 onTap: _pickAvatar,
@@ -802,7 +722,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                   children: [
                     CircleAvatar(
                       radius: 48,
-                      backgroundColor: accentColor.withValues(alpha: 0.2),
+                      backgroundColor: palette.primary.withValues(alpha: 0.2),
                       backgroundImage: _pickedAvatarFile != null
                           ? FileImage(_pickedAvatarFile!) as ImageProvider
                           : (validAvatar != null && validAvatar.isNotEmpty
@@ -817,7 +737,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                               style: TextStyle(
                                 fontSize: 34,
                                 fontWeight: FontWeight.w600,
-                                color: accentColor,
+                                color: palette.primary,
                               ),
                             )
                           : null,
@@ -829,15 +749,18 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                         width: 32,
                         height: 32,
                         decoration: BoxDecoration(
-                          color: accentColor,
+                          color: palette.primary,
                           shape: BoxShape.circle,
-                          border: Border.all(color: bgColor, width: 2),
+                          border: Border.all(
+                            color: palette.background,
+                            width: 2,
+                          ),
                         ),
                         alignment: Alignment.center,
-                        child: const iconoir.Camera(
+                        child: iconoir.Camera(
                           width: 16,
                           height: 16,
-                          color: Colors.white,
+                          color: palette.onPrimary,
                         ),
                       ),
                     ),
@@ -845,193 +768,130 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 18),
 
-            // 2. Название и описание
-            _buildCard(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Column(
-                  children: [
-                    TextField(
-                      controller: _nameController,
-                      style: TextStyle(fontSize: 16, color: textColor),
-                      decoration: InputDecoration(
-                        labelText: widget.isChannel
-                            ? _tr('channel_name_label', 'Название канала')
-                            : _tr('group_name_label', 'Название группы'),
-                        labelStyle: TextStyle(color: subColor),
-                        border: InputBorder.none,
-                      ),
-                    ),
-                    Divider(height: 1, color: dividerColor),
-                    TextField(
-                      controller: _descriptionController,
-                      maxLines: 3,
-                      minLines: 1,
-                      style: TextStyle(fontSize: 15, color: textColor),
-                      decoration: InputDecoration(
-                        labelText: _tr(
-                          'group_info_description',
-                          'Описание (необязательно)',
-                        ),
-                        labelStyle: TextStyle(color: subColor),
-                        border: InputBorder.none,
-                      ),
-                    ),
-                  ],
+            // Название и описание
+            TheavInsetGroup(
+              dividerIndent: 16,
+              children: [
+                TheavInlineTextField(
+                  controller: _nameController,
+                  label: widget.isChannel
+                      ? _tr('channel_name_label', 'Название канала')
+                      : _tr('group_name_label', 'Название группы'),
+                  placeholder: widget.isChannel
+                      ? 'Название канала'
+                      : 'Название группы',
                 ),
-              ),
+                TheavInlineTextField(
+                  controller: _descriptionController,
+                  label: _tr(
+                    'group_info_description',
+                    'Описание (необязательно)',
+                  ),
+                  placeholder: 'Расскажите подробнее...',
+                  maxLines: 3,
+                  minLines: 1,
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
 
-            // 3. Тип: Публичный vs Частный + @username
-            _buildCard(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildSwitchRow(
-                    glassProvider: glassProvider,
-                    icon: iconoir.Globe(
-                      width: 20,
-                      height: 20,
-                      color: accentColor,
-                    ),
-                    title: widget.isChannel
-                        ? _tr('channel_public_toggle', 'Публичный канал')
-                        : _tr('group_info_public', 'Публичная группа'),
-                    subtitle: _isPublic
-                        ? 'Можно найти через поиск и открыть по @username'
-                        : 'Доступ только по пригласительной ссылке',
+            // Тип: Публичный vs Частный + @username
+            TheavInsetGroup(
+              footer: _isPublic ? _usernameValidationHint : null,
+              children: [
+                TheavListRow(
+                  leading: iconoir.Globe(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: widget.isChannel
+                      ? _tr('channel_public_toggle', 'Публичный канал')
+                      : _tr('group_info_public', 'Публичная группа'),
+                  subtitle: _isPublic
+                      ? 'Можно найти через поиск и открыть по @username'
+                      : 'Доступ только по пригласительной ссылке',
+                  trailing: TheavSwitch(
                     value: _isPublic,
-                    accentColor: accentColor,
-                    textColor: textColor,
-                    subColor: subColor,
                     onChanged: (v) {
                       HapticUtils.selection();
                       setState(() => _isPublic = v);
                     },
                   ),
-                  AnimatedSize(
-                    duration: disableAnim
-                        ? Duration.zero
-                        : const Duration(milliseconds: 220),
-                    curve: Curves.easeOutCubic,
-                    child: _isPublic
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Divider(
-                                height: 1,
-                                indent: 54,
-                                color: dividerColor,
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  6,
-                                  16,
-                                  10,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    TextField(
-                                      controller: _usernameController,
-                                      style: TextStyle(
-                                        fontSize: 15.5,
-                                        color: textColor,
-                                      ),
-                                      decoration: InputDecoration(
-                                        labelText: 'Публичный @username',
-                                        labelStyle: TextStyle(color: subColor),
-                                        prefixText: '@',
-                                        prefixStyle: TextStyle(
-                                          fontSize: 15.5,
-                                          fontWeight: FontWeight.w600,
-                                          color: accentColor,
-                                        ),
-                                        suffixIcon: _cleanUsername.isNotEmpty
-                                            ? Padding(
-                                                padding:
-                                                    const EdgeInsets.all(12),
-                                                child: _isUsernameValid
-                                                    ? const iconoir.CheckCircle(
-                                                        width: 18,
-                                                        height: 18,
-                                                        color:
-                                                            Color(0xFF34C759),
-                                                      )
-                                                    : const iconoir
-                                                        .WarningCircle(
-                                                        width: 18,
-                                                        height: 18,
-                                                        color: Colors.redAccent,
-                                                      ),
-                                              )
-                                            : null,
-                                        border: InputBorder.none,
-                                      ),
-                                    ),
-                                    if (_usernameValidationHint != null)
-                                      Text(
-                                        _usernameValidationHint!,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: _usernameServerError != null ||
-                                                  (_cleanUsername.isNotEmpty &&
-                                                      !_isUsernameValid)
-                                              ? Colors.redAccent
-                                              : subColor,
-                                        ),
-                                      )
-                                    else if (_cleanUsername.isNotEmpty)
-                                      Text(
-                                        'Ссылка: https://theaver.app/@$_cleanUsername',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: accentColor,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          )
-                        : const SizedBox.shrink(),
+                  onTap: () {
+                    HapticUtils.selection();
+                    setState(() => _isPublic = !_isPublic);
+                  },
+                ),
+                if (_isPublic)
+                  TheavInlineTextField(
+                    controller: _usernameController,
+                    label: 'Публичный @username',
+                    placeholder: 'username',
+                    prefix: Text(
+                      '@',
+                      style: TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w600,
+                        color: palette.primary,
+                      ),
+                    ),
+                    suffix: _cleanUsername.isNotEmpty
+                        ? (_isUsernameValid
+                            ? const iconoir.CheckCircle(
+                                width: 18,
+                                height: 18,
+                                color: Color(0xFF34C759),
+                              )
+                            : iconoir.WarningCircle(
+                                width: 18,
+                                height: 18,
+                                color: palette.error,
+                              ))
+                        : null,
                   ),
-                ],
-              ),
+                TheavListRow(
+                  leading: iconoir.Lock(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Запретить копирование и пересылку',
+                  subtitle: 'Участники не смогут копировать и сохранять контент',
+                  trailing: TheavSwitch(
+                    value: _hasProtectedContent,
+                    onChanged: (v) {
+                      HapticUtils.selection();
+                      setState(() => _hasProtectedContent = v);
+                    },
+                  ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    setState(
+                      () => _hasProtectedContent = !_hasProtectedContent,
+                    );
+                  },
+                ),
+              ],
             ),
 
-            // 4. Подпись авторов в канале (2 уровня)
+            // Подпись авторов в канале
             if (widget.isChannel) ...[
-              const SizedBox(height: 16),
-              _buildCard(
-                context,
-                glassProvider: glassProvider,
-                isDark: isDark,
-                child: Column(
-                  children: [
-                    _buildSwitchRow(
-                      glassProvider: glassProvider,
-                      icon: iconoir.EditPencil(
-                        width: 20,
-                        height: 20,
-                        color: accentColor,
-                      ),
-                      title: 'Подписывать сообщения',
-                      subtitle: 'Показывать имя автора в нижней строке поста',
+              const SizedBox(height: 8),
+              TheavInsetGroup(
+                children: [
+                  TheavListRow(
+                    leading: iconoir.EditPencil(
+                      width: 20,
+                      height: 20,
+                      color: palette.primary,
+                    ),
+                    title: 'Подписывать сообщения',
+                    subtitle: 'Показывать имя автора в нижней строке поста',
+                    trailing: TheavSwitch(
                       value: _signMessages,
-                      accentColor: accentColor,
-                      textColor: textColor,
-                      subColor: subColor,
                       onChanged: (v) {
                         HapticUtils.selection();
                         setState(() {
@@ -1040,321 +900,131 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                         });
                       },
                     ),
+                    onTap: () {
+                      HapticUtils.selection();
+                      setState(() {
+                        _signMessages = !_signMessages;
+                        if (!_signMessages) _showAuthorProfiles = false;
+                      });
+                    },
+                  ),
+                  if (_signMessages)
                     AnimatedSize(
                       duration: disableAnim
                           ? Duration.zero
-                          : const Duration(milliseconds: 220),
+                          : const Duration(milliseconds: 200),
                       curve: Curves.easeOutCubic,
-                      child: AnimatedOpacity(
-                        duration: disableAnim
-                            ? Duration.zero
-                            : const Duration(milliseconds: 180),
-                        opacity: _signMessages ? 1.0 : 0.0,
-                        child: _signMessages
-                            ? Column(
-                                children: [
-                                  Divider(
-                                    height: 1,
-                                    indent: 54,
-                                    color: dividerColor,
-                                  ),
-                                  _buildSwitchRow(
-                                    glassProvider: glassProvider,
-                                    icon: iconoir.User(
-                                      width: 20,
-                                      height: 20,
-                                      color: accentColor,
-                                    ),
-                                    title: 'Профили авторов',
-                                    subtitle:
-                                        'Отображать аватар и ссылку на профиль автора поста',
-                                    value: _showAuthorProfiles,
-                                    accentColor: accentColor,
-                                    textColor: textColor,
-                                    subColor: subColor,
-                                    onChanged: (v) {
-                                      HapticUtils.selection();
-                                      setState(() => _showAuthorProfiles = v);
-                                    },
-                                  ),
-                                ],
-                              )
-                            : const SizedBox.shrink(),
+                      child: TheavListRow(
+                        leading: iconoir.User(
+                          width: 20,
+                          height: 20,
+                          color: palette.primary,
+                        ),
+                        title: 'Профили авторов',
+                        subtitle:
+                            'Отображать аватар и ссылку на профиль автора поста',
+                        trailing: TheavSwitch(
+                          value: _showAuthorProfiles,
+                          onChanged: (v) {
+                            HapticUtils.selection();
+                            setState(() => _showAuthorProfiles = v);
+                          },
+                        ),
+                        onTap: () {
+                          HapticUtils.selection();
+                          setState(
+                            () => _showAuthorProfiles = !_showAuthorProfiles,
+                          );
+                        },
                       ),
                     ),
-                  ],
-                ),
+                ],
               ),
             ],
 
-            // 5. Telegram-навигация управления
-            const SizedBox(height: 16),
-            _buildCard(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              child: Column(
-                children: [
-                  if (widget.isChannel) ...[
-                    _buildNavRow(
-                      icon: iconoir.ChatLines(
-                        width: 20,
-                        height: 20,
-                        color: accentColor,
-                      ),
-                      title: 'Обсуждение',
-                      trailingText: _linkedChat?.name.isNotEmpty == true
-                          ? _linkedChat!.name
-                          : ((_linkedChatId ?? '').isNotEmpty
-                              ? 'Группа #$_linkedChatId'
-                              : 'Добавить группу'),
-                      accentColor: accentColor,
-                      textColor: textColor,
-                      subColor: subColor,
-                      onTap: _openDiscussionSettings,
-                    ),
-                    Divider(height: 1, indent: 54, color: dividerColor),
-                  ] else ...[
-                    _buildNavRow(
-                      icon: iconoir.Lock(
-                        width: 20,
-                        height: 20,
-                        color: accentColor,
-                      ),
-                      title: 'Разрешения',
-                      trailingText:
-                          '${_enabledPermissionsCount(_defaultPermissions)}/7',
-                      trailingBadge: slowBadge.isNotEmpty ? slowBadge : null,
-                      accentColor: accentColor,
-                      textColor: textColor,
-                      subColor: subColor,
-                      onTap: _openGroupPermissions,
-                    ),
-                    Divider(height: 1, indent: 54, color: dividerColor),
-                    _buildNavRow(
-                      icon: iconoir.Clock(
-                        width: 20,
-                        height: 20,
-                        color: accentColor,
-                      ),
-                      title: 'История чата для новых участников',
-                      trailingText: _historyForNew ? 'Видна' : 'Скрыта',
-                      accentColor: accentColor,
-                      textColor: textColor,
-                      subColor: subColor,
-                      onTap: _showHistoryVisibilitySheet,
-                    ),
-                    Divider(height: 1, indent: 54, color: dividerColor),
-                  ],
-                  _buildNavRow(
-                    icon: iconoir.Heart(
+            // Telegram-навигация управления
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              children: [
+                if (widget.isChannel)
+                  TheavListRow(
+                    leading: iconoir.ChatLines(
                       width: 20,
                       height: 20,
-                      color: accentColor,
+                      color: palette.primary,
                     ),
-                    title: 'Реакции',
-                    trailingText: _reactionSummary(),
-                    accentColor: accentColor,
-                    textColor: textColor,
-                    subColor: subColor,
-                    onTap: _openReactionsSettings,
+                    title: 'Обсуждение',
+                    valueText: _linkedChat?.name.isNotEmpty == true
+                        ? _linkedChat!.name
+                        : ((_linkedChatId ?? '').isNotEmpty
+                            ? 'Группа #$_linkedChatId'
+                            : 'Добавить группу'),
+                    showChevron: true,
+                    onTap: _openDiscussionSettings,
+                  )
+                else ...[
+                  TheavListRow(
+                    leading: iconoir.Lock(
+                      width: 20,
+                      height: 20,
+                      color: palette.primary,
+                    ),
+                    title: 'Разрешения',
+                    valueText:
+                        '${_enabledPermissionsCount(_defaultPermissions)}/7${slowBadge.isNotEmpty ? ' • $slowBadge' : ''}',
+                    showChevron: true,
+                    onTap: _openGroupPermissions,
                   ),
-                  Divider(height: 1, indent: 54, color: dividerColor),
-                  _buildNavRow(
-                    icon: iconoir.Link(
+                  TheavListRow(
+                    leading: iconoir.Clock(
                       width: 20,
                       height: 20,
-                      color: accentColor,
+                      color: palette.primary,
                     ),
-                    title: 'Пригласительные ссылки',
-                    trailingText:
-                        (_inviteLink ?? '').isNotEmpty ? 'Активна' : '',
-                    accentColor: accentColor,
-                    textColor: textColor,
-                    subColor: subColor,
-                    onTap: _openInviteLinks,
-                  ),
-                  Divider(height: 1, indent: 54, color: dividerColor),
-                  _buildNavRow(
-                    icon: iconoir.ShieldCheck(
-                      width: 20,
-                      height: 20,
-                      color: accentColor,
-                    ),
-                    title: 'Администраторы',
-                    trailingText: '$_adminsCount',
-                    accentColor: accentColor,
-                    textColor: textColor,
-                    subColor: subColor,
-                    onTap: _openAdminsSheet,
+                    title: 'История чата для новых участников',
+                    valueText: _historyForNew ? 'Видна' : 'Скрыта',
+                    showChevron: true,
+                    onTap: _showHistoryVisibilitySheet,
                   ),
                 ],
-              ),
+                TheavListRow(
+                  leading: iconoir.Heart(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Реакции',
+                  valueText: _reactionSummary(),
+                  showChevron: true,
+                  onTap: _openReactionsSettings,
+                ),
+                TheavListRow(
+                  leading: iconoir.Link(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Пригласительные ссылки',
+                  valueText: (_inviteLink ?? '').isNotEmpty ? 'Активна' : '',
+                  showChevron: true,
+                  onTap: _openInviteLinks,
+                ),
+                TheavListRow(
+                  leading: iconoir.ShieldCheck(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Администраторы',
+                  valueText: '$_adminsCount',
+                  showChevron: true,
+                  onTap: _openAdminsSheet,
+                ),
+              ],
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildNavRow({
-    required Widget icon,
-    required String title,
-    required String trailingText,
-    String? trailingBadge,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-    required VoidCallback onTap,
-  }) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 52),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        leading: SizedBox(width: 28, child: Center(child: icon)),
-        title: Text(
-          title,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
-            color: textColor,
-          ),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (trailingBadge != null && trailingBadge.isNotEmpty) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: accentColor.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  trailingBadge,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
-                    color: accentColor,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-            ],
-            if (trailingText.isNotEmpty)
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 130),
-                child: Text(
-                  trailingText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: accentColor,
-                  ),
-                ),
-              ),
-            const SizedBox(width: 4),
-            iconoir.NavArrowRight(width: 18, height: 18, color: subColor),
-          ],
-        ),
-        onTap: onTap,
-      ),
-    );
-  }
-
-  Widget _buildSwitchRow({
-    required LiquidGlassProvider? glassProvider,
-    required Widget icon,
-    required String title,
-    String? subtitle,
-    required bool value,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-    required ValueChanged<bool> onChanged,
-  }) {
-    final trailing = glassProvider != null
-        ? AdaptiveSwitch(
-            value: value,
-            onChanged: onChanged,
-            activeColor: accentColor,
-          )
-        : Switch.adaptive(
-            value: value,
-            activeThumbColor: accentColor,
-            onChanged: onChanged,
-          );
-
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 52),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        leading: SizedBox(width: 28, child: Center(child: icon)),
-        title: Text(
-          title,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
-            color: textColor,
-          ),
-        ),
-        subtitle: subtitle != null
-            ? Text(
-                subtitle,
-                style: TextStyle(fontSize: 12.5, color: subColor),
-              )
-            : null,
-        trailing: trailing,
-        onTap: () => onChanged(!value),
-      ),
-    );
-  }
-
-  Widget _buildCard(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Widget child,
-  }) {
-    if ((glassProvider?.enabled ?? false) && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 20,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: isDark
-              ? null
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
-          child: Material(type: MaterialType.transparency, child: child),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.black.withValues(alpha: 0.08),
-          width: 0.5,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(type: MaterialType.transparency, child: child),
     );
   }
 }

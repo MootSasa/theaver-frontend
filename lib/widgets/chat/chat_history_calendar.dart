@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -358,7 +357,7 @@ class _ChatHistoryCalendarState extends State<ChatHistoryCalendar> {
     final isDesktop = ChatHistoryCalendar._isDesktopPlatform(context);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
+    final glassEnabled = LiquidGlassProvider.maybeOf(context)?.enabled ?? false;
 
     final surfaceColor = glassEnabled
         ? (isDark

@@ -2,13 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
-import '../../../models/theav_theme.dart';
 import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
-import '../../../services/liquid_glass_provider.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 import '../../../widgets/user/avatar_with_status.dart';
 
@@ -167,12 +165,6 @@ class _ChannelDiscussionSettingsScreenState
 
   Future<void> _linkGroup(Chat group) async {
     if (_isSubmitting) return;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.72)
-        : const Color(0xFF475569);
-
     final extraNote =
         (group.linkedChatId != null &&
                 group.linkedChatId!.isNotEmpty &&
@@ -180,29 +172,19 @@ class _ChannelDiscussionSettingsScreenState
             ? '\n\nЭта группа уже привязана к другому каналу — прежняя связь будет заменена.'
             : '';
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          'Привязать «${group.name}»?',
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: Text(
+      title: 'Привязать «${group.name}»?',
+      message:
           'Публикации канала «${widget.channelName}» будут автоматически пересылаться в эту группу для комментариев.$extraNote',
-          style: TextStyle(color: subColor),
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Привязать',
+          result: true,
+          isPrimary: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Привязать'),
-          ),
-        ],
-      ),
+      ],
     );
     if (confirmed != true || !mounted) return;
 
@@ -244,36 +226,19 @@ class _ChannelDiscussionSettingsScreenState
 
   Future<void> _unlinkGroup() async {
     if (_isSubmitting || !_hasLinkedGroup) return;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          'Отвязать группу?',
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: Text(
+      title: 'Отвязать группу?',
+      message:
           'Комментарии под новыми публикациями канала перестанут отображаться.',
-          style: TextStyle(
-            color: isDark ? Colors.white70 : const Color(0xFF475569),
-          ),
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Отвязать',
+          result: true,
+          isDestructive: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Отвязать',
-              style: TextStyle(color: Colors.redAccent),
-            ),
-          ),
-        ],
-      ),
+      ],
     );
     if (confirmed != true || !mounted) return;
 
@@ -311,21 +276,7 @@ class _ChannelDiscussionSettingsScreenState
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final bgColor = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F7);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.08);
-
+    final palette = context.theav;
     final availableGroups =
         _adminGroups.where((g) => g.id != _linkedChatId).toList();
 
@@ -336,206 +287,146 @@ class _ChannelDiscussionSettingsScreenState
       },
       child: SettingsFloatingScaffold(
         title: 'Обсуждение',
-        backgroundColor: bgColor,
+        backgroundColor: palette.background,
         onBack: _popWithResult,
         actions: _isSubmitting
-            ? const [
+            ? [
                 SettingsHeaderAction(
                   child: SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: palette.primary,
+                    ),
                   ),
                 ),
               ]
             : const [],
         body: ListView(
           padding: EdgeInsets.fromLTRB(
-            16,
+            0,
             SettingsFloatingHeader.topClearanceOf(context) + 12,
-            16,
-            36,
+            0,
+            MediaQuery.paddingOf(context).bottom + 36,
           ),
           children: [
-            _buildSurfaceCard(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: accentColor.withValues(alpha: 0.14),
-                        shape: BoxShape.circle,
-                      ),
-                      alignment: Alignment.center,
-                      child: iconoir.ChatLines(
-                        width: 22,
-                        height: 22,
-                        color: accentColor,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Text(
-                        'Привяжите группу, чтобы подписчики могли оставлять комментарии под публикациями канала «${widget.channelName}».',
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          height: 1.38,
-                          color: subColor,
+            TheavInsetGroup(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: palette.primary.withValues(alpha: 0.14),
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: iconoir.ChatLines(
+                          width: 22,
+                          height: 22,
+                          color: palette.primary,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Привяжите группу, чтобы подписчики могли оставлять комментарии под публикациями канала «${widget.channelName}».',
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            height: 1.38,
+                            color: palette.subtext,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 16),
             if (_hasLinkedGroup) ...[
-              Padding(
-                padding: const EdgeInsets.only(left: 14, bottom: 8),
-                child: Text(
-                  'ПРИВЯЗАННАЯ ГРУППА',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.4,
-                    color: subColor,
-                  ),
-                ),
-              ),
-              _buildLinkedGroupCard(
-                context,
-                glassProvider: glassProvider,
-                isDark: isDark,
-                accentColor: accentColor,
-                textColor: textColor,
-                subColor: subColor,
-              ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 8),
+              _buildLinkedGroupCard(context, palette: palette),
             ],
-            _buildSurfaceCard(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              child: ListTile(
-                minTileHeight: 56,
-                leading: Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: accentColor.withValues(alpha: 0.14),
-                    shape: BoxShape.circle,
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              children: [
+                TheavListRow(
+                  leading: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: palette.primary.withValues(alpha: 0.14),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: iconoir.Plus(
+                      width: 20,
+                      height: 20,
+                      color: palette.primary,
+                    ),
                   ),
-                  alignment: Alignment.center,
-                  child: iconoir.Plus(
-                    width: 20,
-                    height: 20,
-                    color: accentColor,
-                  ),
+                  title: 'Создать группу для обсуждения',
+                  subtitle:
+                      'Будет создана группа «${widget.channelName.trim()} Chat»',
+                  enabled: !_isSubmitting,
+                  onTap: _createDiscussionGroup,
                 ),
-                title: Text(
-                  'Создать группу для обсуждения',
-                  style: TextStyle(
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.w600,
-                    color: accentColor,
-                  ),
-                ),
-                subtitle: Text(
-                  'Будет создана группа «${widget.channelName.trim()} Chat»',
-                  style: TextStyle(fontSize: 12.5, color: subColor),
-                ),
-                onTap: _isSubmitting ? null : _createDiscussionGroup,
-              ),
+              ],
             ),
-            const SizedBox(height: 20),
-            Padding(
-              padding: const EdgeInsets.only(left: 14, bottom: 8),
-              child: Text(
-                'ВАШИ ГРУППЫ (ВЛАДЕЛЕЦ ИЛИ АДМИН)',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.4,
-                  color: subColor,
-                ),
-              ),
-            ),
+            const SizedBox(height: 8),
             if (_isLoading)
               const Padding(
                 padding: EdgeInsets.all(28),
                 child: Center(child: CircularProgressIndicator()),
               )
             else if (availableGroups.isEmpty)
-              _buildSurfaceCard(
-                context,
-                glassProvider: glassProvider,
-                isDark: isDark,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 22,
+              TheavInsetGroup(
+                header: 'ВАШИ ГРУППЫ (ВЛАДЕЛЕЦ ИЛИ АДМИН)',
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 22,
+                    ),
+                    child: Text(
+                      'Нет других групп, в которых вы являетесь владельцем или администратором.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 14, color: palette.subtext),
+                    ),
                   ),
-                  child: Text(
-                    'Нет других групп, в которых вы являетесь владельцем или администратором.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: subColor),
-                  ),
-                ),
+                ],
               )
             else
-              _buildSurfaceCard(
-                context,
-                glassProvider: glassProvider,
-                isDark: isDark,
-                child: Column(
-                  children: [
-                    for (int i = 0; i < availableGroups.length; i++) ...[
-                      ListTile(
-                        minTileHeight: 58,
-                        leading: AvatarWithStatus(
-                          avatarUrl: availableGroups[i].avatarUrl,
-                          name: availableGroups[i].name,
-                          radius: 21,
-                        ),
-                        title: Text(
-                          availableGroups[i].name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: textColor,
-                          ),
-                        ),
-                        subtitle: Text(
-                          availableGroups[i].username != null &&
-                                  availableGroups[i].username!.isNotEmpty
-                              ? '@${availableGroups[i].username}'
-                              : (availableGroups[i].myRole == 'owner'
-                                  ? 'Владелец'
-                                  : 'Администратор'),
-                          style: TextStyle(fontSize: 12.5, color: subColor),
-                        ),
-                        trailing: iconoir.Link(
-                          width: 18,
-                          height: 18,
-                          color: accentColor,
-                        ),
-                        onTap: _isSubmitting
-                            ? null
-                            : () => _linkGroup(availableGroups[i]),
+              TheavInsetGroup(
+                header: 'ВАШИ ГРУППЫ (ВЛАДЕЛЕЦ ИЛИ АДМИН)',
+                dividerIndent: 70,
+                children: [
+                  for (final g in availableGroups)
+                    TheavListRow(
+                      leading: AvatarWithStatus(
+                        avatarUrl: g.avatarUrl,
+                        name: g.name,
+                        radius: 21,
                       ),
-                      if (i < availableGroups.length - 1)
-                        Divider(height: 1, indent: 70, color: dividerColor),
-                    ],
-                  ],
-                ),
+                      title: g.name,
+                      subtitle: g.username != null && g.username!.isNotEmpty
+                          ? '@${g.username}'
+                          : (g.myRole == 'owner'
+                              ? 'Владелец'
+                              : 'Администратор'),
+                      trailing: iconoir.Link(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      enabled: !_isSubmitting,
+                      onTap: () => _linkGroup(g),
+                    ),
+                ],
               ),
           ],
         ),
@@ -545,11 +436,7 @@ class _ChannelDiscussionSettingsScreenState
 
   Widget _buildLinkedGroupCard(
     BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
+    required TheavPalette palette,
   }) {
     final groupName = _linkedChat?.name.isNotEmpty == true
         ? _linkedChat!.name
@@ -560,120 +447,45 @@ class _ChannelDiscussionSettingsScreenState
             ? '${_linkedChat!.memberCount} участников'
             : 'Привязанная группа обсуждения');
 
-    return _buildSurfaceCard(
-      context,
-      glassProvider: glassProvider,
-      isDark: isDark,
-      child: Column(
-        children: [
-          ListTile(
-            minTileHeight: 62,
-            leading: AvatarWithStatus(
-              avatarUrl: _linkedChat?.avatarUrl,
-              name: groupName,
-              radius: 22,
-            ),
-            title: Text(
-              groupName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 15.5,
-                fontWeight: FontWeight.w700,
-                color: textColor,
-              ),
-            ),
-            subtitle: Text(
-              subText,
-              style: TextStyle(fontSize: 12.5, color: subColor),
-            ),
-            trailing: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFF34C759).withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Text(
-                'Активна',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF2E9E4C),
-                ),
-              ),
-            ),
+    return TheavInsetGroup(
+      header: 'ПРИВЯЗАННАЯ ГРУППА',
+      children: [
+        TheavListRow(
+          leading: AvatarWithStatus(
+            avatarUrl: _linkedChat?.avatarUrl,
+            name: groupName,
+            radius: 21,
           ),
-          Divider(
-            height: 1,
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.10)
-                : Colors.black.withValues(alpha: 0.08),
-          ),
-          ListTile(
-            minTileHeight: 50,
-            leading: const iconoir.LinkSlash(
-              width: 20,
-              height: 20,
-              color: Colors.redAccent,
+          title: groupName,
+          subtitle: subText,
+          trailing: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF34C759).withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(10),
             ),
-            title: const Text(
-              'Отвязать группу',
+            child: const Text(
+              'Активна',
               style: TextStyle(
-                fontSize: 15,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: Colors.redAccent,
+                color: Color(0xFF2E9E4C),
               ),
             ),
-            onTap: _isSubmitting ? null : _unlinkGroup,
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSurfaceCard(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Widget child,
-  }) {
-    if ((glassProvider?.enabled ?? false) && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 20,
         ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: isDark
-              ? null
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
-          child: Material(type: MaterialType.transparency, child: child),
+        TheavListRow(
+          leading: iconoir.LinkSlash(
+            width: 20,
+            height: 20,
+            color: palette.error,
+          ),
+          title: 'Отвязать группу',
+          isDestructive: true,
+          enabled: !_isSubmitting,
+          onTap: _unlinkGroup,
         ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.black.withValues(alpha: 0.08),
-          width: 0.5,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(type: MaterialType.transparency, child: child),
+      ],
     );
   }
 }

@@ -15,6 +15,7 @@ import '../../services/chat_folder_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/community_service.dart';
 import '../../services/database/app_database.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -23,6 +24,7 @@ import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../common/adaptive_switch.dart';
+import '../design_system/theav_design_system.dart';
 import '../settings/settings_group.dart';
 
 String _tr(
@@ -106,23 +108,18 @@ class ChatBatchDialogs {
 
     final cancelLabel = _tr(context, 'common_cancel', 'Отмена');
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text(body),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text(cancelLabel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text(confirmLabel),
-          ),
-        ],
-      ),
+      title: title,
+      message: body,
+      actions: [
+        TheavDialogAction<bool>(label: cancelLabel, result: false),
+        TheavDialogAction<bool>(
+          label: confirmLabel,
+          result: true,
+          isDestructive: true,
+        ),
+      ],
     );
 
     return confirmed == true;
@@ -156,25 +153,19 @@ class ChatBatchDialogs {
     try {
       unreadProvider = context.read<UnreadCountProvider>();
     } catch (_) {}
-    final messenger = ScaffoldMessenger.maybeOf(context);
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text(body),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text(cancelLabel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: Text(confirmLabel),
-          ),
-        ],
-      ),
+      title: title,
+      message: body,
+      actions: [
+        TheavDialogAction<bool>(label: cancelLabel, result: false),
+        TheavDialogAction<bool>(
+          label: confirmLabel,
+          result: true,
+          isDestructive: true,
+        ),
+      ],
     );
 
     if (confirmed != true) return false;
@@ -190,7 +181,9 @@ class ChatBatchDialogs {
     }
     await db.batchMarkAsRead(ids);
 
-    messenger?.showSnackBar(SnackBar(content: Text(clearedToast)));
+    if (context.mounted) {
+      GlassToastService().show(context, clearedToast);
+    }
     return true;
   }
 
@@ -218,123 +211,66 @@ class ChatBatchDialogs {
     final applyLabel = _tr(context, 'common_apply', 'Готово');
     final updatedToast =
         _tr(context, 'chats_folders_updated', 'Папки обновлены');
-    final messenger = ScaffoldMessenger.maybeOf(context);
 
-    final applied = await showModalBottomSheet<bool>(
+    final applied = await showTheavModalSheet<bool>(
       context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
+      title: title,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (innerCtx, setSheetState) {
+          if (customFolders.isEmpty) {
             return Padding(
-              padding: const EdgeInsets.only(top: 12, bottom: 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (customFolders.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 28,
-                      ),
-                      child: Text(
-                        emptyText,
-                        style: TextStyle(color: Colors.grey[500]),
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  else ...[
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 340),
-                      child: SingleChildScrollView(
-                        child: SettingsGroup(
-                          children: customFolders.map((folder) {
-                            final checked =
-                                selectedFolderIds.contains(folder.id);
-                            return ListTile(
-                              leading: iconoir.Folder(
-                                width: 20,
-                                height: 20,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              title: Text(
-                                folder.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              trailing: Checkbox(
-                                value: checked,
-                                onChanged: (_) {
-                                  HapticUtils.selection();
-                                  setSheetState(() {
-                                    if (checked) {
-                                      selectedFolderIds.remove(folder.id);
-                                    } else {
-                                      selectedFolderIds.add(folder.id);
-                                    }
-                                  });
-                                },
-                              ),
-                              onTap: () {
-                                HapticUtils.selection();
-                                setSheetState(() {
-                                  if (checked) {
-                                    selectedFolderIds.remove(folder.id);
-                                  } else {
-                                    selectedFolderIds.add(folder.id);
-                                  }
-                                });
-                              },
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          onPressed: () => Navigator.of(sheetContext).pop(true),
-                          child: Text(applyLabel),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: Text(
+                emptyText,
+                style: TextStyle(color: innerCtx.theav.subtext),
+                textAlign: TextAlign.center,
               ),
             );
-          },
-        );
-      },
+          }
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 340),
+                child: SingleChildScrollView(
+                  child: TheavInsetGroup(
+                    margin: EdgeInsets.zero,
+                    children: customFolders.map((folder) {
+                      final checked = selectedFolderIds.contains(folder.id);
+                      return TheavListRow(
+                        leading: iconoir.Folder(
+                          width: 20,
+                          height: 20,
+                          color: innerCtx.theav.primary,
+                        ),
+                        title: folder.name,
+                        trailing: TheavCheckCircle(selected: checked),
+                        onTap: () {
+                          HapticUtils.selection();
+                          setSheetState(() {
+                            if (checked) {
+                              selectedFolderIds.remove(folder.id);
+                            } else {
+                              selectedFolderIds.add(folder.id);
+                            }
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              TheavFloatingPillButton(
+                label: applyLabel,
+                isPrimary: true,
+                onTap: () => Navigator.of(sheetCtx).pop(true),
+              ),
+            ],
+          );
+        },
+      ),
     );
 
     if (applied != true) return false;
@@ -359,7 +295,9 @@ class ChatBatchDialogs {
     }).toList();
 
     await folderService.saveFolders(updated);
-    messenger?.showSnackBar(SnackBar(content: Text(updatedToast)));
+    if (context.mounted) {
+      GlassToastService().show(context, updatedToast);
+    }
     return true;
   }
 

@@ -58,7 +58,12 @@ class SyncService {
 
       if (tooLong) {
         debugPrint(
-            'SyncService: Server returned too_long=true, advancing USN to $maxUsn');
+            'SyncService: Server returned too_long=true, refreshing chats & advancing USN to $maxUsn');
+        try {
+          await ChatService.getChats();
+        } catch (e) {
+          debugPrint('SyncService: too_long getChats refresh failed: $e');
+        }
         await _db.setLastKnownUsn(userId, maxUsn);
         return;
       }
@@ -118,8 +123,15 @@ class SyncService {
         final pinId = rawPinId is num
             ? rawPinId.toInt()
             : int.tryParse(rawPinId?.toString() ?? '');
+        final hasPinIds = payload.containsKey('pinned_message_ids');
+        final pinIds = _extractSyncPinnedIds(payload['pinned_message_ids']);
         if (pinChatId != null) {
-          await _db.updateChatPinnedMessageId(pinChatId, pinId);
+          await _db.updateChatPinnedMessageId(
+            pinChatId,
+            pinId,
+            pinnedMessageIds: pinIds,
+            updatePinnedMessageIds: hasPinIds,
+          );
         }
         break;
       case 'message_unpinned':
@@ -129,8 +141,15 @@ class SyncService {
         final nextPinId = rawNextPinId is num
             ? rawNextPinId.toInt()
             : int.tryParse(rawNextPinId?.toString() ?? '');
+        final hasUnpinIds = payload.containsKey('pinned_message_ids');
+        final unpinIds = _extractSyncPinnedIds(payload['pinned_message_ids']);
         if (unpinChatId != null) {
-          await _db.updateChatPinnedMessageId(unpinChatId, nextPinId);
+          await _db.updateChatPinnedMessageId(
+            unpinChatId,
+            nextPinId,
+            pinnedMessageIds: unpinIds,
+            updatePinnedMessageIds: hasUnpinIds,
+          );
         }
         break;
       case 'new_chat':
@@ -162,7 +181,13 @@ class SyncService {
       case 'history_cleared':
         if (chatId != null) {
           await _db.deleteMessagesForChat(chatId);
-          await _db.refreshChatLastMessageFromDb(chatId);
+          await _db.updateChatPinnedMessageId(
+            chatId,
+            null,
+            pinnedMessageIds: const [],
+            updatePinnedMessageIds: true,
+          );
+          await _db.refreshChatLastMessageFromDb(chatId, allowClear: true);
         }
         break;
       case 'draft_updated':
@@ -180,6 +205,8 @@ class SyncService {
       case 'message_views_updated':
       case 'post_comments_updated':
       case 'member_updated':
+      case 'scheduled_messages_updated':
+      case 'join_requests_updated':
         await ChatService.handleWebSocketEvent(
           WebSocketEvent(
             type: WebSocketEvent.fromJson({'type': eventType}).type,
@@ -196,6 +223,16 @@ class SyncService {
       default:
         debugPrint('SyncService: Unknown event type: $eventType');
     }
+  }
+
+  List<int> _extractSyncPinnedIds(dynamic raw) {
+    if (raw is! List) return const [];
+    final ids = <int>[];
+    for (final item in raw) {
+      final parsed = item is num ? item.toInt() : int.tryParse(item.toString());
+      if (parsed != null && parsed > 0) ids.add(parsed);
+    }
+    return ids;
   }
 
   Future<void> _applyNewMessage(Map<String, dynamic> payload) async {
@@ -362,6 +399,11 @@ class SyncService {
       commentsCount: Value((payload['comments_count'] as num?)?.toInt() ?? 0),
       recentRepliersJson: Value(recentRepliersStr),
       threadRootMessageId: Value(isThreadComment ? rawThreadRootId : null),
+      hasMediaSpoiler: Value(
+        payload['has_media_spoiler'] == true ||
+            payload['has_media_spoiler'] == 1 ||
+            mediaPayloadMap['has_media_spoiler'] == true,
+      ),
     ));
 
     final isCommunityChannel =
@@ -459,12 +501,17 @@ class SyncService {
     }
 
     final isPollUpdate = payload['message_type'] == 'poll';
+    final bool? hasMediaSpoiler = payload.containsKey('has_media_spoiler')
+        ? (payload['has_media_spoiler'] == true ||
+            payload['has_media_spoiler'] == 1)
+        : null;
     await _db.updateMessageContent(
       serverId,
       payload['content']?.toString() ?? '',
       entitiesStr,
       mediaPayloadStr,
       !isPollUpdate,
+      hasMediaSpoiler,
     );
     final chatId = payload['chat_id']?.toString();
     if (chatId != null) {
@@ -474,8 +521,18 @@ class SyncService {
 
   Future<void> _applyDeleteMessage(Map<String, dynamic> payload) async {
     final serverId = payload['message_id']?.toString();
-    if (serverId == null) return;
-    await _db.deleteMessage(serverId);
+    final rawBatch = payload['message_ids'];
+    final ids = <String>[
+      if (rawBatch is List)
+        ...rawBatch.map((e) => e.toString()).where((e) => e.isNotEmpty),
+      if (serverId != null && serverId.isNotEmpty) serverId,
+    ];
+    if (ids.isEmpty) return;
+    if (ids.length == 1) {
+      await _db.deleteMessage(ids.first);
+    } else {
+      await _db.deleteMessagesBatch(ids);
+    }
     final chatId = payload['chat_id']?.toString();
     if (chatId != null) {
       await _db.refreshChatLastMessageFromDb(chatId);
@@ -576,6 +633,14 @@ class SyncService {
       peerCustomizationJson: Value(payload['peer_customization'] is Map
           ? jsonEncode(payload['peer_customization'])
           : payload['peer_customization']?.toString()),
+      hasProtectedContent: Value(
+        payload['has_protected_content'] == true ||
+            payload['has_protected_content'] == 1,
+      ),
+      pinnedMessageIdsJson: payload['pinned_message_ids'] is List
+          ? Value(jsonEncode(
+              _extractSyncPinnedIds(payload['pinned_message_ids'])))
+          : const Value.absent(),
     ));
   }
 
@@ -647,6 +712,16 @@ class SyncService {
               ? jsonEncode(payload['peer_customization'])
               : payload['peer_customization']?.toString())
           : Value(chat.peerCustomizationJson),
+      hasProtectedContent: payload.containsKey('has_protected_content')
+          ? Value(
+              payload['has_protected_content'] == true ||
+                  payload['has_protected_content'] == 1,
+            )
+          : Value(chat.hasProtectedContent),
+      pinnedMessageIdsJson: payload.containsKey('pinned_message_ids')
+          ? Value(jsonEncode(
+              _extractSyncPinnedIds(payload['pinned_message_ids'])))
+          : Value(chat.pinnedMessageIdsJson),
     );
 
     await _db.saveChat(companion);
@@ -679,6 +754,7 @@ class SyncService {
     dynamic mediaPayload,
     bool isSilent = false,
     String? threadRootMessageId,
+    bool hasMediaSpoiler = false,
   }) async {
     final localId = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
@@ -733,6 +809,7 @@ class SyncService {
       groupedId: Value(groupedId),
       isSilent: Value(isSilent),
       threadRootMessageId: Value(threadRootMessageId),
+      hasMediaSpoiler: Value(hasMediaSpoiler),
     ));
 
     // Return the saved message as DbMessage
@@ -779,6 +856,7 @@ class SyncService {
       commentsCount: 0,
       recentRepliersJson: null,
       threadRootMessageId: threadRootMessageId,
+      hasMediaSpoiler: hasMediaSpoiler,
     );
   }
 

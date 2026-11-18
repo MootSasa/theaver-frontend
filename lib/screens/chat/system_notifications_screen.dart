@@ -18,6 +18,7 @@ import '../../services/unread_count_provider.dart';
 import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/unread_separator.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../utils/date_time_utils.dart';
@@ -179,7 +180,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
     final l10n = context.l10n;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final mediaQuery = MediaQuery.of(context);
 
     // Height offset for floating cloud app bar (same as in PrivateChatScreen)
@@ -459,7 +460,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
   }
 
   Widget _buildBottomBar(
-    LiquidGlassProvider glassProvider,
+    LiquidGlassProvider? glassProvider,
     bool isDark,
     ThemeData theme,
     AppLocalizations l10n,
@@ -491,7 +492,7 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
       ],
     );
 
-    if (glassProvider.enabled) {
+    if (glassProvider != null && glassProvider.enabled) {
       final glassStyle = glassProvider.createStyle(
         color: isDark
             ? const Color.fromARGB(40, 30, 30, 40)
@@ -546,26 +547,22 @@ class _SystemNotificationsScreenState extends State<SystemNotificationsScreen> {
   }
 
   void _showChatInfoDialog(BuildContext context, AppLocalizations l10n) {
-    showDialog(
+    showTheavDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            const ShieldCheck(width: 24, height: 24, color: Colors.blue),
-            const SizedBox(width: 10),
-            Text(l10n.translate('system_notifications_title')),
-          ],
-        ),
-        content: Text(
-          '${l10n.translate('system_notifications_subtitle')}\n\n${l10n.translate('system_read_only_banner')}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(l10n.translate('ok')),
-          ),
-        ],
+      icon: ShieldCheck(
+        width: 28,
+        height: 28,
+        color: context.theav.primary,
       ),
+      title: l10n.translate('system_notifications_title'),
+      message:
+          '${l10n.translate('system_notifications_subtitle')}\n\n${l10n.translate('system_read_only_banner')}',
+      actions: [
+        TheavDialogAction<void>(
+          label: l10n.translate('ok'),
+          isPrimary: true,
+        ),
+      ],
     );
   }
 }

@@ -7,7 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../services/file_service.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/media_cache_manager.dart';
+import '../design_system/theav_design_system.dart';
 
 enum DownloadStatus { idle, downloading, downloaded, failed }
 
@@ -222,8 +224,9 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
           _status = DownloadStatus.failed;
           _progress = 0.0;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Download failed: ${e.toString()}')),
+        GlassToastService().showError(
+          context,
+          'Download failed: ${e.toString()}',
         );
       }
     }
@@ -237,8 +240,9 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
 
     // Show notification that download started
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Download started for ${widget.fileName}')),
+      GlassToastService().show(
+        context,
+        'Download started for ${widget.fileName}',
       );
       // Reset state since we can't track progress in web
       setState(() {
@@ -288,8 +292,9 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
           _resolvedFileSize = fileLen.toDouble();
         }
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Файл скачан. Нажмите на файл, чтобы открыть.')),
+      GlassToastService().show(
+        context,
+        'Файл скачан. Нажмите на файл, чтобы открыть.',
       );
     }
   }
@@ -305,9 +310,7 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
 
   Future<void> _openDownloadedFile() async {
     if (_downloadedFilePath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('File not downloaded yet')),
-      );
+      GlassToastService().show(context, 'File not downloaded yet');
       return;
     }
 
@@ -315,48 +318,50 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
       final result = await OpenFile.open(_downloadedFilePath);
       if (result.type != ResultType.done) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to open file: ${result.message}')),
+          GlassToastService().showError(
+            context,
+            'Failed to open file: ${result.message}',
           );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error opening file: $e')),
-        );
+        GlassToastService().showError(context, 'Error opening file: $e');
       }
     }
   }
 
   void _showFileOptions() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    final parentContext = context;
+    showTheavModalSheet<void>(
+      context: parentContext,
+      title: widget.fileName,
+      builder: (sheetCtx) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+        child: TheavInsetGroup(
           children: [
-            ListTile(
-              leading: const iconoir.OpenNewWindow(width: 22, height: 22),
-              title: Text(context.l10n.translate('chat_open_file')),
+            TheavListRow(
+              leading: const iconoir.OpenNewWindow(width: 20, height: 20),
+              title: parentContext.l10n.translate('chat_open_file'),
               onTap: () {
-                Navigator.pop(context);
+                Navigator.pop(sheetCtx);
                 _openDownloadedFile();
               },
             ),
-            ListTile(
-              leading: const iconoir.ShareAndroid(width: 22, height: 22),
-              title: Text(context.l10n.translate('share')),
+            TheavListRow(
+              leading: const iconoir.ShareAndroid(width: 20, height: 20),
+              title: parentContext.l10n.translate('share'),
               onTap: () {
-                Navigator.pop(context);
+                Navigator.pop(sheetCtx);
                 _shareFile();
               },
             ),
-            ListTile(
-              leading: const iconoir.Folder(width: 22, height: 22),
-              title: Text('Показать в папке: $_downloadedFilePath'),
+            TheavListRow(
+              leading: const iconoir.Folder(width: 20, height: 20),
+              title: 'Показать в папке',
+              subtitle: _downloadedFilePath,
               onTap: () {
-                Navigator.pop(context);
+                Navigator.pop(sheetCtx);
                 _showInFolder();
               },
             ),
@@ -369,9 +374,7 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   /// Share the downloaded file using the system share sheet
   Future<void> _shareFile() async {
     if (_downloadedFilePath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Сначала скачайте файл')),
-      );
+      GlassToastService().show(context, 'Сначала скачайте файл');
       return;
     }
     try {
@@ -383,9 +386,7 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка при отправке: $e')),
-        );
+        GlassToastService().showError(context, 'Ошибка при отправке: $e');
       }
     }
   }
@@ -393,9 +394,7 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   /// Show the downloaded file in the system file manager
   Future<void> _showInFolder() async {
     if (_downloadedFilePath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Сначала скачайте файл')),
-      );
+      GlassToastService().show(context, 'Сначала скачайте файл');
       return;
     }
     try {
@@ -403,15 +402,14 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
       // the system's file manager via open_file with "folder" mode
       final result = await OpenFile.open(_downloadedFilePath);
       if (result.type != ResultType.done && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось открыть: ${result.message}')),
+        GlassToastService().showError(
+          context,
+          'Не удалось открыть: ${result.message}',
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка: $e')),
-        );
+        GlassToastService().showError(context, 'Ошибка: $e');
       }
     }
   }

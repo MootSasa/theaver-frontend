@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
-import '../../../models/theav_theme.dart';
 import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
-import '../../../services/liquid_glass_provider.dart';
 import '../../../utils/haptic_utils.dart';
 import '../../../widgets/chat/admin_permissions_widget.dart';
+import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/message/group_message_avatar_row.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 import '../../../widgets/user/avatar_with_status.dart';
@@ -100,36 +98,19 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
 
   Future<void> _demoteAdmin() async {
     if (_isSaving || _isOwnerTarget) return;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          'Разжаловать администратора?',
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: Text(
+      title: 'Разжаловать администратора?',
+      message:
           '$_displayName потеряет все права администратора в этом ${_isChannel ? 'канале' : 'чате'}.',
-          style: TextStyle(
-            color: isDark ? Colors.white70 : const Color(0xFF475569),
-          ),
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Разжаловать',
+          result: true,
+          isDestructive: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Разжаловать',
-              style: TextStyle(color: Colors.redAccent),
-            ),
-          ),
-        ],
-      ),
+      ],
     );
     if (confirmed != true || !mounted) return;
 
@@ -161,80 +142,67 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final bgColor = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F7);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
-    final buttonFg = accentColor.computeLuminance() > 0.35
-        ? const Color(0xFF0F172A)
-        : Colors.white;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final palette = context.theav;
 
     return SettingsFloatingScaffold(
       title: _isAdminTarget || _isOwnerTarget
           ? 'Права администратора'
           : 'Назначить админом',
-      backgroundColor: bgColor,
+      backgroundColor: palette.background,
       actions: [
         if (_isSaving)
-          const SettingsHeaderAction(
+          SettingsHeaderAction(
             child: SizedBox(
               width: 18,
               height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: palette.primary,
+              ),
             ),
           )
         else
           SettingsHeaderAction(
             tooltip: 'Сохранить',
-            foregroundColor: accentColor,
-            icon: iconoir.Check(width: 22, height: 22, color: accentColor),
+            foregroundColor: palette.primary,
+            icon: iconoir.Check(width: 22, height: 22, color: palette.primary),
             onTap: _saveRights,
           ),
       ],
       body: ListView(
         padding: EdgeInsets.fromLTRB(
-          16,
+          0,
           SettingsFloatingHeader.topClearanceOf(context) + 12,
-          16,
-          36,
+          0,
+          MediaQuery.paddingOf(context).bottom + 36,
         ),
         children: [
-          _buildTargetUserCard(
-            context,
-            glassProvider: glassProvider,
-            isDark: isDark,
-            accentColor: accentColor,
-            textColor: textColor,
-            subColor: subColor,
-          ),
-          const SizedBox(height: 18),
+          _buildTargetUserCard(context, palette: palette),
+          const SizedBox(height: 10),
           Padding(
-            padding: const EdgeInsets.only(left: 14, bottom: 8),
+            padding: const EdgeInsets.fromLTRB(32, 8, 32, 8),
             child: Text(
               'ПРЕДПРОСМОТР В ЧАТЕ',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.4,
-                color: subColor,
+                color: palette.subtext,
               ),
             ),
           ),
-          _buildLivePreviewCard(
-            context,
-            isDark: isDark,
-            accentColor: accentColor,
-            textColor: textColor,
-            subColor: subColor,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _buildLivePreviewCard(
+              context,
+              isDark: isDark,
+              accentColor: palette.primary,
+              textColor: palette.onSurface,
+              subColor: palette.subtext,
+            ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           AdminPermissionsWidget(
             chatType: widget.chatType,
             initialRights: _rights,
@@ -248,54 +216,22 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
             onAdminTitleChanged: (next) => setState(() => _adminTitle = next),
             onIsAnonymousChanged: (next) => setState(() => _isAnonymous = next),
           ),
-          const SizedBox(height: 24),
-          SizedBox(
-            height: 48,
-            child: FilledButton.icon(
-              onPressed: _isSaving ? null : _saveRights,
-              style: FilledButton.styleFrom(
-                backgroundColor: accentColor,
-                foregroundColor: buttonFg,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              icon: iconoir.Check(
-                width: 20,
-                height: 20,
-                color: buttonFg,
-              ),
-              label: const Text(
-                'Сохранить',
-                style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
           if (_isAdminTarget) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 48,
-              child: OutlinedButton.icon(
-                onPressed: _isSaving ? null : _demoteAdmin,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
-                  side: BorderSide(
-                    color: Colors.redAccent.withValues(alpha: 0.45),
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              children: [
+                TheavListRow(
+                  leading: iconoir.UserXmark(
+                    width: 20,
+                    height: 20,
+                    color: palette.error,
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+                  title: 'Разжаловать администратора',
+                  isDestructive: true,
+                  enabled: !_isSaving,
+                  onTap: _demoteAdmin,
                 ),
-                icon: const iconoir.UserXmark(
-                  width: 20,
-                  height: 20,
-                  color: Colors.redAccent,
-                ),
-                label: const Text(
-                  'Разжаловать администратора',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                ),
-              ),
+              ],
             ),
           ],
         ],
@@ -305,62 +241,29 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
 
   Widget _buildTargetUserCard(
     BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
+    required TheavPalette palette,
   }) {
     final username = widget.participant.username.trim();
     final subtitle = username.isNotEmpty
         ? '@$username'
         : (widget.participant.isOnline ? 'в сети' : 'участник');
 
-    final row = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: [
-          AvatarWithStatus(
+    return TheavInsetGroup(
+      children: [
+        TheavListRow(
+          leading: AvatarWithStatus(
             userId: widget.participant.id,
             avatarUrl: widget.participant.avatarUrl,
             name: _displayName,
-            radius: 26,
+            radius: 24,
             isOnline: widget.participant.isOnline,
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 16.5,
-                    fontWeight: FontWeight.w700,
-                    color: textColor,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    color: widget.participant.isOnline
-                        ? accentColor
-                        : subColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
+          title: _displayName,
+          subtitle: subtitle,
+          trailing: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: accentColor.withValues(alpha: 0.14),
+              color: palette.primary.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
@@ -370,36 +273,12 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: accentColor,
+                color: palette.primary,
               ),
             ),
           ),
-        ],
-      ),
-    );
-
-    if ((glassProvider?.enabled ?? false) && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 20,
         ),
-      );
-      return LiquidGlassLens(style: style, child: row);
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.black.withValues(alpha: 0.08),
-          width: 0.5,
-        ),
-      ),
-      child: row,
+      ],
     );
   }
 

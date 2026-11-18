@@ -38,6 +38,29 @@ int _parseIntValue(dynamic raw, {int defaultValue = 0}) {
   return int.tryParse(raw.toString()) ?? defaultValue;
 }
 
+List<int> _parseIntList(dynamic raw) {
+  if (raw == null) return const [];
+  dynamic decoded = raw;
+  if (raw is String) {
+    final s = raw.trim();
+    if (s.isEmpty || s == 'null') return const [];
+    try {
+      decoded = jsonDecode(s);
+    } catch (_) {
+      return const [];
+    }
+  }
+  if (decoded is! List) return const [];
+  final result = <int>[];
+  for (final item in decoded) {
+    final parsed = item is num ? item.toInt() : int.tryParse(item.toString());
+    if (parsed != null && parsed > 0) {
+      result.add(parsed);
+    }
+  }
+  return result;
+}
+
 /// Default member permissions for a group chat.
 class GroupDefaultPermissions {
   final bool canSendMessages;
@@ -803,6 +826,201 @@ class InviteLinkItem {
       );
 }
 
+/// Scheduled message or send-when-online queue item.
+class ScheduledMessage {
+  final String id;
+  final String chatId;
+  final String senderId;
+  final String content;
+  final String messageType;
+  final String? fileUrl;
+  final String? fileName;
+  final int? fileSize;
+  final int? width;
+  final int? height;
+  final int duration;
+  final bool isRound;
+  final bool hasMediaSpoiler;
+  final String? replyToMessageId;
+  final bool isQuote;
+  final String quoteText;
+  final int quoteOffset;
+  final int quoteLength;
+  final List<MessageEntity> entities;
+  final LinkPreviewOptions? linkPreviewOptions;
+  final bool invertMedia;
+  final Map<String, dynamic>? mediaPayload;
+  final String? groupedId;
+  final bool isSilent;
+  final bool? sendAsAnonymous;
+  final DateTime? scheduleAt;
+  final bool sendWhenOnline;
+  final DateTime? createdAt;
+
+  const ScheduledMessage({
+    required this.id,
+    required this.chatId,
+    required this.senderId,
+    this.content = '',
+    this.messageType = 'text',
+    this.fileUrl,
+    this.fileName,
+    this.fileSize,
+    this.width,
+    this.height,
+    this.duration = 0,
+    this.isRound = false,
+    this.hasMediaSpoiler = false,
+    this.replyToMessageId,
+    this.isQuote = false,
+    this.quoteText = '',
+    this.quoteOffset = 0,
+    this.quoteLength = 0,
+    this.entities = const [],
+    this.linkPreviewOptions,
+    this.invertMedia = false,
+    this.mediaPayload,
+    this.groupedId,
+    this.isSilent = false,
+    this.sendAsAnonymous,
+    this.scheduleAt,
+    this.sendWhenOnline = false,
+    this.createdAt,
+  });
+
+  factory ScheduledMessage.fromJson(Map<String, dynamic> json) {
+    final parsedEntities = <MessageEntity>[];
+    final rawEntities = json['entities'];
+    if (rawEntities is List) {
+      for (final item in rawEntities) {
+        if (item is Map) {
+          parsedEntities.add(
+            MessageEntity.fromJson(Map<String, dynamic>.from(item)),
+          );
+        }
+      }
+    }
+    LinkPreviewOptions? parsedLinkPreview;
+    if (json['link_preview_options'] is Map) {
+      try {
+        parsedLinkPreview = LinkPreviewOptions.fromJson(
+          Map<String, dynamic>.from(json['link_preview_options'] as Map),
+        );
+      } catch (_) {}
+    }
+    Map<String, dynamic>? parsedMediaPayload;
+    if (json['media_payload'] is Map) {
+      parsedMediaPayload = Map<String, dynamic>.from(json['media_payload'] as Map);
+    }
+
+    return ScheduledMessage(
+      id: (json['id'] ?? '').toString(),
+      chatId: (json['chat_id'] ?? '').toString(),
+      senderId: (json['sender_id'] ?? '').toString(),
+      content: (json['content'] ?? '').toString(),
+      messageType: (json['message_type'] ?? 'text').toString(),
+      fileUrl: _nonEmptyString(json['file_url']),
+      fileName: _nonEmptyString(json['file_name']),
+      fileSize: json['file_size'] is num
+          ? (json['file_size'] as num).toInt()
+          : int.tryParse(json['file_size']?.toString() ?? ''),
+      width: json['width'] is num
+          ? (json['width'] as num).toInt()
+          : int.tryParse(json['width']?.toString() ?? ''),
+      height: json['height'] is num
+          ? (json['height'] as num).toInt()
+          : int.tryParse(json['height']?.toString() ?? ''),
+      duration: _parseIntValue(json['duration']),
+      isRound: _parseBoolFlag(json['is_round']),
+      hasMediaSpoiler: _parseBoolFlag(json['has_media_spoiler']),
+      replyToMessageId: _nonEmptyString(json['reply_to_message_id']),
+      isQuote: _parseBoolFlag(json['is_quote']),
+      quoteText: (json['quote_text'] ?? '').toString(),
+      quoteOffset: _parseIntValue(json['quote_offset']),
+      quoteLength: _parseIntValue(json['quote_length']),
+      entities: parsedEntities,
+      linkPreviewOptions: parsedLinkPreview,
+      invertMedia: _parseBoolFlag(json['invert_media']),
+      mediaPayload: parsedMediaPayload,
+      groupedId: _nonEmptyString(json['grouped_id']),
+      isSilent: _parseBoolFlag(json['is_silent']),
+      sendAsAnonymous: json.containsKey('send_as_anonymous')
+          ? _parseBoolFlag(json['send_as_anonymous'])
+          : null,
+      scheduleAt: DateTimeUtils.parseUtcDateTime(json['schedule_at']),
+      sendWhenOnline: _parseBoolFlag(json['send_when_online']),
+      createdAt: DateTimeUtils.parseUtcDateTime(json['created_at']),
+    );
+  }
+
+  Message toMessage({String senderName = ''}) {
+    return Message(
+      id: 'sched_$id',
+      chatId: chatId,
+      senderId: senderId,
+      content: content,
+      messageType: messageType,
+      isEdited: false,
+      createdAt: (scheduleAt ?? createdAt ?? DateTime.now().toUtc())
+          .toIso8601String(),
+      senderName: senderName,
+      fileUrl: fileUrl,
+      fileName: fileName,
+      replyToMessageId: replyToMessageId,
+      isQuote: isQuote,
+      quoteText: quoteText.isNotEmpty ? quoteText : null,
+      quoteOffset: quoteOffset,
+      quoteLength: quoteLength,
+      entities: entities,
+      linkPreviewOptions: linkPreviewOptions,
+      invertMedia: invertMedia,
+      isRound: isRound,
+      duration: duration > 0 ? duration : null,
+      mediaPayload: mediaPayload,
+      groupedId: groupedId,
+      isSilent: isSilent,
+      hasMediaSpoiler: hasMediaSpoiler,
+    );
+  }
+}
+
+/// Pending invite-link join request item for admins.
+class ChatJoinRequest {
+  final String id;
+  final String userId;
+  final String username;
+  final String displayName;
+  final String? avatarUrl;
+  final int? inviteLinkId;
+  final DateTime? requestedAt;
+
+  const ChatJoinRequest({
+    required this.id,
+    required this.userId,
+    this.username = '',
+    this.displayName = '',
+    this.avatarUrl,
+    this.inviteLinkId,
+    this.requestedAt,
+  });
+
+  factory ChatJoinRequest.fromJson(Map<String, dynamic> json) {
+    final uid = (json['user_id'] ?? json['id'] ?? '').toString();
+    return ChatJoinRequest(
+      id: (json['id'] ?? uid).toString(),
+      userId: uid,
+      username: (json['username'] ?? '').toString(),
+      displayName: (json['display_name'] ?? json['username'] ?? 'Пользователь')
+          .toString(),
+      avatarUrl: _nonEmptyString(json['avatar_url']),
+      inviteLinkId: json['invite_link_id'] is num
+          ? (json['invite_link_id'] as num).toInt()
+          : int.tryParse(json['invite_link_id']?.toString() ?? ''),
+      requestedAt: DateTimeUtils.parseUtcDateTime(json['requested_at']),
+    );
+  }
+}
+
 /// Real-time update event emitted by [ChatService.realtimeUpdates].
 class ChatRealtimeUpdate {
   final WebSocketEventType type;
@@ -840,6 +1058,8 @@ class Chat {
   final int lastReadOutboxMessageId;
   final int? pinnedMessageId;
   final Message? pinnedMessage;
+  final List<int> pinnedMessageIds;
+  final bool hasProtectedContent;
   final String? username;
   final bool isPublic;
   final bool isBot;
@@ -882,6 +1102,8 @@ class Chat {
     this.lastReadOutboxMessageId = 0,
     this.pinnedMessageId,
     this.pinnedMessage,
+    this.pinnedMessageIds = const [],
+    this.hasProtectedContent = false,
     this.username,
     this.isPublic = false,
     this.isBot = false,
@@ -1062,6 +1284,15 @@ class Chat {
     final parsedActiveCallId = _nonEmptyString(json['active_call_id']);
     final parsedIsMember =
         json.containsKey('is_member') ? _parseBoolFlag(json['is_member'], defaultValue: true) : (parsedMyRole != 'guest');
+    final parsedHasProtectedContent = _parseBoolFlag(
+      json['has_protected_content'] ?? json['noforwards'],
+    );
+    final parsedPinnedList = _parseIntList(json['pinned_message_ids']);
+    final effectivePinnedIds = parsedPinnedList.isNotEmpty
+        ? parsedPinnedList
+        : (parsedPinnedMessageId != null && parsedPinnedMessageId > 0
+            ? <int>[parsedPinnedMessageId]
+            : const <int>[]);
 
     return Chat(
       id: json['id']?.toString() ?? json['chat_id']?.toString() ?? '',
@@ -1113,6 +1344,8 @@ class Chat {
       ),
       reactionSettings: ReactionSettings.fromChatJson(json),
       peerCustomization: parsedPeerCust,
+      hasProtectedContent: parsedHasProtectedContent,
+      pinnedMessageIds: effectivePinnedIds,
     );
   }
 
@@ -1138,6 +1371,12 @@ class Chat {
         notify: false,
       );
     }
+    final dbPinnedList = _parseIntList(model.pinnedMessageIdsJson);
+    final effectiveDbPinnedIds = dbPinnedList.isNotEmpty
+        ? dbPinnedList
+        : (model.pinnedMessageId != null && model.pinnedMessageId! > 0
+            ? <int>[model.pinnedMessageId!]
+            : const <int>[]);
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
@@ -1178,6 +1417,8 @@ class Chat {
       ),
       reactionSettings: ReactionSettings.tryParse(model.reactionSettingsJson),
       peerCustomization: dbCust,
+      hasProtectedContent: model.hasProtectedContent,
+      pinnedMessageIds: effectiveDbPinnedIds,
     );
   }
 
@@ -1224,6 +1465,10 @@ class Chat {
           ? drift.Value(jsonEncode(reactionSettings!.toJson()))
           : const drift.Value.absent(),
       peerCustomizationJson: drift.Value(peerCustomization?.toJsonString()),
+      hasProtectedContent: drift.Value(hasProtectedContent),
+      pinnedMessageIdsJson: pinnedMessageIds.isNotEmpty
+          ? drift.Value(jsonEncode(pinnedMessageIds))
+          : const drift.Value.absent(),
     );
   }
 
@@ -1250,6 +1495,8 @@ class Chat {
     int? lastReadOutboxMessageId,
     int? pinnedMessageId,
     Message? pinnedMessage,
+    List<int>? pinnedMessageIds,
+    bool? hasProtectedContent,
     String? username,
     bool? isPublic,
     bool? isBot,
@@ -1296,6 +1543,8 @@ class Chat {
           lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
       pinnedMessageId: pinnedMessageId ?? this.pinnedMessageId,
       pinnedMessage: pinnedMessage ?? this.pinnedMessage,
+      pinnedMessageIds: pinnedMessageIds ?? this.pinnedMessageIds,
+      hasProtectedContent: hasProtectedContent ?? this.hasProtectedContent,
       username: username ?? this.username,
       isPublic: isPublic ?? this.isPublic,
       isBot: isBot ?? this.isBot,
@@ -1662,6 +1911,7 @@ class Message {
   final List<RecentReplier> recentRepliers;
   final String? channelPostId;
   final String? threadRootMessageId;
+  final bool hasMediaSpoiler;
 
   Message({
     required this.id,
@@ -1716,6 +1966,7 @@ class Message {
     this.recentRepliers = const [],
     this.channelPostId,
     this.threadRootMessageId,
+    this.hasMediaSpoiler = false,
   });
 
   /// Whether this message has a reply or quote
@@ -2099,6 +2350,8 @@ class Message {
       recentRepliers: RecentReplier.parseList(json['recent_repliers']),
       channelPostId: _nonEmptyString(json['channel_post_id']),
       threadRootMessageId: _nonEmptyString(json['thread_root_message_id']),
+      hasMediaSpoiler: _parseBoolFlag(json['has_media_spoiler']) ||
+          _parseBoolFlag(parsedMediaPayload?['has_media_spoiler']),
     );
   }
 
@@ -2278,6 +2531,8 @@ class Message {
       recentRepliers: RecentReplier.parseList(model.recentRepliersJson),
       channelPostId: _nonEmptyString(dbMediaPayload?['channel_post_id']),
       threadRootMessageId: _nonEmptyString(model.threadRootMessageId),
+      hasMediaSpoiler: model.hasMediaSpoiler ||
+          (dbMediaPayload?['has_media_spoiler'] == true),
     );
   }
 
@@ -2360,6 +2615,7 @@ class Message {
             : null,
       ),
       threadRootMessageId: drift.Value(threadRootMessageId),
+      hasMediaSpoiler: drift.Value(hasMediaSpoiler),
     );
   }
 
@@ -2417,6 +2673,7 @@ class Message {
     List<RecentReplier>? recentRepliers,
     String? channelPostId,
     String? threadRootMessageId,
+    bool? hasMediaSpoiler,
   }) {
     return Message(
       id: id ?? this.id,
@@ -2471,6 +2728,7 @@ class Message {
       recentRepliers: recentRepliers ?? this.recentRepliers,
       channelPostId: channelPostId ?? this.channelPostId,
       threadRootMessageId: threadRootMessageId ?? this.threadRootMessageId,
+      hasMediaSpoiler: hasMediaSpoiler ?? this.hasMediaSpoiler,
     );
   }
 
@@ -2497,6 +2755,8 @@ class ChatDetails {
   final int lastReadOutboxMessageId;
   final int? pinnedMessageId;
   final Message? pinnedMessage;
+  final List<int> pinnedMessageIds;
+  final bool hasProtectedContent;
   final String? username;
   final bool isPublic;
   final bool isVerified;
@@ -2532,6 +2792,8 @@ class ChatDetails {
     this.lastReadOutboxMessageId = 0,
     this.pinnedMessageId,
     this.pinnedMessage,
+    this.pinnedMessageIds = const [],
+    this.hasProtectedContent = false,
     this.username,
     this.isPublic = false,
     this.isVerified = false,
@@ -2596,6 +2858,8 @@ class ChatDetails {
     int? lastReadOutboxMessageId,
     int? pinnedMessageId,
     Message? pinnedMessage,
+    List<int>? pinnedMessageIds,
+    bool? hasProtectedContent,
     String? username,
     bool? isPublic,
     bool? isVerified,
@@ -2636,6 +2900,8 @@ class ChatDetails {
           lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
       pinnedMessageId: pinnedMessageId ?? this.pinnedMessageId,
       pinnedMessage: pinnedMessage ?? this.pinnedMessage,
+      pinnedMessageIds: pinnedMessageIds ?? this.pinnedMessageIds,
+      hasProtectedContent: hasProtectedContent ?? this.hasProtectedContent,
       username: username ?? this.username,
       isPublic: isPublic ?? this.isPublic,
       isVerified: isVerified ?? this.isVerified,
@@ -2699,6 +2965,16 @@ class ChatDetails {
         ? _parseBoolFlag(json['is_member'], defaultValue: true)
         : (parsedMyRole != 'guest');
 
+    final parsedPinnedList = _parseIntList(json['pinned_message_ids']);
+    final List<int> effectivePinnedIds = parsedPinnedList.isNotEmpty
+        ? parsedPinnedList
+        : (parsedPinnedMessageId != null && parsedPinnedMessageId > 0
+            ? <int>[parsedPinnedMessageId]
+            : const <int>[]);
+    final bool parsedHasProtectedContent = _parseBoolFlag(
+      json['has_protected_content'] ?? json['noforwards'],
+    );
+
     return ChatDetails(
       id: json['id']?.toString() ?? '',
       chatType: parsedChatType,
@@ -2714,6 +2990,8 @@ class ChatDetails {
           _parseIntValue(json['last_read_outbox_message_id']),
       pinnedMessageId: parsedPinnedMessageId,
       pinnedMessage: parsedPinnedMessage,
+      pinnedMessageIds: effectivePinnedIds,
+      hasProtectedContent: parsedHasProtectedContent,
       username: json['username']?.toString(),
       isPublic: json['is_public'] == true,
       isVerified: json['is_verified'] == true,
@@ -3214,6 +3492,7 @@ class ChatService {
     Map<String, dynamic>? mediaPayload,
     bool isSilent = false,
     bool sendAsAnonymous = false,
+    bool hasMediaSpoiler = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3280,6 +3559,9 @@ class ChatService {
       }
       if (sendAsAnonymous) {
         body['send_as_anonymous'] = true;
+      }
+      if (hasMediaSpoiler) {
+        body['has_media_spoiler'] = true;
       }
 
       // Try WebSocket RPC first when connected
@@ -3421,6 +3703,7 @@ class ChatService {
     String? replyToMessageId,
     bool isSilent = false,
     bool sendAsAnonymous = false,
+    bool hasMediaSpoiler = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3448,6 +3731,9 @@ class ChatService {
       }
       if (sendAsAnonymous) {
         body['send_as_anonymous'] = true;
+      }
+      if (hasMediaSpoiler) {
+        body['has_media_spoiler'] = true;
       }
       if (replyToMessageId != null && replyToMessageId.isNotEmpty) {
         body['reply_to_message_id'] = replyToMessageId;
@@ -3555,6 +3841,7 @@ class ChatService {
     required String messageId,
     required String content,
     List<MessageEntity>? entities,
+    bool? hasMediaSpoiler,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3567,6 +3854,9 @@ class ChatService {
       };
       if (entities != null && entities.isNotEmpty) {
         body['entities'] = entities.map((e) => e.toJson()).toList();
+      }
+      if (hasMediaSpoiler != null) {
+        body['has_media_spoiler'] = hasMediaSpoiler;
       }
 
       final response = await http.put(
@@ -3599,10 +3889,11 @@ class ChatService {
     }
   }
 
-  /// Deletes a message from a chat for everyone.
+  /// Deletes a message from a chat (with optional Telegram revoke for peer).
   static Future<Map<String, dynamic>> deleteMessage({
     required String chatId,
     required String messageId,
+    bool revoke = true,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3611,7 +3902,9 @@ class ChatService {
       }
 
       final response = await http.delete(
-        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/messages/$messageId'),
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/chats/$chatId/messages/$messageId?revoke=$revoke',
+        ),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -3620,10 +3913,15 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
+        try {
+          await AppDatabase().deleteMessage(messageId);
+          await AppDatabase().refreshChatLastMessageFromDb(chatId);
+        } catch (_) {}
         return {
           'success': true,
           'message': data['message'] ?? 'Message deleted successfully',
           'message_id': data['message_id']?.toString() ?? messageId,
+          'revoked': data['revoked'] ?? revoke,
         };
       } else {
         return {
@@ -3633,6 +3931,69 @@ class ChatService {
       }
     } catch (e) {
       debugPrint('Delete message error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Batch deletes multiple messages (`POST /api/chats/:id/messages/delete`)
+  /// with Telegram revoke and admin moderation options.
+  static Future<Map<String, dynamic>> deleteMessagesBatch({
+    required String chatId,
+    required List<String> messageIds,
+    bool revoke = true,
+    bool reportSpam = false,
+    bool banUser = false,
+    bool deleteAllFromUser = false,
+  }) async {
+    if (messageIds.isEmpty) {
+      return {'success': false, 'message': 'No messages specified'};
+    }
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final parsedIds = messageIds
+          .map((id) => int.tryParse(id.trim()) ?? id.trim())
+          .toList();
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/messages/delete'),
+        headers: headers,
+        body: jsonEncode({
+          'message_ids': parsedIds,
+          'revoke': revoke,
+          'report_spam': reportSpam,
+          'ban_user': banUser,
+          'delete_all_from_user': deleteAllFromUser,
+        }),
+      );
+
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        final rawDeleted = data['deleted_ids'];
+        final deletedIds = rawDeleted is List
+            ? rawDeleted.map((e) => e.toString()).where((e) => e.isNotEmpty).toList()
+            : messageIds;
+        try {
+          await AppDatabase().deleteMessagesBatch(deletedIds);
+          await AppDatabase().refreshChatLastMessageFromDb(chatId);
+        } catch (_) {}
+        return {
+          'success': true,
+          'deleted_ids': deletedIds,
+          'deleted_count': data['deleted_count'] ?? deletedIds.length,
+          'revoked': data['revoked'] ?? revoke,
+        };
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'message': _extractErrorMessage(data, 'Не удалось удалить сообщения'),
+      };
+    } catch (e) {
+      debugPrint('Batch delete messages error: $e');
       return {'success': false, 'message': 'Network error: ${e.toString()}'};
     }
   }
@@ -3731,6 +4092,7 @@ class ChatService {
   /// [chatId] - The ID of the chat to clear
   static Future<Map<String, dynamic>> clearChatHistory({
     required String chatId,
+    bool revoke = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3739,7 +4101,7 @@ class ChatService {
       }
 
       final response = await http.delete(
-        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/messages'),
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/messages?revoke=$revoke'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -3748,6 +4110,10 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
+        try {
+          await AppDatabase().deleteMessagesForChat(chatId);
+          await AppDatabase().refreshChatLastMessageFromDb(chatId, allowClear: true);
+        } catch (_) {}
         return {
           'success': true,
           'message': data['message'] ?? 'Chat history cleared',
@@ -4406,6 +4772,7 @@ class ChatService {
     required String fromChatId,
     required List<String> messageIds,
     bool hideSender = false,
+    bool hideCaption = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -4427,6 +4794,7 @@ class ChatService {
           'from_chat_id': int.tryParse(fromChatId) ?? fromChatId,
           'message_ids': parsedIds,
           'hide_sender': hideSender,
+          if (hideCaption) 'hide_caption': true,
         }),
       );
 
@@ -4450,6 +4818,9 @@ class ChatService {
         final retryAfter = _extractRetryAfter(data);
         return {
           'success': false,
+          'status_code': response.statusCode,
+          if (data is Map && data['error'] != null)
+            'error_code': data['error'].toString(),
           'message': _extractErrorMessage(data, 'Не удалось переслать сообщения'),
           if (retryAfter != null) 'retry_after': retryAfter,
         };
@@ -4484,11 +4855,21 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
+        final nextPinId = (data['pinned_message_id'] as num?)?.toInt() ??
+            int.tryParse(messageId);
+        final pinIds = _parseIntList(data['pinned_message_ids']);
+        try {
+          await AppDatabase().updateChatPinnedMessageId(
+            chatId,
+            nextPinId,
+            pinnedMessageIds: pinIds,
+            updatePinnedMessageIds: data.containsKey('pinned_message_ids'),
+          );
+        } catch (_) {}
         return {
           'success': true,
-          'pinned_message_id':
-              (data['pinned_message_id'] as num?)?.toInt() ??
-                  int.tryParse(messageId),
+          'pinned_message_id': nextPinId,
+          if (pinIds.isNotEmpty) 'pinned_message_ids': pinIds,
         };
       } else {
         return {
@@ -4524,9 +4905,20 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
+        final nextPinId = (data['pinned_message_id'] as num?)?.toInt();
+        final pinIds = _parseIntList(data['pinned_message_ids']);
+        try {
+          await AppDatabase().updateChatPinnedMessageId(
+            chatId,
+            nextPinId,
+            pinnedMessageIds: pinIds,
+            updatePinnedMessageIds: data.containsKey('pinned_message_ids'),
+          );
+        } catch (_) {}
         return {
           'success': true,
-          'pinned_message_id': (data['pinned_message_id'] as num?)?.toInt(),
+          'pinned_message_id': nextPinId,
+          'pinned_message_ids': pinIds,
         };
       } else {
         return {
@@ -4574,6 +4966,27 @@ class ChatService {
       debugPrint('Get pinned messages error: $e');
       return [];
     }
+  }
+
+  /// Unpins all messages in a chat (`DELETE /api/chats/:chatId/pinned-messages`).
+  static Future<bool> unpinAllMessages({
+    required String chatId,
+  }) async {
+    final ok = await _sendBoolRequest(
+      'DELETE',
+      '/api/chats/$chatId/pinned-messages',
+    );
+    if (ok) {
+      try {
+        await AppDatabase().updateChatPinnedMessageId(
+          chatId,
+          null,
+          pinnedMessageIds: const [],
+          updatePinnedMessageIds: true,
+        );
+      } catch (_) {}
+    }
+    return ok;
   }
 
   /// Preview an invite link code without joining (GET /api/chats/invite/:code)
@@ -4832,6 +5245,14 @@ class ChatService {
                   perms != null ? jsonEncode(perms.toJson()) : null,
               reactionSettingsJson:
                   reactions != null ? jsonEncode(reactions.toJson()) : null,
+              hasProtectedContent: event.data.containsKey('has_protected_content')
+                  ? _parseBoolFlag(event.data['has_protected_content'])
+                  : null,
+              pinnedMessageIdsJson: event.data.containsKey('pinned_message_ids')
+                  ? jsonEncode(_parseIntList(event.data['pinned_message_ids']))
+                  : null,
+              updatePinnedMessageIds:
+                  event.data.containsKey('pinned_message_ids'),
             );
           }
         } catch (e) {
@@ -4840,6 +5261,26 @@ class ChatService {
       }
       _realtimeController.add(ChatRealtimeUpdate(
         type: WebSocketEventType.chatSettingsUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.scheduledMessagesUpdated ||
+        rawType == 'scheduled_messages_updated') {
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.scheduledMessagesUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.joinRequestsUpdated ||
+        rawType == 'join_requests_updated') {
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.joinRequestsUpdated,
         chatId: chatId,
         data: Map<String, dynamic>.from(event.data),
       ));
@@ -5110,6 +5551,7 @@ class ChatService {
     String? fileUrl,
     String? fileName,
     String messageType = 'text',
+    bool hasMediaSpoiler = false,
   }) async {
     try {
       final headers = await _authHeaders();
@@ -5124,6 +5566,7 @@ class ChatService {
           'entities': entities.map((e) => e.toJson()).toList(),
         if (fileUrl != null && fileUrl.isNotEmpty) 'file_url': fileUrl,
         if (fileName != null && fileName.isNotEmpty) 'file_name': fileName,
+        if (hasMediaSpoiler) 'has_media_spoiler': true,
       };
 
       final response = await http.post(
@@ -5288,6 +5731,9 @@ class ChatService {
                 perms != null ? jsonEncode(perms.toJson()) : null,
             reactionSettingsJson:
                 reactions != null ? jsonEncode(reactions.toJson()) : null,
+            hasProtectedContent: payload.containsKey('has_protected_content')
+                ? _parseBoolFlag(payload['has_protected_content'])
+                : null,
           );
         } catch (_) {}
         return Map<String, dynamic>.from(data);
@@ -5517,6 +5963,275 @@ class ChatService {
     return _sendBoolRequest(
       'DELETE',
       '/api/chats/$chatId/invite-links/$linkId',
+    );
+  }
+
+  /// Lists pending invite-link join requests for admins (`GET /api/chats/:id/join-requests`).
+  static Future<List<ChatJoinRequest>> getJoinRequests(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return [];
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/join-requests'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map) {
+        final rawList = data['join_requests'];
+        if (rawList is List) {
+          return rawList
+              .whereType<Map>()
+              .map((m) => ChatJoinRequest.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Get join requests error: $e');
+      return [];
+    }
+  }
+
+  /// Approves a pending join request (`POST /api/chats/:id/join-requests/:userId/approve`).
+  static Future<bool> approveJoinRequest({
+    required String chatId,
+    required String userId,
+  }) {
+    return _sendBoolRequest(
+      'POST',
+      '/api/chats/$chatId/join-requests/$userId/approve',
+    );
+  }
+
+  /// Declines a pending join request (`POST /api/chats/:id/join-requests/:userId/decline`).
+  static Future<bool> declineJoinRequest({
+    required String chatId,
+    required String userId,
+  }) {
+    return _sendBoolRequest(
+      'POST',
+      '/api/chats/$chatId/join-requests/$userId/decline',
+    );
+  }
+
+  /// Lists scheduled messages for a chat (`GET /api/chats/:id/scheduled`).
+  static Future<List<ScheduledMessage>> getScheduledMessages(
+    String chatId,
+  ) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return [];
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/scheduled'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map) {
+        final rawList = data['scheduled_messages'];
+        if (rawList is List) {
+          return rawList
+              .whereType<Map>()
+              .map((m) => ScheduledMessage.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint('Get scheduled messages error: $e');
+      return [];
+    }
+  }
+
+  /// Creates a scheduled message or send-when-online queue item (`POST /api/chats/:id/scheduled`).
+  static Future<Map<String, dynamic>> createScheduledMessage({
+    required String chatId,
+    required String content,
+    String messageType = 'text',
+    DateTime? scheduleAt,
+    bool sendWhenOnline = false,
+    String? fileUrl,
+    String? fileName,
+    int? fileSize,
+    int? width,
+    int? height,
+    int duration = 0,
+    bool isRound = false,
+    bool hasMediaSpoiler = false,
+    String? replyToMessageId,
+    bool isQuote = false,
+    String? quoteText,
+    int quoteOffset = 0,
+    int quoteLength = 0,
+    List<MessageEntity>? entities,
+    LinkPreviewOptions? linkPreviewOptions,
+    bool invertMedia = false,
+    Map<String, dynamic>? mediaPayload,
+    String? groupedId,
+    bool isSilent = false,
+    bool? sendAsAnonymous,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      String effectiveMessageType = messageType;
+      bool effectiveIsRound = isRound;
+      if (effectiveMessageType == 'round') {
+        effectiveMessageType = 'video';
+        effectiveIsRound = true;
+      }
+
+      final body = <String, dynamic>{
+        'content': content,
+        'message_type': effectiveMessageType,
+        if (fileUrl != null && fileUrl.isNotEmpty) 'file_url': fileUrl,
+        if (fileName != null && fileName.isNotEmpty) 'file_name': fileName,
+        if (fileSize != null && fileSize > 0) 'file_size': fileSize,
+        if (width != null && width > 0) 'width': width,
+        if (height != null && height > 0) 'height': height,
+        if (duration > 0) 'duration': duration,
+        if (effectiveIsRound) 'is_round': true,
+        if (hasMediaSpoiler) 'has_media_spoiler': true,
+        if (replyToMessageId != null && replyToMessageId.isNotEmpty)
+          'reply_to_message_id': int.tryParse(replyToMessageId) ?? replyToMessageId,
+        if (isQuote) 'is_quote': true,
+        if (quoteText != null && quoteText.isNotEmpty) 'quote_text': quoteText,
+        if (quoteOffset > 0) 'quote_offset': quoteOffset,
+        if (quoteLength > 0) 'quote_length': quoteLength,
+        if (entities != null && entities.isNotEmpty)
+          'entities': entities.map((e) => e.toJson()).toList(),
+        if (linkPreviewOptions != null)
+          'link_preview_options': linkPreviewOptions.toJson(),
+        if (invertMedia) 'invert_media': true,
+        if (mediaPayload != null && mediaPayload.isNotEmpty)
+          'media_payload': mediaPayload,
+        if (groupedId != null && groupedId.isNotEmpty) 'grouped_id': groupedId,
+        if (isSilent) 'is_silent': true,
+        if (sendAsAnonymous != null) 'send_as_anonymous': sendAsAnonymous,
+        'send_when_online': sendWhenOnline,
+        if (!sendWhenOnline && scheduleAt != null)
+          'schedule_at': scheduleAt.toUtc().toIso8601String(),
+      };
+
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/scheduled'),
+        headers: headers,
+        body: jsonEncode(body),
+      );
+      final data = _tryDecodeJson(response.body);
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          data is Map &&
+          data['success'] == true) {
+        final raw = data['scheduled_message'];
+        final parsed = raw is Map
+            ? ScheduledMessage.fromJson(Map<String, dynamic>.from(raw))
+            : null;
+        return {
+          'success': true,
+          if (parsed != null) 'scheduled_message': parsed,
+        };
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'message': _extractErrorMessage(data, 'Не удалось запланировать сообщение'),
+      };
+    } catch (e) {
+      debugPrint('Create scheduled message error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Edits or reschedules a pending scheduled message (`PUT /api/chats/:id/scheduled/:schedId`).
+  static Future<ScheduledMessage?> updateScheduledMessage({
+    required String chatId,
+    required String schedId,
+    String? content,
+    List<MessageEntity>? entities,
+    bool? hasMediaSpoiler,
+    bool? isSilent,
+    DateTime? scheduleAt,
+    bool? sendWhenOnline,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return null;
+      final body = <String, dynamic>{
+        if (content != null) 'content': content,
+        if (entities != null)
+          'entities': entities.map((e) => e.toJson()).toList(),
+        if (hasMediaSpoiler != null) 'has_media_spoiler': hasMediaSpoiler,
+        if (isSilent != null) 'is_silent': isSilent,
+        if (sendWhenOnline != null) 'send_when_online': sendWhenOnline,
+        if (scheduleAt != null)
+          'schedule_at': scheduleAt.toUtc().toIso8601String(),
+      };
+      final response = await http.put(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/scheduled/$schedId'),
+        headers: headers,
+        body: jsonEncode(body),
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 &&
+          data is Map &&
+          data['success'] == true &&
+          data['scheduled_message'] is Map) {
+        return ScheduledMessage.fromJson(
+          Map<String, dynamic>.from(data['scheduled_message'] as Map),
+        );
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Update scheduled message error: $e');
+      return null;
+    }
+  }
+
+  /// Sends a pending scheduled message immediately (`POST /api/chats/:id/scheduled/:schedId/send-now`).
+  static Future<Message?> sendScheduledMessageNow({
+    required String chatId,
+    required String schedId,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return null;
+      final response = await http.post(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/chats/$chatId/scheduled/$schedId/send-now',
+        ),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 &&
+          data is Map &&
+          data['success'] == true &&
+          data['message'] is Map) {
+        final parsed = Message.fromJson(
+          Map<String, dynamic>.from(data['message'] as Map),
+        );
+        try {
+          await AppDatabase().saveMessage(parsed.toCompanion(fallbackChatId: chatId));
+          await AppDatabase().refreshChatLastMessageFromDb(chatId);
+        } catch (_) {}
+        return parsed;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Send scheduled message now error: $e');
+      return null;
+    }
+  }
+
+  /// Deletes a pending scheduled message (`DELETE /api/chats/:id/scheduled/:schedId`).
+  static Future<bool> deleteScheduledMessage({
+    required String chatId,
+    required String schedId,
+  }) {
+    return _sendBoolRequest(
+      'DELETE',
+      '/api/chats/$chatId/scheduled/$schedId',
     );
   }
 

@@ -55,6 +55,9 @@ class Chats extends Table {
       boolean().withDefault(const Constant(false))();
   TextColumn get chatPermissionsJson => text().nullable()();
   TextColumn get reactionSettingsJson => text().nullable()();
+  BoolColumn get hasProtectedContent =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get pinnedMessageIdsJson => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -127,6 +130,8 @@ class Messages extends Table {
   IntColumn get commentsCount => integer().withDefault(const Constant(0))();
   TextColumn get recentRepliersJson => text().nullable()();
   TextColumn get threadRootMessageId => text().nullable()();
+  BoolColumn get hasMediaSpoiler =>
+      boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {localId};
@@ -249,7 +254,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -449,6 +454,23 @@ class AppDatabase extends _$AppDatabase {
 
             await customStatement(
               'CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(chat_id, thread_root_message_id, created_at) WHERE thread_root_message_id IS NOT NULL',
+            );
+          }
+          if (from < 14) {
+            await _addColumnIfMissing(
+              'chats',
+              'has_protected_content',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'pinned_message_ids_json',
+              'TEXT',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'has_media_spoiler',
+              'INTEGER NOT NULL DEFAULT 0',
             );
           }
         },
@@ -1118,6 +1140,7 @@ class AppDatabase extends _$AppDatabase {
     String? entities,
     String? mediaPayload,
     bool isEdited = true,
+    bool? hasMediaSpoiler,
   ]) async {
     await (update(messages)..where((t) => t.serverId.equals(serverId)))
         .write(MessagesCompanion(
@@ -1126,6 +1149,9 @@ class AppDatabase extends _$AppDatabase {
       mediaPayload:
           mediaPayload != null ? Value(mediaPayload) : const Value.absent(),
       isEdited: Value(isEdited),
+      hasMediaSpoiler: hasMediaSpoiler != null
+          ? Value(hasMediaSpoiler)
+          : const Value.absent(),
     ));
   }
 
@@ -1200,6 +1226,16 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteMessage(String messageId) async {
     await (delete(messages)
           ..where((t) => t.serverId.equals(messageId) | t.localId.equals(messageId)))
+        .go();
+  }
+
+  /// Пакетно удалить сообщения по списку serverId или localId
+  Future<void> deleteMessagesBatch(List<String> messageIds) async {
+    if (messageIds.isEmpty) return;
+    await ensureInitialized();
+    await (delete(messages)
+          ..where((t) =>
+              t.serverId.isIn(messageIds) | t.localId.isIn(messageIds)))
         .go();
   }
 
@@ -1336,16 +1372,23 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  /// Обновить ID закреплённого сообщения в чате
+  /// Обновить ID закреплённого сообщения (и список закрепов) в чате
   Future<void> updateChatPinnedMessageId(
     String chatId,
-    int? pinnedMessageId,
-  ) async {
+    int? pinnedMessageId, {
+    List<int>? pinnedMessageIds,
+    bool updatePinnedMessageIds = false,
+  }) async {
     if (chatId.isEmpty) return;
     await ensureInitialized();
     await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
       ChatsCompanion(
         pinnedMessageId: Value(pinnedMessageId),
+        pinnedMessageIdsJson: updatePinnedMessageIds
+            ? Value(pinnedMessageIds != null
+                ? jsonEncode(pinnedMessageIds)
+                : null)
+            : const Value.absent(),
       ),
     );
   }
@@ -1411,6 +1454,9 @@ class AppDatabase extends _$AppDatabase {
     bool? hasActiveCall,
     String? chatPermissionsJson,
     String? reactionSettingsJson,
+    bool? hasProtectedContent,
+    String? pinnedMessageIdsJson,
+    bool updatePinnedMessageIds = false,
   }) async {
     if (chatId.isEmpty) return;
     await ensureInitialized();
@@ -1439,6 +1485,12 @@ class AppDatabase extends _$AppDatabase {
             : const Value.absent(),
         reactionSettingsJson: reactionSettingsJson != null
             ? Value(reactionSettingsJson)
+            : const Value.absent(),
+        hasProtectedContent: hasProtectedContent != null
+            ? Value(hasProtectedContent)
+            : const Value.absent(),
+        pinnedMessageIdsJson: updatePinnedMessageIds
+            ? Value(pinnedMessageIdsJson)
             : const Value.absent(),
       ),
     );

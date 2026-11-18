@@ -19,6 +19,7 @@ import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../theme/viewport_gradient_box.dart';
 import '../tiling/static_tile_cache_boundary.dart';
+import 'message_seen_view.dart';
 import 'sticker_item_widget.dart';
 import 'telegram_avatar_stack.dart';
 
@@ -77,6 +78,7 @@ class MessageContextMenu extends StatefulWidget {
   final String messageContent;
   final Widget Function(GlobalKey focusedKey)? focusedMessageBuilder;
   final bool enableBlur;
+  final bool hasProtectedContent;
   final Offset? initialDragStartGlobalPosition;
   final Offset? initialDragCurrentGlobalPosition;
   final VoidCallback onReply;
@@ -108,6 +110,7 @@ class MessageContextMenu extends StatefulWidget {
     this.messageContent = '',
     this.focusedMessageBuilder,
     this.enableBlur = true,
+    this.hasProtectedContent = false,
     this.initialDragStartGlobalPosition,
     this.initialDragCurrentGlobalPosition,
     required this.onReply,
@@ -1247,6 +1250,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
                     child: MessageTextSelectionToolbar(
                       anchors: selectionAnchors,
                       onCopy: () {
+                        if (widget.hasProtectedContent) {
+                          GlassToastService().show(
+                            context,
+                            'Копирование и пересылка запрещены в этом чате',
+                          );
+                          _handleDismiss();
+                          return;
+                        }
                         final text = _getSelectedPlainText();
                         if (text.isNotEmpty) {
                           Clipboard.setData(ClipboardData(text: text));
@@ -1737,7 +1748,20 @@ class MessageContextMenuState extends State<MessageContextMenu>
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (_shouldShowReadStatus) ...[
+                          if (widget.chatType == 'channel' &&
+                              widget.message != null &&
+                              widget.message!.id.isNotEmpty &&
+                              !widget.message!.id.startsWith('local_')) ...[
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+                              child: MessageSeenView(
+                                message: widget.message!,
+                                chatType: widget.chatType,
+                                isMe: widget.isMe,
+                              ),
+                            ),
+                            const Divider(height: 1),
+                          ] else if (_shouldShowReadStatus) ...[
                             _buildReadReceiptItem(theme),
                             const Divider(height: 1),
                           ],
@@ -1774,19 +1798,20 @@ class MessageContextMenuState extends State<MessageContextMenu>
                             ),
                           if (widget.onStopPoll != null)
                             _buildActionItem(
-                              (c) => Icon(Icons.stop_circle_outlined, color: c, size: 20),
+                              (c) => iconoir.XmarkCircle(color: c, width: 20, height: 20),
                               context.l10n.translate('poll_stop'),
                               widget.onStopPoll!,
                               theme,
                               enabled: !isSending,
                             ),
-                          _buildActionItem(
-                            (c) => iconoir.Copy(color: c, width: 20, height: 20),
-                            context.l10n.translate('chat_action_copy'),
-                            widget.onCopy,
-                            theme,
-                            enabled: !isSending,
-                          ),
+                          if (!widget.hasProtectedContent)
+                            _buildActionItem(
+                              (c) => iconoir.Copy(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_action_copy'),
+                              widget.onCopy,
+                              theme,
+                              enabled: !isSending,
+                            ),
                           if (widget.onPin != null)
                             _buildActionItem(
                               (c) => iconoir.Pin(color: c, width: 20, height: 20),
@@ -1797,7 +1822,8 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               theme,
                               enabled: !isSending,
                             ),
-                          if (widget.onForward != null)
+                          if (!widget.hasProtectedContent &&
+                              widget.onForward != null)
                             _buildActionItem(
                               (c) => iconoir.ForwardMessage(color: c, width: 20, height: 20),
                               'Переслать',

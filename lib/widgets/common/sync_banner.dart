@@ -120,7 +120,7 @@ class _SyncBannerWidgetState extends State<_SyncBannerWidget>
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cardBg = isDark ? const Color(0xFF1E272E) : Colors.white;
-    final primaryTextColor = isDark ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E);
+    final primaryTextColor = theme.colorScheme.onSurface;
     const secondaryTextColor = Color(0xFF8E8E93);
 
     return SlideTransition(

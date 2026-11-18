@@ -283,9 +283,17 @@ void main() {
           ),
         ),
       );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Что умеет этот бот?'), findsOneWidget);
-      expect(find.text('Команды бота'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(BotCommandsPopup),
+          matching: find.textContaining('token'),
+        ),
+        findsWidgets,
+      );
       expect(find.text('Copy API Token'), findsOneWidget);
 
       await tester.tap(find.text('/mybots'));

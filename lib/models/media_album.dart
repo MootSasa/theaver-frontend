@@ -66,6 +66,8 @@ class MediaAlbum {
   bool get isRead => primaryMessage.isRead;
   int get sendStatus => primaryMessage.sendStatus;
   bool get hasCaption => caption != null && caption!.trim().isNotEmpty;
+  bool get hasMediaSpoiler =>
+      items.any((item) => item.message.hasMediaSpoiler);
 }
 
 /// Abstract representation of an item in the chat feed

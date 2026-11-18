@@ -29,6 +29,7 @@ import '../message/inline_keyboard_widget.dart';
 import '../message/inline_video_player.dart';
 import '../message/media_album_widget.dart';
 import '../message/media_download_button.dart';
+import '../message/media_spoiler_overlay.dart';
 import '../message/message_bubble.dart';
 import '../message/message_interactive_state.dart';
 import '../message/poll_message_widget.dart';
@@ -79,6 +80,9 @@ class ChannelPostCard extends StatelessWidget {
   final void Function(String replyToId, String? chatId)? onReplyTap;
   final void Function(String url, String name, String type)? onFileTap;
   final ValueChanged<Message>? onRetry;
+  final VoidCallback? onBodyTap;
+  final VoidCallback? onDoubleTap;
+  final bool hasProtectedContent;
 
   const ChannelPostCard({
     super.key,
@@ -106,6 +110,9 @@ class ChannelPostCard extends StatelessWidget {
     this.onReplyTap,
     this.onFileTap,
     this.onRetry,
+    this.onBodyTap,
+    this.onDoubleTap,
+    this.hasProtectedContent = false,
   }) : assert(
          message != null || album != null,
          'Either message or album must be provided to ChannelPostCard',
@@ -170,6 +177,9 @@ class ChannelPostCard extends StatelessWidget {
       onReplyTap: onReplyTap,
       onFileTap: onFileTap,
       onRetry: onRetry,
+      onBodyTap: onBodyTap,
+      onDoubleTap: onDoubleTap,
+      hasProtectedContent: hasProtectedContent,
     );
   }
 
@@ -379,7 +389,8 @@ class ChannelPostCard extends StatelessWidget {
     final bool hasCommentsBar =
         showCommentsRow ??
         ((linkedChatId != null && linkedChatId!.isNotEmpty) || msg.canComment);
-    final bool showShareButton = !isSelectionMode && msg.messageType != 'system';
+    final bool showShareButton =
+        !isSelectionMode && !hasProtectedContent && msg.messageType != 'system';
 
     final double viewportWidth = TileViewportScope.widthOf(context);
     final double specCardWidth = (viewportWidth - 56.0).clamp(260.0, 520.0);
@@ -431,7 +442,7 @@ class ChannelPostCard extends StatelessWidget {
           hasCommentsBar: hasCommentsBar,
         );
 
-        final Widget decoratedCard = MetaData(
+        final Widget cardContainer = MetaData(
           metaData: 'message_bubble_box',
           child: Container(
             margin: EdgeInsets.only(
@@ -469,6 +480,16 @@ class ChannelPostCard extends StatelessWidget {
                 : cardColumn,
           ),
         );
+
+        final Widget decoratedCard =
+            (!isSelectionMode && (onBodyTap != null || onDoubleTap != null))
+            ? GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: onBodyTap,
+                onDoubleTap: onDoubleTap,
+                child: cardContainer,
+              )
+            : cardContainer;
 
         final Widget cardWithShare = Row(
           mainAxisSize: MainAxisSize.min,
@@ -745,6 +766,7 @@ class ChannelPostCard extends StatelessWidget {
         suppressMargin: true,
         suppressFooter: true,
         overrideWidth: cardWidth,
+        hasProtectedContent: hasProtectedContent,
         overrideBorderRadius: hasTopHeader
             ? BorderRadius.zero
             : const BorderRadius.vertical(top: Radius.circular(16.0)),
@@ -934,38 +956,44 @@ class ChannelPostCard extends StatelessWidget {
     if (hasMedia) {
       if (_isImage || _isVideo) {
         final double mediaHeight = _computeSingleMediaHeight(msg, cardWidth);
-        final Widget mediaWidget = _SingleChannelMediaView(
-          key: ValueKey('ch_media_${msg.id}_$resolvedFileUrl'),
+        final Widget mediaWidget = MediaSpoilerOverlay(
           messageId: msg.id,
-          url: resolvedFileUrl,
-          thumbBase64: msg.thumbBase64,
-          thumbUrl: msg.thumbUrl,
-          fileSize: msg.mediaFileSize,
-          duration: msg.mediaDuration ?? msg.duration,
-          isVideo: _isVideo,
-          width: cardWidth,
-          height: mediaHeight,
-          topRadius: hasTopHeader ? 0.0 : 16.0,
-          autoDownload: MediaCacheManager.instance.shouldAutoDownload(
-            messageType: _isVideo ? 'video' : 'image',
+          hasSpoiler: msg.hasMediaSpoiler,
+          borderRadius: 0.0,
+          child: _SingleChannelMediaView(
+            key: ValueKey('ch_media_${msg.id}_$resolvedFileUrl'),
+            messageId: msg.id,
+            url: resolvedFileUrl,
+            thumbBase64: msg.thumbBase64,
+            thumbUrl: msg.thumbUrl,
             fileSize: msg.mediaFileSize,
+            duration: msg.mediaDuration ?? msg.duration,
+            isVideo: _isVideo,
+            width: cardWidth,
+            height: mediaHeight,
+            topRadius: hasTopHeader ? 0.0 : 16.0,
+            autoDownload: MediaCacheManager.instance.shouldAutoDownload(
+              messageType: _isVideo ? 'video' : 'image',
+              fileSize: msg.mediaFileSize,
+            ),
+            onTap: ([localPath]) {
+              if (_isVideo) {
+                onFileTap?.call(
+                  localPath ?? resolvedFileUrl,
+                  msg.fileName ?? 'video.mp4',
+                  'video',
+                );
+              } else {
+                FullscreenPhotoViewer.open(
+                  context,
+                  resolvedFileUrl,
+                  tag: 'ch_photo_${msg.id}_$resolvedFileUrl',
+                  localFilePath: localPath,
+                  hasProtectedContent: hasProtectedContent,
+                );
+              }
+            },
           ),
-          onTap: ([localPath]) {
-            if (_isVideo) {
-              onFileTap?.call(
-                localPath ?? resolvedFileUrl,
-                msg.fileName ?? 'video.mp4',
-                'video',
-              );
-            } else {
-              FullscreenPhotoViewer.open(
-                context,
-                resolvedFileUrl,
-                tag: 'ch_photo_${msg.id}_$resolvedFileUrl',
-                localFilePath: localPath,
-              );
-            }
-          },
         );
 
         final Widget? captionWidget = hasCaption

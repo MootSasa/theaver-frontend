@@ -4,6 +4,7 @@ import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../screens/settings/widgets/update_dialog.dart';
 import '../../services/chat_service.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/update_service.dart';
 import '../../utils/haptic_utils.dart';
 
@@ -58,26 +59,16 @@ class _UnsupportedMessageWidgetState extends State<UnsupportedMessageWidget> {
       if (update.hasUpdate) {
         UpdateDialog.show(context, update, isManual: true);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('app_up_to_date'),
-            ),
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
+        GlassToastService().show(
+          context,
+          context.l10n.translate('app_up_to_date'),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '${context.l10n.translate('check_updates_error')}: $e',
-            ),
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
+        GlassToastService().showError(
+          context,
+          '${context.l10n.translate('check_updates_error')}: $e',
         );
       }
     } finally {

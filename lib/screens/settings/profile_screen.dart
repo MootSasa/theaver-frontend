@@ -41,6 +41,7 @@ import '../../utils/swipe_back_route.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/common/sync_banner.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/profile/profile_banner_layer.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../widgets/profile/avatar_gallery_viewer.dart';
@@ -1808,51 +1809,39 @@ class ProfileScreenState extends State<ProfileScreen>
   Future<void> _handleDeleteOrLeaveChat() async {
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final l10n = context.l10n;
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          _isGroup
-              ? _tr(l10n, 'profile_leave_group_title', 'Покинуть группу?')
-              : (_isChannel
-                  ? _tr(l10n, 'profile_leave_channel_title', 'Покинуть канал?')
-                  : _tr(l10n, 'profile_delete_chat_title', 'Удалить чат?')),
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: Text(
-          _isGroup || _isChannel
-              ? _tr(
-                  l10n,
-                  'profile_leave_confirm_message',
-                  'Вы уверены, что хотите выйти?',
-                )
-              : _tr(
-                  l10n,
-                  'profile_delete_chat_confirm_message',
-                  'Чат и вся переписка будут удалены.',
-                ),
-          style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(_tr(l10n, 'profile_cancel', 'Отмена')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(
-              _isGroup || _isChannel
-                  ? _tr(l10n, 'profile_leave_action', 'Покинуть')
-                  : _tr(l10n, 'profile_delete_action', 'Удалить'),
-              style: const TextStyle(color: Colors.redAccent),
+      title: _isGroup
+          ? _tr(l10n, 'profile_leave_group_title', 'Покинуть группу?')
+          : (_isChannel
+              ? _tr(l10n, 'profile_leave_channel_title', 'Покинуть канал?')
+              : _tr(l10n, 'profile_delete_chat_title', 'Удалить чат?')),
+      message: _isGroup || _isChannel
+          ? _tr(
+              l10n,
+              'profile_leave_confirm_message',
+              'Вы уверены, что хотите выйти?',
+            )
+          : _tr(
+              l10n,
+              'profile_delete_chat_confirm_message',
+              'Чат и вся переписка будут удалены.',
             ),
-          ),
-        ],
-      ),
+      actions: [
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'profile_cancel', 'Отмена'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: _isGroup || _isChannel
+              ? _tr(l10n, 'profile_leave_action', 'Покинуть')
+              : _tr(l10n, 'profile_delete_action', 'Удалить'),
+          result: true,
+          isDestructive: true,
+        ),
+      ],
     );
 
     if (confirmed != true || !mounted) return;
@@ -2056,43 +2045,42 @@ class ProfileScreenState extends State<ProfileScreen>
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
     final controller = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final l10n = context.l10n;
 
-    final query = await showDialog<String>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          _tr(l10n, 'profile_add_member_title', 'Добавить участника'),
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-          decoration: InputDecoration(
-            hintText: _tr(
+      title: _tr(l10n, 'profile_add_member_title', 'Добавить участника'),
+      content: TheavInsetGroup(
+        children: [
+          TheavInlineTextField(
+            controller: controller,
+            autofocus: true,
+            placeholder: _tr(
               l10n,
               'profile_add_member_hint',
               'Введите @username или ID пользователя',
             ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(_tr(l10n, 'profile_cancel', 'Отмена')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: Text(_tr(l10n, 'common_add', 'Добавить')),
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => Navigator.of(context, rootNavigator: true).pop(true),
           ),
         ],
       ),
+      actions: [
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'profile_cancel', 'Отмена'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'common_add', 'Добавить'),
+          result: true,
+          isPrimary: true,
+        ),
+      ],
     );
+    final query = confirmed == true ? controller.text.trim() : '';
+    Future.delayed(const Duration(milliseconds: 250), controller.dispose);
 
-    if (query == null || query.isEmpty || !mounted) return;
+    if (query.isEmpty || !mounted) return;
     try {
       final token = await AuthService.getToken();
       final dio = Dio();
@@ -2209,39 +2197,22 @@ class ProfileScreenState extends State<ProfileScreen>
   Future<void> _confirmBanMember(ChatParticipant participant) async {
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final targetName = participant.displayName.isNotEmpty
         ? participant.displayName
         : '@${participant.username}';
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          'Заблокировать в чате?',
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+      title: 'Заблокировать в чате?',
+      message: '$targetName будет удалён(а) и не сможет снова вступить в этот чат.',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Заблокировать',
+          result: true,
+          isDestructive: true,
         ),
-        content: Text(
-          '$targetName будет удалён(а) и не сможет снова вступить в этот чат.',
-          style: TextStyle(
-            color: isDark ? Colors.white70 : const Color(0xFF475569),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
-              'Заблокировать',
-              style: TextStyle(color: Colors.redAccent),
-            ),
-          ),
-        ],
-      ),
+      ],
     );
     if (confirmed != true || !mounted) return;
 
@@ -2266,13 +2237,7 @@ class ProfileScreenState extends State<ProfileScreen>
   Future<void> _showRestrictMemberSheet(ChatParticipant participant) async {
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor =
-        isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
+    final palette = context.theav;
 
     var current = participant.memberRestrictions ??
         MemberRestrictions(
@@ -2295,150 +2260,115 @@ class ProfileScreenState extends State<ProfileScreen>
       (label: '1 месяц', value: const Duration(days: 30)),
     ];
 
-    final saved = await showModalBottomSheet<bool>(
+    final saved = await showTheavModalSheet<bool>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      title: 'Ограничить: ${participant.displayName}',
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => SettingsAttachedSheet(
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Ограничить права: ${participant.displayName}',
-                  style: TextStyle(
-                    fontSize: 17.5,
-                    fontWeight: FontWeight.w700,
-                    color: textColor,
+        builder: (ctx, setSheetState) => SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TheavInsetGroup(
+                children: [
+                  _buildRestrictionSwitch(
+                    'Отправка сообщений',
+                    current.canSendMessages,
+                    palette.primary,
+                    (v) => setSheetState(
+                      () => current = current.copyWith(canSendMessages: v),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                _buildRestrictionSwitch(
-                  'Отправка сообщений',
-                  current.canSendMessages,
-                  accentColor,
-                  textColor,
-                  (v) => setSheetState(
-                    () => current = current.copyWith(canSendMessages: v),
+                  _buildRestrictionSwitch(
+                    'Отправка медиа',
+                    current.canSendMedia,
+                    palette.primary,
+                    (v) => setSheetState(
+                      () => current = current.copyWith(canSendMedia: v),
+                    ),
                   ),
-                ),
-                _buildRestrictionSwitch(
-                  'Отправка медиа',
-                  current.canSendMedia,
-                  accentColor,
-                  textColor,
-                  (v) => setSheetState(
-                    () => current = current.copyWith(canSendMedia: v),
+                  _buildRestrictionSwitch(
+                    'Стикеры и GIF',
+                    current.canSendStickersGifs,
+                    palette.primary,
+                    (v) => setSheetState(
+                      () => current = current.copyWith(canSendStickersGifs: v),
+                    ),
                   ),
-                ),
-                _buildRestrictionSwitch(
-                  'Стикеры и GIF',
-                  current.canSendStickersGifs,
-                  accentColor,
-                  textColor,
-                  (v) => setSheetState(
-                    () => current = current.copyWith(canSendStickersGifs: v),
+                  _buildRestrictionSwitch(
+                    'Опросы',
+                    current.canSendPolls,
+                    palette.primary,
+                    (v) => setSheetState(
+                      () => current = current.copyWith(canSendPolls: v),
+                    ),
                   ),
-                ),
-                _buildRestrictionSwitch(
-                  'Опросы',
-                  current.canSendPolls,
-                  accentColor,
-                  textColor,
-                  (v) => setSheetState(
-                    () => current = current.copyWith(canSendPolls: v),
+                  _buildRestrictionSwitch(
+                    'Добавление участников',
+                    current.canInviteUsers,
+                    palette.primary,
+                    (v) => setSheetState(
+                      () => current = current.copyWith(canInviteUsers: v),
+                    ),
                   ),
-                ),
-                _buildRestrictionSwitch(
-                  'Добавление участников',
-                  current.canInviteUsers,
-                  accentColor,
-                  textColor,
-                  (v) => setSheetState(
-                    () => current = current.copyWith(canInviteUsers: v),
+                  _buildRestrictionSwitch(
+                    'Закрепление сообщений',
+                    current.canPinMessages,
+                    palette.primary,
+                    (v) => setSheetState(
+                      () => current = current.copyWith(canPinMessages: v),
+                    ),
                   ),
-                ),
-                _buildRestrictionSwitch(
-                  'Закрепление сообщений',
-                  current.canPinMessages,
-                  accentColor,
-                  textColor,
-                  (v) => setSheetState(
-                    () => current = current.copyWith(canPinMessages: v),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
+                ],
+              ),
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
                   'СРОК ОГРАНИЧЕНИЯ',
                   style: TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w600,
-                    color: subColor,
+                    color: palette.subtext,
                   ),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final opt in durations)
-                      ChoiceChip(
-                        label: Text(opt.label),
-                        selected: duration == opt.value,
-                        onSelected: (_) =>
-                            setSheetState(() => duration = opt.value),
-                        selectedColor: accentColor.withValues(alpha: 0.22),
-                        labelStyle: TextStyle(
-                          color: duration == opt.value
-                              ? accentColor
-                              : textColor,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  height: 46,
-                  child: Builder(
-                    builder: (_) {
-                      final buttonFg = accentColor.computeLuminance() > 0.35
-                          ? const Color(0xFF0F172A)
-                          : Colors.white;
-                      return FilledButton(
-                        onPressed: saving
-                            ? null
-                            : () async {
-                                setSheetState(() => saving = true);
-                                final until = duration != null
-                                    ? DateTime.now().add(duration!)
-                                    : null;
-                                final ok =
-                                    await ChatService.updateMemberRestrictions(
-                                  chatId: cid,
-                                  userId: participant.id,
-                                  restrictions: current,
-                                  restrictedUntil: until,
-                                );
-                                if (ctx.mounted) Navigator.pop(ctx, ok);
-                              },
-                        style: FilledButton.styleFrom(
-                          backgroundColor: accentColor,
-                          foregroundColor: buttonFg,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: const Text('Сохранить ограничения'),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final opt in durations)
+                    TheavFloatingPillButton(
+                      height: 36,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      label: opt.label,
+                      isPrimary: duration == opt.value,
+                      onTap: () => setSheetState(() => duration = opt.value),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              TheavFloatingPillButton(
+                isPrimary: true,
+                enabled: !saving,
+                label: saving ? 'Сохранение...' : 'Сохранить ограничения',
+                onTap: () async {
+                  setSheetState(() => saving = true);
+                  final until = duration != null
+                      ? DateTime.now().add(duration!)
+                      : null;
+                  final ok = await ChatService.updateMemberRestrictions(
+                    chatId: cid,
+                    userId: participant.id,
+                    restrictions: current,
+                    restrictedUntil: until,
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx, ok);
+                },
+              ),
+            ],
           ),
         ),
       ),
@@ -2454,16 +2384,13 @@ class ProfileScreenState extends State<ProfileScreen>
     String title,
     bool value,
     Color accentColor,
-    Color textColor,
     ValueChanged<bool> onChanged,
   ) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      minTileHeight: 46,
-      title: Text(title, style: TextStyle(color: textColor, fontSize: 15)),
-      trailing: Switch.adaptive(
+    return TheavListRow(
+      title: title,
+      trailing: TheavSwitch(
         value: value,
-        activeThumbColor: accentColor,
+        activeColor: accentColor,
         onChanged: onChanged,
       ),
       onTap: () => onChanged(!value),
@@ -2478,10 +2405,11 @@ class ProfileScreenState extends State<ProfileScreen>
     required bool hasColoredTheme,
   }) {
     final effectiveDark = isDark || hasColoredTheme;
-    final textColor = effectiveDark ? Colors.white : const Color(0xFF1C1C1E);
+    final palette = context.theav;
+    final textColor = effectiveDark ? Colors.white : palette.onSurface;
     final subColor = effectiveDark
         ? Colors.white.withValues(alpha: 0.65)
-        : const Color(0xFF475569);
+        : palette.subtext;
     final accentColor =
         effectiveDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
     final dividerColor = effectiveDark
@@ -2559,8 +2487,8 @@ class ProfileScreenState extends State<ProfileScreen>
       ],
     );
 
-    if (isGlass) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = isGlass ? LiquidGlassProvider.maybeOf(context) : null;
+    if (isGlass && glassProvider != null) {
       final glassStyle = glassProvider.createStyle(
         context: context,
         isDarkOverride: effectiveDark,
@@ -2685,7 +2613,7 @@ class ProfileScreenState extends State<ProfileScreen>
     final l10n = context.l10n;
     final accentColor =
         isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final textColor = isDark ? Colors.white : context.theav.onSurface;
     final subColor = isDark
         ? Colors.white.withValues(alpha: 0.60)
         : const Color(0xFF6C6C70);
@@ -2890,7 +2818,7 @@ class ProfileScreenState extends State<ProfileScreen>
                         color: const Color(0xFF4CAF50),
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
+                          color: isDark ? context.theav.surface : Colors.white,
                           width: 2,
                         ),
                       ),
@@ -3006,7 +2934,7 @@ class ProfileScreenState extends State<ProfileScreen>
     required bool canModerate,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final textColor = isDark ? Colors.white : context.theav.onSurface;
     final accentColor =
         isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
     final isAdminOrOwner = member.role == 'admin' || member.role == 'owner';
@@ -3201,64 +3129,53 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _showMusicDialog() async {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final l10n = context.l10n;
     final titleCtrl = TextEditingController(text: _musicTitle ?? '');
     final authorCtrl = TextEditingController(text: _musicAuthor ?? '');
 
-    final saved = await showDialog<bool>(
+    final saved = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          _tr(l10n, 'profile_menu_choose_music', 'Музыка в профиле'),
-          style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleCtrl,
-              style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-              decoration: InputDecoration(
-                labelText:
-                    _tr(l10n, 'profile_music_track_title', 'Название трека'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: authorCtrl,
-              style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-              decoration: InputDecoration(
-                labelText:
-                    _tr(l10n, 'profile_music_track_artist', 'Исполнитель'),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          if (_musicTitle != null && _musicTitle!.isNotEmpty)
-            TextButton(
-              onPressed: () {
-                titleCtrl.clear();
-                authorCtrl.clear();
-                Navigator.pop(ctx, true);
-              },
-              child: Text(
-                _tr(l10n, 'profile_delete_action', 'Удалить'),
-                style: const TextStyle(color: Colors.redAccent),
-              ),
-            ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(_tr(l10n, 'profile_cancel', 'Отмена')),
+      title: _tr(l10n, 'profile_menu_choose_music', 'Музыка в профиле'),
+      content: TheavInsetGroup(
+        children: [
+          TheavInlineTextField(
+            controller: titleCtrl,
+            label: _tr(l10n, 'profile_music_track_title', 'Название трека'),
+            placeholder: 'Название трека',
+            autofocus: true,
+            textInputAction: TextInputAction.next,
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(_tr(l10n, 'profile_save', 'Сохранить')),
+          TheavInlineTextField(
+            controller: authorCtrl,
+            label: _tr(l10n, 'profile_music_track_artist', 'Исполнитель'),
+            placeholder: 'Исполнитель',
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) =>
+                Navigator.of(context, rootNavigator: true).pop(true),
           ),
         ],
       ),
+      actions: [
+        if (_musicTitle != null && _musicTitle!.isNotEmpty)
+          TheavDialogAction<bool>(
+            label: _tr(l10n, 'profile_delete_action', 'Удалить'),
+            isDestructive: true,
+            onPressed: () {
+              titleCtrl.clear();
+              authorCtrl.clear();
+              Navigator.of(context, rootNavigator: true).pop(true);
+            },
+          ),
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'profile_cancel', 'Отмена'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'profile_save', 'Сохранить'),
+          result: true,
+          isPrimary: true,
+        ),
+      ],
     );
 
     if (saved == true && mounted) {
@@ -3278,6 +3195,10 @@ class ProfileScreenState extends State<ProfileScreen>
         _musicAuthor = newAuthor.isEmpty ? null : newAuthor;
       });
     }
+    Future.delayed(const Duration(milliseconds: 250), () {
+      titleCtrl.dispose();
+      authorCtrl.dispose();
+    });
   }
 
   // ============================================================
@@ -3423,48 +3344,36 @@ class ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _pickImage() async {
     final l10n = context.l10n;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? Colors.white70 : const Color(0xFF0088CC);
+    final accentColor = context.theav.primary;
 
-    final ImageSource? source = await showDialog<ImageSource>(
+    final ImageSource? source = await showTheavModalSheet<ImageSource>(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-          title: Text(
-            l10n.translate('profile_choose_photo'),
-            style: TextStyle(
-                color: isDark ? Colors.white : const Color(0xFF1C1C1E)),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: iconoir.Camera(
-                    width: 22, height: 22, color: accentColor),
-                title: Text(
-                  l10n.translate('profile_camera'),
-                  style: TextStyle(
-                      color:
-                          isDark ? Colors.white70 : const Color(0xFF1C1C1E)),
-                ),
-                onTap: () => Navigator.pop(context, ImageSource.camera),
+      title: l10n.translate('profile_choose_photo'),
+      builder: (sheetCtx) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+        child: TheavInsetGroup(
+          children: [
+            TheavListRow(
+              leading: iconoir.Camera(
+                width: 22,
+                height: 22,
+                color: accentColor,
               ),
-              ListTile(
-                leading: iconoir.MediaImage(
-                    width: 22, height: 22, color: accentColor),
-                title: Text(
-                  l10n.translate('profile_gallery'),
-                  style: TextStyle(
-                      color:
-                          isDark ? Colors.white70 : const Color(0xFF1C1C1E)),
-                ),
-                onTap: () => Navigator.pop(context, ImageSource.gallery),
+              title: l10n.translate('profile_camera'),
+              onTap: () => Navigator.pop(sheetCtx, ImageSource.camera),
+            ),
+            TheavListRow(
+              leading: iconoir.MediaImage(
+                width: 22,
+                height: 22,
+                color: accentColor,
               ),
-            ],
-          ),
-        );
-      },
+              title: l10n.translate('profile_gallery'),
+              onTap: () => Navigator.pop(sheetCtx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
     );
 
     if (source == null) return;
@@ -3515,38 +3424,22 @@ class ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _deleteAvatar() async {
     final l10n = context.l10n;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        title: Text(
-          l10n.translate('profile_delete_photo_confirm_title'),
-          style:
-              TextStyle(color: isDark ? Colors.white : const Color(0xFF1C1C1E)),
+      title: l10n.translate('profile_delete_photo_confirm_title'),
+      message: l10n.translate('profile_delete_photo_confirm_message'),
+      actions: [
+        TheavDialogAction<bool>(
+          label: l10n.translate('profile_cancel'),
+          result: false,
         ),
-        content: Text(
-          l10n.translate('profile_delete_photo_confirm_message'),
-          style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+        TheavDialogAction<bool>(
+          label: l10n.translate('profile_delete_photo'),
+          result: true,
+          isDestructive: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(
-              l10n.translate('profile_cancel'),
-              style: TextStyle(color: isDark ? Colors.white54 : Colors.black54),
-            ),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(
-              l10n.translate('profile_delete_photo'),
-              style: TextStyle(color: Colors.red.shade400),
-            ),
-          ),
-        ],
-      ),
+      ],
     );
 
     if (confirmed != true) return;
@@ -4716,8 +4609,8 @@ class ProfileScreenState extends State<ProfileScreen>
             : null);
     final activePreset = _getActiveColorPreset(profileTheme);
 
-    Color backgroundColor =
-        isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F7);
+    final palette = context.theav;
+    Color backgroundColor = palette.background;
     if (activePreset != null) {
       if (activePreset.isGradient && activePreset.gradientColors != null) {
         backgroundColor = activePreset.gradientColors!.last;
@@ -4728,9 +4621,8 @@ class ProfileScreenState extends State<ProfileScreen>
 
     final bool hasColoredTheme = activePreset != null;
     final bool effectiveIsDark = isDark || hasColoredTheme;
-    final onSurfaceColor = hasColoredTheme
-        ? Colors.white
-        : (isDark ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E));
+    final onSurfaceColor =
+        hasColoredTheme ? Colors.white : palette.onSurface;
 
     final screenWidth = TileViewportScope.widthOf(context);
     final screenHeight = TileViewportScope.heightOf(context);
@@ -4857,7 +4749,7 @@ class ProfileScreenState extends State<ProfileScreen>
     // Единый цвет иконок для всех кнопок интерфейса (<, •••, быстрые действия, капсула разделов)
     final headerIconColor = effectiveIsDark
         ? Colors.white.withValues(alpha: 0.92)
-        : const Color(0xFF1C1C1E);
+        : palette.onSurface;
 
     final sections = _buildSections(l10n);
     final int safeSectionIdx =
@@ -5821,8 +5713,9 @@ class _RoundHeaderButton extends StatelessWidget {
   Widget build(BuildContext context) {
     const size = 44.0;
 
-    if (glassEnabled) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider =
+        glassEnabled ? LiquidGlassProvider.maybeOf(context) : null;
+    if (glassEnabled && glassProvider != null) {
       final glassStyle = glassProvider.createStyle(
         context: context,
         isDarkOverride: isDark,
@@ -5926,7 +5819,7 @@ class _ThreeDotsGlyph extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final iconColor = color ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final iconColor = color ?? (isDark ? Colors.white : context.theav.onSurface);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -6010,7 +5903,7 @@ class _MorphMenuRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final defaultColor = isDark
         ? Colors.white.withValues(alpha: 0.92)
-        : const Color(0xFF1C1C1E);
+        : context.theav.onSurface;
     final itemColor = item.isDestructive ? Colors.red.shade400 : defaultColor;
 
     return GestureDetector(
@@ -6142,22 +6035,23 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
   @override
   Widget build(BuildContext context) {
     final openHeight = math.max(_ctrlSize, widget.items.length * 44.0 + 12.0);
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final glassStyle = glassProvider.createStyle(
-      context: context,
-      isDarkOverride: widget.isDark,
-      isLiteOverride: widget.isLite,
-      color: widget.isDark
-          ? const Color(0x33202025)
-          : const Color(0x66FFFFFF),
-      refractionIndex: 1.15,
-      refractionWidth: 22.0,
-      shape: const LiquidGlassShape.roundedRectangle(
-        cornerRadius: _ctrlSize / 2,
-      ),
-    );
+    final glassProvider =
+        widget.glassEnabled ? LiquidGlassProvider.maybeOf(context) : null;
 
-    if (widget.glassEnabled) {
+    if (widget.glassEnabled && glassProvider != null) {
+      final glassStyle = glassProvider.createStyle(
+        context: context,
+        isDarkOverride: widget.isDark,
+        isLiteOverride: widget.isLite,
+        color: widget.isDark
+            ? const Color(0x33202025)
+            : const Color(0x66FFFFFF),
+        refractionIndex: 1.15,
+        refractionWidth: 22.0,
+        shape: const LiquidGlassShape.roundedRectangle(
+          cornerRadius: _ctrlSize / 2,
+        ),
+      );
       final Widget morphChild = SizedBox(
         width: _menuWidth,
         height: openHeight,

@@ -9,6 +9,12 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import '../../services/glass_toast_service.dart';
+import '../../widgets/chat/forward_options_sheet.dart';
+import '../../widgets/chat/send_options_popup.dart';
+import '../../widgets/chat/telegram_delete_messages_sheet.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import 'pinned_messages_screen.dart';
+import 'scheduled_messages_screen.dart';
 import '../../utils/haptic_utils.dart';
 import '../../services/chat_service.dart';
 import '../../services/draft_service.dart';
@@ -164,6 +170,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   double _topBannerHeight = 0.0;
   bool _topBannerHeightCheckScheduled = false;
   Message? _pinnedMessage;
+  List<Message> _pinnedMessages = [];
+  int _currentPinnedIndex = 0;
+  bool _hasProtectedContent = false;
+  int _scheduledCount = 0;
+  StagedForwardPayload? _stagedForward;
   int _slowmodeRemainingSeconds = 0;
   Timer? _slowmodeTimer;
   List<ChatParticipant> _participants = [];
@@ -1225,6 +1236,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onMessageListened: _onMessageListened,
       onMessagePinned: _onMessagePinned,
       onMessageUnpinned: _onMessageUnpinned,
+      onScheduledMessagesUpdated: (_) => unawaited(_loadScheduledCount()),
       onCallbackQueryAnswer: _onCallbackQueryAnswer,
       onTyping: _onTypingIndicator,
       onUserStatus: _onUserStatusUpdate,
@@ -1325,6 +1337,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _slowModeInterval = rawSlow.toInt();
         }
       }
+      if (data.containsKey('has_protected_content')) {
+        final val = data['has_protected_content'];
+        _hasProtectedContent = val == true || val == 1 || val == 'true';
+      }
     });
   }
 
@@ -1357,8 +1373,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _restrictedUntil = chat.restrictedUntil;
       _reactionSettings = chat.reactionSettings ?? const ReactionSettings();
       _slowModeInterval = chat.slowModeInterval;
+      _hasProtectedContent = chat.hasProtectedContent;
       if (chat.pinnedMessage != null) {
         _pinnedMessage = chat.pinnedMessage;
+        _pinnedMessages = [chat.pinnedMessage!];
       }
     });
   }
@@ -1369,24 +1387,76 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
+  Future<void> _loadPinnedMessagesList() async {
+    try {
+      final list = await ChatService.getPinnedMessages(chatId: widget.chatId);
+      if (!mounted) return;
+      setState(() {
+        _pinnedMessages = list;
+        if (list.isNotEmpty) {
+          _currentPinnedIndex = _currentPinnedIndex.clamp(0, list.length - 1);
+          _pinnedMessage = list[_currentPinnedIndex];
+        } else {
+          _pinnedMessage = null;
+          _currentPinnedIndex = 0;
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _loadScheduledCount() async {
+    try {
+      final items = await ChatService.getScheduledMessages(widget.chatId);
+      if (mounted && _scheduledCount != items.length) {
+        setState(() => _scheduledCount = items.length);
+      }
+    } catch (_) {}
+  }
+
   void _onMessagePinned(WebSocketEvent event) {
     if (!mounted) return;
     final msgRaw = event.data['message'] ?? event.data['pinned_message'];
     final msgId = event.data['message_id']?.toString() ??
         event.data['pinned_message_id']?.toString();
-    if (msgRaw is Map<String, dynamic>) {
-      setState(() => _pinnedMessage = Message.fromJson(msgRaw));
-    } else if (msgId != null && msgId.isNotEmpty) {
-      final found = _messages.where((m) => m.id == msgId);
-      if (found.isNotEmpty) {
-        setState(() => _pinnedMessage = found.first);
+    setState(() {
+      Message? parsed;
+      if (msgRaw is Map<String, dynamic>) {
+        parsed = Message.fromJson(msgRaw);
+      } else if (msgId != null && msgId.isNotEmpty) {
+        final found = _messages.where((m) => m.id == msgId);
+        if (found.isNotEmpty) parsed = found.first;
       }
-    }
+      if (parsed != null) {
+        _pinnedMessages.removeWhere((m) => m.id == parsed!.id);
+        _pinnedMessages.insert(0, parsed);
+        _currentPinnedIndex = 0;
+        _pinnedMessage = parsed;
+      }
+    });
+    unawaited(_loadPinnedMessagesList());
   }
 
   void _onMessageUnpinned(WebSocketEvent event) {
     if (!mounted) return;
-    setState(() => _pinnedMessage = null);
+    final msgId = event.data['message_id']?.toString() ??
+        event.data['pinned_message_id']?.toString();
+    setState(() {
+      if (msgId != null && msgId.isNotEmpty) {
+        _pinnedMessages.removeWhere((m) => m.id == msgId);
+        if (_pinnedMessages.isEmpty) {
+          _pinnedMessage = null;
+          _currentPinnedIndex = 0;
+        } else {
+          _currentPinnedIndex = _currentPinnedIndex.clamp(0, _pinnedMessages.length - 1);
+          _pinnedMessage = _pinnedMessages[_currentPinnedIndex];
+        }
+      } else {
+        _pinnedMessages.clear();
+        _pinnedMessage = null;
+        _currentPinnedIndex = 0;
+      }
+    });
+    unawaited(_loadPinnedMessagesList());
   }
 
   void _onCallbackQueryAnswer(WebSocketEvent event) {
@@ -1402,18 +1472,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
     if (text == null || text.isEmpty) return;
     if (showAlert) {
-      showDialog<void>(
+      showTheavDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Уведомление'),
-          content: Text(text),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
+        title: 'Уведомление',
+        message: text,
+        actions: const [
+          TheavDialogAction<void>(label: 'OK', isPrimary: true),
+        ],
       );
     } else {
       GlassToastService().show(context, text, icon: Icons.info_outline);
@@ -1614,18 +1679,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onMessageDeleted(WebSocketEvent event) {
-    final messageId = event.data['message_id']?.toString();
-    if (messageId == null) return;
+    final rawIds = event.data['message_ids'];
+    final deletedIds = <String>{
+      if (event.data['message_id'] != null) event.data['message_id'].toString(),
+      if (rawIds is List) ...rawIds.map((e) => e.toString()),
+    };
+    if (deletedIds.isEmpty) return;
 
     if (mounted) {
       setState(() {
-        _messages.removeWhere((m) => m.id == messageId);
+        _messages.removeWhere((m) => deletedIds.contains(m.id));
+        _selectedMessageIds.removeAll(deletedIds);
         _updateFeedItems();
       });
     }
 
     try {
-      AppDatabase().deleteMessage(messageId);
+      AppDatabase().deleteMessagesBatch(deletedIds.toList());
     } catch (e) {
       debugPrint('GroupChatScreen: error deleting message from DB: $e');
     }
@@ -2032,8 +2102,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       });
 
       if (_currentUserId != null) {
-        context
-            .read<AppDatabase>()
+        AppDatabase()
             .markMessagesAsRead(widget.chatId, _currentUserId!, readAt: readAt);
       }
     }
@@ -2064,7 +2133,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
       });
 
-      context.read<AppDatabase>().updateMessageReadAndListened(
+      AppDatabase().updateMessageReadAndListened(
             messageId,
             readAt: readAt,
             listenedAt: listenedAt,
@@ -2087,7 +2156,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _updateFeedItems();
       }
     });
-    context.read<AppDatabase>().updateMessageReadAndListened(
+    AppDatabase().updateMessageReadAndListened(
           messageId,
           readAt: listenedAt,
           listenedAt: listenedAt,
@@ -2132,14 +2201,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (chatResult['success'] == true && mounted) {
       final chat = chatResult['chat'] as ChatDetails;
       _applyChatDetails(chat);
-      if (chat.pinnedMessage == null && chat.pinnedMessageId != null) {
-        unawaited(ChatService.getPinnedMessages(chatId: widget.chatId).then((list) {
-          if (!mounted) return;
-          if (list.isNotEmpty) {
-            setState(() => _pinnedMessage = list.first);
-          }
-        }));
+      if (chat.pinnedMessage != null ||
+          chat.pinnedMessageId != null ||
+          chat.pinnedMessageIds.isNotEmpty) {
+        unawaited(_loadPinnedMessagesList());
       }
+      unawaited(_loadScheduledCount());
     }
 
     // Get unread info
@@ -2444,12 +2511,43 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     List<MessageEntity>? entities,
     LinkPreviewOptions? linkPreviewOptions,
     bool invertMedia = false,
+    bool isSilent = false,
+    bool hasMediaSpoiler = false,
+    bool asDocument = false,
   }) async {
     final String controllerCleanText = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
     final String text = (cleanText ?? controllerCleanText).trimRight();
     final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
-    if ((text.trim().isEmpty && _attachedFiles.isEmpty) || _isSending) return;
+    if ((text.trim().isEmpty &&
+            _attachedFiles.isEmpty &&
+            _stagedForward == null) ||
+        _isSending) {
+      return;
+    }
+
+    if (!_isEditing && _stagedForward != null && _canSendMessages) {
+      final staged = _stagedForward!;
+      setState(() => _stagedForward = null);
+      final fwdRes = await ChatService.forwardMessages(
+        toChatId: widget.chatId,
+        fromChatId: staged.fromChatId,
+        messageIds: staged.messages.map((m) => m.id).toList(),
+        hideSender: staged.hideSender,
+        hideCaption: staged.hideCaption,
+      );
+      if (fwdRes['success'] == true) {
+        _triggerSilentSync();
+      } else if (mounted) {
+        GlassToastService().showError(
+          context,
+          fwdRes['message']?.toString() ?? 'Ошибка пересылки',
+        );
+      }
+      if (text.trim().isEmpty && _attachedFiles.isEmpty) {
+        return;
+      }
+    }
     if (!_isEditing && !_canSendMessages) {
       if (mounted) {
         GlassToastService().show(
@@ -2517,13 +2615,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           );
         } else {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  res['message'] ?? context.l10n.translate('chat_edit_error'),
-                ),
-              ),
-            );
+            GlassToastService().show(context, res['message'] ?? context.l10n.translate('chat_edit_error'));
           }
         }
       } catch (e) {
@@ -2580,7 +2672,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       final bool sendAnon = _isAnonymousAdminActive;
 
       // CASE 1: MULTIPLE VISUAL ATTACHMENTS (ALBUM: chunked into batches of up to 10 items)
-      if (_attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
+      if (!asDocument && _attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
         final allFiles = List<File>.from(_attachedFiles);
         _clearAttachedFiles();
 
@@ -2638,7 +2730,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               entities: chunkEntities,
               invertMedia: invertMedia,
               replyToMessageId: replyTo?.id,
+              isSilent: isSilent,
               sendAsAnonymous: sendAnon,
+              hasMediaSpoiler: hasMediaSpoiler,
             );
 
             // Fallback: If server album endpoint fails, send items sequentially with the same albumGroupedId
@@ -2659,7 +2753,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   groupedId: albumGroupedId,
                   invertMedia: invertMedia,
                   replyToMessageId: replyTo?.id,
+                  isSilent: isSilent,
                   sendAsAnonymous: sendAnon,
+                  hasMediaSpoiler: hasMediaSpoiler,
                 );
                 if (singleRes['success'] == true && singleRes['message'] is Message) {
                   fallbackMsgs.add(singleRes['message'] as Message);
@@ -2732,7 +2828,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               mediaPayload: item['media_payload'],
               entities: chunkEntities,
               replyToMessageId: replyTo?.id,
+              isSilent: isSilent,
               sendAsAnonymous: sendAnon,
+              hasMediaSpoiler: hasMediaSpoiler,
             );
             if (res['success'] == true && res['message'] is Message) {
               _maybeStartLocalSlowmode();
@@ -2774,7 +2872,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             }
           });
 
-          final fileMessageType = isVideo ? 'video' : (isImg ? 'image' : _getMessageTypeFromMimeType(uploadResult.mimeType));
+          final fileMessageType = asDocument ? 'file' : (isVideo ? 'video' : (isImg ? 'image' : _getMessageTypeFromMimeType(uploadResult.mimeType)));
           final fileCaption = (i == 0 && effectiveContentText.isNotEmpty) ? effectiveContentText : '';
           final res = await ChatService.sendMessage(
             chatId: widget.chatId,
@@ -2785,7 +2883,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             mediaPayload: uploadResult.toMediaPayload(),
             replyToMessageId: replyTo?.id,
             entities: (i == 0) ? effectiveEntities : null,
+            isSilent: isSilent,
             sendAsAnonymous: sendAnon,
+            hasMediaSpoiler: hasMediaSpoiler,
           );
           if (res['success'] == true && res['message'] is Message) {
             _maybeStartLocalSlowmode();
@@ -2847,8 +2947,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _uploadProgressNotifier.value = 0.0;
         });
 
-        messageType =
-            isVideo ? 'video' : _getMessageTypeFromMimeType(uploadResult.mimeType);
+        messageType = asDocument
+            ? 'file'
+            : (isVideo ? 'video' : _getMessageTypeFromMimeType(uploadResult.mimeType));
         content = effectiveContentText;
         fileUrl = uploadResult.url;
         fileName = uploadResult.fileName;
@@ -2880,6 +2981,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           entities: effectiveEntities,
           linkPreviewOptions: linkPreviewOptions,
           invertMedia: invertMedia,
+          hasMediaSpoiler: hasMediaSpoiler,
         );
       } catch (e) {
         debugPrint('SyncService createPendingMessage error: $e');
@@ -2950,7 +3052,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             entities: effectiveEntities,
             linkPreviewOptions: linkPreviewOptions,
             invertMedia: invertMedia,
+            isSilent: isSilent,
             sendAsAnonymous: sendAnon,
+            hasMediaSpoiler: hasMediaSpoiler,
           );
 
           if (result['success'] == true) {
@@ -3052,9 +3156,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 _updateFeedItems();
               }
             });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to send message: $e')),
-            );
+            GlassToastService().show(context, 'Failed to send message: $e');
           }
         }
       } else {
@@ -3065,7 +3167,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           fileUrl: fileUrl,
           fileName: fileName,
           mediaPayload: singleMediaPayload,
+          isSilent: isSilent,
           sendAsAnonymous: sendAnon,
+          hasMediaSpoiler: hasMediaSpoiler,
         );
 
         if (mounted) {
@@ -3103,9 +3207,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (e) {
       debugPrint('[GroupChatScreen] Error in _sendMessage: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send: $e')),
-        );
+        GlassToastService().show(context, 'Failed to send: $e');
       }
     } finally {
       if (mounted) {
@@ -3232,9 +3334,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to pick audio: $e')),
-        );
+        GlassToastService().show(context, 'Failed to pick audio: $e');
       }
     }
   }
@@ -3248,18 +3348,60 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       ),
     );
 
-    if (result != null && result.files.isNotEmpty && mounted) {
-      setState(() {
-        for (final file in result.files) {
-          _attachedFiles.add(file);
-          _attachedFileNames.add(p.basename(file.path));
+    if (result == null || result.files.isEmpty || !mounted) return;
+
+    if (result.scheduleAt != null) {
+      setState(() => _isUploading = true);
+      try {
+        for (int i = 0; i < result.files.length; i++) {
+          final file = result.files[i];
+          final uploadResult = await _fileService.uploadFileChunked(file);
+          final isVideo = _isVideoFile(file.path);
+          final msgType = result.asDocument
+              ? 'file'
+              : (isVideo
+                  ? 'video'
+                  : (_isImageFile(file.path)
+                      ? 'image'
+                      : _getMessageTypeFromMimeType(uploadResult.mimeType)));
+          final caption = result.captionsByPath[file.path] ??
+              (i == 0 ? (result.caption ?? '') : '');
+          await ChatService.createScheduledMessage(
+            chatId: widget.chatId,
+            content: caption,
+            messageType: msgType,
+            scheduleAt: result.scheduleAt,
+            fileUrl: uploadResult.url,
+            fileName: uploadResult.fileName,
+            hasMediaSpoiler: result.hasMediaSpoiler,
+            mediaPayload: uploadResult.toMediaPayload(),
+            sendAsAnonymous: _isAnonymousAdminActive,
+          );
         }
-        if (result.caption != null && result.caption!.isNotEmpty) {
-          _messageController.text = result.caption!;
+        unawaited(_loadScheduledCount());
+        if (mounted) {
+          GlassToastService().show(context, 'Медиа запланировано');
         }
-      });
-      _sendMessage();
+      } finally {
+        if (mounted) setState(() => _isUploading = false);
+      }
+      return;
     }
+
+    setState(() {
+      for (final file in result.files) {
+        _attachedFiles.add(file);
+        _attachedFileNames.add(p.basename(file.path));
+      }
+      if (result.caption != null && result.caption!.isNotEmpty) {
+        _messageController.text = result.caption!;
+      }
+    });
+    _sendMessage(
+      isSilent: result.isSilent,
+      hasMediaSpoiler: result.hasMediaSpoiler,
+      asDocument: result.asDocument,
+    );
   }
 
   Future<void> _pickMedia(String type) async {
@@ -3302,9 +3444,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to pick $type: $e')),
-        );
+        GlassToastService().show(context, 'Failed to pick $type: $e');
       }
     }
   }
@@ -3323,9 +3463,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to take photo: $e')),
-        );
+        GlassToastService().show(context, 'Failed to take photo: $e');
       }
     }
   }
@@ -3349,9 +3487,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to pick document: $e')),
-        );
+        GlassToastService().show(context, 'Failed to pick document: $e');
       }
     }
   }
@@ -3407,9 +3543,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           await launchUrl(uri, webOnlyWindowName: '_blank');
         } else {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Не удалось открыть файл')),
-            );
+            GlassToastService().show(context, 'Не удалось открыть файл');
           }
         }
       } else {
@@ -3418,17 +3552,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           fileName,
         );
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Файл скачан: $filePath')),
-          );
+          GlassToastService().show(context, 'Файл скачан: $filePath');
           await _fileService.openFile(filePath);
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка при открытии файла: $e')),
-        );
+        GlassToastService().show(context, 'Ошибка при открытии файла: $e');
       }
     }
   }
@@ -3445,15 +3575,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         fileName,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Файл скачан: $filePath')),
-        );
+        GlassToastService().show(context, 'Файл скачан: $filePath');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка при скачивании файла: $e')),
-        );
+        GlassToastService().show(context, 'Ошибка при скачивании файла: $e');
       }
     }
   }
@@ -4125,11 +4251,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     } else {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result['message'] ?? 'У вас нет доступа к этому сообщению'),
-            backgroundColor: Colors.redAccent,
-          ),
+        GlassToastService().show(
+          context,
+          result['message'] ?? 'У вас нет доступа к этому сообщению',
+          isError: true,
         );
       }
     }
@@ -4644,8 +4769,25 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 },
                 isSelectionMode: _isSelectionMode,
                 selectedCount: _selectedMessageIds.length,
+                hasProtectedContent: _hasProtectedContent,
                 onCancelSelection: _clearSelection,
+                onReplySelected: (_selectedMessageIds.length == 1 && _canSendMessages)
+                    ? () {
+                        final id = _selectedMessageIds.first;
+                        final msg = _messages.where((m) => m.id == id).firstOrNull;
+                        _clearSelection();
+                        if (msg != null) _startReply(msg);
+                      }
+                    : null,
                 onCopySelected: _copySelectedMessages,
+                onPinSelected: (_selectedMessageIds.length == 1 && _canPinMessages)
+                    ? () {
+                        final id = _selectedMessageIds.first;
+                        final msg = _messages.where((m) => m.id == id).firstOrNull;
+                        _clearSelection();
+                        if (msg != null) _togglePinMessage(msg);
+                      }
+                    : null,
                 onForwardSelected: _forwardSelectedMessages,
                 onDeleteSelected: _deleteSelectedMessages,
               );
@@ -4670,21 +4812,47 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 ),
                 PinnedMessageBanner(
                   message: _pinnedMessage,
+                  totalPinnedCount: math.max(1, _pinnedMessages.length),
+                  currentPinnedIndex: _currentPinnedIndex,
                   canUnpin: _canPinMessages,
                   onTap: () {
-                    final msg = _pinnedMessage;
-                    if (msg != null) _scrollToMessage(msg.id);
+                    if (_pinnedMessages.isNotEmpty) {
+                      final idx = _currentPinnedIndex.clamp(0, _pinnedMessages.length - 1);
+                      final msg = _pinnedMessages[idx];
+                      _scrollToMessage(msg.id);
+                      if (_pinnedMessages.length > 1) {
+                        setState(() {
+                          _currentPinnedIndex = (idx + 1) % _pinnedMessages.length;
+                          _pinnedMessage = _pinnedMessages[_currentPinnedIndex];
+                        });
+                      }
+                    } else {
+                      final msg = _pinnedMessage;
+                      if (msg != null) _scrollToMessage(msg.id);
+                    }
+                  },
+                  onOpenPinnedList: () async {
+                    final jumpId = await Navigator.of(context).push<String>(
+                      SwipeBackPageRoute(
+                        builder: (_) => PinnedMessagesScreen(
+                          chatId: widget.chatId,
+                          chatTitle: displayName,
+                          canPinMessages: _canPinMessages,
+                          initialPinnedMessages: _pinnedMessages,
+                        ),
+                      ),
+                    );
+                    if (!mounted) return;
+                    unawaited(_loadPinnedMessagesList());
+                    if (jumpId != null && jumpId.isNotEmpty) {
+                      _scrollToMessage(jumpId);
+                    }
                   },
                   onUnpin: _canPinMessages
                       ? () async {
                           final msg = _pinnedMessage;
                           if (msg == null) return;
-                          final msgId = msg.id;
-                          setState(() => _pinnedMessage = null);
-                          await ChatService.unpinMessage(
-                            chatId: widget.chatId,
-                            messageId: msgId,
-                          );
+                          await _togglePinMessage(msg);
                         }
                       : null,
                 ),
@@ -4953,13 +5121,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     _stopRecordingActionBroadcast();
                     setState(() => _isVoiceRecording = false);
                     HapticFeedback.selectionClick();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          context.l10n.translate('chat_voice_too_short'),
-                        ),
-                        duration: const Duration(seconds: 2),
-                      ),
+                    GlassToastService().show(
+                      context,
+                      context.l10n.translate('chat_voice_too_short'),
+                      duration: const Duration(seconds: 2),
                     );
                   },
                   replyToMessage: _replyToMessage,
@@ -4997,12 +5162,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    LiquidGlassProvider? glassProvider;
-    try {
-      glassProvider = Provider.of<LiquidGlassProvider>(context);
-    } catch (_) {
-      glassProvider = null;
-    }
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final bool glassEnabled = glassProvider?.enabled ?? false;
     final bool isLite = glassProvider?.isLite ?? false;
 
@@ -5385,6 +5545,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       highlightItemId: _highlightMessageId,
       isSelected: isSelected,
       isSelectionMode: _isSelectionMode,
+      hasProtectedContent: _hasProtectedContent,
     );
 
     if (showGroupSenderAvatar) {
@@ -5450,6 +5611,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 : () {
                     _showContextMenu(message, isMe, key, enableBlur: true);
                   }),
+        onDoubleTap: _isSelectionMode
+            ? null
+            : () => _toggleReaction(message.id, '❤️'),
         onLongPress: isDesktop
             ? null
             : () {
@@ -5704,6 +5868,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       ),
       onFileTap: (url, name, type) => _openFile(url, name, type),
       formatTime: _formatTime,
+      hasProtectedContent: _hasProtectedContent,
     );
 
     if (showGroupSenderAvatar) {
@@ -5764,6 +5929,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 : () {
                     _showContextMenu(message, isMe, key, enableBlur: true);
                   }),
+        onDoubleTap: _isSelectionMode
+            ? null
+            : () => _toggleReaction(message.id, '❤️'),
         onLongPress: isDesktop
             ? null
             : () {
@@ -5921,11 +6089,163 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   Future<void> _forwardMessagesToPickedChat(List<String> messageIds) async {
     if (messageIds.isEmpty) return;
+    if (_hasProtectedContent) {
+      GlassToastService().show(
+        context,
+        'Копирование и пересылка запрещены в этом чате',
+      );
+      return;
+    }
     await ForwardChatPickerSheet.show(
       context,
       fromChatId: widget.chatId,
       messageIds: messageIds,
+      onStageInCurrentChat: _canSendMessages
+          ? ({required hideSender, required hideCaption}) {
+              final stagedMsgs = _messages
+                  .where((m) => messageIds.contains(m.id))
+                  .toList()
+                  .reversed
+                  .toList();
+              if (stagedMsgs.isEmpty || !mounted) return;
+              setState(() {
+                _stagedForward = StagedForwardPayload(
+                  fromChatId: widget.chatId,
+                  messages: stagedMsgs,
+                  hideSender: hideSender,
+                  hideCaption: hideCaption,
+                );
+              });
+            }
+          : null,
+      onForwarded: (targetChatId) {
+        if (targetChatId == widget.chatId) _triggerSilentSync();
+      },
     );
+  }
+
+  Future<void> _openStagedForwardOptions() async {
+    final staged = _stagedForward;
+    if (staged == null) return;
+    final res = await showForwardOptionsSheet(
+      context: context,
+      payload: staged,
+    );
+    if (!mounted || res == null) return;
+    if (res.cancelForward) {
+      setState(() => _stagedForward = null);
+      return;
+    }
+    final updated = staged.copyWith(
+      hideSender: res.hideSender,
+      hideCaption: res.hideCaption,
+    );
+    if (res.changeRecipient) {
+      final target = await ForwardChatPickerSheet.pickTargetChat(
+        context,
+        fromChatId: updated.fromChatId,
+        messageCount: updated.messages.length,
+      );
+      if (!mounted || target == null) return;
+      if (target.chatId == widget.chatId) {
+        setState(() => _stagedForward = updated);
+        return;
+      }
+      final fwdRes = await ChatService.forwardMessages(
+        toChatId: target.chatId,
+        fromChatId: updated.fromChatId,
+        messageIds: updated.messages.map((m) => m.id).toList(),
+        hideSender: updated.hideSender,
+        hideCaption: updated.hideCaption,
+      );
+      if (!mounted) return;
+      if (fwdRes['success'] == true) {
+        setState(() => _stagedForward = null);
+        GlassToastService().show(
+          context,
+          'Переслано в «${target.chatType == 'saved' ? 'Избранное' : target.name}»',
+        );
+      } else {
+        GlassToastService().showError(
+          context,
+          fwdRes['message']?.toString() ?? 'Ошибка пересылки',
+        );
+      }
+      return;
+    }
+    setState(() => _stagedForward = updated);
+  }
+
+  Future<void> _openScheduledMessages() async {
+    await Navigator.of(context).push(
+      SwipeBackPageRoute(
+        builder: (_) => ScheduledMessagesScreen(
+          chatId: widget.chatId,
+          chatTitle: _groupName,
+        ),
+      ),
+    );
+    if (mounted) unawaited(_loadScheduledCount());
+  }
+
+  Future<void> _handleSendLongPress() async {
+    final parsedText = _messageController.cleanText.trimRight();
+    if (parsedText.trim().isEmpty && _attachedFiles.isEmpty) return;
+    final choice = await showSendOptionsPopup(
+      context: context,
+      isPrivateChat: false,
+    );
+    if (!mounted || choice == null) return;
+    if (choice == SendOptionChoice.sendSilent) {
+      await _sendMessage(isSilent: true);
+      return;
+    }
+    if (choice != SendOptionChoice.schedule) return;
+    final scheduleAt = await showTheavScheduleSheet(context: context);
+    if (!mounted || scheduleAt == null) return;
+
+    final entities = _messageController.entities;
+    if (_attachedFiles.isNotEmpty) {
+      setState(() => _isUploading = true);
+      try {
+        for (int i = 0; i < _attachedFiles.length; i++) {
+          final file = _attachedFiles[i];
+          final uploadResult = await _fileService.uploadFileChunked(file);
+          final isVideo = _isVideoFile(file.path);
+          final msgType = isVideo
+              ? 'video'
+              : (_isImageFile(file.path) ? 'image' : _getMessageTypeFromMimeType(uploadResult.mimeType));
+          await ChatService.createScheduledMessage(
+            chatId: widget.chatId,
+            content: i == 0 ? parsedText : '',
+            messageType: msgType,
+            scheduleAt: scheduleAt,
+            fileUrl: uploadResult.url,
+            fileName: uploadResult.fileName,
+            mediaPayload: uploadResult.toMediaPayload(),
+            entities: i == 0 && entities.isNotEmpty ? entities : null,
+            sendAsAnonymous: _isAnonymousAdminActive,
+          );
+        }
+        _clearAttachedFiles();
+      } finally {
+        if (mounted) setState(() => _isUploading = false);
+      }
+    } else {
+      await ChatService.createScheduledMessage(
+        chatId: widget.chatId,
+        content: parsedText,
+        scheduleAt: scheduleAt,
+        entities: entities.isNotEmpty ? entities : null,
+        sendAsAnonymous: _isAnonymousAdminActive,
+      );
+    }
+    _messageController.clear();
+    DraftService().deleteDraft(widget.chatId);
+    unawaited(_loadScheduledCount());
+    if (mounted) {
+      GlassToastService().show(context, 'Сообщение запланировано');
+    }
   }
 
   Widget? _buildPollOnlyTrailingButton(BuildContext context) {
@@ -5933,17 +6253,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (perms.canSendMedia || !perms.canSendPolls) return null;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    LiquidGlassProvider? glassProvider;
-    try {
-      glassProvider = Provider.of<LiquidGlassProvider>(context);
-    } catch (_) {
-      glassProvider = null;
-    }
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final bool glassEnabled = glassProvider?.enabled ?? false;
     final bool isLite = glassProvider?.isLite ?? false;
-    final Color iconColor = isDark
-        ? Colors.white.withValues(alpha: 0.85)
-        : const Color(0xFF1C1C1E).withValues(alpha: 0.80);
+    final Color iconColor = theme.colorScheme.onSurface.withValues(alpha: 0.82);
 
     final Widget tapTarget = Material(
       type: MaterialType.transparency,
@@ -6041,6 +6354,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       uploadProgressNotifier: _uploadProgressNotifier,
       onAttach: _showAttachmentPicker,
       onEmoji: _onEmojiToggle,
+      forwardPreviewBanner: _stagedForward != null
+          ? ForwardPreviewBar(
+              payload: _stagedForward!,
+              onTapOptions: _openStagedForwardOptions,
+              onCancel: () => setState(() => _stagedForward = null),
+            )
+          : null,
+      scheduledCount: _scheduledCount,
+      onOpenScheduled: _openScheduledMessages,
+      onSendLongPress: _handleSendLongPress,
       onChanged: _onInputTextChanged,
       onSend: _sendMessage,
       onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
@@ -6085,16 +6408,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           await _videoRecorderService.isPermanentlyDenied();
       if (permanentlyDenied) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                context.l10n.translate('chat_video_note_permission_denied'),
-              ),
-              action: SnackBarAction(
-                label: context.l10n.translate('settings_title'),
-                onPressed: () => openAppSettings(),
-              ),
-            ),
+          GlassToastService().show(
+            context,
+            context.l10n.translate('chat_video_note_permission_denied'),
+            actionLabel: context.l10n.translate('settings_title'),
+            onAction: () => openAppSettings(),
           );
         }
         return;
@@ -6103,29 +6421,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       final granted = await _videoRecorderService.requestPermissions();
       if (!granted) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                context.l10n.translate('chat_video_note_permission_denied'),
-              ),
-              action: SnackBarAction(
-                label: context.l10n.translate('settings_title'),
-                onPressed: () => openAppSettings(),
-              ),
-            ),
+          GlassToastService().show(
+            context,
+            context.l10n.translate('chat_video_note_permission_denied'),
+            actionLabel: context.l10n.translate('settings_title'),
+            onAction: () => openAppSettings(),
           );
         }
         return;
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_video_note_hold_hint'),
-            ),
-            duration: const Duration(seconds: 3),
-          ),
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_video_note_hold_hint'),
+          duration: const Duration(seconds: 3),
         );
       }
       return;
@@ -6149,22 +6459,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       setState(() => _isVideoRecording = false);
       final isPermDenied =
           _videoRecorderService.errorMessage == 'permission_denied';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isPermDenied
+      GlassToastService().show(
+        context,
+        isPermDenied
                 ? context.l10n.translate('chat_video_note_permission_denied')
                 : (_videoRecorderService.errorMessage ??
                     context.l10n
                         .translate('chat_video_note_permission_denied')),
-          ),
-          action: isPermDenied
-              ? SnackBarAction(
-                  label: context.l10n.translate('settings_title'),
-                  onPressed: () => openAppSettings(),
-                )
-              : null,
-        ),
+        actionLabel: context.l10n.translate('settings_title'),
+        onAction: () => openAppSettings(),
       );
     }
   }
@@ -6201,13 +6504,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _stopRecordingActionBroadcast();
     setState(() => _isVideoRecording = false);
     HapticFeedback.selectionClick();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          context.l10n.translate('chat_video_note_too_short'),
-        ),
-        duration: const Duration(seconds: 2),
-      ),
+    GlassToastService().show(
+      context,
+      context.l10n.translate('chat_video_note_too_short'),
+      duration: const Duration(seconds: 2),
     );
   }
 
@@ -6227,16 +6527,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       final isPermanentlyDenied = await _voiceRecorderService.isPermanentlyDenied();
       if (isPermanentlyDenied) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                context.l10n.translate('chat_voice_permission_denied'),
-              ),
-              action: SnackBarAction(
-                label: context.l10n.translate('settings_title'),
-                onPressed: () => openAppSettings(),
-              ),
-            ),
+          GlassToastService().show(
+            context,
+            context.l10n.translate('chat_voice_permission_denied'),
+            actionLabel: context.l10n.translate('settings_title'),
+            onAction: () => openAppSettings(),
           );
         }
         return;
@@ -6244,13 +6539,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       final granted = await _voiceRecorderService.requestPermissions();
       if (!granted) return;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_video_note_hold_hint'),
-            ),
-            duration: const Duration(seconds: 3),
-          ),
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_video_note_hold_hint'),
+          duration: const Duration(seconds: 3),
         );
       }
       return;
@@ -6324,7 +6616,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     try {
       final fileName = kIsWeb
           ? 'voice_${DateTime.now().millisecondsSinceEpoch}.webm'
-          : file.path.split(Platform.pathSeparator).last;
+          : file.path.split(!kIsWeb ? Platform.pathSeparator : '/').last;
       try {
         pendingMsg = await syncService.createPendingMessage(
           chatId: widget.chatId,
@@ -6537,7 +6829,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     try {
       final fileName = kIsWeb
           ? 'video_note_${DateTime.now().millisecondsSinceEpoch}.webm'
-          : file.path.split(Platform.pathSeparator).last;
+          : file.path.split(!kIsWeb ? Platform.pathSeparator : '/').last;
       // 1. Immediately create pending message with local file path for instant preview
       try {
         pendingMsg = await syncService.createPendingMessage(
@@ -6719,13 +7011,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         }
       }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_upload_error'),
-            ),
-          ),
-        );
+        GlassToastService().show(context, context.l10n.translate('chat_upload_error'));
       }
     } finally {
       if (mounted) {
@@ -6917,6 +7203,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   void _copySelectedMessages() {
     if (_selectedMessageIds.isEmpty) return;
+    if (_hasProtectedContent) {
+      GlassToastService().show(
+        context,
+        'Копирование и пересылка запрещены в этом чате',
+      );
+      return;
+    }
     final selected = _messages
         .where((m) => _selectedMessageIds.contains(m.id) && m.content.trim().isNotEmpty)
         .toList()
@@ -6948,9 +7241,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         .toList();
     _clearSelection();
     if (toDelete.isEmpty) return;
-    for (final msg in toDelete) {
-      _confirmDeleteMessage(msg);
-    }
+    _deleteMessagesWithSheet(toDelete);
   }
 
   void _handleChatPointerDown(PointerDownEvent event) {
@@ -7212,6 +7503,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       currentUserId: _currentUserId,
       canManagePoll: isMe || isGroupAdmin,
       enableBlur: enableBlur,
+      hasProtectedContent: _hasProtectedContent,
       initialDragStartGlobalPosition: initialDragStartGlobalPosition,
       initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
       onPollUpdated: (updatedPoll) {
@@ -7250,43 +7542,65 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _confirmDeleteMessage(Message message) {
-    final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
-    ChatActionsHelper.confirmAndDeleteMessage(
+    _deleteMessagesWithSheet([message]);
+  }
+
+  Future<void> _deleteMessagesWithSheet(List<Message> targets) async {
+    if (targets.isEmpty) return;
+    final bool allMine = targets.every((m) => m.senderId == _currentUserId);
+    final bool isAdmin = _myRole == 'owner' ||
+        (_myRole == 'admin' && (_myAdminPermissions?.canDeleteMessages ?? true));
+    final bool canModerate = !allMine && isAdmin;
+    final String? authorName =
+        targets.length == 1 ? targets.first.senderName : null;
+
+    final res = await showTelegramDeleteMessagesSheet(
       context: context,
-      chatId: widget.chatId,
-      message: message,
-      onOptimisticDelete: () {
-        if (mounted) {
-          setState(() {
-            _messages.removeWhere((m) => m.id == message.id);
-            _updateFeedItems();
-          });
-        }
-      },
-      onRollback: () {
-        if (mounted) {
-          setState(() {
-            if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
-              _messages.insert(deletedIndex, message);
-            } else {
-              _messages.add(message);
-              _messages.sort((a, b) {
-                try {
-                  final ta = DateTime.parse(a.createdAt);
-                  final tb = DateTime.parse(b.createdAt);
-                  final cmp = tb.compareTo(ta);
-                  if (cmp != 0) return cmp;
-                  return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-                } catch (_) {
-                  return 0;
-                }
-              });
-            }
-            _updateFeedItems();
-          });
-        }
-      },
+      messageCount: targets.length,
+      chatType: 'group',
+      canRevoke: allMine || isAdmin,
+      defaultRevoke: allMine || isAdmin,
+      canModerateOther: canModerate,
+      targetAuthorName: authorName,
     );
+    if (res == null || !res.confirmed || !mounted) return;
+
+    final ids = targets.map((m) => m.id).toList();
+    final backup = List<Message>.from(_messages);
+    setState(() {
+      _messages.removeWhere((m) => ids.contains(m.id));
+      _selectedMessageIds.removeAll(ids);
+      _updateFeedItems();
+    });
+
+    final apiRes = await ChatService.deleteMessagesBatch(
+      chatId: widget.chatId,
+      messageIds: ids,
+      revoke: res.revoke,
+      reportSpam: res.reportSpam,
+      banUser: res.banUser,
+      deleteAllFromUser: res.deleteAllFromUser,
+    );
+    if (apiRes['success'] == true) {
+      if (res.deleteAllFromUser && targets.isNotEmpty && mounted) {
+        final offenderId = targets.first.senderId;
+        setState(() {
+          _messages.removeWhere((m) => m.senderId == offenderId);
+          _updateFeedItems();
+        });
+      }
+    } else if (mounted) {
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(backup);
+        _updateFeedItems();
+      });
+      GlassToastService().showError(
+        context,
+        apiRes['message']?.toString() ?? 'Не удалось удалить сообщения',
+      );
+    }
   }
 
   /// Called when a message becomes visible — queues message for debounced read-up-to

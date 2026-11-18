@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
+import 'chat_selection_header.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -95,9 +95,12 @@ class FloatingGlassAppBar extends StatefulWidget {
   final bool isSelectionMode;
   final int selectedCount;
   final VoidCallback? onCancelSelection;
+  final VoidCallback? onReplySelected;
   final VoidCallback? onCopySelected;
+  final VoidCallback? onPinSelected;
   final VoidCallback? onForwardSelected;
   final VoidCallback? onDeleteSelected;
+  final bool hasProtectedContent;
 
   const FloatingGlassAppBar({
     Key? key,
@@ -129,9 +132,12 @@ class FloatingGlassAppBar extends StatefulWidget {
     this.isSelectionMode = false,
     this.selectedCount = 0,
     this.onCancelSelection,
+    this.onReplySelected,
     this.onCopySelected,
+    this.onPinSelected,
     this.onForwardSelected,
     this.onDeleteSelected,
+    this.hasProtectedContent = false,
   }) : super(key: key);
 
   @override
@@ -350,43 +356,37 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     }
   }
 
-  double _calculateSelectionRightPillWidth() {
-    int count = 0;
-    if (widget.onCopySelected != null) count++;
-    if (widget.onForwardSelected != null) count++;
-    if (widget.onDeleteSelected != null) count++;
-    if (count <= 1) return _kRightPillChannelWidth;
-    if (count == 2) return _kRightPillChatWidth;
-    return 128.0;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlassEnabled = glassProvider.enabled;
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final isGlassEnabled =
+        glassProvider != null && glassProvider.enabled;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final statusBarHeight = MediaQuery.of(context).padding.top;
 
     final bool hasCall = !widget.isChannel && widget.onVoiceCall != null;
-    final double rightCollapsedWidth = widget.isSelectionMode
-        ? _calculateSelectionRightPillWidth()
-        : (hasCall ? _kRightPillChatWidth : _kRightPillChannelWidth);
+    final double rightCollapsedWidth =
+        hasCall ? _kRightPillChatWidth : _kRightPillChannelWidth;
     final double adaptiveMenuWidth = _calculateAdaptiveMenuWidth(context);
 
-    final pillStyle = glassProvider.createStyle(
-      context: context,
-      cornerRadius: _kAppBarBorderRadius,
-      refractionIndex: 1.1,
-      refractionWidth: 24,
-    );
+    final pillStyle = isGlassEnabled
+        ? glassProvider.createStyle(
+            context: context,
+            cornerRadius: _kAppBarBorderRadius,
+            refractionIndex: 1.1,
+            refractionWidth: 24,
+          )
+        : null;
 
-    final morphStyle = glassProvider.createStyle(
-      context: context,
-      cornerRadius: _kAppBarBorderRadius,
-      refractionIndex: 1.1,
-      refractionWidth: 24,
-    );
+    final morphStyle = isGlassEnabled
+        ? glassProvider.createStyle(
+            context: context,
+            cornerRadius: _kAppBarBorderRadius,
+            refractionIndex: 1.1,
+            refractionWidth: 24,
+          )
+        : null;
 
     final normalHeight = statusBarHeight + _kAppBarVerticalPadding + _kAppBarHeight;
     final tileHeight = TileViewportScope.heightOf(context);
@@ -406,104 +406,128 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
               ),
             ),
 
-            // 1. Left Pill: Circular Back Button (44x44)
-            Positioned(
-              key: const ValueKey<String>('chat_appbar_left_pill'),
-              top: statusBarHeight + _kAppBarVerticalPadding,
-              left: _kAppBarHorizontalPadding,
-              width: _kBackPillWidth,
-              height: _kAppBarHeight,
-              child: isGlassEnabled
-                  ? LiquidGlassLens(
-                      style: pillStyle,
-                      touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
-                        stretch: 6,
-                        squeeze: 0.65,
-                        lean: 0.3,
-                        grip: 0.5,
-                      )),
-                      child: _buildBackButton(context, isDark),
-                    )
-                  : _buildMattePill(
-                      isDark: isDark,
-                      child: _buildBackButton(context, isDark),
-                    ),
-            ),
-
-            // 2. Center Pill: Avatar + Name & Status Pill (Telegram Style + Drag Handle for Tile)
-            Positioned(
-              key: const ValueKey<String>('chat_appbar_center_pill'),
-              top: statusBarHeight + _kAppBarVerticalPadding,
-              left: _kAppBarHorizontalPadding + _kBackPillWidth + _kPillSpacing,
-              right: _kAppBarHorizontalPadding + rightCollapsedWidth + _kPillSpacing,
-              height: _kAppBarHeight,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.isSelectionMode ? null : _handleCenterPillTap,
-                onPanStart: _onCenterPillPanStart,
-                onPanUpdate: _onCenterPillPanUpdate,
-                onPanEnd: _onCenterPillPanEnd,
-                onPanCancel: _onCenterPillPanCancel,
-                child: isGlassEnabled
+            if (widget.isSelectionMode)
+              Positioned(
+                key: const ValueKey<String>('chat_appbar_selection_header'),
+                top: statusBarHeight + _kAppBarVerticalPadding,
+                left: _kAppBarHorizontalPadding,
+                right: _kAppBarHorizontalPadding,
+                height: _kAppBarHeight,
+                child: ChatMessageSelectionHeader(
+                  selectedCount: widget.selectedCount,
+                  onCancel: widget.onCancelSelection ?? () {},
+                  onReply: widget.onReplySelected,
+                  onCopy: widget.onCopySelected,
+                  onPin: widget.onPinSelected,
+                  onForward: widget.onForwardSelected,
+                  onDelete: widget.onDeleteSelected,
+                  hasProtectedContent: widget.hasProtectedContent,
+                ),
+              )
+            else ...[
+              // 1. Left Pill: Circular Back Button (44x44)
+              Positioned(
+                key: const ValueKey<String>('chat_appbar_left_pill'),
+                top: statusBarHeight + _kAppBarVerticalPadding,
+                left: _kAppBarHorizontalPadding,
+                width: _kBackPillWidth,
+                height: _kAppBarHeight,
+                child: pillStyle != null
                     ? LiquidGlassLens(
                         style: pillStyle,
-                        child: RepaintBoundary(
-                          child: _buildCenterPillContent(context, isDark, theme),
-                        ),
+                        touch: const LiquidGlassTouch.flexing(LiquidGlassFlex(
+                          stretch: 6,
+                          squeeze: 0.65,
+                          lean: 0.3,
+                          grip: 0.5,
+                        )),
+                        child: _buildBackButton(context),
                       )
                     : _buildMattePill(
                         isDark: isDark,
-                        child: RepaintBoundary(
-                          child: _buildCenterPillContent(context, isDark, theme),
-                        ),
+                        child: _buildBackButton(context),
                       ),
               ),
-            ),
 
-            // 3. Right Pill: Actions (Call + Three Dots), fluidly morphing into the menu directly in Stack
-            Positioned(
-              key: const ValueKey<String>('chat_appbar_right_pill'),
-              top: statusBarHeight + _kAppBarVerticalPadding,
-              right: _kAppBarHorizontalPadding,
-              child: widget.isSelectionMode
-                  ? SizedBox(
-                      width: rightCollapsedWidth,
-                      height: _kAppBarHeight,
-                      child: isGlassEnabled
-                          ? LiquidGlassLens(
-                              style: pillStyle,
-                              child: _SelectionRightPillContent(
-                                key: const ValueKey<String>('chat_selection_right_pill_content'),
-                                width: rightCollapsedWidth,
-                                onCopy: widget.onCopySelected,
-                                onForward: widget.onForwardSelected,
-                                onDelete: widget.onDeleteSelected,
-                              ),
-                            )
-                          : _buildMattePill(
-                              isDark: isDark,
-                              child: _SelectionRightPillContent(
-                                key: const ValueKey<String>('chat_selection_right_pill_matte_content'),
-                                width: rightCollapsedWidth,
-                                onCopy: widget.onCopySelected,
-                                onForward: widget.onForwardSelected,
-                                onDelete: widget.onDeleteSelected,
-                              ),
-                            ),
-                    )
-                  : isGlassEnabled
-                      ? SizedBox(
-                          width: adaptiveMenuWidth,
-                          height: _kMenuHeight,
-                          child: LiquidGlassMorph(
-                            key: const ValueKey<String>('chat_right_morph'),
-                            alignment: Alignment.topRight,
-                            motion: _kChatMenuMotion,
-                            smoothness: 28,
-                            style: morphStyle,
+              // 2. Center Pill: Avatar + Name & Status Pill (Telegram Style + Drag Handle for Tile)
+              Positioned(
+                key: const ValueKey<String>('chat_appbar_center_pill'),
+                top: statusBarHeight + _kAppBarVerticalPadding,
+                left: _kAppBarHorizontalPadding + _kBackPillWidth + _kPillSpacing,
+                right: _kAppBarHorizontalPadding + rightCollapsedWidth + _kPillSpacing,
+                height: _kAppBarHeight,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _handleCenterPillTap,
+                  onPanStart: _onCenterPillPanStart,
+                  onPanUpdate: _onCenterPillPanUpdate,
+                  onPanEnd: _onCenterPillPanEnd,
+                  onPanCancel: _onCenterPillPanCancel,
+                  child: pillStyle != null
+                      ? LiquidGlassLens(
+                          style: pillStyle,
+                          child: RepaintBoundary(
+                            child: _buildCenterPillContent(context, isDark, theme),
+                          ),
+                        )
+                      : _buildMattePill(
+                          isDark: isDark,
+                          child: RepaintBoundary(
+                            child: _buildCenterPillContent(context, isDark, theme),
+                          ),
+                        ),
+                ),
+              ),
+
+              // 3. Right Pill: Actions (Call + Three Dots), fluidly morphing into the menu directly in Stack
+              Positioned(
+                key: const ValueKey<String>('chat_appbar_right_pill'),
+                top: statusBarHeight + _kAppBarVerticalPadding,
+                right: _kAppBarHorizontalPadding,
+                child: morphStyle != null
+                    ? SizedBox(
+                        width: adaptiveMenuWidth,
+                        height: _kMenuHeight,
+                        child: LiquidGlassMorph(
+                          key: const ValueKey<String>('chat_right_morph'),
+                          alignment: Alignment.topRight,
+                          motion: _kChatMenuMotion,
+                          smoothness: 28,
+                          style: morphStyle,
+                          child: _isMenuOpen
+                              ? _ChatActionsMorphMenu(
+                                  key: const ValueKey<String>('chat_actions_menu'),
+                                  width: adaptiveMenuWidth,
+                                  isMuted: widget.isMuted,
+                                  onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
+                                  onSearch: () { _closeMenu(); widget.onSearch?.call(); },
+                                  onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
+                                  onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
+                                  onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                )
+                              : _RightPillContent(
+                                  key: const ValueKey<String>('chat_right_pill_content'),
+                                  width: rightCollapsedWidth,
+                                  hasCall: hasCall,
+                                  onVoiceCall: widget.onVoiceCall,
+                                  onThreeDotsTap: _toggleMenu,
+                                ),
+                        ),
+                      )
+                    : AnimatedContainer(
+                        key: const ValueKey<String>('chat_right_matte_container'),
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeOutCubic,
+                        width: _isMenuOpen ? adaptiveMenuWidth : rightCollapsedWidth,
+                        height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
+                        alignment: Alignment.topRight,
+                        child: _buildMattePill(
+                          isDark: isDark,
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
                             child: _isMenuOpen
                                 ? _ChatActionsMorphMenu(
-                                    key: const ValueKey<String>('chat_actions_menu'),
+                                    key: const ValueKey<String>('chat_actions_menu_matte'),
                                     width: adaptiveMenuWidth,
                                     isMuted: widget.isMuted,
                                     onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
@@ -513,47 +537,17 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                     onReport: () { _closeMenu(); widget.onReport?.call(); },
                                   )
                                 : _RightPillContent(
-                                    key: const ValueKey<String>('chat_right_pill_content'),
+                                    key: const ValueKey<String>('chat_right_pill_matte_content'),
                                     width: rightCollapsedWidth,
                                     hasCall: hasCall,
                                     onVoiceCall: widget.onVoiceCall,
                                     onThreeDotsTap: _toggleMenu,
                                   ),
                           ),
-                        )
-                      : AnimatedContainer(
-                          key: const ValueKey<String>('chat_right_matte_container'),
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOutCubic,
-                          width: _isMenuOpen ? adaptiveMenuWidth : rightCollapsedWidth,
-                          height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
-                          alignment: Alignment.topRight,
-                          child: _buildMattePill(
-                            isDark: isDark,
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 180),
-                              child: _isMenuOpen
-                                  ? _ChatActionsMorphMenu(
-                                      key: const ValueKey<String>('chat_actions_menu_matte'),
-                                      width: adaptiveMenuWidth,
-                                      isMuted: widget.isMuted,
-                                      onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
-                                      onSearch: () { _closeMenu(); widget.onSearch?.call(); },
-                                      onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
-                                      onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                                      onReport: () { _closeMenu(); widget.onReport?.call(); },
-                                    )
-                                  : _RightPillContent(
-                                      key: const ValueKey<String>('chat_right_pill_matte_content'),
-                                      width: rightCollapsedWidth,
-                                      hasCall: hasCall,
-                                      onVoiceCall: widget.onVoiceCall,
-                                      onThreeDotsTap: _toggleMenu,
-                                    ),
-                            ),
-                          ),
                         ),
-            ),
+                      ),
+              ),
+            ],
           ],
     );
 
@@ -571,7 +565,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       child: SizedBox(
         width: double.infinity,
         height: _isMenuOpen ? tileHeight : normalHeight,
-        child: isGlassEnabled
+        child: pillStyle != null
             ? LiquidGlassBlender(
                 smoothness: 0,
                 style: pillStyle,
@@ -622,9 +616,11 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     return computedWidth.clamp(200.0, maxAvailableWidth);
   }
 
-  Widget _buildBackButton(BuildContext context, bool isDark) {
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+  Widget _buildBackButton(BuildContext context) {
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final primaryTextColor =
+        themeExt?.palette.appBarForeground ?? theme.colorScheme.onSurface;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -730,7 +726,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
   Widget _buildCenterPillContent(BuildContext context, bool isDark, ThemeData theme) {
     final themeExt = theme.extension<TheavThemeExtension>();
-    final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final primaryTextColor = themeExt?.palette.appBarForeground ?? theme.colorScheme.onSurface;
     final secondaryTextColor = themeExt?.palette.subtext ??
         (isDark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF4A4A4C));
 
@@ -934,8 +930,7 @@ class _RightPillContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
-    final isDark = theme.brightness == Brightness.dark;
-    final primaryTextColor = themeExt?.palette.appBarForeground ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final primaryTextColor = themeExt?.palette.appBarForeground ?? theme.colorScheme.onSurface;
 
     final Widget content;
     if (!hasCall) {
@@ -1010,101 +1005,6 @@ class _RightPillContent extends StatelessWidget {
         maxHeight: _kAppBarHeight,
         alignment: Alignment.centerRight,
         child: content,
-      ),
-    );
-  }
-}
-
-/// Content of the right pill when multi-message selection mode is active:
-/// [ Copy | Forward | Delete ]
-class _SelectionRightPillContent extends StatelessWidget {
-  final double width;
-  final VoidCallback? onCopy;
-  final VoidCallback? onForward;
-  final VoidCallback? onDelete;
-
-  const _SelectionRightPillContent({
-    super.key,
-    required this.width,
-    this.onCopy,
-    this.onForward,
-    this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final isDark = theme.brightness == Brightness.dark;
-    final primaryTextColor = themeExt?.palette.appBarForeground ??
-        (isDark ? Colors.white : const Color(0xFF1C1C1E));
-    final deleteColor = themeExt?.palette.error ?? const Color(0xFFFF3B30);
-
-    return SizedBox(
-      width: width,
-      height: _kAppBarHeight,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          if (onCopy != null)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                HapticUtils.tap();
-                onCopy!();
-              },
-              child: SizedBox(
-                width: 38,
-                height: _kAppBarHeight,
-                child: Center(
-                  child: iconoir.Copy(
-                    width: 20.0,
-                    height: 20.0,
-                    color: primaryTextColor,
-                  ),
-                ),
-              ),
-            ),
-          if (onForward != null)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                HapticUtils.tap();
-                onForward!();
-              },
-              child: SizedBox(
-                width: 38,
-                height: _kAppBarHeight,
-                child: Center(
-                  child: iconoir.ForwardMessage(
-                    width: 20.0,
-                    height: 20.0,
-                    color: primaryTextColor,
-                  ),
-                ),
-              ),
-            ),
-          if (onDelete != null)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                HapticUtils.tap();
-                onDelete!();
-              },
-              child: SizedBox(
-                width: 38,
-                height: _kAppBarHeight,
-                child: Center(
-                  child: iconoir.Trash(
-                    width: 20.0,
-                    height: 20.0,
-                    color: deleteColor,
-                  ),
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }
@@ -1206,7 +1106,7 @@ class _ChatActionsMorphMenu extends StatelessWidget {
   }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final primaryTextColor = theme.colorScheme.onSurface;
     final destructiveColor = isDark ? const Color(0xFFFF453A) : const Color(0xFFD32F2F);
     final color = isDestructive ? destructiveColor : primaryTextColor;
 
@@ -1636,8 +1536,9 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = Provider.of<LiquidGlassProvider>(context, listen: false);
-    final isGlassEnabled = glassProvider.enabled;
+    final glassProvider = LiquidGlassProvider.maybeOf(context, listen: false);
+    final isGlassEnabled =
+        glassProvider != null && glassProvider.enabled;
 
     final statusBarHeight = MediaQuery.of(context).padding.top;
 
@@ -1652,7 +1553,7 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
               constraints: const BoxConstraints(maxWidth: _kMenuWidth),
               child: IntrinsicWidth(
                 child: isGlassEnabled
-                    ? _buildGlassMenu(isDark, theme)
+                    ? _buildGlassMenu(glassProvider, isDark, theme)
                     : _buildMatteMenu(isDark, theme),
               ),
             ),
@@ -1662,8 +1563,11 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
     );
   }
 
-  Widget _buildGlassMenu(bool isDark, ThemeData theme) {
-    final glassProvider = Provider.of<LiquidGlassProvider>(context, listen: false);
+  Widget _buildGlassMenu(
+    LiquidGlassProvider glassProvider,
+    bool isDark,
+    ThemeData theme,
+  ) {
 
     final style = glassProvider.createStyle(
       context: context,
@@ -1760,8 +1664,9 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
     Widget Function(Color color)? iconBuilder,
     bool isDestructive = false,
   }) {
-    final isDark = Theme.of(widget.chatContext).brightness == Brightness.dark;
-    final primaryTextColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final theme = Theme.of(widget.chatContext);
+    final isDark = theme.brightness == Brightness.dark;
+    final primaryTextColor = theme.colorScheme.onSurface;
     final destructiveColor = isDark ? const Color(0xFFFF453A) : const Color(0xFFD32F2F);
     final color = isDestructive ? destructiveColor : primaryTextColor;
 

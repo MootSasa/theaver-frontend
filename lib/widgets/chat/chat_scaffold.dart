@@ -56,7 +56,7 @@ class ChatScaffold extends StatelessWidget {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final bool isKeyboardVisible = bottomInset > 0;
     final defaultCanPop = canPop ?? !isKeyboardVisible;
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
 
     final Widget stackContent = Stack(
       fit: StackFit.expand,
@@ -233,7 +233,7 @@ class ChatBottomScrollEdge extends StatelessWidget {
     if (TileViewportScope.hasBottomNeighborOf(context)) {
       return const SizedBox.shrink();
     }
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final isGlass = glassProvider?.enabled ?? false;
     if (!isGlass) return const SizedBox.shrink();
 

@@ -260,8 +260,8 @@ class EmojiUtils {
     final int len = text.length;
 
     for (final ent in sorted) {
-      final int start = ent.offset.clamp(0, len);
-      final int end = (ent.offset + ent.length).clamp(start, len);
+      final int start = _snapUtf16Offset(text, ent.offset);
+      final int end = _snapUtf16Offset(text, ent.offset + ent.length).clamp(start, len);
       if (start < pos) continue;
 
       if (start > pos) {
@@ -1006,8 +1006,8 @@ class EmojiUtils {
     }
 
     for (final ent in customEntities) {
-      final int start = ent.offset.clamp(0, len);
-      final int end = (ent.offset + ent.length).clamp(start, len);
+      final int start = _snapUtf16Offset(text, ent.offset);
+      final int end = _snapUtf16Offset(text, ent.offset + ent.length).clamp(start, len);
       if (start < pos) continue;
 
       if (start > pos) {
@@ -1081,8 +1081,9 @@ class EmojiUtils {
     int pos = 0;
 
     for (final ent in customEntities) {
-      final int start = ent.offset.clamp(0, len);
-      final int end = (ent.offset + ent.length).clamp(start, len);
+      final int start = _snapUtf16Offset(singleLine, ent.offset);
+      final int end =
+          _snapUtf16Offset(singleLine, ent.offset + ent.length).clamp(start, len);
       if (start < pos) continue;
 
       if (start > pos) {
@@ -1126,6 +1127,18 @@ class EmojiUtils {
     }
 
     return TextSpan(style: style, children: children);
+  }
+
+  static int _snapUtf16Offset(String text, int index) {
+    final clamped = index.clamp(0, text.length);
+    if (clamped > 0 && clamped < text.length) {
+      final cu = text.codeUnitAt(clamped);
+      final prev = text.codeUnitAt(clamped - 1);
+      if (cu >= 0xDC00 && cu <= 0xDFFF && prev >= 0xD800 && prev <= 0xDBFF) {
+        return clamped - 1;
+      }
+    }
+    return clamped;
   }
 
   /// Builds a [TextSpan] where inline emojis use the local/compact Apple Emoji font.

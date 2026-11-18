@@ -65,8 +65,9 @@ class DraftService {
     if (chatId == null || chatId.isEmpty) return;
 
     final draftData = event.data['draft'];
-    if (draftData is Map<String, dynamic>) {
-      final remoteDraft = ChatDraft.fromJson(draftData);
+    if (draftData is Map) {
+      final remoteDraft =
+          ChatDraft.fromJson(Map<String, dynamic>.from(draftData));
       // Only replace if local is not being typed actively (no pending debounce)
       if (!_debounceTimers.containsKey(chatId)) {
         _drafts[chatId] = remoteDraft;
@@ -131,6 +132,8 @@ class DraftService {
       return;
     }
 
+    final effectiveEntities =
+        trimmed.isEmpty ? const <MessageEntity>[] : entities;
     final existing = _drafts[chatId];
     if (!immediate &&
         existing != null &&
@@ -138,13 +141,13 @@ class DraftService {
         existing.replyToMessageId == replyToMessageId &&
         existing.quoteText == quoteText &&
         existing.isQuote == isQuote &&
-        _sameEntities(existing.entities, entities)) {
+        _sameEntities(existing.entities, effectiveEntities)) {
       return;
     }
 
     final draft = ChatDraft(
       text: text,
-      entities: entities,
+      entities: effectiveEntities,
       replyToMessageId: replyToMessageId,
       quoteText: quoteText,
       isQuote: isQuote,
@@ -259,6 +262,15 @@ class DraftService {
     } catch (e) {
       debugPrint('DraftService: Error persisting to local storage: $e');
     }
+  }
+
+  void dispose() {
+    _wsSubscription?.cancel();
+    _wsSubscription = null;
+    for (final timer in _debounceTimers.values) {
+      timer.cancel();
+    }
+    _debounceTimers.clear();
   }
 
   @visibleForTesting

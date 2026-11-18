@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
@@ -98,7 +97,7 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
         final ext = theme.extension<TheavThemeExtension>();
         final colorScheme = theme.colorScheme;
         final bottomPadding = MediaQuery.of(context).padding.bottom;
-        final glassProvider = context.watch<LiquidGlassProvider?>();
+        final glassProvider = LiquidGlassProvider.maybeOf(context);
         final glassEnabled = glassProvider?.enabled ?? false;
         final isLite = glassProvider?.isLite ?? false;
 

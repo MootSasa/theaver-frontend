@@ -586,6 +586,8 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     List<MessageEntity>? entities,
     LinkPreviewOptions? linkPreviewOptions,
     bool invertMedia = false,
+    bool hasMediaSpoiler = false,
+    bool asDocument = false,
   }) async {
     final String controllerClean = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
@@ -653,7 +655,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         );
         fileUrl = uploadRes.url;
         fileName = uploadRes.fileName;
-        if (uploadRes.mimeType.startsWith('image/')) {
+        if (asDocument) {
+          messageType = 'file';
+        } else if (uploadRes.mimeType.startsWith('image/')) {
           messageType = 'image';
         } else if (uploadRes.mimeType.startsWith('video/')) {
           messageType = 'video';
@@ -689,6 +693,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         createdAt: DateTime.now().toUtc().toIso8601String(),
         senderName: 'Вы',
         sendStatus: 0,
+        hasMediaSpoiler: hasMediaSpoiler,
         entities: resolvedEntities,
       );
 
@@ -710,6 +715,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         fileUrl: fileUrl,
         fileName: fileName,
         messageType: messageType,
+        hasMediaSpoiler: hasMediaSpoiler,
       );
 
       if (!mounted) return;
@@ -1119,7 +1125,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         final mediaRes = await Navigator.push<MediaSendResult>(
           context,
           MaterialPageRoute(
-            builder: (_) => MediaSendScreen(initialFiles: result.files!),
+            builder: (_) => MediaSendScreen(
+              initialFiles: result.files!,
+              showSilentOption: false,
+            ),
           ),
         );
         if (mediaRes != null && mediaRes.files.isNotEmpty && mounted) {
@@ -1130,7 +1139,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               _messageController.text = mediaRes.caption!;
             }
           });
-          await _sendComment();
+          await _sendComment(
+            hasMediaSpoiler: mediaRes.hasMediaSpoiler,
+            asDocument: mediaRes.asDocument,
+          );
         }
       }
       return;

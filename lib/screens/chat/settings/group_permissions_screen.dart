@@ -2,18 +2,18 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
-import '../../../models/theav_theme.dart';
 import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
-import '../../../services/liquid_glass_provider.dart';
 import '../../../utils/haptic_utils.dart';
-import '../../../widgets/common/adaptive_switch.dart';
+import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 import '../../../widgets/user/avatar_with_status.dart';
 
-/// Group permissions, slow mode, per-user restriction exceptions, and blacklist screen.
+/// Group permissions, slow mode ([TheavSteppedSlider]), and modal sub-sheets
+/// for per-user restriction exceptions and blacklist management.
+///
+/// Saves exclusively via the right `44x44` check button in [SettingsFloatingHeader].
 class GroupPermissionsScreen extends StatefulWidget {
   final String chatId;
   final GroupDefaultPermissions initialPermissions;
@@ -45,10 +45,7 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
   late GroupDefaultPermissions _permissions;
   late int _slowModeInterval;
   bool _mediaExpanded = true;
-  int _activeTab = 0; // 0 = Разрешения, 1 = Исключения, 2 = Чёрный список
   bool _isSaving = false;
-  bool _isLoadingMembers = true;
-  bool _isLoadingBanned = true;
   bool _savedAtLeastOnce = false;
   bool _membersChanged = false;
 
@@ -88,16 +85,8 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
       setState(() {
         _allMembers = results[0];
         _bannedMembers = results[1];
-        _isLoadingMembers = false;
-        _isLoadingBanned = false;
       });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _isLoadingMembers = false;
-        _isLoadingBanned = false;
-      });
-    }
+    } catch (_) {}
   }
 
   List<ChatParticipant> get _restrictedMembers {
@@ -166,7 +155,7 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
         Navigator.pop(context, _buildResult());
       }
     } else {
-      GlassToastService().show(
+      GlassToastService().showError(
         context,
         res['message']?.toString() ?? 'Не удалось сохранить разрешения',
       );
@@ -188,17 +177,9 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = maybeLiquidGlassProvider(context);
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final bgColor = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F7);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
+    final palette = context.theav;
+    final disableAnim = MediaQuery.disableAnimationsOf(context);
+    final stopIdx = _slowModeStops.indexOf(_slowModeInterval).clamp(0, 6);
 
     return PopScope(
       canPop: false,
@@ -207,798 +188,426 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
       },
       child: SettingsFloatingScaffold(
         title: 'Разрешения',
-        backgroundColor: bgColor,
+        backgroundColor: palette.background,
         onBack: _popWithResult,
         actions: [
           if (_isSaving)
-            const SettingsHeaderAction(
+            SettingsHeaderAction(
               child: SizedBox(
                 width: 18,
                 height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: palette.primary,
+                ),
               ),
             )
           else
             SettingsHeaderAction(
               tooltip: 'Сохранить',
-              foregroundColor: accentColor,
-              icon: iconoir.Check(width: 22, height: 22, color: accentColor),
+              foregroundColor: palette.primary,
+              icon: iconoir.Check(width: 22, height: 22, color: palette.primary),
               onTap: () => _savePermissionsAndPop(popAfterSave: true),
             ),
         ],
         body: ListView(
           padding: EdgeInsets.fromLTRB(
-            16,
+            0,
             SettingsFloatingHeader.topClearanceOf(context) + 12,
-            16,
-            36,
+            0,
+            MediaQuery.paddingOf(context).bottom + 36,
           ),
           children: [
-            _buildSegmentedTabs(
-              context,
-              glassProvider: glassProvider,
-              isDark: isDark,
-              accentColor: accentColor,
-              textColor: textColor,
-              subColor: subColor,
-            ),
-            const SizedBox(height: 18),
-            if (_activeTab == 0)
-              _buildGlobalPermissionsTab(
-                context,
-                glassProvider: glassProvider,
-                isDark: isDark,
-                accentColor: accentColor,
-                textColor: textColor,
-                subColor: subColor,
-              )
-            else if (_activeTab == 1)
-              _buildExceptionsTab(
-                context,
-                glassProvider: glassProvider,
-                isDark: isDark,
-                accentColor: accentColor,
-                textColor: textColor,
-                subColor: subColor,
-              )
-            else
-              _buildBlacklistTab(
-                context,
-                glassProvider: glassProvider,
-                isDark: isDark,
-                accentColor: accentColor,
-                textColor: textColor,
-                subColor: subColor,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSegmentedTabs(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-  }) {
-    final labels = [
-      'Разрешения',
-      'Исключения (${_restrictedMembers.length})',
-      'Чёрный список (${_bannedMembers.length})',
-    ];
-    final selectedFg = accentColor.computeLuminance() > 0.35
-        ? const Color(0xFF0F172A)
-        : Colors.white;
-
-    return _buildSurfaceCard(
-      context,
-      glassProvider: glassProvider,
-      isDark: isDark,
-      radius: 18,
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Row(
-          children: [
-            for (int i = 0; i < labels.length; i++)
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    HapticUtils.selection();
-                    setState(() => _activeTab = i);
-                  },
-                  child: AnimatedContainer(
-                    duration: MediaQuery.disableAnimationsOf(context)
-                        ? Duration.zero
-                        : const Duration(milliseconds: 200),
-                    curve: Curves.easeOutCubic,
-                    constraints: const BoxConstraints(minHeight: 40),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _activeTab == i
-                          ? accentColor
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      labels[i],
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: _activeTab == i ? selectedFg : textColor,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGlobalPermissionsTab(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-  }) {
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.08);
-    final disableAnim = MediaQuery.disableAnimationsOf(context);
-    final stopIdx = _slowModeStops.indexOf(_slowModeInterval).clamp(0, 6);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 14, bottom: 8),
-          child: Text(
-            'ЧТО МОГУТ ДЕЛАТЬ УЧАСТНИКИ',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.4,
-              color: subColor,
-            ),
-          ),
-        ),
-        _buildSurfaceCard(
-          context,
-          glassProvider: glassProvider,
-          isDark: isDark,
-          child: Column(
-            children: [
-              _buildSwitchRow(
-                glassProvider: glassProvider,
-                icon: iconoir.ChatBubble(
-                  width: 20,
-                  height: 20,
-                  color: accentColor,
-                ),
-                title: 'Отправка сообщений',
-                value: _permissions.canSendMessages,
-                accentColor: accentColor,
-                textColor: textColor,
-                onChanged: (v) {
-                  HapticUtils.selection();
-                  setState(() {
-                    _permissions = _permissions.copyWith(canSendMessages: v);
-                    _mediaExpanded = v;
-                  });
-                },
-              ),
-              if (_permissions.canSendMessages)
-                Divider(height: 1, indent: 54, color: dividerColor),
-              AnimatedSize(
-                duration: disableAnim
-                    ? Duration.zero
-                    : const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                child: _permissions.canSendMessages
-                    ? Column(
-                        children: [
-                          InkWell(
-                            onTap: () {
-                              HapticUtils.selection();
-                              setState(
-                                () => _mediaExpanded = !_mediaExpanded,
-                              );
-                            },
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(minHeight: 46),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                                child: Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 28,
-                                      child: Center(
-                                        child: iconoir.MediaImage(
-                                          width: 19,
-                                          height: 19,
-                                          color: subColor,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 14),
-                                    Expanded(
-                                      child: Text(
-                                        'Медиа и вложения',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: subColor,
-                                        ),
-                                      ),
-                                    ),
-                                    Text(
-                                      '${(_permissions.canSendMedia ? 1 : 0) + (_permissions.canSendStickersGifs ? 1 : 0) + (_permissions.canSendPolls ? 1 : 0)}/3',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        color: accentColor,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    AnimatedRotation(
-                                      turns: _mediaExpanded ? 0.25 : 0.0,
-                                      duration: disableAnim
-                                          ? Duration.zero
-                                          : const Duration(milliseconds: 200),
-                                      child: iconoir.NavArrowRight(
-                                        width: 16,
-                                        height: 16,
-                                        color: subColor,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                          AnimatedSize(
-                            duration: disableAnim
-                                ? Duration.zero
-                                : const Duration(milliseconds: 200),
-                            curve: Curves.easeOutCubic,
-                            child: _mediaExpanded
-                                ? Padding(
-                                    padding: const EdgeInsets.only(left: 16),
-                                    child: Column(
-                                      children: [
-                                        Divider(
-                                          height: 1,
-                                          indent: 38,
-                                          color: dividerColor,
-                                        ),
-                                        _buildSwitchRow(
-                                          glassProvider: glassProvider,
-                                          icon: iconoir.MediaImage(
-                                            width: 18,
-                                            height: 18,
-                                            color: accentColor,
-                                          ),
-                                          title: 'Отправка медиа',
-                                          value: _permissions.canSendMedia,
-                                          accentColor: accentColor,
-                                          textColor: textColor,
-                                          onChanged: (v) {
-                                            HapticUtils.selection();
-                                            setState(() {
-                                              _permissions = _permissions
-                                                  .copyWith(canSendMedia: v);
-                                            });
-                                          },
-                                        ),
-                                        Divider(
-                                          height: 1,
-                                          indent: 38,
-                                          color: dividerColor,
-                                        ),
-                                        _buildSwitchRow(
-                                          glassProvider: glassProvider,
-                                          icon: iconoir.Emoji(
-                                            width: 18,
-                                            height: 18,
-                                            color: accentColor,
-                                          ),
-                                          title: 'Стикеры и GIF',
-                                          value:
-                                              _permissions.canSendStickersGifs,
-                                          accentColor: accentColor,
-                                          textColor: textColor,
-                                          onChanged: (v) {
-                                            HapticUtils.selection();
-                                            setState(() {
-                                              _permissions =
-                                                  _permissions.copyWith(
-                                                canSendStickersGifs: v,
-                                              );
-                                            });
-                                          },
-                                        ),
-                                        Divider(
-                                          height: 1,
-                                          indent: 38,
-                                          color: dividerColor,
-                                        ),
-                                        _buildSwitchRow(
-                                          glassProvider: glassProvider,
-                                          icon: iconoir.StatsReport(
-                                            width: 18,
-                                            height: 18,
-                                            color: accentColor,
-                                          ),
-                                          title: 'Опросы',
-                                          value: _permissions.canSendPolls,
-                                          accentColor: accentColor,
-                                          textColor: textColor,
-                                          onChanged: (v) {
-                                            HapticUtils.selection();
-                                            setState(() {
-                                              _permissions = _permissions
-                                                  .copyWith(canSendPolls: v);
-                                            });
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                : const SizedBox.shrink(),
-                          ),
-                        ],
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              Divider(height: 1, indent: 54, color: dividerColor),
-              _buildSwitchRow(
-                glassProvider: glassProvider,
-                icon: iconoir.UserPlus(
-                  width: 20,
-                  height: 20,
-                  color: accentColor,
-                ),
-                title: 'Добавление участников',
-                value: _permissions.canInviteUsers,
-                accentColor: accentColor,
-                textColor: textColor,
-                onChanged: (v) {
-                  HapticUtils.selection();
-                  setState(() {
-                    _permissions = _permissions.copyWith(canInviteUsers: v);
-                  });
-                },
-              ),
-              Divider(height: 1, indent: 54, color: dividerColor),
-              _buildSwitchRow(
-                glassProvider: glassProvider,
-                icon: iconoir.Pin(width: 20, height: 20, color: accentColor),
-                title: 'Закрепление сообщений',
-                value: _permissions.canPinMessages,
-                accentColor: accentColor,
-                textColor: textColor,
-                onChanged: (v) {
-                  HapticUtils.selection();
-                  setState(() {
-                    _permissions = _permissions.copyWith(canPinMessages: v);
-                  });
-                },
-              ),
-              Divider(height: 1, indent: 54, color: dividerColor),
-              _buildSwitchRow(
-                glassProvider: glassProvider,
-                icon: iconoir.EditPencil(
-                  width: 20,
-                  height: 20,
-                  color: accentColor,
-                ),
-                title: 'Изменение профиля группы',
-                value: _permissions.canChangeInfo,
-                accentColor: accentColor,
-                textColor: textColor,
-                onChanged: (v) {
-                  HapticUtils.selection();
-                  setState(() {
-                    _permissions = _permissions.copyWith(canChangeInfo: v);
-                  });
-                },
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        Padding(
-          padding: const EdgeInsets.only(left: 14, bottom: 8),
-          child: Row(
-            children: [
-              iconoir.Timer(width: 15, height: 15, color: subColor),
-              const SizedBox(width: 6),
-              Text(
-                'МЕДЛЕННЫЙ РЕЖИМ',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.4,
-                  color: subColor,
-                ),
-              ),
-            ],
-          ),
-        ),
-        _buildSurfaceCard(
-          context,
-          glassProvider: glassProvider,
-          isDark: isDark,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            TheavInsetGroup(
+              header: 'ЧТО МОГУТ ДЕЛАТЬ УЧАСТНИКИ',
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Задержка между сообщениями',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        color: textColor,
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: accentColor.withValues(alpha: 0.14),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        _slowModeLabels[stopIdx],
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: accentColor,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: accentColor,
-                    inactiveTrackColor: accentColor.withValues(alpha: 0.2),
-                    thumbColor: accentColor,
-                    overlayColor: accentColor.withValues(alpha: 0.16),
-                    trackHeight: 4,
+                TheavListRow(
+                  leading: iconoir.ChatBubble(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
                   ),
-                  child: Slider(
-                    value: stopIdx.toDouble(),
-                    min: 0,
-                    max: (_slowModeStops.length - 1).toDouble(),
-                    divisions: _slowModeStops.length - 1,
-                    label: _slowModeLabels[stopIdx],
+                  title: 'Отправка сообщений',
+                  trailing: TheavSwitch(
+                    value: _permissions.canSendMessages,
                     onChanged: (v) {
-                      final idx = v.round().clamp(0, _slowModeStops.length - 1);
-                      if (_slowModeStops[idx] != _slowModeInterval) {
-                        HapticUtils.selection();
-                        setState(() => _slowModeInterval = _slowModeStops[idx]);
-                      }
+                      HapticUtils.selection();
+                      setState(() {
+                        _permissions = _permissions.copyWith(canSendMessages: v);
+                        _mediaExpanded = v;
+                      });
                     },
                   ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    final next = !_permissions.canSendMessages;
+                    setState(() {
+                      _permissions = _permissions.copyWith(canSendMessages: next);
+                      _mediaExpanded = next;
+                    });
+                  },
                 ),
-                Row(
-                  children: [
-                    for (int i = 0; i < _slowModeStops.length; i++)
-                      Expanded(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () {
-                            HapticUtils.selection();
-                            setState(
-                              () => _slowModeInterval = _slowModeStops[i],
-                            );
-                          },
-                          child: Container(
-                            constraints: const BoxConstraints(minHeight: 36),
-                            alignment: Alignment.center,
-                            child: Text(
-                              _slowModeLabels[i],
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: i == stopIdx
-                                    ? FontWeight.w700
-                                    : FontWeight.w500,
-                                color: i == stopIdx ? accentColor : subColor,
-                              ),
-                            ),
-                          ),
-                        ),
+                if (_permissions.canSendMessages) ...[
+                  TheavListRow(
+                    leading: iconoir.MediaImage(
+                      width: 19,
+                      height: 19,
+                      color: palette.subtext,
+                    ),
+                    title: 'Медиа и вложения',
+                    valueText:
+                        '${(_permissions.canSendMedia ? 1 : 0) + (_permissions.canSendStickersGifs ? 1 : 0) + (_permissions.canSendPolls ? 1 : 0)}/3',
+                    trailing: AnimatedRotation(
+                      turns: _mediaExpanded ? 0.25 : 0.0,
+                      duration: disableAnim
+                          ? Duration.zero
+                          : const Duration(milliseconds: 200),
+                      child: iconoir.NavArrowRight(
+                        width: 16,
+                        height: 16,
+                        color: palette.subtext,
                       ),
+                    ),
+                    onTap: () {
+                      HapticUtils.selection();
+                      setState(() => _mediaExpanded = !_mediaExpanded);
+                    },
+                  ),
+                  if (_mediaExpanded) ...[
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.MediaImage(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Отправка медиа',
+                      value: _permissions.canSendMedia,
+                      onChanged: (v) {
+                        HapticUtils.selection();
+                        setState(() {
+                          _permissions = _permissions.copyWith(canSendMedia: v);
+                        });
+                      },
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.Emoji(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Стикеры и GIF',
+                      value: _permissions.canSendStickersGifs,
+                      onChanged: (v) {
+                        HapticUtils.selection();
+                        setState(() {
+                          _permissions =
+                              _permissions.copyWith(canSendStickersGifs: v);
+                        });
+                      },
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.StatsReport(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Опросы',
+                      value: _permissions.canSendPolls,
+                      onChanged: (v) {
+                        HapticUtils.selection();
+                        setState(() {
+                          _permissions = _permissions.copyWith(canSendPolls: v);
+                        });
+                      },
+                    ),
+                  ],
+                ],
+                TheavListRow(
+                  leading: iconoir.UserPlus(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Добавление участников',
+                  trailing: TheavSwitch(
+                    value: _permissions.canInviteUsers,
+                    onChanged: (v) {
+                      HapticUtils.selection();
+                      setState(() {
+                        _permissions = _permissions.copyWith(canInviteUsers: v);
+                      });
+                    },
+                  ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    setState(() {
+                      _permissions = _permissions.copyWith(
+                        canInviteUsers: !_permissions.canInviteUsers,
+                      );
+                    });
+                  },
+                ),
+                TheavListRow(
+                  leading: iconoir.Pin(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Закрепление сообщений',
+                  trailing: TheavSwitch(
+                    value: _permissions.canPinMessages,
+                    onChanged: (v) {
+                      HapticUtils.selection();
+                      setState(() {
+                        _permissions = _permissions.copyWith(canPinMessages: v);
+                      });
+                    },
+                  ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    setState(() {
+                      _permissions = _permissions.copyWith(
+                        canPinMessages: !_permissions.canPinMessages,
+                      );
+                    });
+                  },
+                ),
+                TheavListRow(
+                  leading: iconoir.EditPencil(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Изменение профиля группы',
+                  trailing: TheavSwitch(
+                    value: _permissions.canChangeInfo,
+                    onChanged: (v) {
+                      HapticUtils.selection();
+                      setState(() {
+                        _permissions = _permissions.copyWith(canChangeInfo: v);
+                      });
+                    },
+                  ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    setState(() {
+                      _permissions = _permissions.copyWith(
+                        canChangeInfo: !_permissions.canChangeInfo,
+                      );
+                    });
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              header: 'МЕДЛЕННЫЙ РЕЖИМ',
+              footer: _slowModeDescription(_slowModeInterval),
+              children: [
+                TheavSteppedSlider(
+                  title: 'Задержка между сообщениями',
+                  selectedIndex: stopIdx,
+                  labels: _slowModeLabels,
+                  onChanged: (idx) {
+                    setState(() => _slowModeInterval = _slowModeStops[idx]);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              header: 'ОГРАНИЧЕНИЯ И ДОСТУП',
+              children: [
+                TheavListRow(
+                  leading: iconoir.Lock(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Исключения',
+                  valueText: '${_restrictedMembers.length}',
+                  showChevron: true,
+                  onTap: _openExceptionsSheet,
+                ),
+                TheavListRow(
+                  leading: iconoir.UserXmark(
+                    width: 20,
+                    height: 20,
+                    color: palette.error,
+                  ),
+                  title: 'Чёрный список',
+                  valueText: '${_bannedMembers.length}',
+                  showChevron: true,
+                  onTap: _openBlacklistSheet,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _nestedSwitchRow({
+    required TheavPalette palette,
+    required Widget icon,
+    required String title,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return TheavListRow(
+      padding: const EdgeInsets.fromLTRB(34, 10, 16, 10),
+      leading: icon,
+      title: title,
+      trailing: TheavSwitch(value: value, onChanged: onChanged),
+      onTap: () => onChanged(!value),
+    );
+  }
+
+  Future<void> _openExceptionsSheet() async {
+    await showTheavModalSheet<void>(
+      context: context,
+      title: 'Исключения (${_restrictedMembers.length})',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final palette = ctx.theav;
+          final restricted = _restrictedMembers;
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TheavInsetGroup(
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Plus(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Добавить исключение',
+                      onTap: () async {
+                        await _openAddExceptionPicker();
+                        if (ctx.mounted) setSheetState(() {});
+                      },
+                    ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                if (restricted.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'Участники с индивидуальными ограничениями прав появятся здесь.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13.5, color: palette.subtext),
+                    ),
+                  )
+                else
+                  TheavInsetGroup(
+                    children: [
+                      for (final m in restricted)
+                        TheavListRow(
+                          leading: AvatarWithStatus(
+                            userId: m.id,
+                            avatarUrl: m.avatarUrl,
+                            name: m.displayName,
+                            radius: 20,
+                          ),
+                          title: m.displayName,
+                          subtitle: _formatRestrictionsSummary(m),
+                          showChevron: true,
+                          onTap: () async {
+                            await _openRestrictionEditorSheet(m);
+                            if (ctx.mounted) setSheetState(() {});
+                          },
+                        ),
+                    ],
+                  ),
               ],
             ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(left: 14, top: 8, right: 14),
-          child: Text(
-            _slowModeDescription(_slowModeInterval),
-            style: TextStyle(fontSize: 12.5, color: subColor, height: 1.35),
-          ),
-        ),
-        const SizedBox(height: 22),
-        Builder(
-          builder: (_) {
-            final buttonFg = accentColor.computeLuminance() > 0.35
-                ? const Color(0xFF0F172A)
-                : Colors.white;
-            return SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: FilledButton.icon(
-                onPressed: _isSaving
-                    ? null
-                    : () => _savePermissionsAndPop(popAfterSave: true),
-                style: FilledButton.styleFrom(
-                  backgroundColor: accentColor,
-                  foregroundColor: buttonFg,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                icon: iconoir.Check(
-                  width: 20,
-                  height: 20,
-                  color: buttonFg,
-                ),
-                label: const Text(
-                  'Сохранить разрешения',
-                  style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w600),
-                ),
-              ),
-            );
-          },
-        ),
-      ],
+          );
+        },
+      ),
     );
   }
 
-  Widget _buildExceptionsTab(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-  }) {
-    final restricted = _restrictedMembers;
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.08);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSurfaceCard(
-          context,
-          glassProvider: glassProvider,
-          isDark: isDark,
-          child: ListTile(
-            minTileHeight: 52,
-            leading: iconoir.Plus(width: 22, height: 22, color: accentColor),
-            title: Text(
-              'Добавить исключение',
-              style: TextStyle(
-                fontSize: 15.5,
-                fontWeight: FontWeight.w600,
-                color: accentColor,
-              ),
-            ),
-            onTap: _openAddExceptionPicker,
-          ),
-        ),
-        const SizedBox(height: 14),
-        if (_isLoadingMembers)
-          const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(child: CircularProgressIndicator()),
-          )
-        else if (restricted.isEmpty)
-          _buildEmptyStateCard(
-            context,
-            glassProvider: glassProvider,
-            isDark: isDark,
-            accentColor: accentColor,
-            textColor: textColor,
-            subColor: subColor,
-            icon: iconoir.Lock(width: 26, height: 26, color: accentColor),
-            title: 'Нет исключений',
-            subtitle:
-                'Участники с индивидуальными ограничениями прав появятся в этом списке.',
-          )
-        else
-          _buildSurfaceCard(
-            context,
-            glassProvider: glassProvider,
-            isDark: isDark,
+  Future<void> _openBlacklistSheet() async {
+    await showTheavModalSheet<void>(
+      context: context,
+      title: 'Чёрный список (${_bannedMembers.length})',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final palette = ctx.theav;
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                for (int i = 0; i < restricted.length; i++) ...[
-                  ListTile(
-                    minTileHeight: 58,
-                    leading: AvatarWithStatus(
-                      userId: restricted[i].id,
-                      avatarUrl: restricted[i].avatarUrl,
-                      name: restricted[i].displayName,
-                      radius: 21,
-                    ),
-                    title: Text(
-                      restricted[i].displayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: textColor,
+                TheavInsetGroup(
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.UserXmark(
+                        width: 20,
+                        height: 20,
+                        color: palette.error,
                       ),
+                      title: 'Заблокировать участника',
+                      isDestructive: true,
+                      onTap: () async {
+                        await _openAddBanPicker();
+                        if (ctx.mounted) setSheetState(() {});
+                      },
                     ),
-                    subtitle: Text(
-                      _formatRestrictionsSummary(restricted[i]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12.5, color: subColor),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (_bannedMembers.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'Заблокированные пользователи не смогут вернуться в группу и просматривать её.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13.5, color: palette.subtext),
                     ),
-                    trailing: iconoir.NavArrowRight(
-                      width: 18,
-                      height: 18,
-                      color: subColor,
-                    ),
-                    onTap: () => _openRestrictionEditorSheet(restricted[i]),
+                  )
+                else
+                  TheavInsetGroup(
+                    children: [
+                      for (final banned in _bannedMembers)
+                        TheavListRow(
+                          leading: AvatarWithStatus(
+                            userId: banned.id,
+                            avatarUrl: banned.avatarUrl,
+                            name: banned.displayName,
+                            radius: 20,
+                          ),
+                          title: banned.displayName.isNotEmpty
+                              ? banned.displayName
+                              : '@${banned.username}',
+                          subtitle: banned.username.isNotEmpty
+                              ? '@${banned.username}'
+                              : null,
+                          trailing: TheavFloatingPillButton(
+                            height: 32,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            label: 'Разблокировать',
+                            onTap: () async {
+                              await _unbanUser(banned);
+                              if (ctx.mounted) setSheetState(() {});
+                            },
+                          ),
+                        ),
+                    ],
                   ),
-                  if (i < restricted.length - 1)
-                    Divider(height: 1, indent: 70, color: dividerColor),
-                ],
               ],
             ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildBlacklistTab(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-  }) {
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.10)
-        : Colors.black.withValues(alpha: 0.08);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSurfaceCard(
-          context,
-          glassProvider: glassProvider,
-          isDark: isDark,
-          child: ListTile(
-            minTileHeight: 52,
-            leading: const iconoir.UserXmark(
-              width: 22,
-              height: 22,
-              color: Colors.redAccent,
-            ),
-            title: const Text(
-              'Заблокировать участника',
-              style: TextStyle(
-                fontSize: 15.5,
-                fontWeight: FontWeight.w600,
-                color: Colors.redAccent,
-              ),
-            ),
-            onTap: _openAddBanPicker,
-          ),
-        ),
-        const SizedBox(height: 14),
-        if (_isLoadingBanned)
-          const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(child: CircularProgressIndicator()),
-          )
-        else if (_bannedMembers.isEmpty)
-          _buildEmptyStateCard(
-            context,
-            glassProvider: glassProvider,
-            isDark: isDark,
-            accentColor: accentColor,
-            textColor: textColor,
-            subColor: subColor,
-            icon: const iconoir.UserXmark(
-              width: 26,
-              height: 26,
-              color: Colors.redAccent,
-            ),
-            title: 'Чёрный список пуст',
-            subtitle:
-                'Заблокированные пользователи не смогут вернуться в группу и просматривать её.',
-          )
-        else
-          _buildSurfaceCard(
-            context,
-            glassProvider: glassProvider,
-            isDark: isDark,
-            child: Column(
-              children: [
-                for (int i = 0; i < _bannedMembers.length; i++) ...[
-                  ListTile(
-                    minTileHeight: 60,
-                    leading: AvatarWithStatus(
-                      userId: _bannedMembers[i].id,
-                      avatarUrl: _bannedMembers[i].avatarUrl,
-                      name: _bannedMembers[i].displayName,
-                      radius: 21,
-                    ),
-                    title: Text(
-                      _bannedMembers[i].displayName.isNotEmpty
-                          ? _bannedMembers[i].displayName
-                          : '@${_bannedMembers[i].username}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: textColor,
-                      ),
-                    ),
-                    subtitle: _bannedMembers[i].username.isNotEmpty
-                        ? Text(
-                            '@${_bannedMembers[i].username}',
-                            style: TextStyle(fontSize: 12.5, color: subColor),
-                          )
-                        : null,
-                    trailing: TextButton(
-                      onPressed: () => _unbanUser(_bannedMembers[i]),
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size(44, 44),
-                        foregroundColor: accentColor,
-                      ),
-                      child: const Text(
-                        'Разблокировать',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
-                  if (i < _bannedMembers.length - 1)
-                    Divider(height: 1, indent: 70, color: dividerColor),
-                ],
-              ],
-            ),
-          ),
-      ],
+          );
+        },
+      ),
     );
   }
 
@@ -1052,7 +661,10 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
       GlassToastService().show(context, 'Пользователь заблокирован');
       await _loadLists();
     } else {
-      GlassToastService().show(context, 'Не удалось заблокировать пользователя');
+      GlassToastService().showError(
+        context,
+        'Не удалось заблокировать пользователя',
+      );
     }
   }
 
@@ -1070,7 +682,7 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
       });
       GlassToastService().show(context, 'Пользователь разблокирован');
     } else {
-      GlassToastService().show(context, 'Не удалось снять блокировку');
+      GlassToastService().showError(context, 'Не удалось снять блокировку');
     }
   }
 
@@ -1078,65 +690,28 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     required String title,
     required List<ChatParticipant> members,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.65)
-        : const Color(0xFF475569);
-
-    return showModalBottomSheet<ChatParticipant>(
+    return showTheavModalSheet<ChatParticipant>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => SettingsAttachedSheet(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+      title: title,
+      builder: (ctx) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+        child: TheavInsetGroup(
           children: [
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: textColor,
+            for (final m in members)
+              TheavListRow(
+                leading: AvatarWithStatus(
+                  userId: m.id,
+                  avatarUrl: m.avatarUrl,
+                  name: m.displayName,
+                  radius: 20,
+                ),
+                title: m.displayName.isNotEmpty
+                    ? m.displayName
+                    : '@${m.username}',
+                subtitle: m.username.isNotEmpty ? '@${m.username}' : null,
+                showChevron: true,
+                onTap: () => Navigator.pop(ctx, m),
               ),
-            ),
-            const SizedBox(height: 10),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: members.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (_, idx) {
-                  final m = members[idx];
-                  return ListTile(
-                    minTileHeight: 54,
-                    leading: AvatarWithStatus(
-                      userId: m.id,
-                      avatarUrl: m.avatarUrl,
-                      name: m.displayName,
-                      radius: 20,
-                    ),
-                    title: Text(
-                      m.displayName.isNotEmpty
-                          ? m.displayName
-                          : '@${m.username}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: textColor,
-                      ),
-                    ),
-                    subtitle: m.username.isNotEmpty
-                        ? Text(
-                            '@${m.username}',
-                            style: TextStyle(color: subColor, fontSize: 12.5),
-                          )
-                        : null,
-                    onTap: () => Navigator.pop(ctx, m),
-                  );
-                },
-              ),
-            ),
           ],
         ),
       ),
@@ -1144,15 +719,6 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
   }
 
   Future<void> _openRestrictionEditorSheet(ChatParticipant member) async {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final accentColor = themeExt?.palette.primary ??
-        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : const Color(0xFF475569);
-
     var current = member.memberRestrictions ??
         MemberRestrictions(
           canSendMessages: _permissions.canSendMessages,
@@ -1163,15 +729,15 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
           canInviteUsers: _permissions.canInviteUsers,
           canChangeInfo: _permissions.canChangeInfo,
         );
-    Duration? duration; // null = Навсегда
+    Duration? duration;
     var saving = false;
 
-    final saved = await showModalBottomSheet<bool>(
+    final saved = await showTheavModalSheet<bool>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      title: 'Ограничения: ${member.displayName}',
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
+          final palette = ctx.theav;
           final durations = <({String label, Duration? value})>[
             (label: 'Навсегда', value: null),
             (label: '1 час', value: const Duration(hours: 1)),
@@ -1180,176 +746,140 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
             (label: '1 месяц', value: const Duration(days: 30)),
           ];
 
-          return SettingsAttachedSheet(
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Ограничения: ${member.displayName}',
-                    style: TextStyle(
-                      fontSize: 17.5,
-                      fontWeight: FontWeight.w700,
-                      color: textColor,
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TheavInsetGroup(
+                  dividerIndent: 16,
+                  children: [
+                    _sheetToggle(
+                      'Отправка сообщений',
+                      current.canSendMessages,
+                      (v) => setSheetState(
+                        () => current = current.copyWith(canSendMessages: v),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  _sheetToggle(
-                    'Отправка сообщений',
-                    current.canSendMessages,
-                    accentColor,
-                    textColor,
-                    (v) => setSheetState(
-                      () => current = current.copyWith(canSendMessages: v),
+                    _sheetToggle(
+                      'Отправка медиа',
+                      current.canSendMedia,
+                      (v) => setSheetState(
+                        () => current = current.copyWith(canSendMedia: v),
+                      ),
                     ),
-                  ),
-                  _sheetToggle(
-                    'Отправка медиа',
-                    current.canSendMedia,
-                    accentColor,
-                    textColor,
-                    (v) => setSheetState(
-                      () => current = current.copyWith(canSendMedia: v),
+                    _sheetToggle(
+                      'Стикеры и GIF',
+                      current.canSendStickersGifs,
+                      (v) => setSheetState(
+                        () => current =
+                            current.copyWith(canSendStickersGifs: v),
+                      ),
                     ),
-                  ),
-                  _sheetToggle(
-                    'Стикеры и GIF',
-                    current.canSendStickersGifs,
-                    accentColor,
-                    textColor,
-                    (v) => setSheetState(
-                      () => current = current.copyWith(canSendStickersGifs: v),
+                    _sheetToggle(
+                      'Опросы',
+                      current.canSendPolls,
+                      (v) => setSheetState(
+                        () => current = current.copyWith(canSendPolls: v),
+                      ),
                     ),
-                  ),
-                  _sheetToggle(
-                    'Опросы',
-                    current.canSendPolls,
-                    accentColor,
-                    textColor,
-                    (v) => setSheetState(
-                      () => current = current.copyWith(canSendPolls: v),
+                    _sheetToggle(
+                      'Добавление участников',
+                      current.canInviteUsers,
+                      (v) => setSheetState(
+                        () => current = current.copyWith(canInviteUsers: v),
+                      ),
                     ),
-                  ),
-                  _sheetToggle(
-                    'Добавление участников',
-                    current.canInviteUsers,
-                    accentColor,
-                    textColor,
-                    (v) => setSheetState(
-                      () => current = current.copyWith(canInviteUsers: v),
+                    _sheetToggle(
+                      'Закрепление сообщений',
+                      current.canPinMessages,
+                      (v) => setSheetState(
+                        () => current = current.copyWith(canPinMessages: v),
+                      ),
                     ),
-                  ),
-                  _sheetToggle(
-                    'Закрепление сообщений',
-                    current.canPinMessages,
-                    accentColor,
-                    textColor,
-                    (v) => setSheetState(
-                      () => current = current.copyWith(canPinMessages: v),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 22),
+                  child: Text(
                     'СРОК ОГРАНИЧЕНИЯ',
                     style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w600,
-                      color: subColor,
+                      color: palette.subtext,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Wrap(
+                ),
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
                       for (final opt in durations)
-                        ChoiceChip(
-                          label: Text(opt.label),
-                          selected: duration == opt.value,
-                          onSelected: (_) =>
-                              setSheetState(() => duration = opt.value),
-                          selectedColor: accentColor.withValues(alpha: 0.22),
-                          labelStyle: TextStyle(
-                            color: duration == opt.value
-                                ? accentColor
-                                : textColor,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        TheavFloatingPillButton(
+                          height: 36,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          label: opt.label,
+                          isPrimary: duration == opt.value,
+                          onTap: () => setSheetState(() => duration = opt.value),
                         ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  Row(
+                ),
+                const SizedBox(height: 18),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
                     children: [
                       if (member.memberRestrictions != null) ...[
                         Expanded(
-                          child: OutlinedButton(
-                            onPressed: saving
-                                ? null
-                                : () async {
-                                    setSheetState(() => saving = true);
-                                    final ok =
-                                        await ChatService.updateMemberRestrictions(
-                                      chatId: widget.chatId,
-                                      userId: member.id,
-                                      restrictions: const MemberRestrictions(),
-                                      restrictedUntil: null,
-                                    );
-                                    if (ctx.mounted) Navigator.pop(ctx, ok);
-                                  },
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size(0, 46),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
-                            child: const Text('Сбросить'),
+                          child: TheavFloatingPillButton(
+                            enabled: !saving,
+                            label: 'Сбросить',
+                            onTap: () async {
+                              setSheetState(() => saving = true);
+                              final ok =
+                                  await ChatService.updateMemberRestrictions(
+                                chatId: widget.chatId,
+                                userId: member.id,
+                                restrictions: const MemberRestrictions(),
+                                restrictedUntil: null,
+                              );
+                              if (ctx.mounted) Navigator.pop(ctx, ok);
+                            },
                           ),
                         ),
                         const SizedBox(width: 10),
                       ],
                       Expanded(
-                        child: Builder(
-                          builder: (_) {
-                            final buttonFg =
-                                accentColor.computeLuminance() > 0.35
-                                    ? const Color(0xFF0F172A)
-                                    : Colors.white;
-                            return FilledButton(
-                              onPressed: saving
-                                  ? null
-                                  : () async {
-                                      setSheetState(() => saving = true);
-                                      final until = duration != null
-                                          ? DateTime.now().add(duration!)
-                                          : null;
-                                      final ok = await ChatService
-                                          .updateMemberRestrictions(
-                                        chatId: widget.chatId,
-                                        userId: member.id,
-                                        restrictions: current,
-                                        restrictedUntil: until,
-                                      );
-                                      if (ctx.mounted) Navigator.pop(ctx, ok);
-                                    },
-                              style: FilledButton.styleFrom(
-                                backgroundColor: accentColor,
-                                foregroundColor: buttonFg,
-                                minimumSize: const Size(0, 46),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                              ),
-                              child: const Text('Сохранить'),
+                        child: TheavFloatingPillButton(
+                          isPrimary: true,
+                          enabled: !saving,
+                          label: saving ? 'Сохранение...' : 'Сохранить',
+                          onTap: () async {
+                            setSheetState(() => saving = true);
+                            final until = duration != null
+                                ? DateTime.now().add(duration!)
+                                : null;
+                            final ok =
+                                await ChatService.updateMemberRestrictions(
+                              chatId: widget.chatId,
+                              userId: member.id,
+                              restrictions: current,
+                              restrictedUntil: until,
                             );
+                            if (ctx.mounted) Navigator.pop(ctx, ok);
                           },
                         ),
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           );
         },
@@ -1366,157 +896,12 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
   Widget _sheetToggle(
     String title,
     bool value,
-    Color accentColor,
-    Color textColor,
     ValueChanged<bool> onChanged,
   ) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      minTileHeight: 46,
-      title: Text(title, style: TextStyle(color: textColor, fontSize: 15)),
-      trailing: Switch.adaptive(
-        value: value,
-        activeThumbColor: accentColor,
-        onChanged: onChanged,
-      ),
+    return TheavListRow(
+      title: title,
+      trailing: TheavSwitch(value: value, onChanged: onChanged),
       onTap: () => onChanged(!value),
-    );
-  }
-
-  Widget _buildSwitchRow({
-    required LiquidGlassProvider? glassProvider,
-    required Widget icon,
-    required String title,
-    required bool value,
-    required Color accentColor,
-    required Color textColor,
-    required ValueChanged<bool> onChanged,
-  }) {
-    final trailing = glassProvider != null
-        ? AdaptiveSwitch(
-            value: value,
-            onChanged: onChanged,
-            activeColor: accentColor,
-          )
-        : Switch.adaptive(
-            value: value,
-            activeThumbColor: accentColor,
-            onChanged: onChanged,
-          );
-
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 52),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        leading: SizedBox(width: 28, child: Center(child: icon)),
-        title: Text(
-          title,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
-            color: textColor,
-          ),
-        ),
-        trailing: trailing,
-        onTap: () => onChanged(!value),
-      ),
-    );
-  }
-
-  Widget _buildEmptyStateCard(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    required Color accentColor,
-    required Color textColor,
-    required Color subColor,
-    required Widget icon,
-    required String title,
-    required String subtitle,
-  }) {
-    return _buildSurfaceCard(
-      context,
-      glassProvider: glassProvider,
-      isDark: isDark,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-        child: Column(
-          children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: accentColor.withValues(alpha: 0.14),
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: icon,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: textColor,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13.5, color: subColor, height: 1.35),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSurfaceCard(
-    BuildContext context, {
-    required LiquidGlassProvider? glassProvider,
-    required bool isDark,
-    double radius = 20,
-    required Widget child,
-  }) {
-    if ((glassProvider?.enabled ?? false) && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        shape: LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: radius,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: isDark
-              ? null
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(radius),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
-          child: Material(type: MaterialType.transparency, child: child),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(radius),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.10)
-              : Colors.black.withValues(alpha: 0.08),
-          width: 0.5,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(type: MaterialType.transparency, child: child),
     );
   }
 }

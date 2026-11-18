@@ -10,7 +10,6 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/liquid_glass_provider.dart';
 
@@ -505,9 +504,11 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlassEnabled = glassProvider.enabled;
-    final effectiveBlur = isGlassEnabled ? (glassProvider.blur * 2.0).clamp(8.0, 30.0) : 24.0;
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final isGlassEnabled = glassProvider?.enabled ?? false;
+    final effectiveBlur = (isGlassEnabled && glassProvider != null)
+        ? (glassProvider.blur * 2.0).clamp(8.0, 30.0)
+        : 24.0;
 
     final backgroundColor = isDark
         ? const Color(0xFF1E1E24).withValues(alpha: isGlassEnabled ? 0.85 : 0.96)
@@ -1212,10 +1213,10 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
     required bool isDark,
     required Key key,
   }) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlassEnabled = glassProvider.enabled;
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final isGlassEnabled = glassProvider?.enabled ?? false;
 
-    if (!isGlassEnabled) {
+    if (!isGlassEnabled || glassProvider == null) {
       return Padding(
         padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
         child: ClipRRect(

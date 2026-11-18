@@ -13,11 +13,13 @@ import 'media_download_button.dart';
 class MediaAlbumViewer extends StatefulWidget {
   final MediaAlbum album;
   final int initialIndex;
+  final bool hasProtectedContent;
 
   const MediaAlbumViewer({
     Key? key,
     required this.album,
     this.initialIndex = 0,
+    this.hasProtectedContent = false,
   }) : super(key: key);
 
   @override
@@ -177,6 +179,18 @@ class _MediaAlbumViewerState extends State<MediaAlbumViewer> {
                       ),
                     ),
                     const Spacer(),
+                    if (widget.hasProtectedContent)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 10),
+                        child: Tooltip(
+                          message: 'Защищённый контент',
+                          child: iconoir.Lock(
+                            color: Colors.white70,
+                            width: 18,
+                            height: 18,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),

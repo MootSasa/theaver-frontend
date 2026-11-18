@@ -3,7 +3,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:provider/provider.dart';
 
 import '../../config/app_config.dart';
 import '../../models/theav_theme.dart';
@@ -90,7 +89,7 @@ class TelegramServiceMessageWidget extends StatelessWidget {
         : const Color(0xE0FFFFFF);
     final Color pillText = isDark
         ? Colors.white
-        : const Color(0xFF0F172A);
+        : theme.colorScheme.onSurface;
     final Color pillBorder = isDark
         ? Colors.white.withValues(alpha: 0.14)
         : Colors.black.withValues(alpha: 0.10);
@@ -486,7 +485,7 @@ class TelegramChatCreatedIntroCard extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final themeExt = theme.extension<TheavThemeExtension>();
     final palette = themeExt?.palette;
-    final glassEnabled = context.watch<LiquidGlassProvider?>()?.enabled ?? false;
+    final glassEnabled = LiquidGlassProvider.maybeOf(context)?.enabled ?? false;
     final accentColor = palette?.accent ?? theme.colorScheme.primary;
 
     final cardBg = isDark
@@ -495,7 +494,7 @@ class TelegramChatCreatedIntroCard extends StatelessWidget {
     final borderColor = isDark
         ? Colors.white.withValues(alpha: 0.14)
         : Colors.black.withValues(alpha: 0.10);
-    final titleColor = isDark ? Colors.white : const Color(0xFF0F172A);
+    final titleColor = isDark ? Colors.white : theme.colorScheme.onSurface;
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.78)
         : const Color(0xFF334155);
