@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -18,7 +19,7 @@ import '../../utils/haptic_utils.dart';
 import '../design_system/theav_design_system.dart';
 
 /// Launches a bot Mini App (or restores a matching minimized [MiniAppSession])
-/// full-screen over the root navigator.
+/// full-screen over the root navigator while preserving any other minimized sessions.
 Future<void> openMiniAppSheet(
   BuildContext context, {
   required String botId,
@@ -34,18 +35,17 @@ Future<void> openMiniAppSheet(
   ValueChanged<String>? onSwitchInlineQuery,
 }) async {
   final sessionCtrl = MiniAppSessionController.instance;
-  final existing = sessionCtrl.minimizedSession;
-  if (existing != null && existing.isMinimized) {
-    final normalizedId = botId.replaceFirst(RegExp(r'^@+'), '').toLowerCase();
+  final normalizedId = botId.replaceFirst(RegExp(r'^@+'), '').toLowerCase();
+  for (final existing in sessionCtrl.minimizedSessions.reversed) {
     final sameBot = existing.launchData.botId == botId ||
         (normalizedId.isNotEmpty &&
             existing.botUsername.toLowerCase() == normalizedId);
-    final sameUrl = url == null || url.isEmpty || url == existing.launchData.url;
+    final sameUrl =
+        url == null || url.isEmpty || url == existing.launchData.url;
     if (sameBot && appShortName == null && sameUrl) {
-      await sessionCtrl.restore();
+      await sessionCtrl.restoreSession(existing);
       return;
     }
-    sessionCtrl.closeMinimized(existing);
   }
 
   final theme = Theme.of(context);
@@ -113,8 +113,11 @@ class MiniAppActionButtonState {
 }
 
 /// Persistent live Mini App state retained across full-screen <-> minimized dock
-/// bar transitions so the underlying `WebViewController` and JS session never reload.
+/// bar <-> tabs switcher transitions so the underlying `WebViewController` and JS session never reload.
 class MiniAppSession {
+  static int _nextSessionSeq = 0;
+
+  final String id;
   final MiniAppLaunchData launchData;
   final String botName;
   final String botUsername;
@@ -134,8 +137,10 @@ class MiniAppSession {
   Color? customHeaderColor;
   Color? customBackgroundColor;
   Color? customBottomBarColor;
-  final MiniAppActionButtonState mainButton = MiniAppActionButtonState()..text = 'Continue';
-  final MiniAppActionButtonState secondaryButton = MiniAppActionButtonState()..text = 'Cancel';
+  final MiniAppActionButtonState mainButton = MiniAppActionButtonState()
+    ..text = 'Continue';
+  final MiniAppActionButtonState secondaryButton = MiniAppActionButtonState()
+    ..text = 'Cancel';
 
   bool isMinimized = false;
   NavigatorState? lastNavigator;
@@ -145,6 +150,7 @@ class MiniAppSession {
   ValueChanged<String>? onInboundBridgeMessage;
 
   MiniAppSession({
+    String? id,
     required this.launchData,
     this.botName = '',
     this.botUsername = '',
@@ -153,7 +159,7 @@ class MiniAppSession {
     this.mode = 'menu',
     this.buttonText = '',
     this.onSwitchInlineQuery,
-  });
+  }) : id = id ?? 'mini_app_${++_nextSessionSeq}';
 
   String get displayTitle => botName.isNotEmpty
       ? botName
@@ -221,7 +227,7 @@ class MiniAppSession {
         MiniAppSessionController.instance.notifySessionUpdated();
       }
     } else if (evt.eventType == 'web_app_close') {
-      MiniAppSessionController.instance.closeMinimized(this);
+      MiniAppSessionController.instance.closeSession(this);
     }
   }
 
@@ -240,25 +246,79 @@ class MiniAppSession {
   }
 }
 
-/// Coordinates a minimized bottom-docked [MiniAppSession] across navigation routes.
+/// Coordinates multiple minimized [MiniAppSession] entries, the bottom stacked
+/// capsule bar, and the 3D tabs switcher across navigation routes.
 class MiniAppSessionController extends ChangeNotifier {
   MiniAppSessionController._();
 
   static final MiniAppSessionController instance = MiniAppSessionController._();
 
-  MiniAppSession? _minimizedSession;
+  final List<MiniAppSession> _minimizedSessions = <MiniAppSession>[];
+  bool _isSwitcherOpen = false;
+  int _activeFullScreenCount = 0;
 
-  MiniAppSession? get minimizedSession => _minimizedSession;
+  List<MiniAppSession> get minimizedSessions =>
+      List<MiniAppSession>.unmodifiable(_minimizedSessions);
 
-  bool get hasMinimizedSession =>
-      _minimizedSession != null && _minimizedSession!.isMinimized;
+  int get minimizedCount => _minimizedSessions.length;
+
+  MiniAppSession? get minimizedSession =>
+      _minimizedSessions.isEmpty ? null : _minimizedSessions.last;
+
+  bool get hasMinimizedSession => _minimizedSessions.isNotEmpty;
+
+  bool get isSwitcherOpen =>
+      _isSwitcherOpen && _minimizedSessions.isNotEmpty;
+
+  int get activeFullScreenCount => _activeFullScreenCount;
+
+  bool get shouldShowMinimizedBar =>
+      _minimizedSessions.isNotEmpty &&
+      _activeFullScreenCount == 0 &&
+      !_isSwitcherOpen;
+
+  void _notifySafely() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        notifyListeners();
+      });
+    } else {
+      notifyListeners();
+    }
+  }
+
+  void registerFullScreenOpen() {
+    _activeFullScreenCount += 1;
+    if (_minimizedSessions.isNotEmpty) {
+      _notifySafely();
+    }
+  }
+
+  void unregisterFullScreenOpen() {
+    if (_activeFullScreenCount > 0) {
+      _activeFullScreenCount -= 1;
+    }
+    if (_minimizedSessions.isNotEmpty) {
+      _notifySafely();
+    }
+  }
 
   void minimize(MiniAppSession session, {NavigatorState? navigator}) {
     session.isMinimized = true;
     if (navigator != null) {
       session.lastNavigator = navigator;
     }
-    _minimizedSession = session;
+    _minimizedSessions.removeWhere(
+      (s) =>
+          identical(s, session) ||
+          (session.launchData.botId.isNotEmpty &&
+              s.launchData.botId == session.launchData.botId &&
+              s.launchData.url == session.launchData.url),
+    );
+    _minimizedSessions.add(session);
+    _isSwitcherOpen = false;
     session.dispatchEvent('deactivated');
     session.dispatchEvent('viewport_changed', const {
       'height': 0,
@@ -272,23 +332,64 @@ class MiniAppSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void openSwitcher() {
+    if (_minimizedSessions.isEmpty || _isSwitcherOpen) return;
+    _isSwitcherOpen = true;
+    notifyListeners();
+  }
+
+  void closeSwitcher() {
+    if (!_isSwitcherOpen) return;
+    _isSwitcherOpen = false;
+    notifyListeners();
+  }
+
+  Future<void> onMinimizedBarActivate({
+    GlobalKey<NavigatorState>? fallbackNavigatorKey,
+  }) async {
+    if (_minimizedSessions.isEmpty) return;
+    if (_minimizedSessions.length == 1) {
+      await restoreSession(
+        _minimizedSessions.last,
+        fallbackNavigatorKey: fallbackNavigatorKey,
+      );
+      return;
+    }
+    openSwitcher();
+  }
+
   Future<void> restore({
     GlobalKey<NavigatorState>? fallbackNavigatorKey,
   }) async {
-    final session = _minimizedSession;
+    final session = minimizedSession;
     if (session == null) return;
+    await restoreSession(session, fallbackNavigatorKey: fallbackNavigatorKey);
+  }
 
-    final NavigatorState? nav =
-        (session.lastNavigator != null && session.lastNavigator!.mounted)
-            ? session.lastNavigator
-            : fallbackNavigatorKey?.currentState;
+  Future<void> restoreSession(
+    MiniAppSession session, {
+    GlobalKey<NavigatorState>? fallbackNavigatorKey,
+  }) async {
+    NavigatorState? nav;
+    if (session.lastNavigator != null && session.lastNavigator!.mounted) {
+      nav = session.lastNavigator;
+    } else {
+      for (final other in _minimizedSessions.reversed) {
+        if (other.lastNavigator != null && other.lastNavigator!.mounted) {
+          nav = other.lastNavigator;
+          break;
+        }
+      }
+      nav ??= fallbackNavigatorKey?.currentState;
+    }
     if (nav == null || !nav.mounted) return;
 
     final BuildContext? restoreContext = nav.overlay?.context;
     if (restoreContext == null || !restoreContext.mounted) return;
 
+    _minimizedSessions.removeWhere((s) => identical(s, session));
     session.isMinimized = false;
-    _minimizedSession = null;
+    _isSwitcherOpen = false;
     notifyListeners();
     session.dispatchEvent('activated');
 
@@ -312,19 +413,43 @@ class MiniAppSessionController extends ChangeNotifier {
     );
   }
 
+  void closeSession(MiniAppSession session) {
+    final idx = _minimizedSessions.indexWhere((s) => identical(s, session));
+    if (idx == -1) return;
+    _minimizedSessions.removeAt(idx);
+    session.isMinimized = false;
+    if (_minimizedSessions.isEmpty) {
+      _isSwitcherOpen = false;
+    }
+    notifyListeners();
+  }
+
   void closeMinimized([MiniAppSession? target]) {
-    if (_minimizedSession == null) return;
-    if (target != null && !identical(_minimizedSession, target)) return;
-    _minimizedSession!.isMinimized = false;
-    _minimizedSession = null;
+    if (target != null) {
+      closeSession(target);
+    } else {
+      closeAllMinimized();
+    }
+  }
+
+  void closeAllMinimized() {
+    if (_minimizedSessions.isEmpty && !_isSwitcherOpen) return;
+    for (final s in _minimizedSessions) {
+      s.isMinimized = false;
+    }
+    _minimizedSessions.clear();
+    _isSwitcherOpen = false;
     notifyListeners();
   }
 
   @visibleForTesting
   void resetForTesting() {
-    if (_minimizedSession == null) return;
-    _minimizedSession!.isMinimized = false;
-    _minimizedSession = null;
+    for (final s in _minimizedSessions) {
+      s.isMinimized = false;
+    }
+    _minimizedSessions.clear();
+    _isSwitcherOpen = false;
+    _activeFullScreenCount = 0;
     notifyListeners();
   }
 }
@@ -342,7 +467,8 @@ class _MinimizedMiniAppHostScope extends InheritedWidget {
 }
 
 /// Wraps the app navigator subtree to present a Telegram-style minimized bottom
-/// Mini App bar (`[ x BotName ^ ]`) and lift underlying `SafeArea` / chat input bars.
+/// Mini App bar (including stacked counter indicator when 2+ apps are open) and
+/// the full-screen 3D Mini App tabs switcher.
 class MinimizedMiniAppHost extends StatefulWidget {
   final Widget child;
   final GlobalKey<NavigatorState>? navigatorKey;
@@ -362,7 +488,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   late final AnimationController _animController;
   late final Animation<double> _curvedAnim;
   late final Animation<Offset> _slideAnim;
-  MiniAppSession? _displayedSession;
+  List<MiniAppSession> _displayedSessions = const [];
 
   @override
   void initState() {
@@ -383,9 +509,9 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
     ).animate(_curvedAnim);
 
     MiniAppSessionController.instance.addListener(_onSessionChanged);
-    final current = MiniAppSessionController.instance.minimizedSession;
-    if (current != null && current.isMinimized) {
-      _displayedSession = current;
+    final ctrl = MiniAppSessionController.instance;
+    if (ctrl.shouldShowMinimizedBar) {
+      _displayedSessions = ctrl.minimizedSessions;
       _animController.value = 1.0;
     }
   }
@@ -399,36 +525,47 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
 
   void _onSessionChanged() {
     if (!mounted) return;
-    final current = MiniAppSessionController.instance.minimizedSession;
-    if (current != null && current.isMinimized) {
-      setState(() => _displayedSession = current);
+    final ctrl = MiniAppSessionController.instance;
+    if (ctrl.shouldShowMinimizedBar) {
+      setState(() {
+        _displayedSessions = ctrl.minimizedSessions;
+      });
       if (_animController.status != AnimationStatus.forward &&
           _animController.status != AnimationStatus.completed) {
         _animController.forward();
       }
-    } else if (_displayedSession != null) {
+    } else if (_displayedSessions.isNotEmpty) {
       if (_animController.status == AnimationStatus.dismissed) {
-        setState(() => _displayedSession = null);
+        setState(() => _displayedSessions = const []);
       } else if (_animController.status != AnimationStatus.reverse) {
         _animController.reverse().whenComplete(() {
-          if (mounted &&
-              MiniAppSessionController.instance.minimizedSession == null) {
-            setState(() => _displayedSession = null);
+          if (mounted && !MiniAppSessionController.instance.shouldShowMinimizedBar) {
+            setState(() => _displayedSessions = const []);
           }
         });
       } else {
         setState(() {});
       }
+    } else {
+      setState(() {});
     }
   }
 
-  Future<void> _handleCloseMinimized(MiniAppSession session) async {
+  NavigatorState? _resolveNavigatorFor(MiniAppSession session) {
+    if (session.lastNavigator != null && session.lastNavigator!.mounted) {
+      return session.lastNavigator;
+    }
+    for (final other in MiniAppSessionController.instance.minimizedSessions.reversed) {
+      if (other.lastNavigator != null && other.lastNavigator!.mounted) {
+        return other.lastNavigator;
+      }
+    }
+    return widget.navigatorKey?.currentState;
+  }
+
+  Future<void> _handleCloseSession(MiniAppSession session) async {
     if (session.closingConfirmation) {
-      final NavigatorState? nav =
-          (session.lastNavigator != null && session.lastNavigator!.mounted)
-              ? session.lastNavigator
-              : widget.navigatorKey?.currentState;
-      final BuildContext? dialogCtx = nav?.overlay?.context;
+      final BuildContext? dialogCtx = _resolveNavigatorFor(session)?.overlay?.context;
       if (dialogCtx != null && dialogCtx.mounted) {
         final confirm = await showTheavDialog<bool>(
               context: dialogCtx,
@@ -447,20 +584,55 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
         if (!confirm || !mounted) return;
       }
     }
-    MiniAppSessionController.instance.closeMinimized(session);
+    MiniAppSessionController.instance.closeSession(session);
+  }
+
+  Future<void> _handleCloseAllSessions() async {
+    final sessions = MiniAppSessionController.instance.minimizedSessions;
+    final needsConfirm = sessions.any((s) => s.closingConfirmation);
+    if (needsConfirm && sessions.isNotEmpty) {
+      final BuildContext? dialogCtx =
+          _resolveNavigatorFor(sessions.last)?.overlay?.context;
+      if (dialogCtx != null && dialogCtx.mounted) {
+        final confirm = await showTheavDialog<bool>(
+              context: dialogCtx,
+              title: 'Закрыть все Mini Apps?',
+              message: 'Внесённые изменения могут не сохраниться.',
+              actions: const [
+                TheavDialogAction<bool>(label: 'Остаться', result: false),
+                TheavDialogAction<bool>(
+                  label: 'Закрыть все',
+                  result: true,
+                  isDestructive: true,
+                ),
+              ],
+            ) ??
+            false;
+        if (!confirm || !mounted) return;
+      }
+    }
+    MiniAppSessionController.instance.closeAllMinimized();
   }
 
   @override
   Widget build(BuildContext context) {
-    final session = _displayedSession;
-    if (session == null && _animController.isDismissed) {
+    final ctrl = MiniAppSessionController.instance;
+    final bool switcherOpen = ctrl.isSwitcherOpen;
+    if (_displayedSessions.isEmpty &&
+        _animController.isDismissed &&
+        !switcherOpen) {
       return _MinimizedMiniAppHostScope(child: widget.child);
     }
 
     final mq = MediaQuery.of(context);
     final bool keyboardVisible = mq.viewInsets.bottom > 0;
-    final double barBottomInset = math.min(mq.padding.bottom, 10.0);
-    final double totalBarHeight = 48.0 + barBottomInset;
+    final double barBottomInset =
+        math.max(4.0, math.min(mq.padding.bottom, 10.0));
+    final int extraCount =
+        _displayedSessions.length > 1 ? _displayedSessions.length - 1 : 0;
+    final double deckOffset =
+        extraCount >= 2 ? 12.0 : (extraCount == 1 ? 7.0 : 0.0);
+    final double totalBarHeight = deckOffset + 48.0 + barBottomInset;
 
     return _MinimizedMiniAppHostScope(
       child: AnimatedBuilder(
@@ -468,7 +640,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
         builder: (context, _) {
           final double t = _curvedAnim.value.clamp(0.0, 1.0);
           final double targetBottom =
-              math.max(mq.padding.bottom, totalBarHeight + 2.0);
+              math.max(mq.padding.bottom, totalBarHeight + 4.0);
           final double extraBottom = keyboardVisible
               ? mq.padding.bottom
               : ui.lerpDouble(mq.padding.bottom, targetBottom, t)!;
@@ -488,7 +660,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
             children: [
               adjustedChild,
               if (!keyboardVisible &&
-                  session != null &&
+                  _displayedSessions.isNotEmpty &&
                   _animController.value > 0.0)
                 Positioned(
                   left: 0,
@@ -498,14 +670,28 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                     position: _slideAnim,
                     child: MinimizedMiniAppBar(
                       key: const ValueKey('minimized_mini_app_bar'),
-                      session: session,
+                      sessions: _displayedSessions,
                       bottomInset: barBottomInset,
-                      onRestore: () => MiniAppSessionController.instance.restore(
+                      onActivate: () => MiniAppSessionController.instance
+                          .onMinimizedBarActivate(
                         fallbackNavigatorKey: widget.navigatorKey,
                       ),
-                      onClose: () => _handleCloseMinimized(session),
+                      onClose: () =>
+                          _handleCloseSession(_displayedSessions.last),
                     ),
                   ),
+                ),
+              if (switcherOpen)
+                MiniAppTabsSwitcher(
+                  key: const ValueKey('mini_app_tabs_switcher'),
+                  sessions: ctrl.minimizedSessions,
+                  onDismiss: ctrl.closeSwitcher,
+                  onSelectSession: (s) => ctrl.restoreSession(
+                    s,
+                    fallbackNavigatorKey: widget.navigatorKey,
+                  ),
+                  onCloseSession: _handleCloseSession,
+                  onCloseAll: _handleCloseAllSessions,
                 ),
             ],
           );
@@ -515,176 +701,534 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   }
 }
 
-/// Telegram-style minimized bottom bar (`[ x BotName ^ ]`) docked above the
-/// bottom gesture inset with theme-derived surface/Liquid Glass styling.
+/// Telegram-style minimized bottom bar (`[ x BotName (и ещё N) ^ ]`) supporting
+/// stacked back-card rim indicators when 2+ Mini Apps are minimized.
 class MinimizedMiniAppBar extends StatelessWidget {
-  final MiniAppSession session;
+  final List<MiniAppSession> sessions;
   final double bottomInset;
-  final VoidCallback onRestore;
+  final VoidCallback onActivate;
   final VoidCallback onClose;
 
   const MinimizedMiniAppBar({
     super.key,
-    required this.session,
+    required this.sessions,
     required this.bottomInset,
-    required this.onRestore,
+    required this.onActivate,
     required this.onClose,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (sessions.isEmpty) return const SizedBox.shrink();
+    final MiniAppSession front = sessions.last;
+    final int extraCount = sessions.length - 1;
+    final double deckOffset =
+        extraCount >= 2 ? 12.0 : (extraCount == 1 ? 7.0 : 0.0);
+
     final resolved = MiniAppJsBridge.resolveThemeColors(Theme.of(context));
     final style = TheavSurfaceStyle.of(context);
 
-    final Color barBg = session.customHeaderColor ?? resolved.headerBg;
-    final Color barFg = session.customHeaderColor != null
+    final Color barBg = front.customHeaderColor ?? resolved.headerBg;
+    final Color barFg = front.customHeaderColor != null
         ? (barBg.computeLuminance() <= 0.55 ? Colors.white : Colors.black87)
         : resolved.headerFg;
-    final Color barDivider = session.customHeaderColor != null
+    final Color barDivider = front.customHeaderColor != null
         ? barFg.withValues(alpha: 0.14)
         : resolved.divider;
 
     final bool useGlassBar = style.isGlass &&
         style.glassProvider != null &&
-        session.customHeaderColor == null;
+        front.customHeaderColor == null;
+
+    final Widget frontContent = Material(
+      type: MaterialType.transparency,
+      child: SizedBox(
+        height: 48,
+        child: Row(
+          children: [
+            SizedBox(
+              width: 46,
+              height: 48,
+              child: Semantics(
+                button: true,
+                label: 'Закрыть',
+                child: InkWell(
+                  key: const ValueKey('minimized_mini_app_close_button'),
+                  borderRadius: BorderRadius.circular(24),
+                  onTap: () {
+                    HapticUtils.tap();
+                    onClose();
+                  },
+                  child: Center(
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 22,
+                      color: barFg,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  HapticUtils.selection();
+                  onActivate();
+                },
+                onVerticalDragEnd: (d) {
+                  if ((d.primaryVelocity ?? 0.0) < -200.0) {
+                    HapticUtils.selection();
+                    onActivate();
+                  }
+                },
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 4, right: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            front.displayTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16.5,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.15,
+                              color: barFg,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ),
+                        if (extraCount > 0)
+                          Text(
+                            ' и ещё $extraCount',
+                            key: const ValueKey('minimized_mini_app_extra_count'),
+                            maxLines: 1,
+                            style: TextStyle(
+                              fontSize: 16.5,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.15,
+                              color: barFg.withValues(alpha: 0.78),
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 46,
+              height: 48,
+              child: Semantics(
+                button: true,
+                label: 'Развернуть',
+                child: InkWell(
+                  key: const ValueKey('minimized_mini_app_expand_button'),
+                  borderRadius: BorderRadius.circular(24),
+                  onTap: () {
+                    HapticUtils.selection();
+                    onActivate();
+                  },
+                  child: Center(
+                    child: Icon(
+                      Icons.keyboard_arrow_up_rounded,
+                      size: 26,
+                      color: barFg,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
 
     return SizedBox(
-      height: 48.0 + bottomInset,
+      height: deckOffset + 48.0 + bottomInset,
       width: double.infinity,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          if (useGlassBar)
+          if (extraCount >= 2)
             Positioned(
-              left: 4,
-              right: 4,
+              left: 26,
+              right: 26,
               top: 0,
-              bottom: -14,
-              child: LiquidGlassLens(
-                style: style.glassProvider!.createStyle(
-                  context: context,
-                  cornerRadius: 14,
-                  refractionIndex: style.isFull ? 1.10 : 1.05,
-                  refractionWidth: 18.0,
-                  borderWidth: 1.0,
-                  color: barBg.withValues(alpha: style.isDark ? 0.76 : 0.84),
-                ),
-                child: const SizedBox.expand(),
-              ),
-            )
-          else
-            Positioned(
-              left: 4,
-              right: 4,
-              top: 0,
-              bottom: 0,
+              height: 24,
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: barBg,
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(14),
-                  ),
-                  border: Border(
-                    top: BorderSide(color: barDivider, width: 0.8),
-                    left: BorderSide(color: barDivider, width: 0.8),
-                    right: BorderSide(color: barDivider, width: 0.8),
-                  ),
+                  color: Color.alphaBlend(
+                    barFg.withValues(alpha: style.isDark ? 0.04 : 0.03),
+                    barBg,
+                  ).withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: barDivider, width: 0.65),
                 ),
               ),
             ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(4, 0, 4, bottomInset),
-            child: Material(
-              type: MaterialType.transparency,
-              child: SizedBox(
-                height: 48,
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 46,
-                      height: 48,
-                      child: Semantics(
-                        button: true,
-                        label: 'Закрыть',
-                        child: InkWell(
-                          key: const ValueKey('minimized_mini_app_close_button'),
-                          borderRadius: BorderRadius.circular(24),
-                          onTap: () {
-                            HapticUtils.tap();
-                            onClose();
-                          },
-                          child: Center(
-                            child: Icon(
-                              Icons.close_rounded,
-                              size: 22,
-                              color: barFg,
-                            ),
-                          ),
+          if (extraCount >= 1)
+            Positioned(
+              left: 15,
+              right: 15,
+              top: extraCount >= 2 ? 5.5 : 0.0,
+              height: 26,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color.alphaBlend(
+                    barFg.withValues(alpha: style.isDark ? 0.07 : 0.05),
+                    barBg,
+                  ).withValues(alpha: 0.88),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: barDivider, width: 0.75),
+                ),
+              ),
+            ),
+          Positioned(
+            left: 6,
+            right: 6,
+            top: deckOffset,
+            height: 48,
+            child: useGlassBar
+                ? LiquidGlassLens(
+                    style: style.glassProvider!.createStyle(
+                      context: context,
+                      cornerRadius: 18,
+                      refractionIndex: style.isFull ? 1.10 : 1.05,
+                      refractionWidth: 18.0,
+                      borderWidth: 1.0,
+                      color: barBg.withValues(alpha: style.isDark ? 0.78 : 0.86),
+                    ),
+                    child: frontContent,
+                  )
+                : DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: barBg,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: barDivider, width: 0.85),
+                      boxShadow: style.floatingShadow,
+                    ),
+                    child: frontContent,
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Telegram-style full-screen 3D perspective card switcher for multiple open
+/// minimized Mini Apps with a top `Закрыть все вкладки` pill.
+class MiniAppTabsSwitcher extends StatelessWidget {
+  final List<MiniAppSession> sessions;
+  final VoidCallback onDismiss;
+  final ValueChanged<MiniAppSession> onSelectSession;
+  final ValueChanged<MiniAppSession> onCloseSession;
+  final VoidCallback onCloseAll;
+
+  const MiniAppTabsSwitcher({
+    super.key,
+    required this.sessions,
+    required this.onDismiss,
+    required this.onSelectSession,
+    required this.onCloseSession,
+    required this.onCloseAll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final resolved = MiniAppJsBridge.resolveThemeColors(theme);
+    final style = TheavSurfaceStyle.of(context);
+    final mq = MediaQuery.of(context);
+    final blurFilter = style.getBlurFilter(sigma: 16.0);
+
+    final Color dimTint =
+        resolved.bodyBg.withValues(alpha: style.isDark ? 0.74 : 0.64);
+    Widget backdrop = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onDismiss,
+      child: ColoredBox(color: dimTint),
+    );
+    if (blurFilter != null) {
+      backdrop = ClipRect(
+        child: BackdropFilter(
+          filter: blurFilter,
+          child: backdrop,
+        ),
+      );
+    }
+
+    final Widget closeAllChild = Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        key: const ValueKey('mini_app_close_all_tabs_button'),
+        borderRadius: BorderRadius.circular(18),
+        onTap: () {
+          HapticUtils.tap();
+          onCloseAll();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+          child: Text(
+            'Закрыть все вкладки',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: resolved.headerFg,
+              decoration: TextDecoration.none,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final Widget closeAllPill = (style.isGlass && style.glassProvider != null)
+        ? LiquidGlassLens(
+            style: style.glassProvider!.createStyle(
+              context: context,
+              cornerRadius: 18,
+              refractionIndex: 1.06,
+              refractionWidth: 14.0,
+              borderWidth: 1.0,
+              color: resolved.headerBg
+                  .withValues(alpha: style.isDark ? 0.72 : 0.84),
+            ),
+            child: closeAllChild,
+          )
+        : DecoratedBox(
+            decoration: BoxDecoration(
+              color: resolved.surfaceBg.withValues(alpha: 0.94),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: resolved.divider, width: 0.7),
+              boxShadow: style.floatingShadow,
+            ),
+            child: closeAllChild,
+          );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(child: backdrop),
+        Positioned(
+          top: mq.padding.top + 18,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: SizedBox(height: 36, child: closeAllPill),
+          ),
+        ),
+        Positioned(
+          top: mq.padding.top + 72,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final double availH = constraints.maxHeight;
+              final double cardHeight = (availH * 0.56).clamp(220.0, 390.0);
+              final int n = sessions.length;
+              final double stepY = n <= 1
+                  ? 0.0
+                  : ((availH - cardHeight - 28.0) / (n - 1))
+                      .clamp(132.0, 220.0);
+              final double stackHeight = cardHeight + (n - 1) * stepY;
+              final double topPad =
+                  ((availH - stackHeight) * 0.45).clamp(8.0, 64.0);
+
+              return SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  topPad,
+                  16,
+                  math.max(20.0, mq.padding.bottom + 12),
+                ),
+                child: SizedBox(
+                  height: stackHeight,
+                  width: double.infinity,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      for (int i = 0; i < n; i++)
+                        _buildStackedCard(
+                          context,
+                          session: sessions[i],
+                          top: i * stepY,
+                          cardHeight: cardHeight,
+                          resolved: resolved,
+                          style: style,
                         ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStackedCard(
+    BuildContext context, {
+    required MiniAppSession session,
+    required double top,
+    required double cardHeight,
+    required MiniAppThemeColors resolved,
+    required TheavSurfaceStyle style,
+  }) {
+    final Color cardBodyBg = session.customBackgroundColor ?? resolved.bodyBg;
+    final Color cardHeaderBg = session.customHeaderColor ?? resolved.headerBg;
+    final bool isCardHeaderDark = cardHeaderBg.computeLuminance() <= 0.55;
+    final Color cardHeaderFg = session.customHeaderColor != null
+        ? (isCardHeaderDark ? Colors.white : Colors.black87)
+        : resolved.headerFg;
+    final Color cardDivider = session.customHeaderColor != null
+        ? cardHeaderFg.withValues(alpha: 0.14)
+        : resolved.divider;
+    final Color sealColor = session.customHeaderColor != null
+        ? cardHeaderFg.withValues(alpha: 0.85)
+        : resolved.palette.primary;
+    final Color sealCheckColor =
+        (sealColor.computeLuminance() - cardHeaderBg.computeLuminance()).abs() >
+                0.18
+            ? cardHeaderBg
+            : resolved.palette.onPrimary;
+    final String unameLower = (session.botUsername.isNotEmpty
+            ? session.botUsername
+            : session.launchData.botUsername)
+        .toLowerCase()
+        .trim();
+    final bool isVerified = session.isVerified ||
+        session.launchData.botIsVerified ||
+        unameLower == 'botmother' ||
+        unameLower == 'botfather';
+
+    final Matrix4 tiltMatrix = Matrix4.identity()
+      ..setEntry(3, 2, 0.0010)
+      ..rotateX(0.14);
+
+    return Positioned(
+      top: top,
+      left: 0,
+      right: 0,
+      height: cardHeight,
+      child: Dismissible(
+        key: ValueKey('mini_app_tab_dismiss_${session.id}'),
+        direction: DismissDirection.horizontal,
+        onDismissed: (_) => onCloseSession(session),
+        child: Transform(
+          alignment: Alignment.topCenter,
+          transform: tiltMatrix,
+          child: GestureDetector(
+            key: ValueKey('mini_app_tab_card_${session.id}'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              HapticUtils.selection();
+              onSelectSession(session);
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: cardBodyBg,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: cardDivider, width: 0.8),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: style.isDark ? 0.45 : 0.16),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: cardHeaderBg,
+                      border: Border(
+                        bottom: BorderSide(color: cardDivider, width: 0.75),
                       ),
                     ),
-                    Expanded(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          HapticUtils.selection();
-                          onRestore();
-                        },
-                        onVerticalDragEnd: (d) {
-                          if ((d.primaryVelocity ?? 0.0) < -200.0) {
-                            HapticUtils.selection();
-                            onRestore();
-                          }
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 4, right: 8),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              session.displayTitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 16.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: -0.15,
-                                color: barFg,
-                                decoration: TextDecoration.none,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 46,
+                            height: 48,
+                            child: Semantics(
+                              button: true,
+                              label: 'Закрыть',
+                              child: InkWell(
+                                key: ValueKey('mini_app_tab_close_${session.id}'),
+                                borderRadius: BorderRadius.circular(24),
+                                onTap: () {
+                                  HapticUtils.tap();
+                                  onCloseSession(session);
+                                },
+                                child: Center(
+                                  child: Icon(
+                                    Icons.close_rounded,
+                                    size: 22,
+                                    color: cardHeaderFg,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 46,
-                      height: 48,
-                      child: Semantics(
-                        button: true,
-                        label: 'Развернуть',
-                        child: InkWell(
-                          key: const ValueKey('minimized_mini_app_expand_button'),
-                          borderRadius: BorderRadius.circular(24),
-                          onTap: () {
-                            HapticUtils.selection();
-                            onRestore();
-                          },
-                          child: Center(
-                            child: Icon(
-                              Icons.keyboard_arrow_up_rounded,
-                              size: 26,
-                              color: barFg,
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 14),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      session.displayTitle,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 16.5,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: -0.15,
+                                        color: cardHeaderFg,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                    ),
+                                  ),
+                                  if (isVerified) ...[
+                                    const SizedBox(width: 6),
+                                    MiniAppVerifiedSeal(
+                                      size: 17,
+                                      color: sealColor,
+                                      checkColor: sealCheckColor,
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  Expanded(
+                    child: ColoredBox(color: cardBodyBg),
+                  ),
+                ],
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -984,6 +1528,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   late final MiniAppSession _session;
   bool _isMenuOpen = false;
   bool _isMinimizing = false;
+  bool _hasFullScreenRegistration = false;
 
   double _dragOffsetY = 0.0;
   double _dragResetFrom = 0.0;
@@ -1051,6 +1596,15 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _session.onRequestBridgeInjection = _injectBridge;
     _session.onInboundBridgeMessage = _handleBridgeMessage;
     _session.ensureWebViewInitialized();
+    _hasFullScreenRegistration = true;
+    MiniAppSessionController.instance.registerFullScreenOpen();
+  }
+
+  void _releaseFullScreenRegistration() {
+    if (_hasFullScreenRegistration) {
+      _hasFullScreenRegistration = false;
+      MiniAppSessionController.instance.unregisterFullScreenOpen();
+    }
   }
 
   @override
@@ -1061,6 +1615,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   @override
   void dispose() {
+    _releaseFullScreenRegistration();
     if (identical(_session.onSheetStateChanged, _onSessionStateChanged)) {
       _session.onSheetStateChanged = null;
     }
@@ -1510,6 +2065,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _closeMenu();
     if (_MinimizedMiniAppHostScope.maybeOf(context)) {
       _isMinimizing = true;
+      _releaseFullScreenRegistration();
       final nav = Navigator.of(context, rootNavigator: true);
       MiniAppSessionController.instance.minimize(_session, navigator: nav);
       nav.maybePop();

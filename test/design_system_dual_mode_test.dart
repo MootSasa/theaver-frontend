@@ -921,4 +921,194 @@ void main() {
     });
     expect(headerDecorated, isNotEmpty);
   });
+
+  testWidgets(
+      'Multiple minimized Mini Apps render stacked counter bar and open 3D tabs switcher',
+      (tester) async {
+    addTearDown(MiniAppSessionController.instance.resetForTesting);
+
+    const launch1 = MiniAppLaunchData(
+      url: 'https://api.theaver.app/api/miniapps/studio',
+      initData: 'user=%7B%7D&hash=1',
+      botId: '1',
+      botUsername: 'BotFather',
+      botDisplayName: 'BotFather',
+      botIsVerified: true,
+    );
+    const launch2 = MiniAppLaunchData(
+      url: 'https://wallet.example.com/app',
+      initData: 'user=%7B%7D&hash=2',
+      botId: '2',
+      botUsername: 'walt_bot',
+      botDisplayName: 'Walt (ранее Кошелёк)',
+    );
+
+    final session1 = MiniAppSession(
+      id: 'tab_botfather',
+      launchData: launch1,
+      botName: 'BotFather',
+      botUsername: 'BotFather',
+      isVerified: true,
+    );
+    final session2 = MiniAppSession(
+      id: 'tab_walt',
+      launchData: launch2,
+      botName: 'Walt (ранее Кошелёк)',
+      botUsername: 'walt_bot',
+    );
+
+    await tester.pumpWidget(
+      _buildHost(
+        glassMode: GlassMode.full,
+        child: Builder(
+          builder: (context) => Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    showTheavModalSheet<void>(
+                      context: context,
+                      enableDrag: false,
+                      useRootNavigator: true,
+                      builder: (_) => const SizedBox.shrink(),
+                      customSheetBuilder: (_) => MiniAppWebViewSheet(
+                        launchData: launch1,
+                        botName: 'BotFather',
+                        botUsername: 'BotFather',
+                        isVerified: true,
+                        session: session1,
+                      ),
+                    );
+                  },
+                  child: const Text('OpenOne'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    showTheavModalSheet<void>(
+                      context: context,
+                      enableDrag: false,
+                      useRootNavigator: true,
+                      builder: (_) => const SizedBox.shrink(),
+                      customSheetBuilder: (_) => MiniAppWebViewSheet(
+                        launchData: launch2,
+                        botName: 'Walt (ранее Кошелёк)',
+                        botUsername: 'walt_bot',
+                        session: session2,
+                      ),
+                    );
+                  },
+                  child: const Text('OpenTwo'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // 1. Open and minimize Mini App 1.
+    await tester.tap(find.text('OpenOne'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('mini_app_collapse_expand_button')));
+    await tester.pumpAndSettle();
+
+    final barFinder = find.byKey(const ValueKey('minimized_mini_app_bar'));
+    expect(barFinder, findsOneWidget);
+    expect(find.text('BotFather'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('minimized_mini_app_extra_count')),
+      findsNothing,
+    );
+
+    // 2. Open and minimize Mini App 2 -> stacked bar displays "Walt (ранее Кошелёк) и ещё 1".
+    await tester.tap(find.text('OpenTwo'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('mini_app_collapse_expand_button')));
+    await tester.pumpAndSettle();
+
+    expect(MiniAppSessionController.instance.minimizedCount, 2);
+    expect(barFinder, findsOneWidget);
+    expect(find.text('Walt (ранее Кошелёк)'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('minimized_mini_app_extra_count')),
+      findsOneWidget,
+    );
+    expect(find.text(' и ещё 1'), findsOneWidget);
+
+    // 3. Tapping minimized bar opens MiniAppTabsSwitcher instead of a single sheet.
+    await tester.tap(find.byKey(const ValueKey('minimized_mini_app_expand_button')));
+    await tester.pumpAndSettle();
+
+    final switcherFinder = find.byKey(const ValueKey('mini_app_tabs_switcher'));
+    expect(switcherFinder, findsOneWidget);
+    expect(find.byType(MiniAppWebViewSheet), findsNothing);
+    expect(
+      find.byKey(const ValueKey('mini_app_close_all_tabs_button')),
+      findsOneWidget,
+    );
+    expect(find.text('Закрыть все вкладки'), findsOneWidget);
+    expect(find.text('BotFather'), findsOneWidget);
+    expect(find.text('Walt (ранее Кошелёк)'), findsOneWidget);
+
+    final switcherLensFinder = find.descendant(
+      of: switcherFinder,
+      matching: find.byType(LiquidGlassLens),
+    );
+    expect(switcherLensFinder, findsOneWidget);
+    expect(
+      find.ancestor(
+        of: switcherLensFinder,
+        matching: find.descendant(
+          of: switcherFinder,
+          matching: find.byWidgetPredicate(
+            (w) => w is Opacity || w is FadeTransition,
+          ),
+        ),
+      ),
+      findsNothing,
+    );
+
+    // 4. Selecting BotFather restores it full-screen while keeping Walt minimized.
+    await tester.tap(find.text('BotFather'));
+    await tester.pumpAndSettle();
+
+    expect(switcherFinder, findsNothing);
+    expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+    expect(MiniAppSessionController.instance.minimizedSessions, [session2]);
+
+    // 5. Minimize BotFather again -> front title flips to "BotFather и ещё 1".
+    await tester.tap(find.byKey(const ValueKey('mini_app_collapse_expand_button')));
+    await tester.pumpAndSettle();
+
+    expect(MiniAppSessionController.instance.minimizedCount, 2);
+    expect(barFinder, findsOneWidget);
+    expect(find.text('BotFather'), findsOneWidget);
+    expect(find.text(' и ещё 1'), findsOneWidget);
+
+    // 6. Reopen switcher via bar title tap and close BotFather card via X.
+    await tester.tap(find.text('BotFather'));
+    await tester.pumpAndSettle();
+    expect(switcherFinder, findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('mini_app_tab_close_tab_botfather')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(MiniAppSessionController.instance.minimizedSessions, [session2]);
+    expect(switcherFinder, findsOneWidget);
+    expect(find.text('BotFather'), findsNothing);
+    expect(find.text('Walt (ранее Кошелёк)'), findsOneWidget);
+
+    // 7. Tap "Закрыть все вкладки" -> closes remaining sessions and clears UI.
+    await tester.tap(
+      find.byKey(const ValueKey('mini_app_close_all_tabs_button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(MiniAppSessionController.instance.minimizedCount, 0);
+    expect(switcherFinder, findsNothing);
+    expect(barFinder, findsNothing);
+  });
 }
