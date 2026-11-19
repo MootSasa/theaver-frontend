@@ -15,6 +15,7 @@ import 'power_saving_screen.dart';
 import 'language_screen.dart';
 import 'chat_settings_screen.dart';
 import 'accounts_screen.dart';
+import 'bots_and_mini_apps_screen.dart';
 import 'settings_search_index.dart';
 import 'wallets_screen.dart';
 import '../../config/app_config.dart';
@@ -484,6 +485,25 @@ class _SettingsScreenState extends State<SettingsScreen>
               Navigator.push(
                 context,
                 SwipeBackPageRoute(builder: (_) => const FoldersScreen()),
+              );
+            },
+          ),
+
+          // Bots and Mini Apps Hub
+          ListTile(
+            leading: iconoir.AppWindow(width: 22, height: 22, color: accent),
+            title: const Text('Боты и Mini Apps'),
+            subtitle: Text(
+              '@BotMother, мини-приложения и inline-боты',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            onTap: () {
+              HapticUtils.tap();
+              Navigator.push(
+                context,
+                SwipeBackPageRoute(
+                  builder: (_) => const BotsAndMiniAppsScreen(),
+                ),
               );
             },
           ),

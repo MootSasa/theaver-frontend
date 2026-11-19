@@ -735,6 +735,9 @@ class MessageBubble extends StatelessWidget {
   final void Function(String tag)? onSavedTagTap;
   final VoidCallback? onEffectTap;
   final ValueChanged<String>? onInsertInlineQuery;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
 
   const MessageBubble({
     Key? key,
@@ -770,6 +773,9 @@ class MessageBubble extends StatelessWidget {
     this.onSavedTagTap,
     this.onEffectTap,
     this.onInsertInlineQuery,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
   }) : super(key: key);
 
   MessageBubble copyWithKey(Key? newKey) {
@@ -807,6 +813,9 @@ class MessageBubble extends StatelessWidget {
       onSavedTagTap: onSavedTagTap,
       onEffectTap: onEffectTap,
       onInsertInlineQuery: onInsertInlineQuery,
+      onMentionTap: onMentionTap,
+      onCommandTap: onCommandTap,
+      onHashtagTap: onHashtagTap,
     );
   }
 
@@ -1696,6 +1705,9 @@ class MessageBubble extends StatelessWidget {
           nameColorPreset: effectivePreset,
           replyStripStyle: effectiveStripStyle,
           replyEmoji: quoteReplyEmoji,
+          onMentionTap: onMentionTap,
+          onCommandTap: onCommandTap,
+          onHashtagTap: onHashtagTap,
         ),
       );
 
@@ -1780,6 +1792,9 @@ class MessageBubble extends StatelessWidget {
             nameColorPreset: effectivePreset,
             replyStripStyle: effectiveStripStyle,
             replyEmoji: quoteReplyEmoji,
+            onMentionTap: onMentionTap,
+            onCommandTap: onCommandTap,
+            onHashtagTap: onHashtagTap,
           ),
         );
         if (_isImage || _isVideo) {

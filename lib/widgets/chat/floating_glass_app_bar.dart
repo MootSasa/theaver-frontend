@@ -1656,6 +1656,7 @@ class GlassChatMenu extends StatefulWidget {
   final bool isSavedPeersMode;
   final int autoDeleteSeconds;
   final bool isSavedChat;
+  final List<FloatingChatMenuItem> extraMenuItems;
 
   const GlassChatMenu({
     Key? key,
@@ -1674,6 +1675,7 @@ class GlassChatMenu extends StatefulWidget {
     this.isSavedPeersMode = false,
     this.autoDeleteSeconds = 0,
     this.isSavedChat = false,
+    this.extraMenuItems = const [],
   }) : super(key: key);
 
   static void show(
@@ -1692,36 +1694,51 @@ class GlassChatMenu extends StatefulWidget {
     bool isSavedPeersMode = false,
     int autoDeleteSeconds = 0,
     bool isSavedChat = false,
+    List<FloatingChatMenuItem> extraMenuItems = const [],
   }) {
+    final callerContext = context;
     showGeneralDialog(
-      context: context,
+      context: callerContext,
       barrierDismissible: true,
       barrierLabel: 'Dismiss',
       barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 250),
-      pageBuilder: (context, animation, secondaryAnimation) {
+      pageBuilder: (dialogCtx, animation, secondaryAnimation) {
         return GlassChatMenu(
-          chatContext: context,
+          chatContext: callerContext,
           isMuted: isMuted,
-          onVoiceCall: () { Navigator.pop(context); onVoiceCall(); },
-          onVideoCall: () { Navigator.pop(context); onVideoCall(); },
-          onSearch: () { Navigator.pop(context); onSearch(); },
-          onToggleMute: () { Navigator.pop(context); onToggleMute(); },
-          onClearHistory: () { Navigator.pop(context); onClearHistory(); },
-          onReport: () { Navigator.pop(context); onReport(); },
-          onViewProfile: () { Navigator.pop(context); onViewProfile(); },
+          onVoiceCall: () { Navigator.pop(dialogCtx); onVoiceCall(); },
+          onVideoCall: () { Navigator.pop(dialogCtx); onVideoCall(); },
+          onSearch: () { Navigator.pop(dialogCtx); onSearch(); },
+          onToggleMute: () { Navigator.pop(dialogCtx); onToggleMute(); },
+          onClearHistory: () { Navigator.pop(dialogCtx); onClearHistory(); },
+          onReport: () { Navigator.pop(dialogCtx); onReport(); },
+          onViewProfile: () { Navigator.pop(dialogCtx); onViewProfile(); },
           onAutoDelete: onAutoDelete != null
-              ? () { Navigator.pop(context); onAutoDelete(); }
+              ? () { Navigator.pop(dialogCtx); onAutoDelete(); }
               : null,
           onChatAppearance: onChatAppearance != null
-              ? () { Navigator.pop(context); onChatAppearance(); }
+              ? () { Navigator.pop(dialogCtx); onChatAppearance(); }
               : null,
           onToggleSavedViewMode: onToggleSavedViewMode != null
-              ? () { Navigator.pop(context); onToggleSavedViewMode(); }
+              ? () { Navigator.pop(dialogCtx); onToggleSavedViewMode(); }
               : null,
           isSavedPeersMode: isSavedPeersMode,
           autoDeleteSeconds: autoDeleteSeconds,
           isSavedChat: isSavedChat,
+          extraMenuItems: extraMenuItems
+              .map(
+                (e) => FloatingChatMenuItem(
+                  label: e.label,
+                  iconBuilder: e.iconBuilder,
+                  isDestructive: e.isDestructive,
+                  onTap: () {
+                    Navigator.pop(dialogCtx);
+                    e.onTap();
+                  },
+                ),
+              )
+              .toList(),
         );
       },
       transitionBuilder: (context, animation, secondaryAnimation, child) {
@@ -1866,6 +1883,13 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
               'Оформление',
               widget.onChatAppearance!,
               iconBuilder: (c) => iconoir.Palette(color: c, width: 22, height: 22),
+            ),
+          for (final item in widget.extraMenuItems)
+            _menuItem(
+              item.label,
+              item.onTap,
+              iconBuilder: item.iconBuilder,
+              isDestructive: item.isDestructive,
             ),
           _menuItem(
             widget.isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),

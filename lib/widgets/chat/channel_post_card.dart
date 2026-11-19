@@ -11,6 +11,7 @@ import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../screens/settings/profile_screen.dart';
 import '../../services/chat_service.dart';
+import '../../services/dm_parity_service.dart' show TranslationResult;
 import '../../services/media_cache_manager.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/theav_theme_service.dart';
@@ -22,11 +23,13 @@ import '../../utils/swipe_back_route.dart';
 import '../common/peer_badges_widget.dart';
 import '../message/blurred_media_placeholder.dart';
 import '../message/call_message_widget.dart';
+import '../message/contact_message_widget.dart';
 import '../message/dice_message_widget.dart';
 import '../message/document_message_widget.dart';
 import '../message/fullscreen_photo_viewer.dart';
 import '../message/inline_keyboard_widget.dart';
 import '../message/inline_video_player.dart';
+import '../message/location_message_widget.dart';
 import '../message/media_album_widget.dart';
 import '../message/media_download_button.dart';
 import '../message/media_spoiler_overlay.dart';
@@ -84,6 +87,12 @@ class ChannelPostCard extends StatelessWidget {
   final VoidCallback? onDoubleTap;
   final bool hasProtectedContent;
   final ValueChanged<String>? onInsertInlineQuery;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
+  final TranslationResult? translation;
+  final bool isTranslating;
+  final VoidCallback? onHideTranslation;
 
   const ChannelPostCard({
     super.key,
@@ -115,6 +124,12 @@ class ChannelPostCard extends StatelessWidget {
     this.onDoubleTap,
     this.hasProtectedContent = false,
     this.onInsertInlineQuery,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
+    this.translation,
+    this.isTranslating = false,
+    this.onHideTranslation,
   }) : assert(
          message != null || album != null,
          'Either message or album must be provided to ChannelPostCard',
@@ -182,6 +197,13 @@ class ChannelPostCard extends StatelessWidget {
       onBodyTap: onBodyTap,
       onDoubleTap: onDoubleTap,
       hasProtectedContent: hasProtectedContent,
+      onInsertInlineQuery: onInsertInlineQuery,
+      onMentionTap: onMentionTap,
+      onCommandTap: onCommandTap,
+      onHashtagTap: onHashtagTap,
+      translation: translation,
+      isTranslating: isTranslating,
+      onHideTranslation: onHideTranslation,
     );
   }
 
@@ -959,6 +981,48 @@ class ChannelPostCard extends StatelessWidget {
       ];
     }
 
+    if (msg.messageType == 'location' ||
+        msg.messageType == 'live_location' ||
+        msg.messageType == 'venue') {
+      return [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            12.0,
+            hasTopHeader ? 2.0 : 10.0,
+            12.0,
+            2.0,
+          ),
+          child: LocationMessageWidget(
+            message: msg,
+            isMe: false,
+            textColor: textColor,
+            subtextColor: subtextColor,
+            accentColor: accentColor,
+          ),
+        ),
+      ];
+    }
+
+    if (msg.messageType == 'contact') {
+      return [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            12.0,
+            hasTopHeader ? 2.0 : 10.0,
+            12.0,
+            2.0,
+          ),
+          child: ContactMessageWidget(
+            message: msg,
+            isMe: false,
+            textColor: textColor,
+            subtextColor: subtextColor,
+            accentColor: accentColor,
+          ),
+        ),
+      ];
+    }
+
     if (hasMedia) {
       if (_isImage || _isVideo) {
         final double mediaHeight = _computeSingleMediaHeight(msg, cardWidth);
@@ -1318,9 +1382,100 @@ class ChannelPostCard extends StatelessWidget {
       entities: entities,
       nameColorPreset: preset,
       replyStripStyle: stripStyle,
+      onMentionTap: onMentionTap,
+      onCommandTap: onCommandTap,
+      onHashtagTap: onHashtagTap,
     );
 
-    if (!includeLinkPreview) return textWidget;
+    final Widget? translationBlock = (isTranslating || translation != null)
+        ? Container(
+            margin: const EdgeInsets.only(top: 6.0),
+            padding: const EdgeInsets.only(top: 6.0),
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(
+                  color: textColor.withValues(alpha: 0.14),
+                  width: 0.7,
+                ),
+              ),
+            ),
+            child: isTranslating
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.6,
+                          color: textColor.withValues(alpha: 0.7),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Перевод...',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: textColor.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        translation!.translatedText,
+                        style: style,
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          iconoir.Translate(
+                            width: 12,
+                            height: 12,
+                            color: textColor.withValues(alpha: 0.65),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            translation!.targetLang.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              color: textColor.withValues(alpha: 0.65),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (onHideTranslation != null) ...[
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: onHideTranslation,
+                              child: Text(
+                                'Скрыть перевод',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+          )
+        : null;
+
+    if (!includeLinkPreview) {
+      if (translationBlock == null) return textWidget;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [textWidget, translationBlock],
+      );
+    }
 
     final previewOpts = msg.linkPreviewOptions;
     final bool previewDisabled = previewOpts?.isDisabled ?? false;
@@ -1357,7 +1512,14 @@ class ChannelPostCard extends StatelessWidget {
         previewUrl.isNotEmpty &&
         !previewDisabled &&
         !EntityParser.isInternalStorageUrl(previewUrl);
-    if (!hasEffectivePreview) return textWidget;
+    if (!hasEffectivePreview) {
+      if (translationBlock == null) return textWidget;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [textWidget, translationBlock],
+      );
+    }
 
     final bool showAbove = previewOpts?.showAboveText ?? false;
     final bool preferLarge = previewOpts?.preferLargeMedia ?? false;
@@ -1380,8 +1542,18 @@ class ChannelPostCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: showAbove
-          ? [previewCard, const SizedBox(height: 6.0), textWidget]
-          : [textWidget, const SizedBox(height: 6.0), previewCard],
+          ? [
+              previewCard,
+              const SizedBox(height: 6.0),
+              textWidget,
+              if (translationBlock != null) translationBlock,
+            ]
+          : [
+              textWidget,
+              if (translationBlock != null) translationBlock,
+              const SizedBox(height: 6.0),
+              previewCard,
+            ],
     );
   }
 

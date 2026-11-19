@@ -7,13 +7,16 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
+import '../../screens/settings/profile_screen.dart';
 import '../../screens/settings/theme_preview_screen.dart';
 import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/search_service.dart';
 import '../../services/theav_theme_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../../utils/swipe_back_route.dart';
 import 'code_block_widget.dart';
 import 'collapsible_blockquote_widget.dart';
 import 'spoiler_text_widget.dart';
@@ -57,6 +60,9 @@ class TextMessageWidget extends StatelessWidget {
   final NameColorPreset? nameColorPreset;
   final ReplyStripStyle? replyStripStyle;
   final ReplyEmojiData? replyEmoji;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
 
   const TextMessageWidget({
     Key? key,
@@ -67,6 +73,9 @@ class TextMessageWidget extends StatelessWidget {
     this.nameColorPreset,
     this.replyStripStyle,
     this.replyEmoji,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
   }) : super(key: key);
 
   /// Preserves consecutive spaces and multiple enters inside message text,
@@ -350,6 +359,9 @@ class TextMessageWidget extends StatelessWidget {
           nameColorPreset: nameColorPreset,
           replyStripStyle: replyStripStyle,
           replyEmoji: replyEmoji,
+          onMentionTap: onMentionTap,
+          onCommandTap: onCommandTap,
+          onHashtagTap: onHashtagTap,
         ),
       ),
     );
@@ -366,6 +378,9 @@ class _DirectEntityMessageRenderer extends StatefulWidget {
   final NameColorPreset? nameColorPreset;
   final ReplyStripStyle? replyStripStyle;
   final ReplyEmojiData? replyEmoji;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
 
   const _DirectEntityMessageRenderer({
     required this.cleanText,
@@ -377,6 +392,9 @@ class _DirectEntityMessageRenderer extends StatefulWidget {
     this.nameColorPreset,
     this.replyStripStyle,
     this.replyEmoji,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
   });
 
   @override
@@ -449,6 +467,105 @@ class _DirectEntityMessageRendererState
     Clipboard.setData(ClipboardData(text: codeText));
     if (mounted) {
       GlassToastService().show(context, 'Код скопирован', icon: Icons.check);
+    }
+  }
+
+  Future<void> _handleMentionTap(String rawMention) async {
+    final cleanUsername = rawMention.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (cleanUsername.isEmpty) return;
+    if (widget.onMentionTap != null) {
+      widget.onMentionTap!(cleanUsername);
+      return;
+    }
+
+    try {
+      final result = await SearchService.search(
+        query: cleanUsername,
+        limit: 15,
+      );
+      if (!mounted) return;
+      final candidates = <SearchPeer>[
+        ...result.myPeers,
+        ...result.globalPeers,
+      ];
+      SearchPeer? matched;
+      for (final p in candidates) {
+        if (p.username.toLowerCase() == cleanUsername.toLowerCase()) {
+          matched = p;
+          break;
+        }
+      }
+      if (matched == null) {
+        GlassToastService().show(
+          context,
+          'Пользователь @$cleanUsername не найден',
+        );
+        return;
+      }
+
+      if (matched.isUser) {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ProfileScreen(
+              entityType: ProfileEntityType.user,
+              userId: matched!.id,
+              initialName: matched.name,
+              initialAvatarUrl: matched.avatarUrl,
+            ),
+          ),
+        );
+      } else if (matched.isChannel || matched.isGroup) {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ProfileScreen(
+              entityType: matched!.isChannel
+                  ? ProfileEntityType.channel
+                  : ProfileEntityType.group,
+              chatId: matched.chatId ?? matched.id,
+              initialName: matched.name,
+              initialAvatarUrl: matched.avatarUrl,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error resolving @$cleanUsername: $e');
+    }
+  }
+
+  void _handleCommandTap(String rawCommand) {
+    final cmd = rawCommand.trim();
+    if (cmd.isEmpty) return;
+    if (widget.onCommandTap != null) {
+      widget.onCommandTap!(cmd);
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: cmd));
+    if (mounted) {
+      GlassToastService().show(
+        context,
+        'Команда $cmd скопирована',
+        icon: Icons.check,
+      );
+    }
+  }
+
+  void _handleHashtagTap(String rawHashtag) {
+    final tag = rawHashtag.trim();
+    if (tag.isEmpty) return;
+    if (widget.onHashtagTap != null) {
+      widget.onHashtagTap!(tag);
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: tag));
+    if (mounted) {
+      GlassToastService().show(
+        context,
+        'Хэштег $tag скопирован',
+        icon: Icons.check,
+      );
     }
   }
 
@@ -796,6 +913,9 @@ class _DirectEntityMessageRendererState
         bool isStrike = false;
         bool isCode = false;
         String? linkUrl;
+        String? mentionUsername;
+        String? botCommand;
+        String? hashtag;
 
         for (final e in localEntities) {
           if (e.offset <= sliceStart && (e.offset + e.length) >= sliceEnd) {
@@ -826,6 +946,27 @@ class _DirectEntityMessageRendererState
                         e.offset + e.length,
                       );
                 break;
+              case 'mention':
+                mentionUsername = EntityParser.safeSubstring(
+                  segmentText,
+                  e.offset,
+                  e.offset + e.length,
+                );
+                break;
+              case 'bot_command':
+                botCommand = EntityParser.safeSubstring(
+                  segmentText,
+                  e.offset,
+                  e.offset + e.length,
+                );
+                break;
+              case 'hashtag':
+                hashtag = EntityParser.safeSubstring(
+                  segmentText,
+                  e.offset,
+                  e.offset + e.length,
+                );
+                break;
             }
           }
         }
@@ -838,9 +979,15 @@ class _DirectEntityMessageRendererState
         }
 
         final bool hasLink = linkUrl != null && linkUrl.isNotEmpty;
+        final bool hasInteractiveToken =
+            (mentionUsername != null && mentionUsername.isNotEmpty) ||
+                (botCommand != null && botCommand.isNotEmpty) ||
+                (hashtag != null && hashtag.isNotEmpty);
         if (hasLink) {
           sliceStyle = sliceStyle.copyWith(color: rangeLinkColor);
           isUnderline = true;
+        } else if (hasInteractiveToken) {
+          sliceStyle = sliceStyle.copyWith(color: rangeLinkColor);
         }
 
         if (isUnderline || isStrike) {
@@ -877,6 +1024,18 @@ class _DirectEntityMessageRendererState
           if (hasLink) {
             final targetUrl = linkUrl;
             recognizer = _createTapRecognizer(() => _handleLinkTap(targetUrl));
+          } else if (mentionUsername != null && mentionUsername.isNotEmpty) {
+            final targetMention = mentionUsername;
+            recognizer =
+                _createTapRecognizer(() => _handleMentionTap(targetMention));
+          } else if (botCommand != null && botCommand.isNotEmpty) {
+            final targetCmd = botCommand;
+            recognizer =
+                _createTapRecognizer(() => _handleCommandTap(targetCmd));
+          } else if (hashtag != null && hashtag.isNotEmpty) {
+            final targetTag = hashtag;
+            recognizer =
+                _createTapRecognizer(() => _handleHashtagTap(targetTag));
           } else if (isCode) {
             recognizer = _createTapRecognizer(() => _handleCodeCopy(sliceText));
           }

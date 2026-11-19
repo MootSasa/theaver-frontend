@@ -95,6 +95,7 @@ import '../../widgets/chat/pinned_message_banner.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
 import '../../widgets/chat/bot_welcome_card.dart';
 import '../../widgets/chat/bot_commands_popup.dart';
+import '../../widgets/chat/mention_and_bot_popup.dart';
 import '../../widgets/chat/reply_keyboard_panel.dart';
 import '../../widgets/bot/inline_results_popup.dart';
 import '../../widgets/bot/mini_app_webview_sheet.dart';
@@ -153,6 +154,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   bool _isBotCommandsOpen = false;
   bool _isReplyKeyboardOpen = true;
   final InlineQueryController _inlineQueryController = InlineQueryController();
+  List<BotInfo> _inlineDirectoryBots = const [];
+  String? _activeMentionQuery;
+  int _mentionTokenStart = -1;
+  int _mentionTokenEnd = -1;
+  bool _mentionIsAtStart = false;
   Message? _pinnedMessage;
   List<Message> _pinnedMessages = [];
   int _currentPinnedIndex = 0;
@@ -440,6 +446,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     ProfileInstantCache.instance.prefetchSharedContent(widget.chatId);
     WidgetsBinding.instance.addObserver(this);
     _loadData();
+    unawaited(_loadInlineDirectoryBots());
     _initWebSocket();
     _scrollController.addListener(_onScroll);
     _inputFocusNode.addListener(_onFocusChanged);
@@ -1934,6 +1941,84 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Timer? _typingKeepAliveTimer;
   bool _amITyping = false;
 
+  Future<void> _loadInlineDirectoryBots() async {
+    final bots = await BotService.getBotsDirectory(inlineOnly: true);
+    if (mounted && bots.isNotEmpty) {
+      setState(() => _inlineDirectoryBots = bots);
+    }
+  }
+
+  void _updateMentionAutocompleteState() {
+    if (!mounted) return;
+    if (_inlineQueryController.isActive) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+
+    final sel = _textController.selection;
+    final cursor = sel.isValid ? sel.extentOffset : _textController.text.length;
+    final token = BotService.parseActiveMentionToken(_textController.text, cursor);
+    if (token == null) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+
+    if (_activeMentionQuery != token.query ||
+        _mentionTokenStart != token.start ||
+        _mentionTokenEnd != token.end ||
+        _mentionIsAtStart != token.isAtMessageStart) {
+      setState(() {
+        _activeMentionQuery = token.query;
+        _mentionTokenStart = token.start;
+        _mentionTokenEnd = token.end;
+        _mentionIsAtStart = token.isAtMessageStart;
+      });
+    }
+  }
+
+  void _applyMentionSelection(String username) {
+    final text = _textController.text;
+    final cleanUname = username.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (cleanUname.isEmpty) return;
+
+    final start = _mentionTokenStart;
+    final end = _mentionTokenEnd;
+    if (start < 0 || end < start || end > text.length) {
+      _insertInlineQueryText('@$cleanUname ');
+      return;
+    }
+
+    final insertion = '@$cleanUname ';
+    final updated = text.replaceRange(start, end, insertion);
+    final newCursor = start + insertion.length;
+    setState(() {
+      _activeMentionQuery = null;
+      _mentionTokenStart = -1;
+      _mentionTokenEnd = -1;
+      _mentionIsAtStart = false;
+    });
+    _textController.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: newCursor),
+    );
+    _inputFocusNode.requestFocus();
+    _onInputTextChanged(updated);
+  }
+
   void _onControllerDraftSync() {
     if (!_isEditing) {
       DraftService().saveDraft(
@@ -1945,6 +2030,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         isQuote: _isQuote,
       );
     }
+    _updateMentionAutocompleteState();
   }
 
   void _onInputTextChanged(String text) {
@@ -1974,6 +2060,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       chatId: widget.chatId,
       chatType: _chatType,
     );
+    _updateMentionAutocompleteState();
 
     final bool hasText = text.trim().isNotEmpty;
     if (hasText) {
@@ -3043,7 +3130,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           });
           if (isBotPeer && participant.id.isNotEmpty) {
             unawaited(
-              BotService.getBotInfo(participant.id, chatId: widget.chatId).then((info) {
+              BotService.getBotInfo(
+                participant.id,
+                chatId: widget.chatId,
+                forceRefresh: true,
+              ).then((info) {
                 if (mounted && info != null) {
                   setState(() => _botInfo = info);
                 }
@@ -5198,6 +5289,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onOpenContactUser: _openUserProfileById,
       onSavedTagTap: _selectSavedTagFilter,
       onInsertInlineQuery: _insertInlineQueryText,
+      onCommandTap: (cmd) {
+        if (_isBot) {
+          _sendMessage(cleanText: cmd);
+        } else {
+          _textController.text = cmd;
+          _inputFocusNode.requestFocus();
+        }
+      },
+      onHashtagTap: (_) {
+        ChatActionsHelper.openSearch(
+          context: context,
+          chatId: widget.chatId,
+          chatName: _chatName,
+          onMessageSelected: (msgId) => _scrollToMessage(msgId),
+        );
+      },
       onEffectTap: message.effectId != null && message.effectId!.isNotEmpty
           ? () => GlassToastService().show(
                 context,
@@ -5750,6 +5857,34 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             );
           },
         ),
+        if (_activeMentionQuery != null && !_inlineQueryController.isActive)
+          MentionAndBotPopup(
+            query: _activeMentionQuery!,
+            isAtMessageStart: _mentionIsAtStart,
+            participants: [
+              if (_otherUserId != null &&
+                  _otherUserId!.isNotEmpty &&
+                  _otherUsername != null &&
+                  _otherUsername!.isNotEmpty)
+                MentionCandidate(
+                  id: _otherUserId!,
+                  username: _otherUsername!,
+                  displayName: _chatName,
+                  avatarUrl: _chatAvatar,
+                  isBot: _isBot,
+                  supportsInlineQueries: _botInfo?.supportsInlineQueries ?? false,
+                  inlinePlaceholder: _botInfo?.inlinePlaceholder,
+                ),
+            ],
+            inlineBots: _inlineDirectoryBots,
+            onSelectMention: (cand) => _applyMentionSelection(cand.username),
+            onSelectInlineBot: (bot) {
+              if (bot.username != null && bot.username!.isNotEmpty) {
+                _applyMentionSelection(bot.username!);
+              }
+            },
+            onClose: () => setState(() => _activeMentionQuery = null),
+          ),
         if (_isBot && commands.isNotEmpty)
           BotCommandsPopup(
             isOpen: _isBotCommandsOpen,
@@ -5822,16 +5957,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           onToggleBotCommands: () {
             setState(() => _isBotCommandsOpen = !_isBotCommandsOpen);
           },
-          botMenuWebAppLabel: (_isBot && isMenuWebApp)
-              ? (_botInfo!.menuButton.text.isNotEmpty
+          botMenuWebAppLabel: (_isBot && appUrl != null && appUrl.isNotEmpty)
+              ? ((isMenuWebApp && _botInfo!.menuButton.text.isNotEmpty)
                   ? _botInfo!.menuButton.text
-                  : 'Меню')
+                  : 'Приложение')
               : null,
-          onOpenBotMenuWebApp: (_isBot && isMenuWebApp)
+          onOpenBotMenuWebApp: (_isBot && appUrl != null && appUrl.isNotEmpty)
               ? () => _openBotMiniApp(
-                    url: _botInfo!.menuButton.webAppUrl,
-                    mode: 'menu',
-                    buttonText: _botInfo!.menuButton.text,
+                    url: appUrl,
+                    mode: isMenuWebApp ? 'menu' : 'main',
+                    buttonText: _botInfo?.menuButton.text ?? '',
                   )
               : null,
           hasReplyKeyboard: hasReplyKb,

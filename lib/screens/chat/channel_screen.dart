@@ -85,6 +85,13 @@ import '../../widgets/chat/channel_bottom_capsule_bar.dart';
 import '../../widgets/chat/live_chat_call_banner.dart';
 import '../../widgets/message/telegram_service_message_widget.dart';
 import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
+import '../../services/bot_service.dart';
+import '../../services/dm_parity_service.dart';
+import '../../widgets/chat/contact_picker_sheet.dart';
+import '../../widgets/chat/location_picker_sheet.dart';
+import '../../widgets/chat/mention_and_bot_popup.dart';
+import '../../widgets/bot/inline_results_popup.dart';
+import '../../widgets/bot/mini_app_webview_sheet.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
@@ -168,6 +175,14 @@ class _ChannelScreenState extends State<ChannelScreen>
   ReactionSettings? _reactionSettings;
   bool _hasActiveCall = false;
   bool _isSilentBroadcast = false;
+  List<BotInfo> _inlineDirectoryBots = const [];
+  String? _activeMentionQuery;
+  int _mentionTokenStart = -1;
+  int _mentionTokenEnd = -1;
+  bool _mentionIsAtStart = false;
+  final InlineQueryController _inlineQueryController = InlineQueryController();
+  final Map<String, TranslationResult> _translationsByMsgId = {};
+  final Set<String> _translatingMsgIds = {};
   List<ChatParticipant> _participants = [];
   Message? _pinnedMessage;
   List<Message> _pinnedMessages = [];
@@ -552,6 +567,7 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     _loadData();
     _loadCachedKeyboardHeight();
+    unawaited(_loadInlineDirectoryBots());
     _initWebSocket();
     _inputFocusNode.addListener(_onFocusChanged);
     _stickerInputTarget = ChatStickerInputTarget(
@@ -3461,7 +3477,11 @@ class _ChannelScreenState extends State<ChannelScreen>
         );
         break;
       case AttachmentPickerAction.location:
+        await _sendLocation();
+        break;
       case AttachmentPickerAction.contact:
+        await _sendContact();
+        break;
       case null:
         break;
     }
@@ -3747,6 +3767,91 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
   }
 
+  Future<void> _loadInlineDirectoryBots() async {
+    final bots = await BotService.getBotsDirectory(inlineOnly: true);
+    if (mounted && bots.isNotEmpty) {
+      setState(() => _inlineDirectoryBots = bots);
+    }
+  }
+
+  void _updateMentionAutocompleteState() {
+    if (!mounted || !_canPostInChannel) return;
+    if (_inlineQueryController.isActive) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+    final sel = _messageController.selection;
+    final cursor =
+        sel.isValid ? sel.extentOffset : _messageController.text.length;
+    final token =
+        BotService.parseActiveMentionToken(_messageController.text, cursor);
+    if (token == null) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+    if (_activeMentionQuery != token.query ||
+        _mentionTokenStart != token.start ||
+        _mentionTokenEnd != token.end ||
+        _mentionIsAtStart != token.isAtMessageStart) {
+      setState(() {
+        _activeMentionQuery = token.query;
+        _mentionTokenStart = token.start;
+        _mentionTokenEnd = token.end;
+        _mentionIsAtStart = token.isAtMessageStart;
+      });
+    }
+  }
+
+  void _insertInlineQueryText(String text) {
+    _messageController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    _inputFocusNode.requestFocus();
+  }
+
+  void _applyMentionSelection(String username) {
+    final text = _messageController.text;
+    final cleanUname = username.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (cleanUname.isEmpty) return;
+
+    final start = _mentionTokenStart;
+    final end = _mentionTokenEnd;
+    if (start < 0 || end < start || end > text.length) {
+      _insertInlineQueryText('@$cleanUname ');
+      return;
+    }
+
+    final insertion = '@$cleanUname ';
+    final updated = text.replaceRange(start, end, insertion);
+    final newCursor = start + insertion.length;
+    setState(() {
+      _activeMentionQuery = null;
+      _mentionTokenStart = -1;
+      _mentionTokenEnd = -1;
+      _mentionIsAtStart = false;
+    });
+    _messageController.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: newCursor),
+    );
+    _inputFocusNode.requestFocus();
+  }
+
   void _onInputTextChanged() {
     DraftService().saveDraft(
       widget.channelId,
@@ -3756,6 +3861,14 @@ class _ChannelScreenState extends State<ChannelScreen>
       quoteText: _quoteText,
       isQuote: _isQuote,
     );
+    if (_canPostInChannel) {
+      _inlineQueryController.onTextChanged(
+        _messageController.text,
+        chatId: widget.channelId,
+        chatType: 'channel',
+      );
+      _updateMentionAutocompleteState();
+    }
   }
 
   void _startReply(Message message) {
@@ -3850,6 +3963,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     DraftService().flushDraft(widget.channelId);
     StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _messageController.removeListener(_onInputTextChanged);
+    _inlineQueryController.dispose();
     _emojiPanelController.dispose();
     _inputFocusNode.removeListener(_onFocusChanged);
     _inputFocusNode.dispose();
@@ -4682,6 +4796,22 @@ class _ChannelScreenState extends State<ChannelScreen>
       onFileTap: _openFile,
       onRetry: (msg) => _retryMessage(msg),
       hasProtectedContent: _hasProtectedContent,
+      onInsertInlineQuery: _canPostInChannel ? _insertInlineQueryText : null,
+      translation: _translationsByMsgId[message.id],
+      isTranslating: _translatingMsgIds.contains(message.id),
+      onHideTranslation: () {
+        setState(() => _translationsByMsgId.remove(message.id));
+      },
+      onHashtagTap: (_) {
+        ChatActionsHelper.openSearch(
+          context: context,
+          chatId: widget.channelId,
+          chatName: _channelName.isNotEmpty
+              ? _channelName
+              : (widget.channelName ?? 'Канал'),
+          onMessageSelected: (msgId) => _scrollToMessage(msgId),
+        );
+      },
       onBodyTap: _isSelectionMode
           ? null
           : () => _showContextMenu(message, isMe, key, enableBlur: true),
@@ -5101,10 +5231,149 @@ class _ChannelScreenState extends State<ChannelScreen>
                 previewText: message.content,
               )
           : null,
+      onTranslate: message.content.trim().isNotEmpty
+          ? () => unawaited(_toggleTranslateMessage(message))
+          : null,
+      isTranslated: _translationsByMsgId.containsKey(message.id),
+      onReplyInAnotherChat: !_hasProtectedContent
+          ? () => unawaited(_replyInAnotherChat(message))
+          : null,
       onDelete: _canDeleteMessages ? (msg) => _confirmDeleteMessage(msg) : null,
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
     );
+  }
+
+  Future<void> _sendLocation() async {
+    if (!_canPostInChannel) return;
+    final picked = await showLocationPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.channelId,
+      content: '',
+      messageType: picked.messageType,
+      latitude: picked.latitude,
+      longitude: picked.longitude,
+      livePeriod: picked.livePeriod,
+      heading: picked.heading,
+      horizontalAccuracy: picked.horizontalAccuracy,
+      placeName: picked.placeName,
+      address: picked.address,
+      isSilent: _isSilentBroadcast,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить геопозицию',
+      );
+    }
+  }
+
+  Future<void> _sendContact() async {
+    if (!_canPostInChannel) return;
+    final picked = await showContactPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.channelId,
+      content: picked.displayName,
+      messageType: 'contact',
+      contact: picked.toPayload(),
+      isSilent: _isSilentBroadcast,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить контакт',
+      );
+    }
+  }
+
+  Future<void> _toggleTranslateMessage(Message message) async {
+    if (_translationsByMsgId.containsKey(message.id)) {
+      setState(() => _translationsByMsgId.remove(message.id));
+      return;
+    }
+    if (_translatingMsgIds.contains(message.id)) return;
+    setState(() => _translatingMsgIds.add(message.id));
+    final localeCode = Localizations.localeOf(context).languageCode;
+    final targetLang = localeCode.isNotEmpty ? localeCode : 'ru';
+    final res = await DmParityService.translateMessage(
+      chatId: widget.channelId,
+      messageId: message.id,
+      targetLang: targetLang,
+    );
+    if (!mounted) return;
+    setState(() {
+      _translatingMsgIds.remove(message.id);
+      if (res['success'] == true && res['translation'] is TranslationResult) {
+        _translationsByMsgId[message.id] =
+            res['translation'] as TranslationResult;
+      }
+    });
+    if (res['success'] != true && mounted) {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось перевести пост',
+      );
+    }
+  }
+
+  Future<void> _replyInAnotherChat(Message message) async {
+    final target = await ForwardChatPickerSheet.pickTargetChat(
+      context,
+      fromChatId: widget.channelId,
+      messageCount: 1,
+    );
+    if (!mounted || target == null) return;
+    if (target.chatId == widget.channelId && _canPostInChannel) {
+      _startReply(message);
+      return;
+    }
+    if (target.chatType == 'private' || target.chatType == 'saved') {
+      await Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: (_) => PrivateChatScreen(
+            chatId: target.chatId,
+            otherUserName:
+                target.chatType == 'saved' ? 'Избранное' : target.name,
+            otherUserAvatar: target.avatarUrl,
+            otherUserId: target.otherUserId,
+            initialReplyMessage: message,
+            initialReplyChatId: widget.channelId,
+            initialReplyChatName: _channelName.isNotEmpty
+                ? _channelName
+                : (widget.channelName ?? 'Канал'),
+          ),
+        ),
+      );
+    } else {
+      GlassToastService().show(
+        context,
+        'Ответ в другой чат пока поддержан только для личных чатов',
+      );
+    }
   }
 
   void _enterSelectionMode(Message message) {
@@ -5427,7 +5696,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   Widget _buildBottomBar(String displayName) {
-    return ChannelBottomCapsuleBar(
+    final bar = ChannelBottomCapsuleBar(
       channelId: widget.channelId,
       channelName: displayName,
       myRole: _myRole,
@@ -5529,6 +5798,95 @@ class _ChannelScreenState extends State<ChannelScreen>
       onInvertMediaChanged: (val) {
         setState(() => _invertMedia = val);
       },
+    );
+
+    if (!_canPostInChannel) return bar;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListenableBuilder(
+          listenable: _inlineQueryController,
+          builder: (ctx, _) {
+            if (!_inlineQueryController.isActive) {
+              return const SizedBox.shrink();
+            }
+            return InlineResultsPopup(
+              botUsername: _inlineQueryController.activeBotUsername ?? '',
+              query: _inlineQueryController.query,
+              response: _inlineQueryController.response,
+              isLoading: _inlineQueryController.isLoading,
+              isLoadingMore: _inlineQueryController.isLoadingMore,
+              onClose: _inlineQueryController.clear,
+              onLoadMore: () => _inlineQueryController.loadMore(
+                chatId: widget.channelId,
+                chatType: 'channel',
+              ),
+              onTapHeaderButton: (btn) async {
+                final botId = _inlineQueryController.activeBotUsername ?? '';
+                if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
+                  await openMiniAppSheet(
+                    ctx,
+                    botId: botId,
+                    botUsername: botId,
+                    url: btn.webAppUrl,
+                    chatId: widget.channelId,
+                    mode: 'inline',
+                    onSwitchInlineQuery: _insertInlineQueryText,
+                  );
+                }
+              },
+              onSelectResult: (item) async {
+                final ok = await _inlineQueryController.sendSelectedResult(
+                  chatId: widget.channelId,
+                  result: item,
+                  replyToMessageId: _replyToMessage?.id,
+                );
+                if (!ctx.mounted) return;
+                if (ok) {
+                  _messageController.clear();
+                  _inlineQueryController.clear();
+                  if (_replyToMessage != null) _cancelReply();
+                } else {
+                  GlassToastService().show(
+                    ctx,
+                    'Не удалось отправить результат',
+                  );
+                }
+              },
+            );
+          },
+        ),
+        if (_activeMentionQuery != null && !_inlineQueryController.isActive)
+          MentionAndBotPopup(
+            query: _activeMentionQuery!,
+            isAtMessageStart: _mentionIsAtStart,
+            participants: _participants
+                .where((p) => p.id != _currentUserId && p.username.isNotEmpty)
+                .map(
+                  (p) => MentionCandidate(
+                    id: p.id,
+                    username: p.username,
+                    displayName:
+                        p.displayName.isNotEmpty ? p.displayName : p.username,
+                    avatarUrl: p.avatarUrl,
+                    isBot: p.isBot ||
+                        p.username.toLowerCase().endsWith('bot') ||
+                        p.username.toLowerCase() == 'botmother',
+                  ),
+                )
+                .toList(),
+            inlineBots: _inlineDirectoryBots,
+            onSelectMention: (cand) => _applyMentionSelection(cand.username),
+            onSelectInlineBot: (bot) {
+              if (bot.username != null && bot.username!.isNotEmpty) {
+                _applyMentionSelection(bot.username!);
+              }
+            },
+            onClose: () => setState(() => _activeMentionQuery = null),
+          ),
+        bar,
+      ],
     );
   }
 

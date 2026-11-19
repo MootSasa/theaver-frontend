@@ -100,7 +100,13 @@ import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../call/group_call_screen.dart';
 import '../../services/bot_service.dart';
+import '../../services/dm_parity_service.dart';
+import 'package:geolocator/geolocator.dart';
+import '../../widgets/chat/contact_picker_sheet.dart';
+import '../../widgets/chat/dm_parity_sheets.dart';
+import '../../widgets/chat/location_picker_sheet.dart';
 import '../../widgets/chat/bot_commands_popup.dart';
+import '../../widgets/chat/mention_and_bot_popup.dart';
 import '../../widgets/chat/reply_keyboard_panel.dart';
 import '../../widgets/bot/inline_results_popup.dart';
 import '../../widgets/bot/mini_app_webview_sheet.dart';
@@ -219,6 +225,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   bool _isBotCommandsOpen = false;
   bool _isReplyKeyboardOpen = true;
   final InlineQueryController _inlineQueryController = InlineQueryController();
+  List<BotInfo> _inlineDirectoryBots = const [];
+  String? _activeMentionQuery;
+  int _mentionTokenStart = -1;
+  int _mentionTokenEnd = -1;
+  bool _mentionIsAtStart = false;
+
+  // Parity state (Auto-delete, Appearance, Translation, Live Location)
+  int _autoDeleteSeconds = 0;
+  ChatAppearanceConfig? _chatAppearance;
+  final Map<String, TranslationResult> _translationsByMsgId = {};
+  final Set<String> _translatingMsgIds = {};
+  String? _activeLiveLocationMessageId;
+  Timer? _liveLocationTimer;
+  DateTime? _liveLocationExpiresAt;
 
   String get _screenProtectionKey => 'group_chat_${widget.chatId}';
 
@@ -511,6 +531,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     _loadData();
     _loadCachedKeyboardHeight();
+    unawaited(_loadInlineDirectoryBots());
+    unawaited(_loadChatAppearance());
     _initWebSocket();
     _inputFocusNode.addListener(_onFocusChanged);
     _stickerInputTarget = ChatStickerInputTarget(
@@ -1444,6 +1466,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _restrictedUntil = chat.restrictedUntil;
       _reactionSettings = chat.reactionSettings ?? const ReactionSettings();
       _slowModeInterval = chat.slowModeInterval;
+      _autoDeleteSeconds = chat.messageAutoDeleteTime;
       _hasProtectedContent = chat.hasProtectedContent;
       _isForum = chat.isForum || _activeTopic != null;
       _unreadMentionsCount = chat.unreadMentionsCount;
@@ -1482,7 +1505,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final collected = <BotCommand>[];
     final seen = <String>{};
     for (final bot in bots) {
-      final info = await BotService.getBotInfo(bot.id, chatId: widget.chatId);
+      final info = await BotService.getBotInfo(
+        bot.id,
+        chatId: widget.chatId,
+        forceRefresh: true,
+      );
       if (info == null) continue;
       for (final cmd in info.commands) {
         final key = '${cmd.command.toLowerCase()}_${bot.username.toLowerCase()}';
@@ -2391,6 +2418,94 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Timer? _typingKeepAliveTimer;
   bool _amITyping = false;
 
+  Future<void> _loadInlineDirectoryBots() async {
+    final bots = await BotService.getBotsDirectory(inlineOnly: true);
+    if (mounted && bots.isNotEmpty) {
+      setState(() => _inlineDirectoryBots = bots);
+    }
+  }
+
+  Future<void> _loadChatAppearance() async {
+    final cfg = await DmParityService.getChatAppearance(widget.chatId);
+    if (!mounted) return;
+    setState(() {
+      _chatAppearance = (cfg == null || cfg.isEmpty) ? null : cfg;
+    });
+  }
+
+  void _updateMentionAutocompleteState() {
+    if (!mounted) return;
+    if (_inlineQueryController.isActive) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+
+    final sel = _messageController.selection;
+    final cursor =
+        sel.isValid ? sel.extentOffset : _messageController.text.length;
+    final token =
+        BotService.parseActiveMentionToken(_messageController.text, cursor);
+    if (token == null) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+
+    if (_activeMentionQuery != token.query ||
+        _mentionTokenStart != token.start ||
+        _mentionTokenEnd != token.end ||
+        _mentionIsAtStart != token.isAtMessageStart) {
+      setState(() {
+        _activeMentionQuery = token.query;
+        _mentionTokenStart = token.start;
+        _mentionTokenEnd = token.end;
+        _mentionIsAtStart = token.isAtMessageStart;
+      });
+    }
+  }
+
+  void _applyMentionSelection(String username) {
+    final text = _messageController.text;
+    final cleanUname = username.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (cleanUname.isEmpty) return;
+
+    final start = _mentionTokenStart;
+    final end = _mentionTokenEnd;
+    if (start < 0 || end < start || end > text.length) {
+      _insertInlineQueryText('@$cleanUname ');
+      return;
+    }
+
+    final insertion = '@$cleanUname ';
+    final updated = text.replaceRange(start, end, insertion);
+    final newCursor = start + insertion.length;
+    setState(() {
+      _activeMentionQuery = null;
+      _mentionTokenStart = -1;
+      _mentionTokenEnd = -1;
+      _mentionIsAtStart = false;
+    });
+    _messageController.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: newCursor),
+    );
+    _inputFocusNode.requestFocus();
+    _onInputTextChanged(updated);
+  }
+
   void _onControllerDraftSync() {
     if (!_isEditing) {
       DraftService().saveDraft(
@@ -2402,6 +2517,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         isQuote: _isQuote,
       );
     }
+    _updateMentionAutocompleteState();
   }
 
   void _onInputTextChanged(String text) {
@@ -2429,6 +2545,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       chatId: widget.chatId,
       chatType: 'group',
     );
+    _updateMentionAutocompleteState();
 
     final bool hasText = text.trim().isNotEmpty;
     if (hasText) {
@@ -3763,10 +3880,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _pickDocument();
         break;
       case AttachmentPickerAction.location:
-        // Location sending in group chat
+        _sendLocation();
         break;
       case AttachmentPickerAction.contact:
-        // Contact sending in group chat
+        _sendContact();
         break;
       case AttachmentPickerAction.music:
         _pickAudio();
@@ -4877,6 +4994,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _realtimeSub?.cancel();
     _typingTimer?.cancel();
     _slowmodeTimer?.cancel();
+    _liveLocationTimer?.cancel();
 
     if (_registeredTileId != null) {
       TilingLayoutController.instance.unregisterTileBackHandler(
@@ -5255,6 +5373,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 onReport: () {
                   // TODO: Report dialog
                 },
+                autoDeleteSeconds: _autoDeleteSeconds,
+                onAutoDelete: _isAdmin ? _openAutoDeleteSheet : null,
+                onChatAppearance: _openChatAppearanceSheet,
                 isSelectionMode: _isSelectionMode,
                 selectedCount: _selectedMessageIds.length,
                 hasProtectedContent: _hasProtectedContent,
@@ -6529,7 +6650,39 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onFileTap: (url, name, type) => _openFile(url, name, type),
       formatTime: _formatTime,
       hasProtectedContent: _hasProtectedContent,
+      translation: _translationsByMsgId[message.id],
+      isTranslating: _translatingMsgIds.contains(message.id),
+      onHideTranslation: () {
+        setState(() => _translationsByMsgId.remove(message.id));
+      },
+      onStopLiveLocation: () => _stopLiveLocation(message.id),
+      onOpenContactUser: (uid) {
+        if (uid.isEmpty) return;
+        Navigator.of(context).push(
+          SwipeBackPageRoute(
+            builder: (_) => ProfileScreen(
+              entityType: ProfileEntityType.user,
+              userId: uid,
+            ),
+          ),
+        );
+      },
       onInsertInlineQuery: _insertInlineQueryText,
+      onCommandTap: (cmd) {
+        if (_canSendMessages) {
+          _sendMessage(cleanText: cmd);
+        }
+      },
+      onHashtagTap: (_) {
+        ChatActionsHelper.openSearch(
+          context: context,
+          chatId: widget.chatId,
+          chatName: _groupName.isNotEmpty
+              ? _groupName
+              : (widget.groupName ?? 'Группа'),
+          onMessageSelected: (msgId) => _scrollToMessage(msgId),
+        );
+      },
     );
 
     if (showGroupSenderAvatar) {
@@ -7084,6 +7237,37 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             );
           },
         ),
+        if (_activeMentionQuery != null && !_inlineQueryController.isActive)
+          MentionAndBotPopup(
+            query: _activeMentionQuery!,
+            isAtMessageStart: _mentionIsAtStart,
+            participants: _participants
+                .where((p) => p.id != _currentUserId && p.username.isNotEmpty)
+                .map(
+                  (p) => MentionCandidate(
+                    id: p.id,
+                    username: p.username,
+                    displayName:
+                        p.displayName.isNotEmpty ? p.displayName : p.username,
+                    avatarUrl: p.avatarUrl,
+                    isBot: p.isBot ||
+                        p.username.toLowerCase().endsWith('bot') ||
+                        p.username.toLowerCase() == 'botmother',
+                    roleLabel: p.role == 'owner'
+                        ? 'Владелец'
+                        : (p.role == 'admin' ? 'Админ' : null),
+                  ),
+                )
+                .toList(),
+            inlineBots: _inlineDirectoryBots,
+            onSelectMention: (cand) => _applyMentionSelection(cand.username),
+            onSelectInlineBot: (bot) {
+              if (bot.username != null && bot.username!.isNotEmpty) {
+                _applyMentionSelection(bot.username!);
+              }
+            },
+            onClose: () => setState(() => _activeMentionQuery = null),
+          ),
         if (_groupBotCommands.isNotEmpty)
           BotCommandsPopup(
             isOpen: _isBotCommandsOpen,
@@ -8375,10 +8559,269 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _focusInputField();
       },
       onSelect: () => _enterSelectionMode(message),
+      onTranslate: message.content.trim().isNotEmpty
+          ? () => unawaited(_toggleTranslateMessage(message))
+          : null,
+      isTranslated: _translationsByMsgId.containsKey(message.id),
+      onReplyInAnotherChat: !_hasProtectedContent
+          ? () => unawaited(_replyInAnotherChat(message))
+          : null,
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
     );
+  }
+
+  Future<void> _sendLocation() async {
+    if (!_canSendMessages) return;
+    final picked = await showLocationPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.chatId,
+      content: '',
+      messageType: picked.messageType,
+      latitude: picked.latitude,
+      longitude: picked.longitude,
+      livePeriod: picked.livePeriod,
+      heading: picked.heading,
+      horizontalAccuracy: picked.horizontalAccuracy,
+      placeName: picked.placeName,
+      address: picked.address,
+      topicId: _activeTopicId,
+      sendAsChatId: _selectedSendAsChatId,
+      sendAsAnonymous: _isAnonymousAdminActive,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+      if (picked.messageType == 'live_location' && (picked.livePeriod ?? 0) > 0) {
+        _startLiveLocationUpdater(sent.id, picked.livePeriod ?? 900);
+      }
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить геопозицию',
+      );
+    }
+  }
+
+  void _startLiveLocationUpdater(String messageId, int livePeriodSeconds) {
+    _liveLocationTimer?.cancel();
+    _activeLiveLocationMessageId = messageId;
+    _liveLocationExpiresAt = DateTime.now()
+        .toUtc()
+        .add(Duration(seconds: livePeriodSeconds));
+    _liveLocationTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      final targetId = _activeLiveLocationMessageId;
+      final expiresAt = _liveLocationExpiresAt;
+      if (!mounted || targetId == null || expiresAt == null) {
+        _liveLocationTimer?.cancel();
+        return;
+      }
+      if (DateTime.now().toUtc().isAfter(expiresAt)) {
+        _liveLocationTimer?.cancel();
+        _activeLiveLocationMessageId = null;
+        return;
+      }
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 8),
+          ),
+        );
+        await DmParityService.updateLiveLocation(
+          widget.chatId,
+          targetId,
+          latitude: pos.latitude,
+          longitude: pos.longitude,
+          heading: pos.heading >= 0 && pos.heading <= 360
+              ? pos.heading.round()
+              : null,
+          horizontalAccuracy: pos.accuracy > 0 ? pos.accuracy : null,
+        );
+      } catch (_) {}
+    });
+  }
+
+  Future<void> _stopLiveLocation(String messageId) async {
+    if (_activeLiveLocationMessageId == messageId) {
+      _liveLocationTimer?.cancel();
+      _liveLocationTimer = null;
+      _activeLiveLocationMessageId = null;
+      _liveLocationExpiresAt = null;
+    }
+    final res = await DmParityService.updateLiveLocation(
+      widget.chatId,
+      messageId,
+      stop: true,
+    );
+    if (!mounted) return;
+    if (res['success'] == true) {
+      final rawPayload = res['media_payload'];
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == messageId);
+        if (idx != -1) {
+          final current = _messages[idx];
+          final nextPayload = rawPayload is Map
+              ? Map<String, dynamic>.from(rawPayload)
+              : {
+                  ...?current.mediaPayload,
+                  'is_live_active': false,
+                };
+          _messages[idx] = current.copyWith(mediaPayload: nextPayload);
+          _updateFeedItems();
+        }
+      });
+      GlassToastService().show(context, 'Трансляция геопозиции остановлена');
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось остановить трансляцию',
+      );
+    }
+  }
+
+  Future<void> _sendContact() async {
+    if (!_canSendMessages) return;
+    final picked = await showContactPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.chatId,
+      content: picked.displayName,
+      messageType: 'contact',
+      contact: picked.toPayload(),
+      topicId: _activeTopicId,
+      sendAsChatId: _selectedSendAsChatId,
+      sendAsAnonymous: _isAnonymousAdminActive,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить контакт',
+      );
+    }
+  }
+
+  Future<void> _openAutoDeleteSheet() async {
+    final sec = await showAutoDeleteTimerSheet(
+      context,
+      currentSeconds: _autoDeleteSeconds,
+    );
+    if (!mounted || sec == null) return;
+    final res = await DmParityService.setChatAutoDelete(widget.chatId, sec);
+    if (!mounted) return;
+    if (res['success'] == true) {
+      setState(() => _autoDeleteSeconds = sec);
+      GlassToastService().show(
+        context,
+        sec == 0 ? 'Автоудаление отключено' : 'Автоудаление обновлено',
+      );
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось обновить автоудаление',
+      );
+    }
+  }
+
+  Future<void> _openChatAppearanceSheet() async {
+    final res = await showChatAppearanceSheet(
+      context,
+      chatId: widget.chatId,
+      current: _chatAppearance,
+      canApplyForBoth: _isAdmin,
+    );
+    if (!mounted || res == null || !res.changed) return;
+    setState(() {
+      _chatAppearance =
+          (res.appearance == null || res.appearance!.isEmpty) ? null : res.appearance;
+    });
+  }
+
+  Future<void> _toggleTranslateMessage(Message message) async {
+    if (_translationsByMsgId.containsKey(message.id)) {
+      setState(() => _translationsByMsgId.remove(message.id));
+      return;
+    }
+    if (_translatingMsgIds.contains(message.id)) return;
+    setState(() => _translatingMsgIds.add(message.id));
+    final localeCode = Localizations.localeOf(context).languageCode;
+    final targetLang = localeCode.isNotEmpty ? localeCode : 'ru';
+    final res = await DmParityService.translateMessage(
+      chatId: widget.chatId,
+      messageId: message.id,
+      targetLang: targetLang,
+    );
+    if (!mounted) return;
+    setState(() {
+      _translatingMsgIds.remove(message.id);
+      if (res['success'] == true && res['translation'] is TranslationResult) {
+        _translationsByMsgId[message.id] =
+            res['translation'] as TranslationResult;
+      }
+    });
+    if (res['success'] != true && mounted) {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось перевести сообщение',
+      );
+    }
+  }
+
+  Future<void> _replyInAnotherChat(Message message) async {
+    final target = await ForwardChatPickerSheet.pickTargetChat(
+      context,
+      fromChatId: widget.chatId,
+      messageCount: 1,
+    );
+    if (!mounted || target == null) return;
+    if (target.chatId == widget.chatId) {
+      _startReply(message);
+      return;
+    }
+    if (target.chatType == 'private' || target.chatType == 'saved') {
+      await Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: (_) => PrivateChatScreen(
+            chatId: target.chatId,
+            otherUserName:
+                target.chatType == 'saved' ? 'Избранное' : target.name,
+            otherUserAvatar: target.avatarUrl,
+            otherUserId: target.otherUserId,
+            initialReplyMessage: message,
+            initialReplyChatId: widget.chatId,
+            initialReplyChatName: _groupName.isNotEmpty
+                ? _groupName
+                : (widget.groupName ?? 'Группа'),
+          ),
+        ),
+      );
+    } else {
+      GlassToastService().show(
+        context,
+        'Ответ в другой чат пока поддержан только для личных чатов',
+      );
+    }
   }
 
   void _confirmDeleteMessage(Message message) {

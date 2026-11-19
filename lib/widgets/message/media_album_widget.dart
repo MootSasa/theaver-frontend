@@ -45,6 +45,9 @@ class MediaAlbumWidget extends StatelessWidget {
   final double? overrideWidth;
   final BorderRadius? overrideBorderRadius;
   final bool hasProtectedContent;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
 
   const MediaAlbumWidget({
     Key? key,
@@ -69,6 +72,9 @@ class MediaAlbumWidget extends StatelessWidget {
     this.overrideWidth,
     this.overrideBorderRadius,
     this.hasProtectedContent = false,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
   }) : super(key: key);
 
   MediaAlbumWidget copyWithKey(Key? newKey) {
@@ -95,6 +101,9 @@ class MediaAlbumWidget extends StatelessWidget {
       overrideWidth: overrideWidth,
       overrideBorderRadius: overrideBorderRadius,
       hasProtectedContent: hasProtectedContent,
+      onMentionTap: onMentionTap,
+      onCommandTap: onCommandTap,
+      onHashtagTap: onHashtagTap,
     );
   }
 
@@ -326,6 +335,9 @@ class MediaAlbumWidget extends StatelessWidget {
                           color: onBubbleColor,
                           fontSize: 15,
                         ),
+                        onMentionTap: onMentionTap,
+                        onCommandTap: onCommandTap,
+                        onHashtagTap: onHashtagTap,
                       ),
                     ),
                     if (!suppressFooter) ...[

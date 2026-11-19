@@ -932,11 +932,17 @@ class ProfileScreenState extends State<ProfileScreen>
           if (u['is_online'] is bool) {
             _isOnline = u['is_online'] as bool;
           }
-          if (u['is_bot'] is bool) {
-            _peerIsBot = u['is_bot'] as bool;
-          }
+          final unameLower =
+              (u['username']?.toString() ?? _usernameController.text)
+                  .trim()
+                  .toLowerCase();
+          _peerIsBot = (u['is_bot'] == true) ||
+              unameLower == 'botmother' ||
+              unameLower.endsWith('bot');
           if (u['is_verified'] is bool) {
             _peerIsVerified = u['is_verified'] as bool;
+          } else if (unameLower == 'botmother') {
+            _peerIsVerified = true;
           }
           if (u['last_seen'] != null) {
             _lastSeen = DateTime.tryParse(u['last_seen'].toString());
@@ -1000,7 +1006,11 @@ class ProfileScreenState extends State<ProfileScreen>
   Future<void> _loadBotProfileInfo() async {
     final uid = widget.userId;
     if (uid == null || uid.isEmpty) return;
-    final info = await BotService.getBotInfo(uid, chatId: _resolvedChatId);
+    final info = await BotService.getBotInfo(
+      uid,
+      chatId: _resolvedChatId,
+      forceRefresh: true,
+    );
     if (mounted && info != null) {
       setState(() => _botInfo = info);
     }
@@ -6106,40 +6116,86 @@ class ProfileScreenState extends State<ProfileScreen>
                                               ),
                                             ] else if (_isUser &&
                                                 _peerIsBot &&
-                                                (_botInfo?.webApps.isNotEmpty ??
+                                                (_botInfo?.hasAnyWebApp ??
                                                     false)) ...[
                                               const SizedBox(height: 12),
-                                              TheavInsetGroup(
-                                                header: 'Мини-приложения',
-                                                margin: EdgeInsets.zero,
-                                                children: [
-                                                  for (final app
-                                                      in _botInfo!.webApps)
-                                                    TheavListRow(
-                                                      leading:
-                                                          iconoir.AppWindow(
-                                                        width: 20,
-                                                        height: 20,
-                                                        color: context
-                                                            .theav.primary,
-                                                      ),
-                                                      title: app.title.isNotEmpty
-                                                          ? app.title
-                                                          : app.shortName,
-                                                      subtitle: app.description
-                                                              .isNotEmpty
-                                                          ? app.description
-                                                          : '@${_usernameController.text}/${app.shortName}',
-                                                      showChevron: true,
-                                                      onTap: () =>
-                                                          _openBotAppFromProfile(
-                                                        appShortName:
-                                                            app.shortName,
-                                                        url: app.url,
-                                                        mode: 'app',
-                                                      ),
-                                                    ),
-                                                ],
+                                              Builder(
+                                                builder: (context) {
+                                                  final info = _botInfo!;
+                                                  final primaryUrl =
+                                                      info.effectiveWebAppUrl;
+                                                  final hasPrimaryDuplicate =
+                                                      primaryUrl == null ||
+                                                          primaryUrl.isEmpty ||
+                                                          info.webApps.any(
+                                                            (w) =>
+                                                                w.url ==
+                                                                primaryUrl,
+                                                          );
+                                                  return TheavInsetGroup(
+                                                    header: 'Мини-приложения',
+                                                    margin: EdgeInsets.zero,
+                                                    children: [
+                                                      if (!hasPrimaryDuplicate)
+                                                        TheavListRow(
+                                                          leading:
+                                                              iconoir.AppWindow(
+                                                            width: 20,
+                                                            height: 20,
+                                                            color: context
+                                                                .theav.primary,
+                                                          ),
+                                                          title: info.menuButton
+                                                                      .isWebApp &&
+                                                                  info
+                                                                      .menuButton
+                                                                      .text
+                                                                      .isNotEmpty
+                                                              ? info.menuButton
+                                                                  .text
+                                                              : 'Открыть приложение',
+                                                          subtitle: primaryUrl,
+                                                          showChevron: true,
+                                                          onTap: () =>
+                                                              _openBotAppFromProfile(
+                                                            url: primaryUrl,
+                                                            mode: info.menuButton
+                                                                    .isWebApp
+                                                                ? 'menu'
+                                                                : 'main',
+                                                          ),
+                                                        ),
+                                                      for (final app
+                                                          in info.webApps)
+                                                        TheavListRow(
+                                                          leading:
+                                                              iconoir.AppWindow(
+                                                            width: 20,
+                                                            height: 20,
+                                                            color: context
+                                                                .theav.primary,
+                                                          ),
+                                                          title: app.title
+                                                                  .isNotEmpty
+                                                              ? app.title
+                                                              : app.shortName,
+                                                          subtitle: app
+                                                                  .description
+                                                                  .isNotEmpty
+                                                              ? app.description
+                                                              : '@${_usernameController.text}/${app.shortName}',
+                                                          showChevron: true,
+                                                          onTap: () =>
+                                                              _openBotAppFromProfile(
+                                                            appShortName:
+                                                                app.shortName,
+                                                            url: app.url,
+                                                            mode: 'app',
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  );
+                                                },
                                               ),
                                             ],
                                           ],

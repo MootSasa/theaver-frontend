@@ -210,10 +210,11 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
     String? errorCode,
   ) {
     if (widget.isLoading && results.isEmpty) {
-      return Center(
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
+            const Spacer(),
             SizedBox(
               width: 16,
               height: 16,
@@ -224,6 +225,19 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
               '@${widget.botUsername}...',
               style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
             ),
+            const Spacer(),
+            if (widget.onClose != null)
+              IconButton(
+                onPressed: widget.onClose,
+                visualDensity: VisualDensity.compact,
+                iconSize: 18,
+                tooltip: 'Закрыть',
+                icon: iconoir.Xmark(
+                  width: 16,
+                  height: 16,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
           ],
         ),
       );
@@ -233,15 +247,32 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
       final emptyMsg = errorCode == 'BOT_INLINE_DISABLED'
           ? 'У @${widget.botUsername} отключён inline-режим'
           : 'Нет результатов от @${widget.botUsername}';
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            emptyMsg,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
-          ),
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                emptyMsg,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+              ),
+            ),
+            if (widget.onClose != null)
+              IconButton(
+                onPressed: widget.onClose,
+                visualDensity: VisualDensity.compact,
+                iconSize: 18,
+                tooltip: 'Закрыть',
+                icon: iconoir.Xmark(
+                  width: 16,
+                  height: 16,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+          ],
         ),
       );
     }
@@ -427,11 +458,33 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
 
 /// Shared debounced controller for `@bot query` inline mode across DM and Group chats.
 class InlineQueryController extends ChangeNotifier {
+  final Future<BotInlineQueryResponse?> Function({
+    required String botId,
+    required String query,
+    String? chatId,
+    String? chatType,
+    String offset,
+  }) _queryFetcher;
+  final Duration _debounceDuration;
+
+  InlineQueryController({
+    Future<BotInlineQueryResponse?> Function({
+      required String botId,
+      required String query,
+      String? chatId,
+      String? chatType,
+      String offset,
+    })? queryFetcher,
+    Duration debounceDuration = const Duration(milliseconds: 320),
+  })  : _queryFetcher = queryFetcher ?? BotService.queryInlineBotDetailed,
+        _debounceDuration = debounceDuration;
+
   Timer? _debounce;
   int _requestSeq = 0;
   bool _disposed = false;
 
   String? activeBotUsername;
+  String? _dismissedNonBotUsername;
   String query = '';
   BotInlineQueryResponse? response;
   bool isLoading = false;
@@ -446,14 +499,26 @@ class InlineQueryController extends ChangeNotifier {
   }) {
     final parsed = BotService.parseInlineBotInput(text);
     if (parsed == null) {
+      _dismissedNonBotUsername = null;
       if (isActive || response != null || isLoading) {
         clear();
       }
       return;
     }
 
-    final changed = activeBotUsername?.toLowerCase() !=
-            parsed.botUsername.toLowerCase() ||
+    final parsedLower = parsed.botUsername.toLowerCase();
+    if (_dismissedNonBotUsername != null &&
+        _dismissedNonBotUsername != parsedLower) {
+      _dismissedNonBotUsername = null;
+    }
+    if (_dismissedNonBotUsername == parsedLower) {
+      if (isActive || response != null || isLoading) {
+        clear();
+      }
+      return;
+    }
+
+    final changed = activeBotUsername?.toLowerCase() != parsedLower ||
         query != parsed.query;
     if (!changed && (response != null || isLoading)) {
       return;
@@ -468,14 +533,19 @@ class InlineQueryController extends ChangeNotifier {
 
     _debounce?.cancel();
     final seq = ++_requestSeq;
-    _debounce = Timer(const Duration(milliseconds: 320), () async {
-      final res = await BotService.queryInlineBotDetailed(
+    _debounce = Timer(_debounceDuration, () async {
+      final res = await _queryFetcher(
         botId: parsed.botUsername,
         query: parsed.query,
         chatId: chatId,
         chatType: chatType,
       );
       if (_disposed || seq != _requestSeq) return;
+      if (res == null || res.errorCode == 'NOT_FOUND') {
+        _dismissedNonBotUsername = parsedLower;
+        clear();
+        return;
+      }
       response = res;
       isLoading = false;
       notifyListeners();
@@ -493,7 +563,7 @@ class InlineQueryController extends ChangeNotifier {
     isLoadingMore = true;
     notifyListeners();
     final seq = _requestSeq;
-    final more = await BotService.queryInlineBotDetailed(
+    final more = await _queryFetcher(
       botId: bot,
       query: query,
       chatId: chatId,

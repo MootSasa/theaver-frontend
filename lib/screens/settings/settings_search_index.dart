@@ -7,6 +7,7 @@ import 'about_theaver_screen.dart';
 import 'accounts_screen.dart';
 import 'badge_settings_screen.dart';
 import 'blocked_users_screen.dart';
+import 'bots_and_mini_apps_screen.dart';
 import 'change_email_screen.dart';
 import 'chat_settings_screen.dart';
 import 'chat_type_notifications_screen.dart';
@@ -320,6 +321,26 @@ class SettingsSearchIndex {
         keywords: const ['folders', 'tabs', 'папки', 'вкладки', 'фильтры'],
         icon: Icons.folder_outlined,
         onSelect: (c) => _push(c, const FoldersScreen()),
+      ),
+      SettingsSearchEntry(
+        id: 'bots_mini_apps',
+        titleKey: 'settings_bots_mini_apps',
+        fallbackTitle: 'Боты и Mini Apps',
+        sectionKey: 'settings_bots_mini_apps',
+        fallbackSection: 'Боты и приложения',
+        keywords: const [
+          'bots',
+          'botmother',
+          'mini app',
+          'webapp',
+          'inline',
+          'боты',
+          'мини-приложения',
+          'приложения',
+          'инлайн',
+        ],
+        icon: Icons.apps_outlined,
+        onSelect: (c) => _push(c, const BotsAndMiniAppsScreen()),
       ),
       SettingsSearchEntry(
         id: 'new_folder',

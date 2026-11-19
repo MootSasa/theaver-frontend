@@ -55,6 +55,14 @@ class EntityParser {
   /// Regular expression for detecting URLs (both with scheme and bare domains).
   static RegExp get urlRegex => _urlRegex;
 
+  static final RegExp _mentionRegex =
+      RegExp(r'(?<![a-zA-Z0-9_./])@([a-zA-Z][a-zA-Z0-9_]{2,31})\b');
+  static final RegExp _botCommandRegex = RegExp(
+    r'(?<![a-zA-Z0-9_./:])(/[a-zA-Z][a-zA-Z0-9_]{0,31}(?:@[a-zA-Z][a-zA-Z0-9_]{3,31})?)(?![a-zA-Z0-9_/])',
+  );
+  static final RegExp _hashtagRegex =
+      RegExp(r'(?<![a-zA-Z0-9_&#/])#([\p{L}\p{N}_]{1,64})', unicode: true);
+
   /// Ensures the URL starts with http:// or https://.
   static String normalizeUrl(String raw) {
     var u = cleanUrl(raw);
@@ -1422,7 +1430,10 @@ class EntityParser {
     } else {
       final normalized = rawText.replaceAll('\r\n', '\n').trimRight();
       if (!_formattingSyntaxCheck.hasMatch(normalized) &&
-          !_urlRegex.hasMatch(normalized)) {
+          !_urlRegex.hasMatch(normalized) &&
+          !normalized.contains('@') &&
+          !normalized.contains('/') &&
+          !normalized.contains('#')) {
         final plainRes = ParsedMessage(cleanText: normalized, entities: const []);
         if (_resolvedMessageCache.length >= _kMaxResolvedCacheSize) {
           _resolvedMessageCache.remove(_resolvedMessageCache.keys.first);
@@ -1467,6 +1478,8 @@ class EntityParser {
       }
     }
 
+    _appendAutoDetectedEntities(cleanText, baseEntities);
+
     baseEntities.sort((a, b) {
       if (a.offset != b.offset) return a.offset.compareTo(b.offset);
       if (a.length != b.length) return b.length.compareTo(a.length);
@@ -1482,5 +1495,66 @@ class EntityParser {
     }
     _resolvedMessageCache[cacheKey] = result;
     return result;
+  }
+
+  static void _appendAutoDetectedEntities(
+    String cleanText,
+    List<MessageEntity> baseEntities,
+  ) {
+    if (cleanText.isEmpty) return;
+
+    bool isProtectedRange(int start, int end, String ownType) {
+      for (final e in baseEntities) {
+        final eEnd = e.offset + e.length;
+        if (start >= eEnd || end <= e.offset) continue;
+        if (e.type == 'pre' ||
+            e.type == 'code' ||
+            e.type == 'url' ||
+            e.type == 'link' ||
+            e.type == 'text_link' ||
+            e.type == 'latex_inline' ||
+            e.type == 'latex_block' ||
+            e.type == ownType) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (cleanText.contains('@')) {
+      for (final m in _mentionRegex.allMatches(cleanText)) {
+        if (!isProtectedRange(m.start, m.end, 'mention')) {
+          baseEntities.add(MessageEntity(
+            type: 'mention',
+            offset: m.start,
+            length: m.end - m.start,
+          ));
+        }
+      }
+    }
+
+    if (cleanText.contains('/')) {
+      for (final m in _botCommandRegex.allMatches(cleanText)) {
+        if (!isProtectedRange(m.start, m.end, 'bot_command')) {
+          baseEntities.add(MessageEntity(
+            type: 'bot_command',
+            offset: m.start,
+            length: m.end - m.start,
+          ));
+        }
+      }
+    }
+
+    if (cleanText.contains('#')) {
+      for (final m in _hashtagRegex.allMatches(cleanText)) {
+        if (!isProtectedRange(m.start, m.end, 'hashtag')) {
+          baseEntities.add(MessageEntity(
+            type: 'hashtag',
+            offset: m.start,
+            length: m.end - m.start,
+          ));
+        }
+      }
+    }
   }
 }
