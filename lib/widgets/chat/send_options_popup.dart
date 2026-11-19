@@ -10,6 +10,7 @@ enum SendOptionChoice {
   sendSilent,
   schedule,
   sendWhenOnline,
+  sendWithEffect,
 }
 
 /// Telegram-style send options sheet shown when long-pressing the Send button
@@ -19,6 +20,7 @@ Future<SendOptionChoice?> showSendOptionsPopup({
   bool isPrivateChat = false,
   bool isPeerOnline = true,
   bool showSilentOption = true,
+  bool showEffectOption = true,
 }) {
   return showTheavModalSheet<SendOptionChoice>(
     context: context,
@@ -66,6 +68,19 @@ Future<SendOptionChoice?> showSendOptionsPopup({
                   subtitle: 'Автоматически доставится при появлении онлайн',
                   onTap: () =>
                       Navigator.of(ctx).pop(SendOptionChoice.sendWhenOnline),
+                ),
+              if (showEffectOption)
+                TheavListRow(
+                  leading: iconoir.Sparks(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Отправить с эффектом',
+                  subtitle: 'Выбрать анимацию к сообщению',
+                  showChevron: true,
+                  onTap: () =>
+                      Navigator.of(ctx).pop(SendOptionChoice.sendWithEffect),
                 ),
             ],
           ),

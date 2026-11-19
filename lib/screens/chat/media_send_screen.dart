@@ -99,6 +99,8 @@ class MediaSendResult {
   final DateTime? scheduleAt;
   final bool sendWhenOnline;
   final Map<String, String> captionsByPath;
+  final bool isViewOnce;
+  final int ttlSeconds;
 
   const MediaSendResult({
     required this.files,
@@ -110,6 +112,8 @@ class MediaSendResult {
     this.scheduleAt,
     this.sendWhenOnline = false,
     this.captionsByPath = const {},
+    this.isViewOnce = false,
+    this.ttlSeconds = 0,
   });
 }
 
@@ -142,6 +146,8 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
   bool _asDocument = false;
   bool _hasMediaSpoiler = false;
   bool _isCompressing = false;
+  bool _isViewOnce = false;
+  int _ttlSeconds = 0;
 
   final Map<String, VideoPlayerController> _videoControllers = {};
   final Map<String, TextEditingController> _captionControllers = {};
@@ -452,7 +458,11 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                         onChanged: (val) {
                           setState(() {
                             _asDocument = val;
-                            if (val) _hasMediaSpoiler = false;
+                            if (val) {
+                              _hasMediaSpoiler = false;
+                              _isViewOnce = false;
+                              _ttlSeconds = 0;
+                            }
                           });
                           setSheetState(() {});
                           Navigator.pop(ctx);
@@ -461,12 +471,82 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                       onTap: () {
                         setState(() {
                           _asDocument = !_asDocument;
-                          if (_asDocument) _hasMediaSpoiler = false;
+                          if (_asDocument) {
+                            _hasMediaSpoiler = false;
+                            _isViewOnce = false;
+                            _ttlSeconds = 0;
+                          }
                         });
                         setSheetState(() {});
                         Navigator.pop(ctx);
                       },
                     ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showViewOnceTimerPicker() {
+    if (!widget.isPrivateChat || _asDocument || _files.length != 1) return;
+    HapticUtils.selection();
+    final palette = context.theav;
+    const ttlChoices = <int>[0, 5, 10, 30, 60];
+    showTheavModalSheet<void>(
+      context: context,
+      title: 'Таймер просмотра',
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TheavInsetGroup(
+                  dividerIndent: 52,
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Timer(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: '1× Однократный просмотр',
+                      subtitle: 'Медиа удалится сразу после просмотра',
+                      trailing: TheavCheckCircle(selected: _isViewOnce),
+                      onTap: () {
+                        setState(() {
+                          _isViewOnce = !_isViewOnce;
+                          if (_isViewOnce) _ttlSeconds = 0;
+                        });
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                    for (final sec in ttlChoices)
+                      TheavListRow(
+                        leading: iconoir.Clock(
+                          width: 20,
+                          height: 20,
+                          color: sec == 0 ? palette.subtext : palette.primary,
+                        ),
+                        title: sec == 0
+                            ? 'Без таймера'
+                            : 'Исчезнет через $sec сек',
+                        trailing: TheavCheckCircle(
+                          selected: !_isViewOnce && _ttlSeconds == sec,
+                        ),
+                        onTap: () {
+                          setState(() {
+                            _isViewOnce = false;
+                            _ttlSeconds = sec;
+                          });
+                          Navigator.pop(ctx);
+                        },
+                      ),
                   ],
                 ),
               ],
@@ -572,6 +652,8 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
             scheduleAt: scheduleAt,
             sendWhenOnline: sendWhenOnline,
             captionsByPath: captionsByPath,
+            isViewOnce: _files.length == 1 && !_asDocument && _isViewOnce,
+            ttlSeconds: _files.length == 1 && !_asDocument ? _ttlSeconds : 0,
           ),
         );
       }
@@ -597,6 +679,8 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
             scheduleAt: scheduleAt,
             sendWhenOnline: sendWhenOnline,
             captionsByPath: captionsByPath,
+            isViewOnce: _files.length == 1 && !_asDocument && _isViewOnce,
+            ttlSeconds: _files.length == 1 && !_asDocument ? _ttlSeconds : 0,
           ),
         );
       }
@@ -825,6 +909,43 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                                           : Colors.white,
                                     ),
                                   ),
+                                  if (widget.isPrivateChat &&
+                                      !_asDocument &&
+                                      _files.length == 1)
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _showViewOnceTimerPicker,
+                                      child: Container(
+                                        height: 32,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                        ),
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: (_isViewOnce || _ttlSeconds > 0)
+                                              ? palette.primary
+                                                  .withValues(alpha: 0.24)
+                                              : Colors.white12,
+                                          borderRadius:
+                                              BorderRadius.circular(16),
+                                        ),
+                                        child: Text(
+                                          _isViewOnce
+                                              ? '1×'
+                                              : (_ttlSeconds > 0
+                                                  ? '$_ttlSeconds с'
+                                                  : '⏱'),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: (_isViewOnce ||
+                                                    _ttlSeconds > 0)
+                                                ? palette.primary
+                                                : Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   GestureDetector(
                                     behavior: HitTestBehavior.opaque,
                                     onTap: _showQualityPicker,

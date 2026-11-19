@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -26,7 +27,9 @@ import '../../services/chat_actions_helper.dart';
 import '../../services/chat_service.dart';
 import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
+import '../../services/dm_parity_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../widgets/chat/dm_parity_sheets.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../models/profile_customization.dart';
 import '../../services/profile_instant_cache.dart';
@@ -194,11 +197,12 @@ class ProfileScreenState extends State<ProfileScreen>
   bool _peerIsBot = false;
   bool _peerIsVerified = false;
 
-  // Общие материалы из локальной БД Drift
+  // Общие материалы из локальной БД Drift и сервера + общие группы
   List<DbMessage> _mediaMessages = [];
   List<DbMessage> _fileMessages = [];
   List<DbMessage> _linkMessages = [];
   List<DbMessage> _voiceMessages = [];
+  List<CommonGroupItem> _commonGroups = [];
 
   /// Выбранная вкладка разделов
   int _selectedSectionIndex = 0;
@@ -540,6 +544,7 @@ class ProfileScreenState extends State<ProfileScreen>
       unawaited(_loadMuteAndBlockState());
       unawaited(_loadOtherUserProfile());
       unawaited(_loadSharedContentForPeerUser());
+      unawaited(_loadCommonGroups());
     } else {
       // Group or Channel
       unawaited(_loadMuteAndBlockState());
@@ -1232,6 +1237,96 @@ class ProfileScreenState extends State<ProfileScreen>
     } catch (_) {}
   }
 
+  Future<void> _loadCommonGroups() async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty || _isSelf) return;
+    final groups = await DmParityService.getCommonGroups(uid);
+    if (!mounted) return;
+    setState(() => _commonGroups = groups);
+  }
+
+  List<DbMessage> _mergeCloudSharedMessages(
+    List<DbMessage> local,
+    List<Message> cloud,
+  ) {
+    if (cloud.isEmpty) return local;
+    final seen = <String>{
+      for (final d in local)
+        if ((d.serverId ?? '').isNotEmpty) d.serverId! else d.localId,
+    };
+    final merged = List<DbMessage>.from(local);
+    for (final m in cloud) {
+      if (m.id.isEmpty || seen.contains(m.id)) continue;
+      seen.add(m.id);
+      merged.add(_dbMessageFromMessage(m));
+    }
+    return merged;
+  }
+
+  DbMessage _dbMessageFromMessage(Message m) {
+    return DbMessage(
+      localId: m.localId ?? m.id,
+      serverId: m.id,
+      chatId: m.chatId,
+      senderId: m.senderId,
+      content: m.content,
+      messageType: m.messageType,
+      fileUrl: m.fileUrl,
+      fileName: m.fileName,
+      replyToMessageId: m.replyToMessageId,
+      isQuote: m.isQuote,
+      quoteText: m.quoteText,
+      quoteOffset: m.quoteOffset,
+      quoteLength: m.quoteLength,
+      replyToSenderId: m.replyInfo?.senderId,
+      replyToSenderName: m.replyInfo?.senderName,
+      replyToContent: m.replyInfo?.content,
+      replyToMessageType: m.replyInfo?.messageType ?? 'text',
+      isRead: m.isRead,
+      isEdited: m.isEdited,
+      sendStatus: m.sendStatus,
+      senderName: m.senderName,
+      senderAvatarUrl: m.senderAvatarUrl,
+      createdAt: m.createdAt,
+      isForward: m.isForward,
+      forwardFromId: m.forwardFromId,
+      forwardFromName: m.forwardFromName,
+      forwardFromAvatarUrl: m.forwardFromAvatarUrl,
+      senderCustomizationJson: m.senderCustomization?.toJsonString(),
+      groupedId: m.groupedId,
+      entities: m.entities.isNotEmpty
+          ? jsonEncode(m.entities.map((e) => e.toJson()).toList())
+          : null,
+      reactions: null,
+      linkPreviewOptions: null,
+      invertMedia: m.invertMedia,
+      isRound: m.isRound,
+      mediaPayload:
+          m.mediaPayload != null ? jsonEncode(m.mediaPayload) : null,
+      viewsCount: m.viewsCount,
+      authorSignature: m.authorSignature,
+      postAuthorId: m.postAuthorId,
+      senderRole: m.senderRole,
+      senderAdminTitle: m.senderAdminTitle,
+      isFromAnonymousAdmin: m.isFromAnonymousAdmin,
+      isSilent: m.isSilent,
+      commentsCount: m.commentsCount,
+      recentRepliersJson: null,
+      threadRootMessageId: m.threadRootMessageId,
+      hasMediaSpoiler: m.hasMediaSpoiler,
+      expiresAt: m.expiresAt,
+      ttlSeconds: m.ttlSeconds,
+      isViewOnce: m.isViewOnce,
+      viewedAt: m.viewedAt,
+      isBurned: m.isBurned,
+      replyToChatId: m.replyToChatId,
+      replyToChatName: m.replyToChatName,
+      replyToChatType: m.replyToChatType,
+      effectId: m.effectId,
+      savedTagsJson: m.savedTags.isNotEmpty ? jsonEncode(m.savedTags) : null,
+    );
+  }
+
   Future<void> _loadSharedContentForChat(String cid) async {
     if (cid.isEmpty) return;
     try {
@@ -1257,6 +1352,33 @@ class ProfileScreenState extends State<ProfileScreen>
         _fileMessages = results[1];
         _linkMessages = results[2];
         _voiceMessages = results[3];
+      });
+
+      final cloudPages = await Future.wait([
+        DmParityService.getChatSharedMedia(cid, type: 'media'),
+        DmParityService.getChatSharedMedia(cid, type: 'files'),
+        DmParityService.getChatSharedMedia(cid, type: 'links'),
+        DmParityService.getChatSharedMedia(cid, type: 'voice'),
+      ]);
+      if (!mounted) return;
+      final mergedMedia = _mergeCloudSharedMessages(results[0], cloudPages[0].messages);
+      final mergedFiles = _mergeCloudSharedMessages(results[1], cloudPages[1].messages);
+      final mergedLinks = _mergeCloudSharedMessages(results[2], cloudPages[2].messages);
+      final mergedVoice = _mergeCloudSharedMessages(results[3], cloudPages[3].messages);
+      ProfileInstantCache.instance.putSharedContent(
+        cid,
+        CachedSharedContentSnapshot(
+          mediaMessages: mergedMedia,
+          fileMessages: mergedFiles,
+          linkMessages: mergedLinks,
+          voiceMessages: mergedVoice,
+        ),
+      );
+      setState(() {
+        _mediaMessages = mergedMedia;
+        _fileMessages = mergedFiles;
+        _linkMessages = mergedLinks;
+        _voiceMessages = mergedVoice;
       });
     } catch (e) {
       debugPrint('[ProfileScreen] Error loading shared content for $cid: $e');
@@ -1615,6 +1737,12 @@ class ProfileScreenState extends State<ProfileScreen>
       filesItem,
       linksItem,
       voiceItem,
+      if (!_isSelf)
+        ProfileSectionItem(
+          type: ProfileSectionType.commonGroups,
+          label: 'Общие группы',
+          count: _commonGroups.length,
+        ),
     ];
   }
 
@@ -5232,6 +5360,7 @@ class ProfileScreenState extends State<ProfileScreen>
                                                             .currentAccount
                                                             ?.userId,
                                                     members: _members,
+                                                    commonGroups: _commonGroups,
                                                     mediaMessages:
                                                         _mediaMessages,
                                                     fileMessages: _fileMessages,
@@ -5244,6 +5373,20 @@ class ProfileScreenState extends State<ProfileScreen>
                                                         _canManageGroupAdminSettings,
                                                     onAddMemberTap:
                                                         _showAddMemberDialog,
+                                                    onCommonGroupTap: (g) {
+                                                      Navigator.push(
+                                                        context,
+                                                        SwipeBackPageRoute(
+                                                          builder: (_) =>
+                                                              GroupChatScreen(
+                                                            chatId: g.id,
+                                                            groupName: g.name,
+                                                            groupAvatar:
+                                                                g.avatarUrl,
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
                                                     onMemberTap: (m) {
                                                       Navigator.push(
                                                         context,
@@ -5622,13 +5765,33 @@ class ProfileScreenState extends State<ProfileScreen>
           iconBuilder: (color, size) =>
               iconoir.ShareIos(color: color, width: size, height: size),
         ),
-        if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty)
+        if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) ...[
+          _MorphMenuItemData(
+            id: 'auto_delete',
+            label: 'Автоудаление сообщений',
+            iconBuilder: (color, size) =>
+                iconoir.Timer(color: color, width: size, height: size),
+          ),
+          _MorphMenuItemData(
+            id: 'chat_appearance',
+            label: 'Оформление чата',
+            iconBuilder: (color, size) =>
+                iconoir.Palette(color: color, width: size, height: size),
+          ),
           _MorphMenuItemData(
             id: 'clear_history',
             label: _tr(l10n, 'chat_menu_clear_history', 'Очистить историю'),
             iconBuilder: (color, size) =>
                 iconoir.Erase(color: color, width: size, height: size),
           ),
+        ],
+        _MorphMenuItemData(
+          id: 'report_user',
+          label: _tr(l10n, 'chat_menu_report', 'Пожаловаться'),
+          isDestructive: true,
+          iconBuilder: (color, size) =>
+              iconoir.WarningTriangle(color: color, width: size, height: size),
+        ),
         _MorphMenuItemData(
           id: 'toggle_block',
           label: _isBlocked
@@ -5724,6 +5887,37 @@ class ProfileScreenState extends State<ProfileScreen>
         break;
       case 'search_chat':
         _handleSearchInChat();
+        break;
+      case 'auto_delete':
+        if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) {
+          unawaited(() async {
+            final sec = await showAutoDeleteTimerSheet(context);
+            if (sec != null && mounted) {
+              await DmParityService.setChatAutoDelete(_resolvedChatId!, sec);
+              _showToast('Автоудаление обновлено');
+            }
+          }());
+        }
+        break;
+      case 'chat_appearance':
+        if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) {
+          unawaited(
+            showChatAppearanceSheet(
+              context,
+              chatId: _resolvedChatId!,
+              canApplyForBoth: true,
+            ),
+          );
+        }
+        break;
+      case 'report_user':
+        unawaited(
+          showAbuseReportSheet(
+            context,
+            targetUserId: widget.userId,
+            chatId: _resolvedChatId,
+          ),
+        );
         break;
       case 'clear_history':
         _handleClearHistory();

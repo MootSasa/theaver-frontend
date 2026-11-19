@@ -84,6 +84,9 @@ dependencies:
   flutter_svg: ^2.0.10+1
   sensors_plus: ^5.0.1
   camera_windows: ^0.3.0
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  geolocator: ^13.0.2
 
 
 

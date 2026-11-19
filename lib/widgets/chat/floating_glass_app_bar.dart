@@ -43,8 +43,17 @@ const double kFloatingAppBarTotalHeight = _kAppBarHeight + _kAppBarVerticalPaddi
 
 /// Ширина выпадающего морф-меню действий.
 const double _kMenuWidth = 250.0;
-/// Высота выпадающего морф-меню действий (5 пунктов по 42pt + padding 24pt = 234pt).
-const double _kMenuHeight = 234.0;
+
+String _formatAutoDeleteShort(int seconds) {
+  if (seconds <= 0) return '';
+  if (seconds >= 31536000) return '1 г';
+  if (seconds >= 2592000) return '1 мес';
+  if (seconds >= 604800) return '7 дн';
+  if (seconds >= 86400) return '24 ч';
+  if (seconds >= 3600) return '${seconds ~/ 3600} ч';
+  if (seconds >= 60) return '${seconds ~/ 60} м';
+  return '$seconds с';
+}
 
 /// Кинематика морфинга меню действий чата.
 /// Использует plain-режим (единая линза без разделения на два блоба, исключающая любые прыжки).
@@ -89,6 +98,12 @@ class FloatingGlassAppBar extends StatefulWidget {
   final VoidCallback? onToggleMute;
   final VoidCallback? onClearHistory;
   final VoidCallback? onReport;
+  final VoidCallback? onAutoDelete;
+  final VoidCallback? onChatAppearance;
+  final VoidCallback? onToggleSavedViewMode;
+  final bool isSavedPeersMode;
+  final int autoDeleteSeconds;
+  final bool isSavedChat;
   final VoidCallback? onViewProfile;
   final WidgetBuilder? profileScreenBuilder;
   final String? heroTag;
@@ -126,6 +141,12 @@ class FloatingGlassAppBar extends StatefulWidget {
     this.onToggleMute,
     this.onClearHistory,
     this.onReport,
+    this.onAutoDelete,
+    this.onChatAppearance,
+    this.onToggleSavedViewMode,
+    this.isSavedPeersMode = false,
+    this.autoDeleteSeconds = 0,
+    this.isSavedChat = false,
     this.onViewProfile,
     this.profileScreenBuilder,
     this.heroTag,
@@ -229,6 +250,15 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       return true;
     }
     return false;
+  }
+
+  double get _computedMenuHeight {
+    int count = 4; // Profile, Search, Mute, Clear history
+    if (widget.onToggleSavedViewMode != null) count++;
+    if (widget.onAutoDelete != null) count++;
+    if (widget.onChatAppearance != null) count++;
+    if (widget.onReport != null || !widget.isSavedChat) count++;
+    return 18.0 + count * 42.0;
   }
 
   void _openMenu() {
@@ -487,7 +517,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                 child: morphStyle != null
                     ? SizedBox(
                         width: adaptiveMenuWidth,
-                        height: _kMenuHeight,
+                        height: _computedMenuHeight,
                         child: LiquidGlassMorph(
                           key: const ValueKey<String>('chat_right_morph'),
                           alignment: Alignment.topRight,
@@ -498,12 +528,26 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                               ? _ChatActionsMorphMenu(
                                   key: const ValueKey<String>('chat_actions_menu'),
                                   width: adaptiveMenuWidth,
+                                  height: _computedMenuHeight,
                                   isMuted: widget.isMuted,
+                                  isSavedChat: widget.isSavedChat,
+                                  isSavedPeersMode: widget.isSavedPeersMode,
+                                  autoDeleteSeconds: widget.autoDeleteSeconds,
+                                  showReport: widget.onReport != null || !widget.isSavedChat,
                                   onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                                   onSearch: () { _closeMenu(); widget.onSearch?.call(); },
                                   onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
                                   onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
                                   onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                  onAutoDelete: widget.onAutoDelete != null
+                                      ? () { _closeMenu(); widget.onAutoDelete?.call(); }
+                                      : null,
+                                  onChatAppearance: widget.onChatAppearance != null
+                                      ? () { _closeMenu(); widget.onChatAppearance?.call(); }
+                                      : null,
+                                  onToggleSavedViewMode: widget.onToggleSavedViewMode != null
+                                      ? () { _closeMenu(); widget.onToggleSavedViewMode?.call(); }
+                                      : null,
                                 )
                               : _RightPillContent(
                                   key: const ValueKey<String>('chat_right_pill_content'),
@@ -519,7 +563,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                         duration: const Duration(milliseconds: 250),
                         curve: Curves.easeOutCubic,
                         width: _isMenuOpen ? adaptiveMenuWidth : rightCollapsedWidth,
-                        height: _isMenuOpen ? _kMenuHeight : _kAppBarHeight,
+                        height: _isMenuOpen ? _computedMenuHeight : _kAppBarHeight,
                         alignment: Alignment.topRight,
                         child: _buildMattePill(
                           isDark: isDark,
@@ -529,12 +573,26 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                 ? _ChatActionsMorphMenu(
                                     key: const ValueKey<String>('chat_actions_menu_matte'),
                                     width: adaptiveMenuWidth,
+                                    height: _computedMenuHeight,
                                     isMuted: widget.isMuted,
+                                    isSavedChat: widget.isSavedChat,
+                                    isSavedPeersMode: widget.isSavedPeersMode,
+                                    autoDeleteSeconds: widget.autoDeleteSeconds,
+                                    showReport: widget.onReport != null || !widget.isSavedChat,
                                     onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                                     onSearch: () { _closeMenu(); widget.onSearch?.call(); },
                                     onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
                                     onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
                                     onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                    onAutoDelete: widget.onAutoDelete != null
+                                        ? () { _closeMenu(); widget.onAutoDelete?.call(); }
+                                        : null,
+                                    onChatAppearance: widget.onChatAppearance != null
+                                        ? () { _closeMenu(); widget.onChatAppearance?.call(); }
+                                        : null,
+                                    onToggleSavedViewMode: widget.onToggleSavedViewMode != null
+                                        ? () { _closeMenu(); widget.onToggleSavedViewMode?.call(); }
+                                        : null,
                                   )
                                 : _RightPillContent(
                                     key: const ValueKey<String>('chat_right_pill_matte_content'),
@@ -847,6 +905,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                           }
                           final effectiveStatusText =
                               widget.statusText ?? (widget.isBot ? 'бот' : null);
+                          Widget statusChild;
                           if (effectiveStatusText != null) {
                             final isHardcodedGrey = widget.statusColor == Colors.grey[600] ||
                                 widget.statusColor == Colors.grey;
@@ -856,7 +915,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                             final effectiveColor = (widget.statusColor == null || isHardcodedGrey)
                                 ? secondaryTextColor
                                 : (widget.statusColor == theme.colorScheme.primary ? defaultAccent : widget.statusColor);
-                            return AnimatedEllipsisText(
+                            statusChild = AnimatedEllipsisText(
                               text: effectiveStatusText,
                               style: TextStyle(
                                 fontSize: _kStatusFontSize,
@@ -864,11 +923,37 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                 fontWeight: FontWeight.w500,
                               ),
                             );
+                          } else {
+                            statusChild = _AutoRefreshingLastSeenText(
+                              isOnline: widget.isOnline,
+                              lastSeen: widget.lastSeen,
+                            );
                           }
-                          return _AutoRefreshingLastSeenText(
-                            isOnline: widget.isOnline,
-                            lastSeen: widget.lastSeen,
-                          );
+                          if (widget.autoDeleteSeconds > 0) {
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                statusChild,
+                                const SizedBox(width: 5),
+                                iconoir.Timer(
+                                  width: 11,
+                                  height: 11,
+                                  color: secondaryTextColor,
+                                ),
+                                const SizedBox(width: 2),
+                                Text(
+                                  _formatAutoDeleteShort(widget.autoDeleteSeconds),
+                                  style: TextStyle(
+                                    fontSize: _kStatusFontSize - 1,
+                                    color: secondaryTextColor,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            );
+                          }
+                          return statusChild;
                         },
                       ),
                     ),
@@ -1013,22 +1098,38 @@ class _RightPillContent extends StatelessWidget {
 /// Content of the expanded actions menu morphed from the right pill.
 class _ChatActionsMorphMenu extends StatelessWidget {
   final double width;
+  final double height;
   final bool isMuted;
+  final bool isSavedChat;
+  final bool isSavedPeersMode;
+  final int autoDeleteSeconds;
+  final bool showReport;
   final VoidCallback onViewProfile;
   final VoidCallback onSearch;
   final VoidCallback onToggleMute;
   final VoidCallback onClearHistory;
   final VoidCallback onReport;
+  final VoidCallback? onAutoDelete;
+  final VoidCallback? onChatAppearance;
+  final VoidCallback? onToggleSavedViewMode;
 
   const _ChatActionsMorphMenu({
     super.key,
     required this.width,
+    required this.height,
     required this.isMuted,
+    this.isSavedChat = false,
+    this.isSavedPeersMode = false,
+    this.autoDeleteSeconds = 0,
+    this.showReport = true,
     required this.onViewProfile,
     required this.onSearch,
     required this.onToggleMute,
     required this.onClearHistory,
     required this.onReport,
+    this.onAutoDelete,
+    this.onChatAppearance,
+    this.onToggleSavedViewMode,
   });
 
   @override
@@ -1037,12 +1138,12 @@ class _ChatActionsMorphMenu extends StatelessWidget {
 
     return SizedBox(
       width: width,
-      height: _kMenuHeight,
+      height: height,
       child: OverflowBox(
         minWidth: width,
         maxWidth: width,
-        minHeight: _kMenuHeight,
-        maxHeight: _kMenuHeight,
+        minHeight: height,
+        maxHeight: height,
         alignment: Alignment.topRight,
         child: Material(
           color: Colors.transparent,
@@ -1066,6 +1167,33 @@ class _ChatActionsMorphMenu extends StatelessWidget {
                     onSearch,
                     iconBuilder: (c) => iconoir.Search(color: c, width: 20, height: 20),
                   ),
+                  if (onToggleSavedViewMode != null)
+                    _menuItem(
+                      context,
+                      isSavedPeersMode ? 'Вид как сообщения' : 'Вид как чаты',
+                      onToggleSavedViewMode!,
+                      iconBuilder: (c) => iconoir.ViewGrid(
+                        color: c,
+                        width: 20,
+                        height: 20,
+                      ),
+                    ),
+                  if (onAutoDelete != null)
+                    _menuItem(
+                      context,
+                      autoDeleteSeconds > 0
+                          ? 'Автоудаление (${_formatAutoDeleteShort(autoDeleteSeconds)})'
+                          : 'Автоудаление',
+                      onAutoDelete!,
+                      iconBuilder: (c) => iconoir.Timer(color: c, width: 20, height: 20),
+                    ),
+                  if (onChatAppearance != null)
+                    _menuItem(
+                      context,
+                      'Оформление',
+                      onChatAppearance!,
+                      iconBuilder: (c) => iconoir.Palette(color: c, width: 20, height: 20),
+                    ),
                   _menuItem(
                     context,
                     isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),
@@ -1081,13 +1209,14 @@ class _ChatActionsMorphMenu extends StatelessWidget {
                     iconBuilder: (c) => iconoir.Trash(color: c, width: 20, height: 20),
                     isDestructive: true,
                   ),
-                  _menuItem(
-                    context,
-                    l10n.translate('chat_menu_report'),
-                    onReport,
-                    iconBuilder: (c) => iconoir.WarningTriangle(color: c, width: 20, height: 20),
-                    isDestructive: true,
-                  ),
+                  if (showReport)
+                    _menuItem(
+                      context,
+                      l10n.translate('chat_menu_report'),
+                      onReport,
+                      iconBuilder: (c) => iconoir.WarningTriangle(color: c, width: 20, height: 20),
+                      isDestructive: true,
+                    ),
                 ],
               ),
             ),
@@ -1466,6 +1595,12 @@ class GlassChatMenu extends StatefulWidget {
   final VoidCallback onClearHistory;
   final VoidCallback onReport;
   final VoidCallback onViewProfile;
+  final VoidCallback? onAutoDelete;
+  final VoidCallback? onChatAppearance;
+  final VoidCallback? onToggleSavedViewMode;
+  final bool isSavedPeersMode;
+  final int autoDeleteSeconds;
+  final bool isSavedChat;
 
   const GlassChatMenu({
     Key? key,
@@ -1478,6 +1613,12 @@ class GlassChatMenu extends StatefulWidget {
     required this.onClearHistory,
     required this.onReport,
     required this.onViewProfile,
+    this.onAutoDelete,
+    this.onChatAppearance,
+    this.onToggleSavedViewMode,
+    this.isSavedPeersMode = false,
+    this.autoDeleteSeconds = 0,
+    this.isSavedChat = false,
   }) : super(key: key);
 
   static void show(
@@ -1490,6 +1631,12 @@ class GlassChatMenu extends StatefulWidget {
     required VoidCallback onClearHistory,
     required VoidCallback onReport,
     required VoidCallback onViewProfile,
+    VoidCallback? onAutoDelete,
+    VoidCallback? onChatAppearance,
+    VoidCallback? onToggleSavedViewMode,
+    bool isSavedPeersMode = false,
+    int autoDeleteSeconds = 0,
+    bool isSavedChat = false,
   }) {
     showGeneralDialog(
       context: context,
@@ -1508,6 +1655,18 @@ class GlassChatMenu extends StatefulWidget {
           onClearHistory: () { Navigator.pop(context); onClearHistory(); },
           onReport: () { Navigator.pop(context); onReport(); },
           onViewProfile: () { Navigator.pop(context); onViewProfile(); },
+          onAutoDelete: onAutoDelete != null
+              ? () { Navigator.pop(context); onAutoDelete(); }
+              : null,
+          onChatAppearance: onChatAppearance != null
+              ? () { Navigator.pop(context); onChatAppearance(); }
+              : null,
+          onToggleSavedViewMode: onToggleSavedViewMode != null
+              ? () { Navigator.pop(context); onToggleSavedViewMode(); }
+              : null,
+          isSavedPeersMode: isSavedPeersMode,
+          autoDeleteSeconds: autoDeleteSeconds,
+          isSavedChat: isSavedChat,
         );
       },
       transitionBuilder: (context, animation, secondaryAnimation, child) {
@@ -1633,6 +1792,26 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
             widget.onSearch,
             iconBuilder: (c) => iconoir.Search(color: c, width: 22, height: 22),
           ),
+          if (widget.onToggleSavedViewMode != null)
+            _menuItem(
+              widget.isSavedPeersMode ? 'Вид как сообщения' : 'Вид как чаты',
+              widget.onToggleSavedViewMode!,
+              iconBuilder: (c) => iconoir.ViewGrid(color: c, width: 22, height: 22),
+            ),
+          if (widget.onAutoDelete != null)
+            _menuItem(
+              widget.autoDeleteSeconds > 0
+                  ? 'Автоудаление (${_formatAutoDeleteShort(widget.autoDeleteSeconds)})'
+                  : 'Автоудаление',
+              widget.onAutoDelete!,
+              iconBuilder: (c) => iconoir.Timer(color: c, width: 22, height: 22),
+            ),
+          if (widget.onChatAppearance != null)
+            _menuItem(
+              'Оформление',
+              widget.onChatAppearance!,
+              iconBuilder: (c) => iconoir.Palette(color: c, width: 22, height: 22),
+            ),
           _menuItem(
             widget.isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),
             widget.onToggleMute,
@@ -1646,12 +1825,13 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
             iconBuilder: (c) => iconoir.Trash(color: c, width: 22, height: 22),
             isDestructive: true,
           ),
-          _menuItem(
-            l10n.translate('chat_menu_report'),
-            widget.onReport,
-            iconBuilder: (c) => iconoir.WarningTriangle(color: c, width: 22, height: 22),
-            isDestructive: true,
-          ),
+          if (!widget.isSavedChat)
+            _menuItem(
+              l10n.translate('chat_menu_report'),
+              widget.onReport,
+              iconBuilder: (c) => iconoir.WarningTriangle(color: c, width: 22, height: 22),
+              isDestructive: true,
+            ),
         ],
       ),
     );

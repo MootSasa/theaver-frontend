@@ -72,6 +72,8 @@ class PrivacySettingsProvider extends ChangeNotifier {
       case 'bio_visibility': return _privacy.copyWith(bioVisibility: value as PrivacyVisibility);
       case 'birthday_visibility': return _privacy.copyWith(birthdayVisibility: value as PrivacyVisibility);
       case 'forwarded_messages': return _privacy.copyWith(forwardedMessages: value as PrivacyVisibility);
+      case 'voice_messages_privacy': return _privacy.copyWith(voiceMessagesPrivacy: value as PrivacyVisibility);
+      case 'messages_privacy': return _privacy.copyWith(messagesPrivacy: value as PrivacyVisibility);
       case 'show_online_status': return _privacy.copyWith(showOnlineStatus: value as bool);
       case 'show_read_receipts': return _privacy.copyWith(showReadReceipts: value as bool);
       default: return _privacy;

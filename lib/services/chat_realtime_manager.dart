@@ -39,6 +39,10 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onChatDeleted;
   final void Function(WebSocketEvent event)? onScheduledMessagesUpdated;
   final void Function(WebSocketEvent event)? onJoinRequestsUpdated;
+  final void Function(WebSocketEvent event)? onMessageBurned;
+  final void Function(WebSocketEvent event)? onChatAutoDeleteUpdated;
+  final void Function(WebSocketEvent event)? onChatAppearanceUpdated;
+  final void Function(WebSocketEvent event)? onScreenshotTaken;
   final VoidCallback? onReconnect;
 
   ChatSubscription({
@@ -65,6 +69,10 @@ class ChatSubscription {
     this.onChatDeleted,
     this.onScheduledMessagesUpdated,
     this.onJoinRequestsUpdated,
+    this.onMessageBurned,
+    this.onChatAutoDeleteUpdated,
+    this.onChatAppearanceUpdated,
+    this.onScreenshotTaken,
     this.onReconnect,
   });
 
@@ -127,6 +135,10 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onChatDeleted,
     void Function(WebSocketEvent event)? onScheduledMessagesUpdated,
     void Function(WebSocketEvent event)? onJoinRequestsUpdated,
+    void Function(WebSocketEvent event)? onMessageBurned,
+    void Function(WebSocketEvent event)? onChatAutoDeleteUpdated,
+    void Function(WebSocketEvent event)? onChatAppearanceUpdated,
+    void Function(WebSocketEvent event)? onScreenshotTaken,
     VoidCallback? onReconnect,
   }) {
     if (!_isInitialized) {
@@ -157,6 +169,10 @@ class ChatRealtimeManager {
       onChatDeleted: onChatDeleted,
       onScheduledMessagesUpdated: onScheduledMessagesUpdated,
       onJoinRequestsUpdated: onJoinRequestsUpdated,
+      onMessageBurned: onMessageBurned,
+      onChatAutoDeleteUpdated: onChatAutoDeleteUpdated,
+      onChatAppearanceUpdated: onChatAppearanceUpdated,
+      onScreenshotTaken: onScreenshotTaken,
       onReconnect: onReconnect,
     );
 
@@ -480,6 +496,62 @@ class ChatRealtimeManager {
         );
         break;
 
+      case WebSocketEventType.messageBurned:
+        final burnChatId = event.data['chat_id']?.toString();
+        final burnMsgId = event.data['message_id']?.toString();
+        if (burnMsgId != null && burnMsgId.isNotEmpty) {
+          try {
+            await AppDatabase().markMessageBurned(
+              burnMsgId,
+              viewedAt: event.data['viewed_at']?.toString(),
+              expiresAt: event.data['expires_at']?.toString(),
+              isBurned: event.data['is_burned'] == true,
+            );
+          } catch (_) {}
+        }
+        _dispatchForChat(burnChatId, (s) => s.onMessageBurned?.call(event));
+        break;
+
+      case WebSocketEventType.chatAutoDeleteUpdated:
+        final autoChatId = event.data['chat_id']?.toString();
+        final rawTtl = event.data['message_auto_delete_time'] ??
+            event.data['ttl_seconds'];
+        final ttlSec = rawTtl is num
+            ? rawTtl.toInt()
+            : int.tryParse(rawTtl?.toString() ?? '') ?? 0;
+        if (autoChatId != null && autoChatId.isNotEmpty) {
+          try {
+            await AppDatabase().updateChatAutoDeleteTime(autoChatId, ttlSec);
+          } catch (_) {}
+        }
+        _dispatchForChat(
+          autoChatId,
+          (s) => s.onChatAutoDeleteUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.chatAppearanceUpdated:
+        final appChatId = event.data['chat_id']?.toString();
+        final rawApp = event.data['appearance'];
+        if (appChatId != null && appChatId.isNotEmpty) {
+          try {
+            await AppDatabase().updateChatAppearanceJson(
+              appChatId,
+              rawApp is Map ? jsonEncode(rawApp) : null,
+            );
+          } catch (_) {}
+        }
+        _dispatchForChat(
+          appChatId,
+          (s) => s.onChatAppearanceUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.screenshotTaken:
+        final scrChatId = event.data['chat_id']?.toString();
+        _dispatchForChat(scrChatId, (s) => s.onScreenshotTaken?.call(event));
+        break;
+
       default:
         final rawNorm = (event.rawType.isNotEmpty
                 ? event.rawType
@@ -691,6 +763,20 @@ class ChatRealtimeManager {
           : (isPollEvent ? (existingMsg?.isEdited ?? false) : true);
       final effectiveContent = content ?? existingMsg?.content ?? '';
 
+      final bool? invertMedia = event.data.containsKey('invert_media')
+          ? (event.data['invert_media'] == true ||
+              event.data['invert_media'] == 1)
+          : null;
+      final String? editedFileUrl = event.data.containsKey('file_url')
+          ? event.data['file_url']?.toString()
+          : null;
+      final String? editedFileName = event.data.containsKey('file_name')
+          ? event.data['file_name']?.toString()
+          : null;
+      final String? editedMessageType = event.data.containsKey('message_type')
+          ? event.data['message_type']?.toString()
+          : null;
+
       try {
         await AppDatabase().updateMessageContent(
           messageId,
@@ -699,6 +785,10 @@ class ChatRealtimeManager {
           mediaPayloadStr,
           effectiveIsEdited,
           hasMediaSpoiler,
+          editedFileUrl,
+          editedFileName,
+          editedMessageType,
+          invertMedia,
         );
         if (chatId != null) {
           await AppDatabase().refreshChatLastMessageFromDb(chatId);
@@ -1116,6 +1206,25 @@ class ChatRealtimeManager {
             msgData['has_media_spoiler'] == 1 ||
             mediaPayloadMap['has_media_spoiler'] == true,
       ),
+      expiresAt: drift.Value(msgData['expires_at']?.toString()),
+      ttlSeconds: drift.Value((msgData['ttl_seconds'] as num?)?.toInt() ??
+          int.tryParse(msgData['ttl_seconds']?.toString() ?? '') ??
+          0),
+      isViewOnce: drift.Value(
+        msgData['is_view_once'] == true || msgData['is_view_once'] == 1,
+      ),
+      viewedAt: drift.Value(msgData['viewed_at']?.toString()),
+      isBurned: drift.Value(msgData['is_burned'] == true ||
+          ((msgData['is_view_once'] == true || msgData['is_view_once'] == 1) &&
+              msgData['viewed_at'] != null &&
+              msgData['viewed_at'].toString().isNotEmpty)),
+      replyToChatId: drift.Value(msgData['reply_to_chat_id']?.toString()),
+      replyToChatName: drift.Value(msgData['reply_to_chat_name']?.toString()),
+      replyToChatType: drift.Value(msgData['reply_to_chat_type']?.toString()),
+      effectId: drift.Value(msgData['effect_id']?.toString()),
+      savedTagsJson: msgData['saved_tags'] is List
+          ? drift.Value(jsonEncode(msgData['saved_tags']))
+          : const drift.Value.absent(),
     ));
   }
 }

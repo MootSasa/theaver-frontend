@@ -1371,6 +1371,8 @@ class PrivacySettings {
   final PrivacyVisibility bioVisibility;
   final PrivacyVisibility birthdayVisibility;
   final PrivacyVisibility forwardedMessages; // everybody=show sender, nobody=anonymous
+  final PrivacyVisibility voiceMessagesPrivacy;
+  final PrivacyVisibility messagesPrivacy; // everybody / contacts
   final bool showOnlineStatus;
   final bool showReadReceipts;
 
@@ -1384,6 +1386,8 @@ class PrivacySettings {
     this.bioVisibility = PrivacyVisibility.everybody,
     this.birthdayVisibility = PrivacyVisibility.contacts,
     this.forwardedMessages = PrivacyVisibility.everybody,
+    this.voiceMessagesPrivacy = PrivacyVisibility.everybody,
+    this.messagesPrivacy = PrivacyVisibility.everybody,
     this.showOnlineStatus = true,
     this.showReadReceipts = true,
   });
@@ -1398,6 +1402,8 @@ class PrivacySettings {
     PrivacyVisibility? bioVisibility,
     PrivacyVisibility? birthdayVisibility,
     PrivacyVisibility? forwardedMessages,
+    PrivacyVisibility? voiceMessagesPrivacy,
+    PrivacyVisibility? messagesPrivacy,
     bool? showOnlineStatus,
     bool? showReadReceipts,
   }) =>
@@ -1411,6 +1417,8 @@ class PrivacySettings {
         bioVisibility: bioVisibility ?? this.bioVisibility,
         birthdayVisibility: birthdayVisibility ?? this.birthdayVisibility,
         forwardedMessages: forwardedMessages ?? this.forwardedMessages,
+        voiceMessagesPrivacy: voiceMessagesPrivacy ?? this.voiceMessagesPrivacy,
+        messagesPrivacy: messagesPrivacy ?? this.messagesPrivacy,
         showOnlineStatus: showOnlineStatus ?? this.showOnlineStatus,
         showReadReceipts: showReadReceipts ?? this.showReadReceipts,
       );
@@ -1425,6 +1433,8 @@ class PrivacySettings {
         bioVisibility: PrivacyVisibility.fromJson(json['bio_visibility'] ?? 'everybody'),
         birthdayVisibility: PrivacyVisibility.fromJson(json['birthday_visibility'] ?? 'contacts'),
         forwardedMessages: PrivacyVisibility.fromJson(json['forwarded_messages'] ?? 'everybody'),
+        voiceMessagesPrivacy: PrivacyVisibility.fromJson(json['voice_messages_privacy'] ?? 'everybody'),
+        messagesPrivacy: PrivacyVisibility.fromJson(json['messages_privacy'] ?? 'everybody'),
         showOnlineStatus: json['show_online_status'] ?? true,
         showReadReceipts: json['show_read_receipts'] ?? true,
       );
@@ -1439,6 +1449,8 @@ class PrivacySettings {
         'bio_visibility': bioVisibility.toJson(),
         'birthday_visibility': birthdayVisibility.toJson(),
         'forwarded_messages': forwardedMessages.toJson(),
+        'voice_messages_privacy': voiceMessagesPrivacy.toJson(),
+        'messages_privacy': messagesPrivacy.toJson(),
         'show_online_status': showOnlineStatus,
         'show_read_receipts': showReadReceipts,
       };

@@ -1078,6 +1078,8 @@ class Chat {
   final GroupDefaultPermissions? defaultPermissions;
   final ReactionSettings? reactionSettings;
   final PeerCustomization? peerCustomization;
+  final int messageAutoDeleteTime;
+  final Map<String, dynamic>? appearance;
 
   Chat({
     required this.id,
@@ -1122,6 +1124,8 @@ class Chat {
     this.defaultPermissions,
     this.reactionSettings,
     this.peerCustomization,
+    this.messageAutoDeleteTime = 0,
+    this.appearance,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   /// Whether this chat belongs to a community channel
@@ -1165,6 +1169,10 @@ class Chat {
       'sticker',
       'gif',
       'animation',
+      'location',
+      'live_location',
+      'venue',
+      'contact',
     };
     return !supportedTypes.contains(lastMessageType!.toLowerCase());
   }
@@ -1350,6 +1358,10 @@ class Chat {
       peerCustomization: parsedPeerCust,
       hasProtectedContent: parsedHasProtectedContent,
       pinnedMessageIds: effectivePinnedIds,
+      messageAutoDeleteTime: _parseIntValue(json['message_auto_delete_time']),
+      appearance: json['appearance'] is Map
+          ? Map<String, dynamic>.from(json['appearance'] as Map)
+          : null,
     );
   }
 
@@ -1381,6 +1393,15 @@ class Chat {
         : (model.pinnedMessageId != null && model.pinnedMessageId! > 0
             ? <int>[model.pinnedMessageId!]
             : const <int>[]);
+    Map<String, dynamic>? dbAppearance;
+    if (model.appearanceJson != null &&
+        model.appearanceJson!.isNotEmpty &&
+        model.appearanceJson != 'null') {
+      try {
+        final dec = jsonDecode(model.appearanceJson!);
+        if (dec is Map) dbAppearance = Map<String, dynamic>.from(dec);
+      } catch (_) {}
+    }
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
@@ -1423,6 +1444,8 @@ class Chat {
       peerCustomization: dbCust,
       hasProtectedContent: model.hasProtectedContent,
       pinnedMessageIds: effectiveDbPinnedIds,
+      messageAutoDeleteTime: model.messageAutoDeleteTime,
+      appearance: dbAppearance,
     );
   }
 
@@ -1473,6 +1496,10 @@ class Chat {
       pinnedMessageIdsJson: pinnedMessageIds.isNotEmpty
           ? drift.Value(jsonEncode(pinnedMessageIds))
           : const drift.Value.absent(),
+      messageAutoDeleteTime: drift.Value(messageAutoDeleteTime),
+      appearanceJson: appearance != null
+          ? drift.Value(jsonEncode(appearance))
+          : const drift.Value.absent(),
     );
   }
 
@@ -1521,6 +1548,9 @@ class Chat {
     GroupDefaultPermissions? defaultPermissions,
     ReactionSettings? reactionSettings,
     PeerCustomization? peerCustomization,
+    int? messageAutoDeleteTime,
+    Map<String, dynamic>? appearance,
+    bool clearAppearance = false,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -1570,6 +1600,9 @@ class Chat {
       defaultPermissions: defaultPermissions ?? this.defaultPermissions,
       reactionSettings: reactionSettings ?? this.reactionSettings,
       peerCustomization: peerCustomization ?? this.peerCustomization,
+      messageAutoDeleteTime:
+          messageAutoDeleteTime ?? this.messageAutoDeleteTime,
+      appearance: clearAppearance ? null : (appearance ?? this.appearance),
     );
   }
 }
@@ -1621,6 +1654,10 @@ class ReplyInfo {
       'sticker',
       'gif',
       'animation',
+      'location',
+      'live_location',
+      'venue',
+      'contact',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
@@ -1916,6 +1953,16 @@ class Message {
   final String? channelPostId;
   final String? threadRootMessageId;
   final bool hasMediaSpoiler;
+  final String? expiresAt;
+  final int ttlSeconds;
+  final bool isViewOnce;
+  final String? viewedAt;
+  final bool isBurned;
+  final String? replyToChatId;
+  final String? replyToChatName;
+  final String? replyToChatType;
+  final String? effectId;
+  final List<String> savedTags;
 
   Message({
     required this.id,
@@ -1971,6 +2018,16 @@ class Message {
     this.channelPostId,
     this.threadRootMessageId,
     this.hasMediaSpoiler = false,
+    this.expiresAt,
+    this.ttlSeconds = 0,
+    this.isViewOnce = false,
+    this.viewedAt,
+    this.isBurned = false,
+    this.replyToChatId,
+    this.replyToChatName,
+    this.replyToChatType,
+    this.effectId,
+    this.savedTags = const [],
   });
 
   /// Whether this message has a reply or quote
@@ -1996,6 +2053,10 @@ class Message {
       'sticker',
       'gif',
       'animation',
+      'location',
+      'live_location',
+      'venue',
+      'contact',
     };
     return !supportedTypes.contains(messageType.toLowerCase());
   }
@@ -2229,6 +2290,28 @@ class Message {
       );
     }
 
+    final String? parsedReplyToChatId = _nonEmptyString(json['reply_to_chat_id']);
+    final String? parsedReplyToChatName =
+        _nonEmptyString(json['reply_to_chat_name']);
+    final String? parsedReplyToChatType =
+        _nonEmptyString(json['reply_to_chat_type']);
+    if (replyInfo != null &&
+        parsedReplyToChatId != null &&
+        (replyInfo.chatId == null || replyInfo.chatId!.isEmpty)) {
+      replyInfo = replyInfo.copyWith(chatId: parsedReplyToChatId);
+    }
+
+    final bool parsedIsViewOnce = _parseBoolFlag(json['is_view_once']);
+    final String? parsedViewedAt = _nonEmptyString(json['viewed_at']);
+    final bool parsedIsBurned = _parseBoolFlag(json['is_burned']) ||
+        (parsedIsViewOnce && parsedViewedAt != null);
+    final List<String> parsedSavedTags = json['saved_tags'] is List
+        ? (json['saved_tags'] as List)
+            .map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList()
+        : const <String>[];
+
     return Message(
       id: json['id']?.toString() ?? '',
       chatId: json['chat_id']?.toString() ?? '',
@@ -2356,6 +2439,16 @@ class Message {
       threadRootMessageId: _nonEmptyString(json['thread_root_message_id']),
       hasMediaSpoiler: _parseBoolFlag(json['has_media_spoiler']) ||
           _parseBoolFlag(parsedMediaPayload?['has_media_spoiler']),
+      expiresAt: _nonEmptyString(json['expires_at']),
+      ttlSeconds: _parseIntValue(json['ttl_seconds']),
+      isViewOnce: parsedIsViewOnce,
+      viewedAt: parsedViewedAt,
+      isBurned: parsedIsBurned,
+      replyToChatId: parsedReplyToChatId,
+      replyToChatName: parsedReplyToChatName,
+      replyToChatType: parsedReplyToChatType,
+      effectId: _nonEmptyString(json['effect_id']),
+      savedTags: parsedSavedTags,
     );
   }
 
@@ -2371,6 +2464,7 @@ class Message {
         senderName: model.replyToSenderName ?? '',
         content: model.replyToContent ?? '',
         messageType: model.replyToMessageType,
+        chatId: model.replyToChatId,
         replyEmoji: replySenderId.isNotEmpty
             ? PeerCustomizationCache.instance.getSync(replySenderId)?.replyEmoji
             : null,
@@ -2537,6 +2631,33 @@ class Message {
       threadRootMessageId: _nonEmptyString(model.threadRootMessageId),
       hasMediaSpoiler: model.hasMediaSpoiler ||
           (dbMediaPayload?['has_media_spoiler'] == true),
+      expiresAt: _nonEmptyString(model.expiresAt),
+      ttlSeconds: model.ttlSeconds,
+      isViewOnce: model.isViewOnce,
+      viewedAt: _nonEmptyString(model.viewedAt),
+      isBurned: model.isBurned ||
+          (model.isViewOnce &&
+              model.viewedAt != null &&
+              model.viewedAt!.isNotEmpty),
+      replyToChatId: _nonEmptyString(model.replyToChatId),
+      replyToChatName: _nonEmptyString(model.replyToChatName),
+      replyToChatType: _nonEmptyString(model.replyToChatType),
+      effectId: _nonEmptyString(model.effectId),
+      savedTags: () {
+        if (model.savedTagsJson == null || model.savedTagsJson!.isEmpty) {
+          return const <String>[];
+        }
+        try {
+          final dec = jsonDecode(model.savedTagsJson!);
+          if (dec is List) {
+            return dec
+                .map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList();
+          }
+        } catch (_) {}
+        return const <String>[];
+      }(),
     );
   }
 
@@ -2620,6 +2741,18 @@ class Message {
       ),
       threadRootMessageId: drift.Value(threadRootMessageId),
       hasMediaSpoiler: drift.Value(hasMediaSpoiler),
+      expiresAt: drift.Value(expiresAt),
+      ttlSeconds: drift.Value(ttlSeconds),
+      isViewOnce: drift.Value(isViewOnce),
+      viewedAt: drift.Value(viewedAt),
+      isBurned: drift.Value(isBurned),
+      replyToChatId: drift.Value(replyToChatId ?? replyInfo?.chatId),
+      replyToChatName: drift.Value(replyToChatName),
+      replyToChatType: drift.Value(replyToChatType),
+      effectId: drift.Value(effectId),
+      savedTagsJson: savedTags.isNotEmpty
+          ? drift.Value(jsonEncode(savedTags))
+          : const drift.Value.absent(),
     );
   }
 
@@ -2678,6 +2811,16 @@ class Message {
     String? channelPostId,
     String? threadRootMessageId,
     bool? hasMediaSpoiler,
+    String? expiresAt,
+    int? ttlSeconds,
+    bool? isViewOnce,
+    String? viewedAt,
+    bool? isBurned,
+    String? replyToChatId,
+    String? replyToChatName,
+    String? replyToChatType,
+    String? effectId,
+    List<String>? savedTags,
   }) {
     return Message(
       id: id ?? this.id,
@@ -2733,6 +2876,16 @@ class Message {
       channelPostId: channelPostId ?? this.channelPostId,
       threadRootMessageId: threadRootMessageId ?? this.threadRootMessageId,
       hasMediaSpoiler: hasMediaSpoiler ?? this.hasMediaSpoiler,
+      expiresAt: expiresAt ?? this.expiresAt,
+      ttlSeconds: ttlSeconds ?? this.ttlSeconds,
+      isViewOnce: isViewOnce ?? this.isViewOnce,
+      viewedAt: viewedAt ?? this.viewedAt,
+      isBurned: isBurned ?? this.isBurned,
+      replyToChatId: replyToChatId ?? this.replyToChatId,
+      replyToChatName: replyToChatName ?? this.replyToChatName,
+      replyToChatType: replyToChatType ?? this.replyToChatType,
+      effectId: effectId ?? this.effectId,
+      savedTags: savedTags ?? this.savedTags,
     );
   }
 
@@ -2788,6 +2941,8 @@ class ChatDetails {
   final bool historyForNewMembers;
   final bool hasActiveCall;
   final String? activeCallId;
+  final int messageAutoDeleteTime;
+  final Map<String, dynamic>? appearance;
 
   ChatDetails({
     required this.id,
@@ -2831,6 +2986,8 @@ class ChatDetails {
     this.historyForNewMembers = true,
     this.hasActiveCall = false,
     this.activeCallId,
+    this.messageAutoDeleteTime = 0,
+    this.appearance,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   bool get isOwner => myRole == 'owner';
@@ -2927,6 +3084,9 @@ class ChatDetails {
     bool? hasActiveCall,
     String? activeCallId,
     bool clearActiveCallId = false,
+    int? messageAutoDeleteTime,
+    Map<String, dynamic>? appearance,
+    bool clearAppearance = false,
   }) {
     return ChatDetails(
       id: id ?? this.id,
@@ -2975,6 +3135,9 @@ class ChatDetails {
       hasActiveCall: hasActiveCall ?? this.hasActiveCall,
       activeCallId:
           clearActiveCallId ? null : (activeCallId ?? this.activeCallId),
+      messageAutoDeleteTime:
+          messageAutoDeleteTime ?? this.messageAutoDeleteTime,
+      appearance: clearAppearance ? null : (appearance ?? this.appearance),
     );
   }
 
@@ -3092,6 +3255,10 @@ class ChatDetails {
       hasActiveCall:
           _parseBoolFlag(json['has_active_call']) || parsedActiveCallId != null,
       activeCallId: parsedActiveCallId,
+      messageAutoDeleteTime: _parseIntValue(json['message_auto_delete_time']),
+      appearance: json['appearance'] is Map
+          ? Map<String, dynamic>.from(json['appearance'] as Map)
+          : null,
     );
   }
 }
@@ -3423,6 +3590,8 @@ class ChatService {
     String? untilMessageId,
     String? aroundMessageId,
     String? afterMessageId,
+    String? tag,
+    String? savedPeerKey,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3435,6 +3604,12 @@ class ChatService {
       }
 
       var url = '${AppConfig.baseUrl}/api/chats/$chatId/messages?limit=$limit';
+      if (tag != null && tag.isNotEmpty) {
+        url += '&tag=${Uri.encodeQueryComponent(tag)}';
+      }
+      if (savedPeerKey != null && savedPeerKey.isNotEmpty) {
+        url += '&saved_peer_key=${Uri.encodeQueryComponent(savedPeerKey)}';
+      }
       if (afterMessageId != null && afterMessageId.isNotEmpty) {
         url += '&after_message_id=$afterMessageId';
       } else if (aroundMessageId != null && aroundMessageId.isNotEmpty) {
@@ -3565,6 +3740,7 @@ class ChatService {
     String? fileUrl,
     String? fileName,
     String? replyToMessageId,
+    String? replyToChatId,
     String? localId,
     bool isQuote = false,
     String? quoteText,
@@ -3581,6 +3757,17 @@ class ChatService {
     bool isSilent = false,
     bool sendAsAnonymous = false,
     bool hasMediaSpoiler = false,
+    bool isViewOnce = false,
+    int ttlSeconds = 0,
+    String? effectId,
+    double? latitude,
+    double? longitude,
+    int? livePeriod,
+    int? heading,
+    double? horizontalAccuracy,
+    String? placeName,
+    String? address,
+    Map<String, dynamic>? contact,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3593,7 +3780,10 @@ class ChatService {
       if (effectiveMessageType == 'round') {
         effectiveMessageType = 'video';
         effectiveIsRound = true;
-      } else if (fileUrl == null && EmojiUtils.isDiceEmoji(content)) {
+      } else if (fileUrl == null &&
+          latitude == null &&
+          contact == null &&
+          EmojiUtils.isDiceEmoji(content)) {
         effectiveMessageType = 'dice';
       }
 
@@ -3612,6 +3802,9 @@ class ChatService {
       };
       if (replyToMessageId != null) {
         body['reply_to_message_id'] = replyToMessageId;
+        if (replyToChatId != null && replyToChatId.isNotEmpty) {
+          body['reply_to_chat_id'] = int.tryParse(replyToChatId) ?? replyToChatId;
+        }
         if (isQuote) {
           body['is_quote'] = true;
           effectiveMediaPayload['is_quote'] = true;
@@ -3650,6 +3843,37 @@ class ChatService {
       }
       if (hasMediaSpoiler) {
         body['has_media_spoiler'] = true;
+      }
+      if (isViewOnce) {
+        body['is_view_once'] = true;
+      }
+      if (ttlSeconds > 0) {
+        body['ttl_seconds'] = ttlSeconds;
+      }
+      if (effectId != null && effectId.isNotEmpty) {
+        body['effect_id'] = effectId;
+      }
+      if (latitude != null && longitude != null) {
+        body['latitude'] = latitude;
+        body['longitude'] = longitude;
+      }
+      if (livePeriod != null && livePeriod > 0) {
+        body['live_period'] = livePeriod;
+      }
+      if (heading != null) {
+        body['heading'] = heading;
+      }
+      if (horizontalAccuracy != null) {
+        body['horizontal_accuracy'] = horizontalAccuracy;
+      }
+      if (placeName != null && placeName.isNotEmpty) {
+        body['place_name'] = placeName;
+      }
+      if (address != null && address.isNotEmpty) {
+        body['address'] = address;
+      }
+      if (contact != null && contact.isNotEmpty) {
+        body['contact'] = contact;
       }
 
       // Try WebSocket RPC first when connected
@@ -3789,6 +4013,8 @@ class ChatService {
     List<MessageEntity>? entities,
     bool invertMedia = false,
     String? replyToMessageId,
+    String? replyToChatId,
+    String? effectId,
     bool isSilent = false,
     bool sendAsAnonymous = false,
     bool hasMediaSpoiler = false,
@@ -3823,8 +4049,14 @@ class ChatService {
       if (hasMediaSpoiler) {
         body['has_media_spoiler'] = true;
       }
+      if (effectId != null && effectId.isNotEmpty) {
+        body['effect_id'] = effectId;
+      }
       if (replyToMessageId != null && replyToMessageId.isNotEmpty) {
         body['reply_to_message_id'] = replyToMessageId;
+        if (replyToChatId != null && replyToChatId.isNotEmpty) {
+          body['reply_to_chat_id'] = int.tryParse(replyToChatId) ?? replyToChatId;
+        }
       }
 
       if (AppConfig.enableDebugLogging) {
@@ -3930,6 +4162,11 @@ class ChatService {
     required String content,
     List<MessageEntity>? entities,
     bool? hasMediaSpoiler,
+    bool? invertMedia,
+    String? fileUrl,
+    String? fileName,
+    String? messageType,
+    Map<String, dynamic>? mediaPayload,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3940,11 +4177,26 @@ class ChatService {
       final body = <String, dynamic>{
         'content': content,
       };
-      if (entities != null && entities.isNotEmpty) {
+      if (entities != null) {
         body['entities'] = entities.map((e) => e.toJson()).toList();
       }
       if (hasMediaSpoiler != null) {
         body['has_media_spoiler'] = hasMediaSpoiler;
+      }
+      if (invertMedia != null) {
+        body['invert_media'] = invertMedia;
+      }
+      if (fileUrl != null && fileUrl.isNotEmpty) {
+        body['file_url'] = fileUrl;
+      }
+      if (fileName != null && fileName.isNotEmpty) {
+        body['file_name'] = fileName;
+      }
+      if (messageType != null && messageType.isNotEmpty) {
+        body['message_type'] = messageType;
+      }
+      if (mediaPayload != null && mediaPayload.isNotEmpty) {
+        body['media_payload'] = mediaPayload;
       }
 
       final response = await http.put(
@@ -4930,6 +5182,7 @@ class ChatService {
     required String chatId,
     required String messageId,
     bool notify = true,
+    bool onlyForMe = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -4944,7 +5197,10 @@ class ChatService {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({'notify': notify}),
+        body: jsonEncode({
+          'notify': notify,
+          if (onlyForMe) 'only_for_me': true,
+        }),
       );
 
       final data = jsonDecode(response.body);

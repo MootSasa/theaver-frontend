@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/database/app_database.dart';
+import '../../services/dm_parity_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/media_playback_coordinator.dart';
@@ -77,6 +78,7 @@ class ProfileSectionPageContent extends StatelessWidget {
 
   // Данные вкладок
   final List<ProfileMemberItem> members;
+  final List<CommonGroupItem> commonGroups;
   final List<DbMessage> mediaMessages;
   final List<DbMessage> fileMessages;
   final List<DbMessage> linkMessages;
@@ -87,6 +89,7 @@ class ProfileSectionPageContent extends StatelessWidget {
   final bool canManageMembers;
   final VoidCallback? onAddMemberTap;
   final ValueChanged<ProfileMemberItem>? onMemberTap;
+  final ValueChanged<CommonGroupItem>? onCommonGroupTap;
   final ValueChanged<ProfileMemberItem>? onToggleAdminRole;
   final ValueChanged<ProfileMemberItem>? onRemoveMember;
 
@@ -103,6 +106,7 @@ class ProfileSectionPageContent extends StatelessWidget {
     this.chatTitle = '',
     this.currentUserId,
     this.members = const [],
+    this.commonGroups = const [],
     this.mediaMessages = const [],
     this.fileMessages = const [],
     this.linkMessages = const [],
@@ -111,6 +115,7 @@ class ProfileSectionPageContent extends StatelessWidget {
     this.canManageMembers = false,
     this.onAddMemberTap,
     this.onMemberTap,
+    this.onCommonGroupTap,
     this.onToggleAdminRole,
     this.onRemoveMember,
     this.onJumpToMessage,
@@ -121,6 +126,8 @@ class ProfileSectionPageContent extends StatelessWidget {
     switch (sectionType) {
       case ProfileSectionType.members:
         return _buildMembersTab(context);
+      case ProfileSectionType.commonGroups:
+        return _buildCommonGroupsTab(context);
       case ProfileSectionType.wall:
         return _buildEmptyState(
           context,
@@ -152,6 +159,99 @@ class ProfileSectionPageContent extends StatelessWidget {
       if (val.isNotEmpty && val != key) return val;
     } catch (_) {}
     return fallback;
+  }
+
+  // ============================================================
+  // 1b. Вкладка «Общие группы»
+  // ============================================================
+
+  Widget _buildCommonGroupsTab(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final subColor = isDark
+        ? Colors.white.withValues(alpha: 0.56)
+        : Colors.black.withValues(alpha: 0.54);
+    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+
+    if (commonGroups.isEmpty) {
+      return _buildEmptyState(
+        context,
+        iconBuilder: (color, size) => iconoir.Group(color: color, width: size, height: size),
+        title: 'Нет общих групп',
+        subtitle: 'Общие группы с этим пользователем появятся здесь',
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int i = 0; i < commonGroups.length; i++) ...[
+          InkWell(
+            onTap: () {
+              HapticUtils.tap();
+              onCommonGroupTap?.call(commonGroups[i]);
+            },
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  AvatarWithStatus(
+                    avatarUrl: commonGroups[i].avatarUrl,
+                    name: commonGroups[i].name,
+                    radius: 21,
+                    isOnline: false,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          commonGroups[i].name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w500,
+                            color: textColor,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${commonGroups[i].participantsCount} участников',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: commonGroups[i].participantsCount > 0
+                                ? subColor
+                                : accentColor.withValues(alpha: 0.8),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: subColor,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (i < commonGroups.length - 1)
+            Divider(
+              height: 1,
+              indent: 70,
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.08)
+                  : Colors.black.withValues(alpha: 0.06),
+            ),
+        ],
+      ],
+    );
   }
 
   // ============================================================

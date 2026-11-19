@@ -204,6 +204,38 @@ class SyncService {
         break;
       case 'draft_updated':
         break;
+      case 'message_burned':
+        final burnMsgId = payload['message_id']?.toString();
+        if (burnMsgId != null && burnMsgId.isNotEmpty) {
+          await _db.markMessageBurned(
+            burnMsgId,
+            viewedAt: payload['viewed_at']?.toString(),
+            expiresAt: payload['expires_at']?.toString(),
+            isBurned: payload['is_burned'] == true,
+          );
+        }
+        break;
+      case 'chat_auto_delete_updated':
+        final autoChatId = payload['chat_id']?.toString() ?? chatId;
+        final rawTtl = payload['message_auto_delete_time'] ??
+            payload['ttl_seconds'];
+        final ttlSec = rawTtl is num
+            ? rawTtl.toInt()
+            : int.tryParse(rawTtl?.toString() ?? '') ?? 0;
+        if (autoChatId != null && autoChatId.isNotEmpty) {
+          await _db.updateChatAutoDeleteTime(autoChatId, ttlSec);
+        }
+        break;
+      case 'chat_appearance_updated':
+        final appChatId = payload['chat_id']?.toString() ?? chatId;
+        final rawApp = payload['appearance'];
+        if (appChatId != null && appChatId.isNotEmpty) {
+          await _db.updateChatAppearanceJson(
+            appChatId,
+            rawApp is Map ? jsonEncode(rawApp) : null,
+          );
+        }
+        break;
       case 'user_appearance_updated':
         final targetUserId = payload['user_id']?.toString();
         if (targetUserId != null && targetUserId.isNotEmpty) {
@@ -416,6 +448,25 @@ class SyncService {
             payload['has_media_spoiler'] == 1 ||
             mediaPayloadMap['has_media_spoiler'] == true,
       ),
+      expiresAt: Value(payload['expires_at']?.toString()),
+      ttlSeconds: Value((payload['ttl_seconds'] as num?)?.toInt() ??
+          int.tryParse(payload['ttl_seconds']?.toString() ?? '') ??
+          0),
+      isViewOnce: Value(
+        payload['is_view_once'] == true || payload['is_view_once'] == 1,
+      ),
+      viewedAt: Value(payload['viewed_at']?.toString()),
+      isBurned: Value(payload['is_burned'] == true ||
+          ((payload['is_view_once'] == true || payload['is_view_once'] == 1) &&
+              payload['viewed_at'] != null &&
+              payload['viewed_at'].toString().isNotEmpty)),
+      replyToChatId: Value(payload['reply_to_chat_id']?.toString()),
+      replyToChatName: Value(payload['reply_to_chat_name']?.toString()),
+      replyToChatType: Value(payload['reply_to_chat_type']?.toString()),
+      effectId: Value(payload['effect_id']?.toString()),
+      savedTagsJson: payload['saved_tags'] is List
+          ? Value(jsonEncode(payload['saved_tags']))
+          : const Value.absent(),
     ));
 
     final isCommunityChannel =
@@ -548,6 +599,18 @@ class SyncService {
             ? true
             : (existingMsg?.isEdited ?? false))
         : (isPollUpdate ? (existingMsg?.isEdited ?? false) : true);
+    final bool? invertMedia = payload.containsKey('invert_media')
+        ? (payload['invert_media'] == true || payload['invert_media'] == 1)
+        : null;
+    final String? editedFileUrl = payload.containsKey('file_url')
+        ? payload['file_url']?.toString()
+        : null;
+    final String? editedFileName = payload.containsKey('file_name')
+        ? payload['file_name']?.toString()
+        : null;
+    final String? editedMessageType = payload.containsKey('message_type')
+        ? payload['message_type']?.toString()
+        : null;
     await _db.updateMessageContent(
       serverId,
       payload['content']?.toString() ?? existingMsg?.content ?? '',
@@ -555,6 +618,10 @@ class SyncService {
       mediaPayloadStr,
       effectiveIsEdited,
       hasMediaSpoiler,
+      editedFileUrl,
+      editedFileName,
+      editedMessageType,
+      invertMedia,
     );
     final chatId = payload['chat_id']?.toString();
     if (chatId != null) {
@@ -798,6 +865,12 @@ class SyncService {
     bool isSilent = false,
     String? threadRootMessageId,
     bool hasMediaSpoiler = false,
+    String? replyToChatId,
+    String? replyToChatName,
+    String? replyToChatType,
+    String? effectId,
+    bool isViewOnce = false,
+    int ttlSeconds = 0,
   }) async {
     final localId = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
@@ -853,6 +926,13 @@ class SyncService {
       isSilent: Value(isSilent),
       threadRootMessageId: Value(threadRootMessageId),
       hasMediaSpoiler: Value(hasMediaSpoiler),
+      ttlSeconds: Value(ttlSeconds),
+      isViewOnce: Value(isViewOnce),
+      isBurned: const Value(false),
+      replyToChatId: Value(replyToChatId),
+      replyToChatName: Value(replyToChatName),
+      replyToChatType: Value(replyToChatType),
+      effectId: Value(effectId),
     ));
 
     // Return the saved message as DbMessage
@@ -900,6 +980,16 @@ class SyncService {
       recentRepliersJson: null,
       threadRootMessageId: threadRootMessageId,
       hasMediaSpoiler: hasMediaSpoiler,
+      expiresAt: null,
+      ttlSeconds: ttlSeconds,
+      isViewOnce: isViewOnce,
+      viewedAt: null,
+      isBurned: false,
+      replyToChatId: replyToChatId,
+      replyToChatName: replyToChatName,
+      replyToChatType: replyToChatType,
+      effectId: effectId,
+      savedTagsJson: null,
     );
   }
 

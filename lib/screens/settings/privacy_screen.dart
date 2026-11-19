@@ -52,6 +52,10 @@ class PrivacyScreen extends StatelessWidget {
                       p.bioVisibility, 'bio_visibility'),
                   _privacyTile(context, l10n.translate('privacy_birthday'),
                       p.birthdayVisibility, 'birthday_visibility'),
+                  _privacyTile(context, 'Голосовые сообщения',
+                      p.voiceMessagesPrivacy, 'voice_messages_privacy'),
+                  _privacyTile(context, 'Личные сообщения',
+                      p.messagesPrivacy, 'messages_privacy'),
                 ],
               ),
 

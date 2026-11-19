@@ -94,6 +94,11 @@ class MessageContextMenu extends StatefulWidget {
   final VoidCallback? onViewPollResults;
   final VoidCallback? onRetractVote;
   final VoidCallback? onStopPoll;
+  final VoidCallback? onTranslate;
+  final bool isTranslated;
+  final VoidCallback? onReport;
+  final VoidCallback? onTagMessage;
+  final VoidCallback? onReplyInAnotherChat;
   final VoidCallback onDelete;
   final Function(String emoji) onReaction;
   final Set<String> selectedEmojis;
@@ -126,6 +131,11 @@ class MessageContextMenu extends StatefulWidget {
     this.onViewPollResults,
     this.onRetractVote,
     this.onStopPoll,
+    this.onTranslate,
+    this.isTranslated = false,
+    this.onReport,
+    this.onTagMessage,
+    this.onReplyInAnotherChat,
     required this.onDelete,
     required this.onReaction,
     this.selectedEmojis = const {},
@@ -2015,7 +2025,58 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               theme,
                               enabled: !isSending,
                             ),
+                          if (widget.onReplyInAnotherChat != null)
+                            _buildActionItem(
+                              (c) => iconoir.ChatBubble(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Ответить в другом чате',
+                              widget.onReplyInAnotherChat!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onTranslate != null)
+                            _buildActionItem(
+                              (c) => iconoir.Translate(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              widget.isTranslated
+                                  ? 'Скрыть перевод'
+                                  : 'Перевести',
+                              widget.onTranslate!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onTagMessage != null)
+                            _buildActionItem(
+                              (c) => iconoir.Label(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Добавить/снять тег',
+                              widget.onTagMessage!,
+                              theme,
+                              enabled: !isSending,
+                            ),
                           const Divider(height: 1),
+                          if (widget.onReport != null && !widget.isMe)
+                            _buildActionItem(
+                              (c) => iconoir.WarningTriangle(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Пожаловаться',
+                              widget.onReport!,
+                              theme,
+                              isDestructive: true,
+                              enabled: !isSending,
+                            ),
                           _buildActionItem(
                             (c) => iconoir.Trash(color: c, width: 20, height: 20),
                             context.l10n.translate('chat_action_delete'),

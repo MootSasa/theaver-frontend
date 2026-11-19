@@ -86,6 +86,11 @@ import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../services/bot_service.dart';
+import '../../services/dm_parity_service.dart';
+import 'package:geolocator/geolocator.dart';
+import '../../widgets/chat/contact_picker_sheet.dart';
+import '../../widgets/chat/dm_parity_sheets.dart';
+import '../../widgets/chat/location_picker_sheet.dart';
 import '../../widgets/chat/pinned_message_banner.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
 import '../../widgets/chat/bot_welcome_card.dart';
@@ -100,6 +105,9 @@ class PrivateChatScreen extends StatefulWidget {
   final bool? otherUserOnline;
   final DateTime? otherUserLastSeen;
   final String? otherUserId;
+  final Message? initialReplyMessage;
+  final String? initialReplyChatId;
+  final String? initialReplyChatName;
 
   const PrivateChatScreen({
     Key? key,
@@ -110,6 +118,9 @@ class PrivateChatScreen extends StatefulWidget {
     this.otherUserOnline,
     this.otherUserLastSeen,
     this.otherUserId,
+    this.initialReplyMessage,
+    this.initialReplyChatId,
+    this.initialReplyChatName,
   }) : super(key: key);
 
   @override
@@ -318,12 +329,30 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String? _quoteText;           // Selected text for quote
   int _quoteOffset = 0;         // Offset of quote in original message
   int _quoteLength = 0;         // Length of quoted fragment
+  String? _replyToChatId;
+  String? _replyToChatName;
   String? _highlightMessageId;  // Message ID to highlight (scroll-to)
   Timer? _highlightTimer;       // Timer to clear highlight
 
   // Editing state
   bool _isEditing = false;
   String? _editingMessageId;
+  bool _editingHasMedia = false;
+
+  // Wave 2B DM & Saved Messages Parity state
+  int _autoDeleteSeconds = 0;
+  ChatAppearanceConfig? _chatAppearance;
+  final Map<String, TranslationResult> _translationsByMsgId = {};
+  final Set<String> _translatingMsgIds = {};
+  String? _activeLiveLocationMessageId;
+  Timer? _liveLocationTimer;
+  DateTime? _liveLocationExpiresAt;
+  List<SavedTagItem> _savedTags = [];
+  String? _selectedSavedTag;
+  bool _isSavedPeersMode = false;
+  List<SavedPeerItem> _savedPeers = [];
+  String? _selectedSavedPeerKey;
+  String? _selectedSavedPeerName;
 
   // Multi-message selection & desktop LMB drag state
   final Set<String> _selectedMessageIds = {};
@@ -390,6 +419,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
     if (widget.otherUserLastSeen != null) {
       _otherUserLastSeen = widget.otherUserLastSeen;
+    }
+    if (widget.initialReplyMessage != null) {
+      _replyToMessage = widget.initialReplyMessage;
+      _replyToChatId = widget.initialReplyChatId;
+      _replyToChatName = widget.initialReplyChatName;
     }
     if (widget.otherUserId != null) {
       _otherUserId = widget.otherUserId;
@@ -859,6 +893,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           setState(() => _hasProtectedContent = val == true || val == 1 || val == 'true');
         }
       },
+      onMessageBurned: _onMessageBurned,
+      onChatAutoDeleteUpdated: _onChatAutoDeleteUpdated,
+      onChatAppearanceUpdated: _onChatAppearanceUpdated,
+      onScreenshotTaken: _onScreenshotTaken,
       onCallbackQueryAnswer: _onCallbackQueryAnswer,
       onUserAvatarUpdated: (event) {
         final userId = event.data['user_id']?.toString();
@@ -958,6 +996,56 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
     });
     unawaited(_loadPinnedMessagesList());
+  }
+
+  void _onMessageBurned(WebSocketEvent event) {
+    if (!mounted) return;
+    final messageId =
+        (event.data['message_id'] ?? event.data['id'])?.toString();
+    if (messageId == null || messageId.isEmpty) return;
+    final viewedAt = event.data['viewed_at']?.toString();
+    setState(() {
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
+          isBurned: true,
+          viewedAt: viewedAt ?? _messages[idx].viewedAt,
+        );
+        _updateFeedItems();
+      }
+    });
+  }
+
+  void _onChatAutoDeleteUpdated(WebSocketEvent event) {
+    if (!mounted) return;
+    final raw =
+        event.data['message_auto_delete_time'] ?? event.data['ttl_seconds'];
+    final sec = raw is int ? raw : int.tryParse(raw?.toString() ?? '') ?? 0;
+    setState(() => _autoDeleteSeconds = sec);
+  }
+
+  void _onChatAppearanceUpdated(WebSocketEvent event) {
+    if (!mounted) return;
+    final raw = event.data['appearance'];
+    if (raw is Map) {
+      final cfg = ChatAppearanceConfig.fromJson(
+        Map<String, dynamic>.from(raw),
+      );
+      setState(() => _chatAppearance = cfg.isEmpty ? null : cfg);
+    } else if (event.data['cleared'] == true || raw == null) {
+      setState(() => _chatAppearance = null);
+    }
+  }
+
+  void _onScreenshotTaken(WebSocketEvent event) {
+    if (!mounted) return;
+    final actor = event.data['actor_name']?.toString().trim() ?? '';
+    GlassToastService().show(
+      context,
+      actor.isNotEmpty
+          ? '$actor сделал(а) снимок экрана'
+          : 'Сделан снимок экрана',
+    );
   }
 
   void _onCallbackQueryAnswer(WebSocketEvent event) {
@@ -1163,7 +1251,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
     final dynamic replyMarkup = event.data['reply_markup'];
 
-    final isPollEvent = event.data['message_type'] == 'poll' ||
+    final newFileUrl = event.data['file_url']?.toString();
+    final newFileName = event.data['file_name']?.toString();
+    final newMsgType = event.data['message_type']?.toString();
+    final bool hasNewInvert = event.data.containsKey('invert_media');
+    final bool newInvert = event.data['invert_media'] == true;
+
+    final isPollEvent = newMsgType == 'poll' ||
         event.data['poll'] is Map ||
         (newMediaPayload != null &&
             (newMediaPayload.containsKey('poll_id') ||
@@ -1171,7 +1265,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (newContent == null &&
         newMediaPayload == null &&
         newEntities == null &&
-        replyMarkup == null) {
+        replyMarkup == null &&
+        newFileUrl == null &&
+        !hasNewInvert) {
       return;
     }
 
@@ -1213,6 +1309,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _messages[index] = current.copyWith(
             content: effectiveContent,
             entities: newEntities ?? current.entities,
+            fileUrl: newFileUrl ?? current.fileUrl,
+            fileName: newFileName ?? current.fileName,
+            messageType: newMsgType ?? current.messageType,
+            invertMedia: hasNewInvert ? newInvert : current.invertMedia,
             mediaPayload: mergedMedia,
             isEdited: nextIsEdited,
           );
@@ -2133,6 +2233,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _quoteText = null;
       _quoteOffset = 0;
       _quoteLength = 0;
+      _replyToChatId = null;
+      _replyToChatName = null;
     });
     DraftService().saveDraft(
       widget.chatId,
@@ -2147,6 +2249,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     setState(() {
       _isEditing = false;
       _editingMessageId = null;
+      _editingHasMedia = false;
       _textController.clear();
     });
   }
@@ -2890,11 +2993,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       setState(() {
         _chatType = chat.chatType;
         _hasProtectedContent = chat.hasProtectedContent;
+        _autoDeleteSeconds = chat.messageAutoDeleteTime;
         if (chat.pinnedMessage != null) {
           _pinnedMessage = chat.pinnedMessage;
           _pinnedMessages = [chat.pinnedMessage!];
         }
       });
+      unawaited(_loadChatAppearance());
+      if (chat.chatType == 'saved') {
+        unawaited(_loadSavedTags());
+      }
       if (chat.pinnedMessage != null ||
           chat.pinnedMessageId != null ||
           chat.pinnedMessageIds.isNotEmpty) {
@@ -3007,6 +3115,35 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   Future<void> _loadMessages() async {
     setState(() => _isLoading = true);
+
+    final bool hasSavedFilter = _chatType == 'saved' &&
+        ((_selectedSavedTag != null && _selectedSavedTag!.isNotEmpty) ||
+            (_selectedSavedPeerKey != null &&
+                _selectedSavedPeerKey!.isNotEmpty));
+
+    if (hasSavedFilter) {
+      final result = await ChatService.getMessages(
+        chatId: widget.chatId,
+        limit: 50,
+        tag: _selectedSavedTag,
+        savedPeerKey: _selectedSavedPeerKey,
+      );
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          if (result['success'] == true) {
+            final serverMessages = result['messages'] as List<Message>;
+            _hasMoreMessages = false;
+            _messages
+              ..clear()
+              ..addAll(serverMessages);
+            _sortMessagesDescending(_messages);
+            _updateFeedItems();
+          }
+        });
+      }
+      return;
+    }
 
     // 1. Сначала загрузить из Drift (мгновенно, offline-first)
     final db = AppDatabase();
@@ -3363,6 +3500,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       forwardFromName: Value(msg.forwardFromName),
       forwardFromAvatarUrl: Value(msg.forwardFromAvatarUrl),
       senderCustomizationJson: Value(msg.senderCustomization?.toJsonString()),
+      hasMediaSpoiler: Value(msg.hasMediaSpoiler),
+      expiresAt: Value(msg.expiresAt),
+      ttlSeconds: Value(msg.ttlSeconds),
+      isViewOnce: Value(msg.isViewOnce),
+      viewedAt: Value(msg.viewedAt),
+      isBurned: Value(msg.isBurned),
+      replyToChatId: Value(msg.replyToChatId),
+      replyToChatName: Value(msg.replyToChatName),
+      replyToChatType: Value(msg.replyToChatType),
+      effectId: Value(msg.effectId),
+      savedTagsJson: msg.savedTags.isNotEmpty
+          ? Value(jsonEncode(msg.savedTags))
+          : const Value.absent(),
     );
   }
 
@@ -3433,12 +3583,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     bool isSilent = false,
     bool hasMediaSpoiler = false,
     bool asDocument = false,
+    bool isViewOnce = false,
+    int ttlSeconds = 0,
+    String? effectId,
   }) async {
     final String controllerCleanText = _textController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _textController.entities;
     final String text = (cleanText ?? controllerCleanText).trimRight();
     final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
     if ((text.trim().isEmpty &&
+            !(_isEditing && _editingHasMedia) &&
             _attachedFiles.isEmpty &&
             _stagedForward == null) ||
         _isSending) {
@@ -3470,17 +3624,41 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     if (_isEditing && _editingMessageId != null) {
       final messageId = _editingMessageId!;
+      final List<File> replacementFiles = List<File>.from(_attachedFiles);
+      if (replacementFiles.isNotEmpty) {
+        _clearAttachedFiles();
+      }
       _cancelEditing();
       try {
         final String effectiveText = text;
         final List<MessageEntity>? effectiveEntities =
             resolvedEntities.isNotEmpty ? resolvedEntities : null;
+        String? repFileUrl;
+        String? repFileName;
+        String? repMsgType;
+        Map<String, dynamic>? repPayload;
+        if (replacementFiles.isNotEmpty) {
+          final file = replacementFiles.first;
+          final isVideo = _isVideoFile(file.path);
+          final isImg = _isImageFile(file.path);
+          final up = await _fileService.uploadFileChunked(file);
+          repFileUrl = up.url;
+          repFileName = up.fileName;
+          repMsgType = isVideo
+              ? 'video'
+              : (isImg ? 'image' : _getMessageTypeFromMimeType(up.mimeType));
+          repPayload = up.toMediaPayload();
+        }
 
         final res = await ChatService.editMessage(
           chatId: widget.chatId,
           messageId: messageId,
           content: effectiveText,
           entities: effectiveEntities,
+          fileUrl: repFileUrl,
+          fileName: repFileName,
+          messageType: repMsgType,
+          mediaPayload: repPayload,
         );
         if (res['success'] == true) {
           if (mounted) {
@@ -3490,6 +3668,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 _messages[idx] = _messages[idx].copyWith(
                   content: effectiveText,
                   entities: effectiveEntities,
+                  fileUrl: repFileUrl ?? _messages[idx].fileUrl,
+                  fileName: repFileName ?? _messages[idx].fileName,
+                  messageType: repMsgType ?? _messages[idx].messageType,
+                  mediaPayload: repPayload ?? _messages[idx].mediaPayload,
                   isEdited: true,
                 );
                 _updateFeedItems();
@@ -3502,6 +3684,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             effectiveEntities != null && effectiveEntities.isNotEmpty
                 ? jsonEncode(effectiveEntities.map((e) => e.toJson()).toList())
                 : null,
+            repPayload != null ? jsonEncode(repPayload) : null,
+            true,
+            null,
+            repFileUrl,
+            repFileName,
+            repMsgType,
           );
         } else {
           if (mounted) {
@@ -3520,6 +3708,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final replyQuoteText = _quoteText;
     final replyQuoteOffset = _quoteOffset;
     final replyQuoteLength = _quoteLength;
+    final replyChatId = _replyToChatId;
+    final replyChatName = _replyToChatName;
 
     _stopMyTyping();
     DraftService().deleteDraft(widget.chatId);
@@ -3547,10 +3737,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _quoteText = null;
       _quoteOffset = 0;
       _quoteLength = 0;
+      _replyToChatId = null;
+      _replyToChatName = null;
       _updateFeedItems();
     });
     _scrollToBottom();
 
+    bool sentUploadTypingAction = false;
     try {
       final String effectiveContentText = text;
       final List<MessageEntity> mergedEntities = [
@@ -3569,6 +3762,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (!asDocument && _attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
         final allFiles = List<File>.from(_attachedFiles);
         _clearAttachedFiles();
+        sentUploadTypingAction = true;
+        _wsService.sendTypingIndicator(
+          widget.chatId,
+          isTyping: true,
+          action: allFiles.every((f) => _isVideoFile(f.path))
+              ? 'uploading_video'
+              : 'uploading_photo',
+        );
 
         final totalFilesCount = allFiles.length;
         int overallProcessedCount = 0;
@@ -3623,8 +3824,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               entities: chunkEntities,
               invertMedia: invertMedia,
               replyToMessageId: replyTo?.id,
+              replyToChatId: replyChatId,
               isSilent: isSilent,
               hasMediaSpoiler: hasMediaSpoiler,
+              effectId: effectId,
             );
 
             // Fallback: If server album endpoint fails (e.g. older backend or DB error),
@@ -3726,6 +3929,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (_attachedFiles.length >= 2) {
         final filesToSend = List<File>.from(_attachedFiles);
         _clearAttachedFiles();
+        sentUploadTypingAction = true;
+        _wsService.sendTypingIndicator(
+          widget.chatId,
+          isTyping: true,
+          action: 'uploading_file',
+        );
         for (int i = 0; i < filesToSend.length; i++) {
           final file = filesToSend[i];
           final isVideo = _isVideoFile(file.path);
@@ -3784,6 +3993,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (_attachedFiles.isNotEmpty) {
         final file = _attachedFiles.first;
         final isVideo = _isVideoFile(file.path);
+        final isImg = _isImageFile(file.path);
+        sentUploadTypingAction = true;
+        _wsService.sendTypingIndicator(
+          widget.chatId,
+          isTyping: true,
+          action: asDocument
+              ? 'uploading_file'
+              : (isVideo
+                  ? 'uploading_video'
+                  : (isImg ? 'uploading_photo' : 'uploading_file')),
+        );
 
         final uploadResult = await _fileService.uploadFileChunked(file, onProgress: (p) {
           _uploadProgressNotifier.value = p;
@@ -3846,7 +4066,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId; // non-null capture для замыканий
         final profileTheme = context.read<ProfileThemeProvider>();
-        var message = Message.fromDbMessage(pendingMsg);
+        var message = Message.fromDbMessage(pendingMsg).copyWith(
+          isViewOnce: isViewOnce,
+          ttlSeconds: ttlSeconds,
+          effectId: effectId,
+          replyToChatId: replyChatId,
+          replyToChatName: replyChatName,
+        );
         if (replyTo != null) {
           final isReplyToMe = replyTo.senderId == _currentUserId;
           message = message.copyWith(
@@ -3890,6 +4116,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             fileUrl: fileUrl,
             fileName: fileName,
             replyToMessageId: replyTo?.id,
+            replyToChatId: replyChatId,
             isQuote: replyIsQuote,
             quoteText: replyQuoteText,
             quoteOffset: replyQuoteOffset,
@@ -3900,6 +4127,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             mediaPayload: singleMediaPayload,
             isSilent: isSilent,
             hasMediaSpoiler: hasMediaSpoiler,
+            isViewOnce: isViewOnce,
+            ttlSeconds: ttlSeconds,
+            effectId: effectId,
           );
 
           if (result['success'] == true) {
@@ -4004,9 +4234,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           messageType: messageType,
           fileUrl: fileUrl,
           fileName: fileName,
+          replyToMessageId: replyTo?.id,
+          replyToChatId: replyChatId,
           mediaPayload: singleMediaPayload,
           isSilent: isSilent,
           hasMediaSpoiler: hasMediaSpoiler,
+          isViewOnce: isViewOnce,
+          ttlSeconds: ttlSeconds,
+          effectId: effectId,
         );
 
         if (mounted) {
@@ -4033,6 +4268,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         GlassToastService().show(context, 'Failed to send: $e');
       }
     } finally {
+      if (sentUploadTypingAction) {
+        _wsService.sendTypingIndicator(
+          widget.chatId,
+          isTyping: false,
+          action: 'stop',
+        );
+      }
       if (mounted) {
         setState(() {
           _isSending = false;
@@ -4135,6 +4377,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         final bool isKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
 
         return ChatScaffold(
+          customBackground: buildChatAppearanceBackgroundWidget(_chatAppearance),
           canPop: !_isSelectionMode &&
               !_showEmojiPanel &&
               !isKeyboardVisible &&
@@ -4175,12 +4418,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                             ? context.l10n.translate('chat_status_recording_voice')
                             : (_typingAction == 'record_round'
                                 ? context.l10n.translate('chat_status_recording_round')
-                                : context.l10n.translate('chat_typing')))
+                                : (_typingAction == 'uploading_photo'
+                                    ? 'отправляет фото'
+                                    : (_typingAction == 'uploading_video'
+                                        ? 'отправляет видео'
+                                        : (_typingAction == 'uploading_file'
+                                            ? 'отправляет файл'
+                                            : context.l10n.translate('chat_typing'))))))
                         : null),
                 isChannel: false,
                 isMuted: _isMuted,
                 isBot: _isBot,
                 isVerified: _isVerified,
+                isSavedChat: isSavedChat,
+                autoDeleteSeconds: _autoDeleteSeconds,
+                isSavedPeersMode: _isSavedPeersMode,
                 heroTag: heroTag,
                 onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: _viewUserProfile,
@@ -4203,7 +4455,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 onSearch: _searchMessages,
                 onToggleMute: _toggleMuteNotifications,
                 onClearHistory: _showClearHistoryDialog,
-                onReport: _showBlockUserDialog,
+                onReport: _openChatAbuseReportSheet,
+                onAutoDelete: isSavedChat ? null : _openAutoDeleteSheet,
+                onChatAppearance: _openChatAppearanceSheet,
+                onToggleSavedViewMode: isSavedChat ? _toggleSavedPeersMode : null,
                 isSelectionMode: _isSelectionMode,
                 selectedCount: _selectedMessageIds.length,
                 hasProtectedContent: _hasProtectedContent,
@@ -4243,8 +4498,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     // В glass-режиме Scaffold без appBar, поэтому нужно учесть
     // высоту статус-бара + AppBar для верхнего отступа контента
+    final hasSavedFilterBar = _chatType == 'saved' &&
+        !_isSavedPeersMode &&
+        (_savedTags.isNotEmpty ||
+            _selectedSavedTag != null ||
+            _selectedSavedPeerKey != null);
+    final savedBarOffset = hasSavedFilterBar ? 44.0 : 0.0;
     final pinnedOffset = _pinnedMessage != null ? 48.0 : 0.0;
-    final topPadding = mediaQuery.padding.top + kToolbarHeight + 16.0 + pinnedOffset;
+    final topPadding =
+        mediaQuery.padding.top + kToolbarHeight + 16.0 + pinnedOffset + savedBarOffset;
     final bottomInset = mediaQuery.viewInsets.bottom;
 
     // Cap panel height to ensure it doesn't cover the entire chat in small windows
@@ -4326,7 +4588,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     Widget buildMessageList(double bottomOffset) {
       Widget listContent;
-      if (_isLoading && _messages.isEmpty) {
+      if (_chatType == 'saved' && _isSavedPeersMode) {
+        listContent = _buildSavedPeersList(
+          topPadding,
+          _inputHeight + bottomOffset,
+        );
+      } else if (_isLoading && _messages.isEmpty) {
         listContent = ChatMessagesShimmerSkeleton(
           key: const ValueKey('private_chat_shimmer'),
           topPadding: topPadding,
@@ -4506,6 +4773,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                         },
                       ),
                     ),
+                    if (hasSavedFilterBar)
+                      Positioned(
+                        top: MediaQuery.paddingOf(context).top +
+                            kFloatingAppBarTotalHeight +
+                            pinnedOffset +
+                            2,
+                        left: 0,
+                        right: 0,
+                        child: _buildSavedFilterBar(),
+                      ),
                     // Плеер видео/аудио (помещаем в корневой Stack, чтобы hitTest работал)
                     Positioned(
                       top: MediaQuery.paddingOf(context).top +
@@ -4889,6 +5166,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onFileTap: (url, name, type) => _openFile(url, name, type),
       formatTime: _formatTime,
       hasProtectedContent: _hasProtectedContent,
+      translation: _translationsByMsgId[message.id],
+      isTranslating: _translatingMsgIds.contains(message.id),
+      onHideTranslation: () {
+        setState(() => _translationsByMsgId.remove(message.id));
+      },
+      onConsumeViewOnce: () => _handleConsumeViewOnce(message),
+      onStopLiveLocation: () => _stopLiveLocation(message.id),
+      onOpenContactUser: _openUserProfileById,
+      onSavedTagTap: _selectSavedTagFilter,
+      onEffectTap: message.effectId != null && message.effectId!.isNotEmpty
+          ? () => GlassToastService().show(
+                context,
+                'Эффект сообщения',
+              )
+          : null,
     );
 
     // Wrap with SwipeToReplyWrapper
@@ -5084,10 +5376,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         );
       }
     } else {
+      bool onlyForMe = false;
+      if (_chatType != 'saved') {
+        final pinChoice = await showPinOptionsSheet(
+          context,
+          isPrivateChat: true,
+          peerName: _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? ''),
+        );
+        if (!mounted || pinChoice == null) return;
+        onlyForMe = pinChoice.onlyForMe;
+      }
       setState(() => _pinnedMessage = message);
       final res = await ChatService.pinMessage(
         chatId: widget.chatId,
         messageId: message.id,
+        onlyForMe: onlyForMe,
       );
       if (res['success'] == true && mounted) {
         GlassToastService().show(
@@ -5211,10 +5514,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       context: context,
       isPrivateChat: _chatType != 'saved',
       isPeerOnline: _isOtherUserOnline,
+      showEffectOption: true,
     );
     if (!mounted || choice == null) return;
     if (choice == SendOptionChoice.sendSilent) {
       await _sendMessage(isSilent: true);
+      return;
+    }
+    if (choice == SendOptionChoice.sendWithEffect) {
+      final effectId = await showMessageEffectPickerSheet(context);
+      if (mounted && effectId != null && effectId.isNotEmpty) {
+        await _sendMessage(effectId: effectId);
+      }
       return;
     }
     DateTime? scheduleAt;
@@ -6039,40 +6350,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     );
   }
 
-  /// Show confirmation dialog for blocking user
-  void _showBlockUserDialog() {
-    showTheavDialog<bool>(
-      context: context,
-      title: 'Заблокировать пользователя?',
-      message: 'Заблокировать $_chatName? Он не сможет отправлять вам сообщения.',
-      actions: [
-        const TheavDialogAction<bool>(label: 'Отмена', result: false),
-        TheavDialogAction<bool>(
-          label: 'Заблокировать',
-          result: true,
-          isDestructive: true,
-        ),
-      ],
-    ).then((confirmed) {
-      if (confirmed == true) _blockUser();
-    });
-  }
-
-  /// Block the user
-  Future<void> _blockUser() async {
-    if (_otherUserId == null) return;
-
-    final result = await ChatService.blockUser(userId: _otherUserId!);
-    if (mounted) {
-      if (result['success'] == true) {
-        GlassToastService().show(context, '$_chatName has been blocked');
-        TilingLayoutController.popOrCloseChatTile(context); // Return to previous screen
-      } else {
-        GlassToastService().show(context, result['message'] ?? 'Failed to block user');
-      }
-    }
-  }
-
   /// Toggle mute notifications for this chat
   bool _isMuted = false;
 
@@ -6282,6 +6559,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       isSilent: result.isSilent,
       hasMediaSpoiler: result.hasMediaSpoiler,
       asDocument: result.asDocument,
+      isViewOnce: result.isViewOnce,
+      ttlSeconds: result.ttlSeconds,
     );
   }
 
@@ -6392,16 +6671,148 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     });
   }
 
-  /// Send current location
+  /// Send current / live / venue location via OpenStreetMap picker sheet
   Future<void> _sendLocation() async {
-    // This would use geolocator package
-    GlassToastService().show(context, 'Send location functionality will be implemented');
+    final picked = await showLocationPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.chatId,
+      content: '',
+      messageType: picked.messageType,
+      latitude: picked.latitude,
+      longitude: picked.longitude,
+      livePeriod: picked.livePeriod,
+      heading: picked.heading,
+      horizontalAccuracy: picked.horizontalAccuracy,
+      placeName: picked.placeName,
+      address: picked.address,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+      if (picked.messageType == 'live_location' && (picked.livePeriod ?? 0) > 0) {
+        _startLiveLocationUpdater(sent.id, picked.livePeriod ?? 900);
+      }
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить геопозицию',
+      );
+    }
   }
 
-  /// Send a contact
+  void _startLiveLocationUpdater(String messageId, int livePeriodSeconds) {
+    _liveLocationTimer?.cancel();
+    _activeLiveLocationMessageId = messageId;
+    _liveLocationExpiresAt = DateTime.now()
+        .toUtc()
+        .add(Duration(seconds: livePeriodSeconds));
+    _liveLocationTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      final targetId = _activeLiveLocationMessageId;
+      final expiresAt = _liveLocationExpiresAt;
+      if (!mounted || targetId == null || expiresAt == null) {
+        _liveLocationTimer?.cancel();
+        return;
+      }
+      if (DateTime.now().toUtc().isAfter(expiresAt)) {
+        _liveLocationTimer?.cancel();
+        _activeLiveLocationMessageId = null;
+        return;
+      }
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 8),
+          ),
+        );
+        await DmParityService.updateLiveLocation(
+          widget.chatId,
+          targetId,
+          latitude: pos.latitude,
+          longitude: pos.longitude,
+          heading: pos.heading >= 0 && pos.heading <= 360
+              ? pos.heading.round()
+              : null,
+          horizontalAccuracy: pos.accuracy > 0 ? pos.accuracy : null,
+        );
+      } catch (_) {}
+    });
+  }
+
+  Future<void> _stopLiveLocation(String messageId) async {
+    if (_activeLiveLocationMessageId == messageId) {
+      _liveLocationTimer?.cancel();
+      _liveLocationTimer = null;
+      _activeLiveLocationMessageId = null;
+      _liveLocationExpiresAt = null;
+    }
+    final res = await DmParityService.updateLiveLocation(
+      widget.chatId,
+      messageId,
+      stop: true,
+    );
+    if (!mounted) return;
+    if (res['success'] == true) {
+      final rawPayload = res['media_payload'];
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == messageId);
+        if (idx != -1) {
+          final current = _messages[idx];
+          final nextPayload = rawPayload is Map
+              ? Map<String, dynamic>.from(rawPayload)
+              : {
+                  ...?current.mediaPayload,
+                  'is_live_active': false,
+                };
+          _messages[idx] = current.copyWith(mediaPayload: nextPayload);
+          _updateFeedItems();
+        }
+      });
+      GlassToastService().show(context, 'Трансляция геопозиции остановлена');
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось остановить трансляцию',
+      );
+    }
+  }
+
+  /// Send a contact card from ContactsService picker
   Future<void> _sendContact() async {
-    // This would use contacts_service package
-    GlassToastService().show(context, 'Send contact functionality will be implemented');
+    final picked = await showContactPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.chatId,
+      content: picked.displayName,
+      messageType: 'contact',
+      contact: picked.toPayload(),
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить контакт',
+      );
+    }
   }
 
   /// Open file when tapped
@@ -6533,6 +6944,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _watchingEmojiTimer?.cancel();
     _highlightTimer?.cancel();
     _slowmodeTimer?.cancel();
+    _liveLocationTimer?.cancel();
 
     if (_registeredTileId != null) {
       TilingLayoutController.instance.unregisterTileBackHandler(
@@ -7185,13 +7597,495 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _textController.loadMessage(message.content, message.entities);
           _isEditing = true;
           _editingMessageId = message.id;
+          _editingHasMedia =
+              message.fileUrl != null && message.fileUrl!.isNotEmpty;
         });
         _focusInputField();
       },
       onSelect: () => _enterSelectionMode(message),
+      onTranslate: message.content.trim().isNotEmpty
+          ? () => unawaited(_toggleTranslateMessage(message))
+          : null,
+      isTranslated: _translationsByMsgId.containsKey(message.id),
+      onReport: (!isMe && _chatType != 'saved')
+          ? () => unawaited(
+                showAbuseReportSheet(
+                  context,
+                  chatId: widget.chatId,
+                  targetUserId: _otherUserId,
+                  messageIds: [message.id],
+                ),
+              )
+          : null,
+      onTagMessage: _chatType == 'saved'
+          ? () => unawaited(_openSavedTagPicker(message))
+          : null,
+      onReplyInAnotherChat: !_hasProtectedContent
+          ? () => unawaited(_replyInAnotherChat(message))
+          : null,
       onDelete: (msg) => _confirmDeleteMessage(msg),
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
+    );
+  }
+
+  Future<void> _loadChatAppearance() async {
+    final cfg = await DmParityService.getChatAppearance(widget.chatId);
+    if (!mounted) return;
+    setState(() {
+      _chatAppearance = (cfg == null || cfg.isEmpty) ? null : cfg;
+    });
+  }
+
+  Future<void> _openAutoDeleteSheet() async {
+    final sec = await showAutoDeleteTimerSheet(
+      context,
+      currentSeconds: _autoDeleteSeconds,
+    );
+    if (!mounted || sec == null) return;
+    final res = await DmParityService.setChatAutoDelete(widget.chatId, sec);
+    if (!mounted) return;
+    if (res['success'] == true) {
+      setState(() => _autoDeleteSeconds = sec);
+      GlassToastService().show(
+        context,
+        sec == 0 ? 'Автоудаление отключено' : 'Автоудаление обновлено',
+      );
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось обновить автоудаление',
+      );
+    }
+  }
+
+  Future<void> _openChatAppearanceSheet() async {
+    final isSavedChat = _chatType == 'saved';
+    final res = await showChatAppearanceSheet(
+      context,
+      chatId: widget.chatId,
+      current: _chatAppearance,
+      canApplyForBoth: !isSavedChat,
+    );
+    if (!mounted || res == null || !res.changed) return;
+    setState(() {
+      _chatAppearance =
+          (res.appearance == null || res.appearance!.isEmpty) ? null : res.appearance;
+    });
+  }
+
+  Future<void> _openChatAbuseReportSheet() async {
+    await showAbuseReportSheet(
+      context,
+      chatId: widget.chatId,
+      targetUserId: _otherUserId,
+    );
+  }
+
+  Future<Map<String, dynamic>> _handleConsumeViewOnce(Message message) async {
+    final res = await DmParityService.consumeViewOnce(widget.chatId, message.id);
+    if (mounted && (res['is_burned'] == true || res['viewed_at'] != null)) {
+      final isBurned = res['is_burned'] == true;
+      final viewedAt = res['viewed_at']?.toString();
+      final expiresAt = res['expires_at']?.toString();
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == message.id);
+        if (idx != -1) {
+          _messages[idx] = _messages[idx].copyWith(
+            isBurned: isBurned || _messages[idx].isBurned,
+            viewedAt: viewedAt ?? _messages[idx].viewedAt,
+            expiresAt: expiresAt ?? _messages[idx].expiresAt,
+          );
+          _updateFeedItems();
+        }
+      });
+      if (isBurned) {
+        unawaited(AppDatabase().markMessageBurned(message.id));
+      }
+    }
+    return res;
+  }
+
+  Future<void> _toggleTranslateMessage(Message message) async {
+    if (_translationsByMsgId.containsKey(message.id)) {
+      setState(() => _translationsByMsgId.remove(message.id));
+      return;
+    }
+    if (_translatingMsgIds.contains(message.id)) return;
+    setState(() => _translatingMsgIds.add(message.id));
+    final localeCode = Localizations.localeOf(context).languageCode;
+    final targetLang = localeCode.isNotEmpty ? localeCode : 'ru';
+    final res = await DmParityService.translateMessage(
+      chatId: widget.chatId,
+      messageId: message.id,
+      targetLang: targetLang,
+    );
+    if (!mounted) return;
+    setState(() {
+      _translatingMsgIds.remove(message.id);
+      if (res['success'] == true && res['translation'] is TranslationResult) {
+        _translationsByMsgId[message.id] =
+            res['translation'] as TranslationResult;
+      }
+    });
+    if (res['success'] != true && mounted) {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось перевести сообщение',
+      );
+    }
+  }
+
+  Future<void> _openSavedTagPicker(Message message) async {
+    const presetTags = ['❤️', '🔥', '⭐', '💼', '📌', '💡', '✅', '🎯'];
+    final allTags = <String>{
+      ...presetTags,
+      ..._savedTags.map((t) => t.tag),
+      ...message.savedTags,
+    }.toList();
+    final palette = context.theav;
+    await showTheavModalSheet<void>(
+      context: context,
+      title: 'Теги сообщения',
+      showCloseButton: true,
+      builder: (ctx) {
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final tag in allTags)
+              GestureDetector(
+                onTap: () async {
+                  final hasTag = message.savedTags.contains(tag);
+                  final res = hasTag
+                      ? await DmParityService.removeSavedMessageTag(
+                          message.id,
+                          tag,
+                        )
+                      : await DmParityService.toggleSavedMessageTag(
+                          message.id,
+                          tag,
+                        );
+                  if (!mounted) return;
+                  if (res['success'] == true) {
+                    final nextTags =
+                        (res['saved_tags'] as List<String>?) ?? const [];
+                    setState(() {
+                      final idx =
+                          _messages.indexWhere((m) => m.id == message.id);
+                      if (idx != -1) {
+                        _messages[idx] =
+                            _messages[idx].copyWith(savedTags: nextTags);
+                        _updateFeedItems();
+                      }
+                    });
+                    unawaited(
+                      AppDatabase()
+                          .updateMessageSavedTags(message.id, nextTags),
+                    );
+                    unawaited(_loadSavedTags());
+                    if (ctx.mounted) Navigator.of(ctx).pop();
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: message.savedTags.contains(tag)
+                        ? palette.primary.withValues(alpha: 0.2)
+                        : palette.onSurface.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: message.savedTags.contains(tag)
+                          ? palette.primary
+                          : Colors.transparent,
+                    ),
+                  ),
+                  child: Text(tag, style: const TextStyle(fontSize: 20)),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSavedFilterBar() {
+    final palette = context.theav;
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          if (_selectedSavedPeerKey != null &&
+              _selectedSavedPeerKey!.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _selectedSavedPeerKey = null;
+                    _selectedSavedPeerName = null;
+                  });
+                  unawaited(_loadMessages());
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: palette.primary.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: palette.primary),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _selectedSavedPeerName ?? _selectedSavedPeerKey!,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: palette.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.close_rounded,
+                        size: 14,
+                        color: palette.primary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+          for (final t in _savedTags) ...[
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: GestureDetector(
+                onTap: () => unawaited(_selectSavedTagFilter(t.tag)),
+                onLongPress: () async {
+                  final nextLabel = await showSavedTagLabelSheet(
+                    context,
+                    tag: t.tag,
+                    currentLabel: t.label,
+                  );
+                  if (nextLabel != null && mounted) {
+                    await DmParityService.setSavedTagLabel(t.tag, nextLabel);
+                    unawaited(_loadSavedTags());
+                  }
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _selectedSavedTag == t.tag
+                        ? palette.primary.withValues(alpha: 0.24)
+                        : palette.surface.withValues(alpha: 0.85),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: _selectedSavedTag == t.tag
+                          ? palette.primary
+                          : palette.divider,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(t.tag, style: const TextStyle(fontSize: 14)),
+                      if (t.label.isNotEmpty) ...[
+                        const SizedBox(width: 4),
+                        Text(
+                          t.label,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: _selectedSavedTag == t.tag
+                                ? palette.primary
+                                : palette.onSurface,
+                          ),
+                        ),
+                      ],
+                      if (t.count > 0) ...[
+                        const SizedBox(width: 4),
+                        Text(
+                          '${t.count}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: palette.subtext,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSavedPeersList(double topPad, double bottomPad) {
+    final palette = context.theav;
+    if (_savedPeers.isEmpty) {
+      return Center(
+        key: const ValueKey('saved_peers_empty'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            iconoir.ViewGrid(
+              width: 44,
+              height: 44,
+              color: palette.subtext,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Нет чатов в Избранном',
+              style: TextStyle(color: palette.subtext, fontSize: 15),
+            ),
+          ],
+        ),
+      );
+    }
+    return ListView.separated(
+      key: const ValueKey('saved_peers_list'),
+      padding: EdgeInsets.fromLTRB(12, topPad, 12, bottomPad),
+      itemCount: _savedPeers.length,
+      separatorBuilder: (_, __) => Divider(height: 1, color: palette.divider),
+      itemBuilder: (ctx, i) {
+        final peer = _savedPeers[i];
+        return ListTile(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          leading: CircleAvatar(
+            radius: 22,
+            backgroundColor: palette.primary.withValues(alpha: 0.16),
+            backgroundImage: peer.avatarUrl.isNotEmpty
+                ? avatarImageProvider(peer.avatarUrl)
+                : null,
+            child: peer.avatarUrl.isEmpty
+                ? Text(
+                    peer.title.isNotEmpty ? peer.title[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      color: palette.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                : null,
+          ),
+          title: Text(
+            peer.title.isNotEmpty ? peer.title : peer.savedPeerKey,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: palette.onSurface,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: Text(
+            peer.lastMessagePreview.isNotEmpty
+                ? peer.lastMessagePreview
+                : '${peer.messageCount} сообщ.',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: palette.subtext, fontSize: 12.5),
+          ),
+          trailing: Text(
+            '${peer.messageCount}',
+            style: TextStyle(
+              color: palette.primary,
+              fontWeight: FontWeight.w600,
+              fontSize: 12.5,
+            ),
+          ),
+          onTap: () {
+            setState(() {
+              _selectedSavedPeerKey = peer.savedPeerKey;
+              _selectedSavedPeerName = peer.title;
+              _isSavedPeersMode = false;
+            });
+            unawaited(_loadMessages());
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _loadSavedTags() async {
+    final tags = await DmParityService.getSavedTags();
+    if (!mounted) return;
+    setState(() => _savedTags = tags);
+  }
+
+  Future<void> _selectSavedTagFilter(String tag) async {
+    final next = _selectedSavedTag == tag ? null : tag;
+    setState(() {
+      _selectedSavedTag = next;
+      _isSavedPeersMode = false;
+    });
+    await _loadMessages();
+  }
+
+  Future<void> _toggleSavedPeersMode() async {
+    final entering = !_isSavedPeersMode;
+    setState(() {
+      _isSavedPeersMode = entering;
+    });
+    if (entering) {
+      final peers = await DmParityService.getSavedPeers();
+      if (!mounted) return;
+      setState(() => _savedPeers = peers);
+    }
+  }
+
+  Future<void> _replyInAnotherChat(Message message) async {
+    final target = await ForwardChatPickerSheet.pickTargetChat(
+      context,
+      fromChatId: widget.chatId,
+      messageCount: 1,
+    );
+    if (!mounted || target == null) return;
+    if (target.chatId == widget.chatId) {
+      _startReply(message);
+      return;
+    }
+    if (target.chatType == 'private' || target.chatType == 'saved') {
+      await Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: (_) => PrivateChatScreen(
+            chatId: target.chatId,
+            otherUserName: target.chatType == 'saved' ? 'Избранное' : target.name,
+            otherUserAvatar: target.avatarUrl,
+            otherUserId: target.otherUserId,
+            initialReplyMessage: message,
+            initialReplyChatId: widget.chatId,
+            initialReplyChatName: _chatName.isNotEmpty
+                ? _chatName
+                : (widget.otherUserName ?? 'Чат'),
+          ),
+        ),
+      );
+    } else {
+      GlassToastService().show(
+        context,
+        'Ответ в другой чат пока поддержан только для личных чатов',
+      );
+    }
+  }
+
+  void _openUserProfileById(String userId) {
+    if (userId.isEmpty) return;
+    Navigator.of(context).push(
+      SwipeBackPageRoute(
+        builder: (_) => UserProfileScreen(userId: userId),
+      ),
     );
   }
 

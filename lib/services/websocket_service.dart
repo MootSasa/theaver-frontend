@@ -46,6 +46,10 @@ enum WebSocketEventType {
   scheduledMessagesUpdated,
   joinRequestsUpdated,
   chatUnreadMarked,
+  messageBurned,
+  chatAutoDeleteUpdated,
+  chatAppearanceUpdated,
+  screenshotTaken,
   rpcResult,
   rpcError,
 }
@@ -185,6 +189,14 @@ class WebSocketEvent {
         return WebSocketEventType.joinRequestsUpdated;
       case 'chat_unread_marked':
         return WebSocketEventType.chatUnreadMarked;
+      case 'message_burned':
+        return WebSocketEventType.messageBurned;
+      case 'chat_auto_delete_updated':
+        return WebSocketEventType.chatAutoDeleteUpdated;
+      case 'chat_appearance_updated':
+        return WebSocketEventType.chatAppearanceUpdated;
+      case 'screenshot_taken':
+        return WebSocketEventType.screenshotTaken;
       case 'rpc_result':
         return WebSocketEventType.rpcResult;
       case 'rpc_error':

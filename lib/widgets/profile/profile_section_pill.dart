@@ -12,6 +12,7 @@ import '../../utils/haptic_utils.dart';
 /// Типы вкладок (разделов) в нижней части экрана профиля.
 enum ProfileSectionType {
   members,
+  commonGroups,
   wall,
   gifts,
   media,
@@ -40,6 +41,8 @@ class ProfileSectionItem {
     }
     switch (type) {
       case ProfileSectionType.members:
+        return iconoir.Group(color: color, width: size, height: size);
+      case ProfileSectionType.commonGroups:
         return iconoir.Group(color: color, width: size, height: size);
       case ProfileSectionType.wall:
         return iconoir.ViewGrid(color: color, width: size, height: size);

@@ -37,6 +37,10 @@ import '../theme/viewport_gradient_box.dart';
 import 'poll_message_widget.dart';
 import 'call_message_widget.dart';
 import 'unsupported_message_widget.dart';
+import 'contact_message_widget.dart';
+import 'location_message_widget.dart';
+import 'view_once_media_widget.dart';
+import '../../services/dm_parity_service.dart' show TranslationResult;
 import 'dice_message_widget.dart';
 import 'sticker_message_widget.dart';
 import '../chat/sticker_item_widget.dart';
@@ -722,6 +726,14 @@ class MessageBubble extends StatelessWidget {
   final bool isLastInCluster;
   final VoidCallback? onThreadRootTap;
   final bool hasProtectedContent;
+  final TranslationResult? translation;
+  final bool isTranslating;
+  final VoidCallback? onHideTranslation;
+  final Future<Map<String, dynamic>> Function()? onConsumeViewOnce;
+  final VoidCallback? onStopLiveLocation;
+  final void Function(String userId)? onOpenContactUser;
+  final void Function(String tag)? onSavedTagTap;
+  final VoidCallback? onEffectTap;
 
   const MessageBubble({
     Key? key,
@@ -748,6 +760,14 @@ class MessageBubble extends StatelessWidget {
     this.isLastInCluster = true,
     this.onThreadRootTap,
     this.hasProtectedContent = false,
+    this.translation,
+    this.isTranslating = false,
+    this.onHideTranslation,
+    this.onConsumeViewOnce,
+    this.onStopLiveLocation,
+    this.onOpenContactUser,
+    this.onSavedTagTap,
+    this.onEffectTap,
   }) : super(key: key);
 
   MessageBubble copyWithKey(Key? newKey) {
@@ -776,6 +796,14 @@ class MessageBubble extends StatelessWidget {
       isLastInCluster: isLastInCluster,
       onThreadRootTap: onThreadRootTap,
       hasProtectedContent: hasProtectedContent,
+      translation: translation,
+      isTranslating: isTranslating,
+      onHideTranslation: onHideTranslation,
+      onConsumeViewOnce: onConsumeViewOnce,
+      onStopLiveLocation: onStopLiveLocation,
+      onOpenContactUser: onOpenContactUser,
+      onSavedTagTap: onSavedTagTap,
+      onEffectTap: onEffectTap,
     );
   }
 
@@ -962,6 +990,8 @@ class MessageBubble extends StatelessWidget {
     final bool isUnsupported = message.isUnsupported;
     final String? resolvedFileUrl = AppConfig.resolveMediaUrl(message.fileUrl);
     final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
+    final bool isViewOnceOrTtlMedia =
+        (message.isViewOnce || message.ttlSeconds > 0) && !isUnsupported;
     final bool hasCaption = !isUnsupported && _hasCaption;
     final bool isDice = _isDice;
     final int emojiCount =
@@ -1116,6 +1146,13 @@ class MessageBubble extends StatelessWidget {
     final bool endsWithBlock =
         message.messageType == 'poll' ||
         message.messageType == 'call' ||
+        message.messageType == 'location' ||
+        message.messageType == 'live_location' ||
+        message.messageType == 'venue' ||
+        message.messageType == 'contact' ||
+        (isViewOnceOrTtlMedia && !hasMedia) ||
+        isTranslating ||
+        translation != null ||
         trimmedContent.endsWith('```') ||
         trimmedContent.endsWith(r'$$') ||
         trimmedContent.endsWith(r'\]') ||
@@ -1124,6 +1161,9 @@ class MessageBubble extends StatelessWidget {
         entityEndsWithPre ||
         previewAtBottom ||
         hasMedia;
+
+    final String? effectId = message.effectId?.trim();
+    final bool hasEffect = effectId != null && effectId.isNotEmpty;
 
     // Build Metadata Widget
     final Widget metadataWidget = isBigEmoji
@@ -1136,6 +1176,10 @@ class MessageBubble extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (hasEffect) ...[
+                  _buildEffectBadge(effectId, Colors.white),
+                  const SizedBox(width: 4),
+                ],
                 if (message.isEdited) ...[
                   Text(
                     context.l10n.translate('chat_edited'),
@@ -1180,6 +1224,10 @@ class MessageBubble extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                if (hasEffect) ...[
+                  _buildEffectBadge(effectId, bubbleSubtextColor),
+                  const SizedBox(width: 4),
+                ],
                 if (message.isEdited) ...[
                   Text(
                     context.l10n.translate('chat_edited'),
@@ -1223,6 +1271,90 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
+    Widget? translationWidget;
+    if (isTranslating || translation != null) {
+      translationWidget = Container(
+        margin: const EdgeInsets.only(top: 6.0),
+        padding: const EdgeInsets.only(top: 6.0),
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(
+              color: bubbleSubtextColor.withValues(alpha: 0.24),
+              width: 0.75,
+            ),
+          ),
+        ),
+        child: isTranslating
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      color: bubbleSubtextColor,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Перевод...',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: bubbleSubtextColor,
+                    ),
+                  ),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    translation!.translatedText,
+                    style: textStyle,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      iconoir.Translate(
+                        width: 12,
+                        height: 12,
+                        color: bubbleSubtextColor,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        translation!.targetLang.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: bubbleSubtextColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (onHideTranslation != null) ...[
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: onHideTranslation,
+                          child: Text(
+                            'Скрыть перевод',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isMe
+                                  ? bubbleSubtextColor
+                                  : effectivePreset.primaryColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+      );
+    }
+
     final double effectiveViewportWidth =
         TileViewportScope.widthOf(context) -
             (hasAvatarGutter ? GroupMessageAvatarRow.gutterWidth : 0.0);
@@ -1238,7 +1370,7 @@ class MessageBubble extends StatelessWidget {
     const double replyWidthEstimate = 0.0;
 
     if (message.hasReply) {
-      replyWidget = MessageReplyInfo(
+      final Widget baseReply = MessageReplyInfo(
         replyInfo: message.replyInfo,
         isQuote: message.isQuote,
         quoteText: message.quoteText,
@@ -1251,6 +1383,31 @@ class MessageBubble extends StatelessWidget {
           message.replyInfo?.chatId,
         ),
       );
+      final String? originChatName = message.replyToChatName?.trim();
+      if (originChatName != null && originChatName.isNotEmpty) {
+        replyWidget = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2.0),
+              child: Text(
+                'из «$originChatName»',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: bubbleSubtextColor,
+                ),
+              ),
+            ),
+            baseReply,
+          ],
+        );
+      } else {
+        replyWidget = baseReply;
+      }
     } else if ((message.forwardFromName != null &&
             message.forwardFromName!.isNotEmpty) ||
         (chatType == 'saved' && message.senderName.isNotEmpty)) {
@@ -1335,6 +1492,7 @@ class MessageBubble extends StatelessWidget {
     }
 
     final bool isPureMedia = hasMedia &&
+        !isViewOnceOrTtlMedia &&
         !hasCaption &&
         !_isAudio &&
         !_isVoice &&
@@ -1350,6 +1508,37 @@ class MessageBubble extends StatelessWidget {
       textBodyWidget = CallMessageWidget(
         message: message,
         isMine: isMe,
+      );
+    } else if (message.messageType == 'location' ||
+        message.messageType == 'live_location' ||
+        message.messageType == 'venue') {
+      textBodyWidget = LocationMessageWidget(
+        message: message,
+        isMe: isMe,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+        onStopLiveLocation: onStopLiveLocation,
+      );
+    } else if (message.messageType == 'contact') {
+      textBodyWidget = ContactMessageWidget(
+        message: message,
+        isMe: isMe,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+        onOpenUserProfile: onOpenContactUser,
+      );
+    } else if (isViewOnceOrTtlMedia && !hasMedia) {
+      textBodyWidget = ViewOnceMediaWidget(
+        key: ValueKey('view_once_${message.id}'),
+        message: message,
+        isMe: isMe,
+        isSavedChat: chatType == 'saved',
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+        onConsumeViewOnce: onConsumeViewOnce,
       );
     } else if (message.messageType == 'poll') {
       textBodyWidget = PollMessageWidget(
@@ -1504,6 +1693,17 @@ class MessageBubble extends StatelessWidget {
       }
     }
 
+    if (!hasMedia && translationWidget != null) {
+      textBodyWidget = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          textBodyWidget,
+          translationWidget,
+        ],
+      );
+    }
+
     Widget? mediaContentWidget;
     if (hasMedia) {
       final double maxMediaWidth = math.min(maxBubbleWidth, 340.0);
@@ -1518,6 +1718,9 @@ class MessageBubble extends StatelessWidget {
         mediaWidth,
         resolvedFileUrl,
         mediaHeight: singleMediaSize.height,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
       );
 
       Widget innerContent;
@@ -1550,6 +1753,7 @@ class MessageBubble extends StatelessWidget {
           children: invertMedia
               ? [
                   captionWidget,
+                  if (translationWidget != null) translationWidget,
                   const SizedBox(height: 6.0),
                   mediaWidget,
                   const SizedBox(height: 3.0),
@@ -1559,11 +1763,12 @@ class MessageBubble extends StatelessWidget {
                   mediaWidget,
                   const SizedBox(height: 6.0),
                   captionWidget,
+                  if (translationWidget != null) translationWidget,
                   const SizedBox(height: 3.0),
                   metadataWidget,
                 ],
         );
-      } else if (_isImage || _isVideo) {
+      } else if ((_isImage || _isVideo) && !isViewOnceOrTtlMedia) {
         innerContent = Stack(
           alignment: Alignment.bottomRight,
           children: [
@@ -1647,7 +1852,11 @@ class MessageBubble extends StatelessWidget {
         ? EdgeInsets.zero
         : _isVoice
             ? const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4.0)
-            : (hasMedia && !hasCaption && replyWidget == null && !hasSenderInBubble)
+            : (hasMedia &&
+                    !hasCaption &&
+                    !isViewOnceOrTtlMedia &&
+                    replyWidget == null &&
+                    !hasSenderInBubble)
                 ? const EdgeInsets.all(4.0)
                 : const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0);
 
@@ -1777,16 +1986,55 @@ class MessageBubble extends StatelessWidget {
       child: bubbleCore,
     );
 
-    // Reactions row and/or Inline Keyboard below message bubble if present
+    // Reactions row, Saved Tags, and/or Inline Keyboard below message bubble if present
     final effectiveReactions = reactions ?? (message.reactions.isNotEmpty ? message.reactions : null);
     final hasReactions = effectiveReactions != null && effectiveReactions.isNotEmpty;
+    final hasSavedTags = message.savedTags.isNotEmpty;
     final hasInlineKeyboard = message.inlineKeyboard.isNotEmpty && message.id.isNotEmpty;
-    if (hasReactions || hasInlineKeyboard) {
+    if (hasReactions || hasSavedTags || hasInlineKeyboard) {
       final effectiveMyReactions = myReactions ?? (myReaction != null && myReaction!.isNotEmpty ? {myReaction!} : message.myReactions);
       alignedBubble = Column(
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           alignedBubble,
+          if (hasSavedTags)
+            Padding(
+              padding: const EdgeInsets.only(top: 4.0, left: 12, right: 12),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (final tag in message.savedTags)
+                    GestureDetector(
+                      onTap: onSavedTagTap != null
+                          ? () => onSavedTagTap!(tag)
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: effectivePreset.primaryColor.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: effectivePreset.primaryColor.withValues(alpha: 0.35),
+                            width: 0.7,
+                          ),
+                        ),
+                        child: Text(
+                          tag,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: effectivePreset.primaryColor,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           if (hasReactions)
             Padding(
               padding: const EdgeInsets.only(top: 4.0, left: 12, right: 12),
@@ -1877,12 +2125,66 @@ class MessageBubble extends StatelessWidget {
     return Size(maxAllowedWidth, 220.0);
   }
 
+  Widget _buildEffectBadge(String effectId, Color color) {
+    final emoji = switch (effectId) {
+      'heart' => '❤️',
+      'fire' => '🔥',
+      'confetti' => '🎉',
+      'thumbs_up' => '👍',
+      'thumbs_down' => '👎',
+      'lightning' => '⚡',
+      'party' => '🥳',
+      'poop' => '💩',
+      _ => '✨',
+    };
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onEffectTap,
+      child: TweenAnimationBuilder<double>(
+        key: ValueKey('eff_${message.id}_$effectId'),
+        tween: Tween<double>(begin: 1.25, end: 1.0),
+        duration: const Duration(milliseconds: 360),
+        curve: Curves.easeOutBack,
+        builder: (context, scale, child) => Transform.scale(
+          scale: scale,
+          child: child,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 1),
+          child: Text(
+            emoji,
+            style: TextStyle(fontSize: 11, color: color),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildMediaWidget(
     BuildContext context,
     double maxWidth,
     String resolvedUrl, {
     double mediaHeight = 220.0,
+    Color? textColor,
+    Color? subtextColor,
+    Color? accentColor,
   }) {
+    if ((message.isViewOnce || message.ttlSeconds > 0) &&
+        !message.isUnsupported) {
+      final theme = Theme.of(context);
+      return ViewOnceMediaWidget(
+        key: ValueKey('view_once_${message.id}'),
+        message: message,
+        isMe: isMe,
+        isSavedChat: chatType == 'saved',
+        textColor: textColor ?? theme.colorScheme.onSurface,
+        subtextColor:
+            subtextColor ?? theme.colorScheme.onSurface.withValues(alpha: 0.7),
+        accentColor: accentColor ?? theme.colorScheme.primary,
+        onConsumeViewOnce: onConsumeViewOnce,
+      );
+    }
+
     if (_isSticker) {
       final meta = message.mediaPayload ?? const <String, dynamic>{};
       final stickerId = meta['sticker_id']?.toString();
@@ -2098,10 +2400,15 @@ class MessageBubble extends StatelessWidget {
   }
 
   Widget _buildFloatingMetadata(BuildContext context) {
+    final effectId = message.effectId?.trim();
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        if (effectId != null && effectId.isNotEmpty) ...[
+          _buildEffectBadge(effectId, Colors.white),
+          const SizedBox(width: 4),
+        ],
         if (message.isEdited) ...[
           Text(
             context.l10n.translate('chat_edited'),

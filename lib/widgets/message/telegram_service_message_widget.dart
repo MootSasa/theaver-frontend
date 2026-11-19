@@ -79,7 +79,9 @@ class TelegramServiceMessageWidget extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final payload = message.mediaPayload;
-    final action = _stringField(payload, 'system_action') ?? '';
+    final action = _stringField(payload, 'system_action') ??
+        _stringField(payload, 'action') ??
+        '';
     final effectiveIsChannel =
         isChannel || _stringField(payload, 'chat_type') == 'channel';
 
@@ -345,6 +347,53 @@ class TelegramServiceMessageWidget extends StatelessWidget {
           leadingIcon:
               iconoir.SoundHigh(width: 14, height: 14, color: pillText),
           child: Text(text, textAlign: TextAlign.center, style: baseStyle),
+        );
+        break;
+
+      case 'chat_auto_delete_updated':
+        final rawTtl = _intField(payload, 'ttl_seconds');
+        final ttlSeconds = rawTtl > 0
+            ? rawTtl
+            : _intField(payload, 'message_auto_delete_time');
+        final actorName = _stringField(payload, 'actor_name');
+        final label = ttlSeconds <= 0
+            ? 'отключил(а) автоудаление сообщений'
+            : (ttlSeconds >= 31536000
+                ? 'установил(а) автоудаление сообщений: 1 год'
+                : (ttlSeconds >= 2592000
+                    ? 'установил(а) автоудаление сообщений: 1 мес.'
+                    : (ttlSeconds >= 604800
+                        ? 'установил(а) автоудаление сообщений: 7 дн.'
+                        : (ttlSeconds >= 86400
+                            ? 'установил(а) автоудаление сообщений: 24 ч.'
+                            : 'установил(а) автоудаление сообщений: $ttlSeconds сек.'))));
+        pillWidget = buildPill(
+          leadingIcon: iconoir.Timer(width: 14, height: 14, color: pillText),
+          child: Text(
+            message.content.trim().isNotEmpty
+                ? message.content.trim()
+                : (actorName != null ? '$actorName $label' : label),
+            textAlign: TextAlign.center,
+            style: baseStyle,
+          ),
+        );
+        break;
+
+      case 'screenshot_taken':
+        final actorName = _stringField(payload, 'actor_name');
+        final text = message.content.trim().isNotEmpty
+            ? message.content.trim()
+            : (actorName != null
+                ? '$actorName сделал(а) снимок экрана'
+                : 'Сделан снимок экрана');
+        pillWidget = buildPill(
+          leadingIcon:
+              iconoir.ShieldCheck(width: 14, height: 14, color: pillText),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: baseStyle,
+          ),
         );
         break;
 

@@ -53,6 +53,8 @@ class _PrivacyDetailScreenState extends State<PrivacyDetailScreen> {
       case 'groups_channels_privacy': return p.groupsChannelsPrivacy;
       case 'bio_visibility': return p.bioVisibility;
       case 'birthday_visibility': return p.birthdayVisibility;
+      case 'voice_messages_privacy': return p.voiceMessagesPrivacy;
+      case 'messages_privacy': return p.messagesPrivacy;
       default: return PrivacyVisibility.contacts;
     }
   }
@@ -71,7 +73,8 @@ class _PrivacyDetailScreenState extends State<PrivacyDetailScreen> {
               _sectionHeader(l10n.translate('privacy_who_can_see')),
               _radioTile(l10n.translate('privacy_everybody'), PrivacyVisibility.everybody, currentValue),
               _radioTile(l10n.translate('privacy_contacts'), PrivacyVisibility.contacts, currentValue),
-              _radioTile(l10n.translate('privacy_nobody'), PrivacyVisibility.nobody, currentValue),
+              if (widget.field != 'messages_privacy')
+                _radioTile(l10n.translate('privacy_nobody'), PrivacyVisibility.nobody, currentValue),
 
               const Divider(height: 32),
 

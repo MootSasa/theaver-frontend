@@ -58,6 +58,9 @@ class Chats extends Table {
   BoolColumn get hasProtectedContent =>
       boolean().withDefault(const Constant(false))();
   TextColumn get pinnedMessageIdsJson => text().nullable()();
+  IntColumn get messageAutoDeleteTime =>
+      integer().withDefault(const Constant(0))();
+  TextColumn get appearanceJson => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -132,6 +135,16 @@ class Messages extends Table {
   TextColumn get threadRootMessageId => text().nullable()();
   BoolColumn get hasMediaSpoiler =>
       boolean().withDefault(const Constant(false))();
+  TextColumn get expiresAt => text().nullable()();
+  IntColumn get ttlSeconds => integer().withDefault(const Constant(0))();
+  BoolColumn get isViewOnce => boolean().withDefault(const Constant(false))();
+  TextColumn get viewedAt => text().nullable()();
+  BoolColumn get isBurned => boolean().withDefault(const Constant(false))();
+  TextColumn get replyToChatId => text().nullable()();
+  TextColumn get replyToChatName => text().nullable()();
+  TextColumn get replyToChatType => text().nullable()();
+  TextColumn get effectId => text().nullable()();
+  TextColumn get savedTagsJson => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {localId};
@@ -254,7 +267,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -472,6 +485,36 @@ class AppDatabase extends _$AppDatabase {
               'has_media_spoiler',
               'INTEGER NOT NULL DEFAULT 0',
             );
+          }
+          if (from < 15) {
+            await _addColumnIfMissing(
+              'chats',
+              'message_auto_delete_time',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('chats', 'appearance_json', 'TEXT');
+            await _addColumnIfMissing('messages', 'expires_at', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'ttl_seconds',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'is_view_once',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'viewed_at', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'is_burned',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'reply_to_chat_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'reply_to_chat_name', 'TEXT');
+            await _addColumnIfMissing('messages', 'reply_to_chat_type', 'TEXT');
+            await _addColumnIfMissing('messages', 'effect_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'saved_tags_json', 'TEXT');
           }
         },
       );
@@ -1141,7 +1184,12 @@ class AppDatabase extends _$AppDatabase {
     String? mediaPayload,
     bool isEdited = true,
     bool? hasMediaSpoiler,
+    String? fileUrl,
+    String? fileName,
+    String? messageType,
+    bool? invertMedia,
   ]) async {
+    await ensureInitialized();
     await (update(messages)..where((t) => t.serverId.equals(serverId)))
         .write(MessagesCompanion(
       content: Value(content),
@@ -1152,7 +1200,64 @@ class AppDatabase extends _$AppDatabase {
       hasMediaSpoiler: hasMediaSpoiler != null
           ? Value(hasMediaSpoiler)
           : const Value.absent(),
+      fileUrl: fileUrl != null ? Value(fileUrl) : const Value.absent(),
+      fileName: fileName != null ? Value(fileName) : const Value.absent(),
+      messageType:
+          messageType != null ? Value(messageType) : const Value.absent(),
+      invertMedia:
+          invertMedia != null ? Value(invertMedia) : const Value.absent(),
     ));
+  }
+
+  /// Обновить таймер автоудаления сообщений в чате
+  Future<void> updateChatAutoDeleteTime(String chatId, int ttlSeconds) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(messageAutoDeleteTime: Value(ttlSeconds)),
+    );
+  }
+
+  /// Обновить сохранённое оформление (тема/обои) чата
+  Future<void> updateChatAppearanceJson(
+      String chatId, String? appearanceJson) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(appearanceJson: Value(appearanceJson)),
+    );
+  }
+
+  /// Пометить одноразовое или TTL-сообщение как просмотренное/сгоревшее
+  Future<void> markMessageBurned(
+    String serverId, {
+    String? viewedAt,
+    String? expiresAt,
+    bool isBurned = true,
+  }) async {
+    if (serverId.isEmpty) return;
+    await ensureInitialized();
+    await (update(messages)
+          ..where((t) => t.serverId.equals(serverId) | t.localId.equals(serverId)))
+        .write(
+      MessagesCompanion(
+        isBurned: Value(isBurned),
+        viewedAt: viewedAt != null ? Value(viewedAt) : const Value.absent(),
+        expiresAt: expiresAt != null ? Value(expiresAt) : const Value.absent(),
+        fileUrl: isBurned ? const Value('') : const Value.absent(),
+      ),
+    );
+  }
+
+  /// Обновить список тегов сообщения в Избранном
+  Future<void> updateMessageSavedTags(
+      String serverId, List<String> tags) async {
+    if (serverId.isEmpty) return;
+    await ensureInitialized();
+    final encoded = jsonEncode(tags);
+    await (update(messages)
+          ..where((t) => t.serverId.equals(serverId) | t.localId.equals(serverId)))
+        .write(MessagesCompanion(savedTagsJson: Value(encoded)));
   }
 
   /// Обновить реакции на сообщении по serverId или localId
