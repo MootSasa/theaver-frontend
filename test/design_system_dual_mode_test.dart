@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import 'package:theaver/models/theav_theme.dart';
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
+import 'package:theaver/services/mini_app_js_bridge.dart';
 import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
@@ -733,4 +735,104 @@ void main() {
       });
     });
   }
+
+  testWidgets(
+      'MiniAppWebViewSheet and MiniAppJsBridge derive palette dynamically from active app theme',
+      (tester) async {
+    const customPalette = TheavPalette(
+      primary: Color(0xFFE91E63),
+      onPrimary: Color(0xFFFFFFFF),
+      background: Color(0xFF2B1035),
+      surface: Color(0xFF3A1647),
+      onSurface: Color(0xFFFCE4EC),
+      appBarBackground: Color(0xFF4A1B59),
+      appBarForeground: Color(0xFFFFD54F),
+      chatBubbleOutgoing: Color(0xFFE91E63),
+      chatBubbleOutgoingText: Color(0xFFFFFFFF),
+      chatBubbleOutgoingSubtext: Color(0xB3FFFFFF),
+      chatBubbleIncoming: Color(0xFF3A1647),
+      chatBubbleIncomingText: Color(0xFFFCE4EC),
+      chatBubbleIncomingSubtext: Color(0xB3FCE4EC),
+      chatDateBadge: Color(0xFF4A1B59),
+      chatDateBadgeText: Color(0xFFFFD54F),
+    );
+    final customTheme = const TheavTheme(
+      id: 'custom_sunset_test',
+      name: 'Sunset Test',
+      author: 'Test',
+      isDark: true,
+      palette: customPalette,
+      wallpaper: TheavWallpaper(),
+    ).toThemeData();
+
+    final themeParams = MiniAppJsBridge.buildThemeParams(customTheme);
+    expect(themeParams['bg_color'], '#2b1035');
+    expect(themeParams['secondary_bg_color'], '#3a1647');
+    expect(themeParams['header_bg_color'], '#4a1b59');
+    expect(themeParams['bottom_bar_bg_color'], '#4a1b59');
+    expect(themeParams['button_color'], '#e91e63');
+    expect(themeParams['text_color'], '#fce4ec');
+
+    const launchData = MiniAppLaunchData(
+      url: 'https://api.theaver.app/api/miniapps/studio',
+      initData: 'hash=test',
+      botId: '1',
+      botUsername: 'BotMother',
+      botDisplayName: 'BotMother',
+      botIsVerified: true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: customTheme,
+        home: const Scaffold(
+          body: MiniAppWebViewSheet(
+            launchData: launchData,
+            botName: 'BotMother',
+            botUsername: 'BotMother',
+            isVerified: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final seal = tester.widget<MiniAppVerifiedSeal>(
+      find.byKey(const ValueKey('mini_app_verified_seal')),
+    );
+    expect(seal.color, const Color(0xFFE91E63));
+    expect(seal.checkColor, customPalette.onPrimary);
+
+    final titleTexts = tester.widgetList<Text>(find.text('BotMother')).toList();
+    expect(
+      titleTexts.any((t) => t.style?.color == const Color(0xFFFFD54F)),
+      isTrue,
+    );
+
+    final bodyMaterials = tester
+        .widgetList<Material>(
+          find.descendant(
+            of: find.byType(MiniAppWebViewSheet),
+            matching: find.byType(Material),
+          ),
+        )
+        .toList();
+    expect(
+      bodyMaterials.any((m) => m.color == const Color(0xFF2B1035)),
+      isTrue,
+    );
+
+    final headerDecorated = tester
+        .widgetList<Container>(
+          find.descendant(
+            of: find.byType(MiniAppWebViewSheet),
+            matching: find.byType(Container),
+          ),
+        )
+        .where((c) {
+      final d = c.decoration;
+      return d is BoxDecoration && d.color == const Color(0xFF4A1B59);
+    });
+    expect(headerDecorated, isNotEmpty);
+  });
 }

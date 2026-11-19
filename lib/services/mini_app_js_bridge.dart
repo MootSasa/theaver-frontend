@@ -18,6 +18,26 @@ class MiniAppBridgeEvent {
   });
 }
 
+/// Opaque theme colors resolved dynamically from the active app [ThemeData] / [TheavPalette]
+/// for [MiniAppWebViewSheet] chrome, placeholder, and `Telegram.WebApp.themeParams`.
+class MiniAppThemeColors {
+  final TheavPalette palette;
+  final Color bodyBg;
+  final Color surfaceBg;
+  final Color headerBg;
+  final Color headerFg;
+  final Color divider;
+
+  const MiniAppThemeColors({
+    required this.palette,
+    required this.bodyBg,
+    required this.surfaceBg,
+    required this.headerBg,
+    required this.headerFg,
+    required this.divider,
+  });
+}
+
 /// Builds the full `window.Telegram.WebApp` (Bot API v7.10) JS injection bridge,
 /// builds CSS/JS `themeParams` from [ThemeData], and parses bridge callbacks.
 class MiniAppJsBridge {
@@ -40,45 +60,87 @@ class MiniAppJsBridge {
     return null;
   }
 
+  static TheavPalette _extractPalette(ThemeData theme) {
+    final ext = theme.extension<TheavThemeExtension>();
+    if (ext != null) return ext.palette;
+    final cs = theme.colorScheme;
+    return TheavPalette(
+      primary: cs.primary,
+      onPrimary: cs.onPrimary,
+      background: theme.scaffoldBackgroundColor,
+      surface: cs.surface,
+      onSurface: cs.onSurface,
+      appBarBackground: theme.appBarTheme.backgroundColor ?? cs.surface,
+      appBarForeground: theme.appBarTheme.foregroundColor ?? cs.onSurface,
+      chatBubbleOutgoing: cs.primary,
+      chatBubbleOutgoingText: cs.onPrimary,
+      chatBubbleOutgoingSubtext: cs.onPrimary.withValues(alpha: 0.7),
+      chatBubbleIncoming: cs.surface,
+      chatBubbleIncomingText: cs.onSurface,
+      chatBubbleIncomingSubtext: cs.onSurface.withValues(alpha: 0.6),
+      chatDateBadge: cs.surface.withValues(alpha: 0.8),
+      chatDateBadgeText: cs.onSurface,
+      subtext: cs.onSurfaceVariant,
+      divider: cs.outlineVariant,
+      error: cs.error,
+    );
+  }
+
+  /// Resolves opaque Mini App surface and header colors from the active app theme.
+  static MiniAppThemeColors resolveThemeColors(ThemeData theme) {
+    final palette = _extractPalette(theme);
+    final Color bodyBg = palette.background.a > 0
+        ? palette.background.withValues(alpha: 1.0)
+        : theme.colorScheme.surface.withValues(alpha: 1.0);
+    Color surfaceBg = palette.surface.a > 0
+        ? Color.alphaBlend(palette.surface, bodyBg)
+        : bodyBg;
+    if (surfaceBg.toARGB32() == bodyBg.toARGB32()) {
+      surfaceBg = Color.alphaBlend(
+        palette.onSurface.withValues(alpha: 0.05),
+        bodyBg,
+      );
+    }
+    Color headerBg = palette.appBarBackground.a > 0
+        ? Color.alphaBlend(palette.appBarBackground, bodyBg)
+        : surfaceBg;
+    if (headerBg.toARGB32() == bodyBg.toARGB32()) {
+      headerBg = surfaceBg;
+    }
+    final Color headerFg = palette.appBarBackground.a > 0.5
+        ? palette.appBarForeground
+        : palette.onSurface;
+    return MiniAppThemeColors(
+      palette: palette,
+      bodyBg: bodyBg,
+      surfaceBg: surfaceBg,
+      headerBg: headerBg,
+      headerFg: headerFg,
+      divider: palette.divider,
+    );
+  }
+
   /// Maps current [ThemeData] & [TheavThemeExtension] colors to opaque Telegram `ThemeParams`.
   static Map<String, String> buildThemeParams(ThemeData theme) {
-    final ext = theme.extension<TheavThemeExtension>();
-    final cs = theme.colorScheme;
-    final bool isDark = theme.brightness == Brightness.dark;
-    final Color bg = isDark
-        ? Color.alphaBlend(
-            cs.surface.withValues(alpha: 0.28),
-            const Color(0xFF181E25),
-          )
-        : cs.surface;
-    final Color headerBg = isDark
-        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.045), bg)
-        : Colors.white;
-    final Color secBg = isDark
-        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.055), bg)
-        : cs.surfaceContainerLow;
-    final text = cs.onSurface;
-    final hint = cs.onSurfaceVariant;
-    final primary = ext?.palette.primary ?? cs.primary;
-    final onPrimary = cs.onPrimary;
-    final error = ext?.palette.error ?? cs.error;
+    final c = resolveThemeColors(theme);
+    final p = c.palette;
 
     return {
-      'bg_color': colorToHex(bg),
-      'secondary_bg_color': colorToHex(secBg),
-      'text_color': colorToHex(text),
-      'hint_color': colorToHex(hint),
-      'link_color': colorToHex(primary),
-      'button_color': colorToHex(primary),
-      'button_text_color': colorToHex(onPrimary),
-      'header_bg_color': colorToHex(headerBg),
-      'bottom_bar_bg_color': colorToHex(headerBg),
-      'accent_text_color': colorToHex(primary),
-      'section_bg_color': colorToHex(bg),
-      'section_header_text_color': colorToHex(primary),
-      'section_separator_color': colorToHex(cs.outlineVariant),
-      'subtitle_text_color': colorToHex(hint),
-      'destructive_text_color': colorToHex(error),
+      'bg_color': colorToHex(c.bodyBg),
+      'secondary_bg_color': colorToHex(c.surfaceBg),
+      'text_color': colorToHex(p.onSurface),
+      'hint_color': colorToHex(p.subtext),
+      'link_color': colorToHex(p.primary),
+      'button_color': colorToHex(p.primary),
+      'button_text_color': colorToHex(p.onPrimary),
+      'header_bg_color': colorToHex(c.headerBg),
+      'bottom_bar_bg_color': colorToHex(c.headerBg),
+      'accent_text_color': colorToHex(p.primary),
+      'section_bg_color': colorToHex(c.surfaceBg),
+      'section_header_text_color': colorToHex(p.primary),
+      'section_separator_color': colorToHex(c.divider),
+      'subtitle_text_color': colorToHex(p.subtext),
+      'destructive_text_color': colorToHex(p.error),
     };
   }
 

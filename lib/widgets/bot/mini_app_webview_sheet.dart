@@ -221,11 +221,13 @@ class _MiniAppVerifiedSealPainter extends CustomPainter {
 /// Telegram-style 2x2 rounded squares Mini App placeholder / loading emblem.
 class MiniAppGridPlaceholder extends StatefulWidget {
   final Color bodyColor;
+  final Color? foregroundColor;
   final bool animate;
 
   const MiniAppGridPlaceholder({
     super.key,
     required this.bodyColor,
+    this.foregroundColor,
     this.animate = false,
   });
 
@@ -275,8 +277,10 @@ class _MiniAppGridPlaceholderState extends State<MiniAppGridPlaceholder>
   }
 
   Widget _buildGrid(double t) {
-    final bool isBodyDark = widget.bodyColor.computeLuminance() <= 0.55;
-    final Color overlayBase = isBodyDark ? Colors.white : Colors.black;
+    final Color overlayBase = widget.foregroundColor ??
+        (widget.bodyColor.computeLuminance() <= 0.55
+            ? Colors.white
+            : Colors.black);
 
     Widget buildTile(int index) {
       final double alpha = widget.animate
@@ -391,6 +395,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   Color? _customHeaderColor;
   Color? _customBackgroundColor;
   Color? _customBottomBarColor;
+  Color? _lastSyncedWebViewBg;
+  Map<String, String>? _lastThemeParams;
 
   final _ButtonState _mainButton = _ButtonState()..text = 'Continue';
   final _ButtonState _secondaryButton = _ButtonState()..text = 'Cancel';
@@ -437,10 +443,45 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncThemeWithWebView();
+  }
+
+  @override
   void dispose() {
     _dragResetController.dispose();
     _menuAnimController.dispose();
     super.dispose();
+  }
+
+  void _syncWebViewBg() {
+    final ctrl = _controller;
+    if (ctrl == null || !mounted) return;
+    final themeColors = MiniAppJsBridge.resolveThemeColors(Theme.of(context));
+    final effectiveBg = _customBackgroundColor ?? themeColors.bodyBg;
+    if (_lastSyncedWebViewBg != effectiveBg) {
+      _lastSyncedWebViewBg = effectiveBg;
+      try {
+        ctrl.setBackgroundColor(effectiveBg);
+      } catch (_) {}
+    }
+  }
+
+  void _syncThemeWithWebView() {
+    _syncWebViewBg();
+    final ctrl = _controller;
+    if (ctrl == null || !mounted) return;
+    final theme = Theme.of(context);
+    final nextParams = MiniAppJsBridge.buildThemeParams(theme);
+    if (_lastThemeParams != null && !mapEquals(_lastThemeParams, nextParams)) {
+      _dispatchEventToWebView('theme_changed', {
+        'theme_params': nextParams,
+        'color_scheme':
+            theme.brightness == Brightness.dark ? 'dark' : 'light',
+      });
+    }
+    _lastThemeParams = nextParams;
   }
 
   void _initWebView() {
@@ -485,9 +526,6 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           },
         ),
       );
-    try {
-      ctrl.setBackgroundColor(const Color(0xFF181E25));
-    } catch (_) {}
     ctrl.loadRequest(uri);
     _controller = ctrl;
   }
@@ -606,6 +644,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         final col = _resolveSpecialColor(data);
         if (mounted) {
           setState(() => _customBackgroundColor = col);
+          _syncWebViewBg();
         }
         break;
 
@@ -991,32 +1030,34 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final style = TheavSurfaceStyle.of(context);
-    final palette = style.palette;
+    final resolved = MiniAppJsBridge.resolveThemeColors(theme);
+    final palette = resolved.palette;
     final media = MediaQuery.of(context);
     final double sheetHeight =
         media.size.height * (_isExpanded ? 1.0 : 0.78);
     final double topInset = _isExpanded ? media.padding.top : 0.0;
     final double topRadius = _isExpanded ? 0.0 : 18.0;
 
-    final bool isDarkTheme = theme.brightness == Brightness.dark;
-    final Color defaultBodyBg = isDarkTheme
-        ? Color.alphaBlend(
-            theme.colorScheme.surface.withValues(alpha: 0.28),
-            const Color(0xFF181E25),
-          )
-        : theme.colorScheme.surface;
-    final Color bodyBg = _customBackgroundColor ?? defaultBodyBg;
-    final bool isBodyDark = bodyBg.computeLuminance() <= 0.55;
-
-    final Color defaultHeaderBg = isDarkTheme
-        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.045), bodyBg)
-        : Colors.white;
-    final Color headerBg = _customHeaderColor ?? defaultHeaderBg;
+    final Color bodyBg = _customBackgroundColor ?? resolved.bodyBg;
+    final Color bodyFg = _customBackgroundColor != null
+        ? (_customBackgroundColor!.computeLuminance() <= 0.55
+            ? Colors.white
+            : Colors.black87)
+        : palette.onSurface;
+    final Color headerBg = _customHeaderColor ?? resolved.headerBg;
     final bool isHeaderDark = headerBg.computeLuminance() <= 0.55;
-    final Color headerFg =
-        isHeaderDark ? Colors.white : const Color(0xFF1B1F23);
+    final Color headerFg = _customHeaderColor != null
+        ? (isHeaderDark ? Colors.white : Colors.black87)
+        : resolved.headerFg;
+    final Color headerDivider = _customHeaderColor != null
+        ? headerFg.withValues(alpha: 0.12)
+        : resolved.divider;
     final Color sealColor =
-        isHeaderDark ? const Color(0xFF7595AE) : palette.primary;
+        _customHeaderColor != null ? headerFg.withValues(alpha: 0.85) : palette.primary;
+    final Color sealCheckColor =
+        (sealColor.computeLuminance() - headerBg.computeLuminance()).abs() > 0.18
+            ? headerBg
+            : palette.onPrimary;
 
     final String displayTitle = widget.botName.isNotEmpty
         ? widget.botName
@@ -1045,7 +1086,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           color: headerBg,
           border: Border(
             bottom: BorderSide(
-              color: Colors.black.withValues(alpha: isHeaderDark ? 0.32 : 0.08),
+              color: headerDivider,
               width: 0.75,
             ),
           ),
@@ -1124,7 +1165,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                               key: const ValueKey('mini_app_verified_seal'),
                               size: 19,
                               color: sealColor,
-                              checkColor: headerBg,
+                              checkColor: sealCheckColor,
                             ),
                           ],
                         ],
@@ -1211,6 +1252,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                           child: MiniAppGridPlaceholder(
                             key: const ValueKey('mini_app_grid_loader'),
                             bodyColor: bodyBg,
+                            foregroundColor: bodyFg,
                             animate: true,
                           ),
                         ),
@@ -1228,9 +1270,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                           child: SizedBox(
                             height: 2.5,
                             child: ColoredBox(
-                              color: isBodyDark
-                                  ? const Color(0xFF7595AE)
-                                  : palette.primary,
+                              color: palette.primary,
                             ),
                           ),
                         ),
@@ -1242,15 +1282,17 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 context,
                 displayTitle: displayTitle,
                 displayHandle: displayHandle,
-                bodyBg: bodyBg,
-                isBodyDark: isBodyDark,
-                palette: palette,
+                resolved: resolved,
               ),
       ),
     );
 
     final Color bottomBarBg = _customBottomBarColor ?? headerBg;
-    final bool isBottomDark = bottomBarBg.computeLuminance() <= 0.55;
+    final Color bottomDivider = _customBottomBarColor != null
+        ? (bottomBarBg.computeLuminance() <= 0.55
+            ? Colors.white12
+            : Colors.black12)
+        : resolved.divider;
 
     final Widget sheetBody = Material(
       color: bodyBg,
@@ -1270,9 +1312,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 color: bottomBarBg,
                 border: Border(
                   top: BorderSide(
-                    color: Colors.black.withValues(
-                      alpha: isBottomDark ? 0.28 : 0.08,
-                    ),
+                    color: bottomDivider,
                     width: 0.6,
                   ),
                 ),
@@ -1481,9 +1521,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               refractionIndex: 1.08,
               refractionWidth: 16.0,
               borderWidth: 1.1,
-              color: style.isDark
-                  ? const Color(0xDE1F2730)
-                  : const Color(0xEEFFFFFF),
+              color: headerBg.withValues(alpha: style.isDark ? 0.86 : 0.90),
             ),
             child: menuItemsColumn,
           )
@@ -1652,20 +1690,14 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     BuildContext context, {
     required String displayTitle,
     required String displayHandle,
-    required Color bodyBg,
-    required bool isBodyDark,
-    required TheavPalette palette,
+    required MiniAppThemeColors resolved,
   }) {
     final uri = Uri.tryParse(widget.launchData.url);
     final host = uri?.host ?? widget.launchData.url;
-    final Color cardBg = Color.alphaBlend(
-      (isBodyDark ? Colors.white : Colors.black).withValues(alpha: 0.045),
-      bodyBg,
-    );
-    final Color titleColor =
-        isBodyDark ? Colors.white : palette.onSurface;
-    final Color subtitleColor =
-        isBodyDark ? Colors.white.withValues(alpha: 0.65) : palette.subtext;
+    final palette = resolved.palette;
+    final Color cardBg = resolved.surfaceBg;
+    final Color titleColor = palette.onSurface;
+    final Color subtitleColor = palette.subtext;
 
     return Center(
       child: SingleChildScrollView(
@@ -1678,8 +1710,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               color: cardBg,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: (isBodyDark ? Colors.white : Colors.black)
-                    .withValues(alpha: 0.08),
+                color: resolved.divider,
               ),
             ),
             child: Column(
@@ -1688,6 +1719,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 MiniAppGridPlaceholder(
                   key: const ValueKey('mini_app_grid_loader'),
                   bodyColor: cardBg,
+                  foregroundColor: palette.onSurface,
                   animate: false,
                 ),
                 const SizedBox(height: 16),
@@ -1737,10 +1769,14 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                               uri,
                               mode: LaunchMode.externalApplication,
                             ),
-                    icon: const iconoir.OpenNewWindow(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: palette.primary,
+                      foregroundColor: palette.onPrimary,
+                    ),
+                    icon: iconoir.OpenNewWindow(
                       width: 17,
                       height: 17,
-                      color: Colors.white,
+                      color: palette.onPrimary,
                     ),
                     label: const Text('Открыть в браузере'),
                   ),
