@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../models/theav_theme.dart';
@@ -26,6 +28,7 @@ class MiniAppThemeColors {
   final Color surfaceBg;
   final Color headerBg;
   final Color headerFg;
+  final Color dockBg;
   final Color divider;
 
   const MiniAppThemeColors({
@@ -34,6 +37,7 @@ class MiniAppThemeColors {
     required this.surfaceBg,
     required this.headerBg,
     required this.headerFg,
+    required this.dockBg,
     required this.divider,
   });
 }
@@ -41,6 +45,13 @@ class MiniAppThemeColors {
 /// Builds the full `window.Telegram.WebApp` (Bot API v7.10) JS injection bridge,
 /// builds CSS/JS `themeParams` from [ThemeData], and parses bridge callbacks.
 class MiniAppJsBridge {
+  static double _rgbDistance(Color a, Color b) {
+    final dr = (a.r - b.r) * 255.0;
+    final dg = (a.g - b.g) * 255.0;
+    final db = (a.b - b.b) * 255.0;
+    return math.sqrt(dr * dr + dg * dg + db * db);
+  }
+
   static String colorToHex(Color color) {
     final argb = color.toARGB32();
     final rgb = argb & 0x00FFFFFF;
@@ -110,12 +121,48 @@ class MiniAppJsBridge {
     final Color headerFg = palette.appBarBackground.a > 0.5
         ? palette.appBarForeground
         : palette.onSurface;
+    final bool isDark = bodyBg.computeLuminance() < 0.5;
+    final Color primaryOpaque = palette.primary.withValues(alpha: 1.0);
+    final bool brightPrimary = primaryOpaque.computeLuminance() > 0.45;
+    Color dockBg;
+    if (isDark) {
+      final Color midBase = Color.lerp(bodyBg, surfaceBg, 0.5)!;
+      final double primaryAlpha = bodyBg.computeLuminance() < 0.008
+          ? (brightPrimary ? 0.11 : 0.16)
+          : (brightPrimary ? 0.09 : 0.14);
+      dockBg = Color.alphaBlend(
+        primaryOpaque.withValues(alpha: primaryAlpha),
+        midBase,
+      );
+    } else {
+      dockBg = Color.alphaBlend(
+        primaryOpaque.withValues(alpha: 0.08),
+        Color.alphaBlend(
+          palette.onSurface.withValues(alpha: 0.04),
+          surfaceBg,
+        ),
+      );
+    }
+    if (_rgbDistance(dockBg, bodyBg) < 18.0) {
+      dockBg = Color.alphaBlend(
+        palette.onSurface.withValues(alpha: isDark ? 0.10 : 0.08),
+        dockBg,
+      );
+    }
+    if (_rgbDistance(dockBg, headerBg) < 12.0) {
+      dockBg = Color.alphaBlend(
+        palette.onSurface.withValues(alpha: isDark ? 0.07 : 0.06),
+        dockBg,
+      );
+    }
+    dockBg = dockBg.withValues(alpha: 1.0);
     return MiniAppThemeColors(
       palette: palette,
       bodyBg: bodyBg,
       surfaceBg: surfaceBg,
       headerBg: headerBg,
       headerFg: headerFg,
+      dockBg: dockBg,
       divider: palette.divider,
     );
   }

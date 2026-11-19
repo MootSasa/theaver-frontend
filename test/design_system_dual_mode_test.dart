@@ -6,6 +6,7 @@ import 'package:theaver/models/theav_theme.dart';
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/mini_app_js_bridge.dart';
+import 'package:theaver/services/theav_theme_service.dart';
 import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
@@ -763,6 +764,16 @@ void main() {
             find.byKey(const ValueKey('minimized_mini_app_dock_fillets'));
         expect(dockFinder, findsOneWidget);
         expect(tester.widget(dockFinder), isA<ColoredBox>());
+        final dockBox = tester.widget<ColoredBox>(dockFinder);
+        final dockTheme = Theme.of(tester.element(dockFinder));
+        final dockResolved = MiniAppJsBridge.resolveThemeColors(dockTheme);
+        expect(dockBox.color, equals(dockResolved.dockBg));
+        expect(dockBox.color, isNot(equals(dockResolved.bodyBg)));
+        expect(
+          dockBox.color,
+          isNot(equals(dockTheme.scaffoldBackgroundColor)),
+        );
+        expect(dockBox.color, isNot(equals(dockResolved.headerBg)));
         expect(filletsFinder, findsOneWidget);
         final Rect scaffoldRect = tester.getRect(find.byType(Scaffold));
         expect(scaffoldRect.height, lessThan(screenHeight - 48.0));
@@ -882,6 +893,24 @@ void main() {
     expect(themeParams['bottom_bar_bg_color'], '#4a1b59');
     expect(themeParams['button_color'], '#e91e63');
     expect(themeParams['text_color'], '#fce4ec');
+
+    final resolvedCustom = MiniAppJsBridge.resolveThemeColors(customTheme);
+    expect(resolvedCustom.dockBg, isNot(equals(resolvedCustom.bodyBg)));
+    expect(resolvedCustom.dockBg, isNot(equals(resolvedCustom.headerBg)));
+    for (final builtIn in TheavThemeService.builtInThemes) {
+      final resolvedBuiltIn =
+          MiniAppJsBridge.resolveThemeColors(builtIn.toThemeData());
+      expect(
+        resolvedBuiltIn.dockBg,
+        isNot(equals(resolvedBuiltIn.bodyBg)),
+        reason: 'dockBg should differ from bodyBg for ${builtIn.id}',
+      );
+      expect(
+        resolvedBuiltIn.dockBg,
+        isNot(equals(resolvedBuiltIn.headerBg)),
+        reason: 'dockBg should differ from headerBg for ${builtIn.id}',
+      );
+    }
 
     const launchData = MiniAppLaunchData(
       url: 'https://api.theaver.app/api/miniapps/studio',

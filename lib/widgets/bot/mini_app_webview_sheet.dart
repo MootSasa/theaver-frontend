@@ -664,7 +664,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                       position: _slideAnim,
                       child: ColoredBox(
                         key: const ValueKey('minimized_mini_app_dock_region'),
-                        color: resolved.bodyBg,
+                        color: resolved.dockBg,
                         child: Padding(
                           padding: EdgeInsets.only(
                             top: topPad,
@@ -693,6 +693,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                 child: dockRegion != null
                     ? Stack(
                         fit: StackFit.expand,
+                        clipBehavior: Clip.none,
                         children: [
                           adjustedChild,
                           Positioned(
@@ -706,7 +707,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                               ),
                               child: CustomPaint(
                                 painter: _DockUpwardFilletsPainter(
-                                  color: resolved.bodyBg,
+                                  color: resolved.dockBg,
                                   radius: cornerRadius,
                                 ),
                               ),
@@ -767,24 +768,27 @@ class _DockUpwardFilletsPainter extends CustomPainter {
       ..style = PaintingStyle.fill
       ..isAntiAlias = true;
 
+    final double overlap = math.min(1.0, r);
     final Path leftFillet = Path()
-      ..moveTo(0, size.height)
+      ..moveTo(0, size.height + overlap)
       ..lineTo(0, size.height - r)
       ..arcToPoint(
         Offset(r, size.height),
         radius: Radius.circular(r),
         clockwise: false,
       )
+      ..lineTo(r, size.height + overlap)
       ..close();
 
     final Path rightFillet = Path()
-      ..moveTo(size.width - r, size.height)
+      ..moveTo(size.width - r, size.height + overlap)
+      ..lineTo(size.width - r, size.height)
       ..arcToPoint(
         Offset(size.width, size.height - r),
         radius: Radius.circular(r),
         clockwise: false,
       )
-      ..lineTo(size.width, size.height)
+      ..lineTo(size.width, size.height + overlap)
       ..close();
 
     canvas.drawPath(leftFillet, paint);
