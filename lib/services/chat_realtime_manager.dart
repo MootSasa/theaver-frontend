@@ -43,6 +43,8 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onChatAutoDeleteUpdated;
   final void Function(WebSocketEvent event)? onChatAppearanceUpdated;
   final void Function(WebSocketEvent event)? onScreenshotTaken;
+  final void Function(WebSocketEvent event)? onForumTopicUpdated;
+  final void Function(WebSocketEvent event)? onUnreadBadgesUpdated;
   final VoidCallback? onReconnect;
 
   ChatSubscription({
@@ -73,6 +75,8 @@ class ChatSubscription {
     this.onChatAutoDeleteUpdated,
     this.onChatAppearanceUpdated,
     this.onScreenshotTaken,
+    this.onForumTopicUpdated,
+    this.onUnreadBadgesUpdated,
     this.onReconnect,
   });
 
@@ -139,6 +143,8 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onChatAutoDeleteUpdated,
     void Function(WebSocketEvent event)? onChatAppearanceUpdated,
     void Function(WebSocketEvent event)? onScreenshotTaken,
+    void Function(WebSocketEvent event)? onForumTopicUpdated,
+    void Function(WebSocketEvent event)? onUnreadBadgesUpdated,
     VoidCallback? onReconnect,
   }) {
     if (!_isInitialized) {
@@ -173,6 +179,8 @@ class ChatRealtimeManager {
       onChatAutoDeleteUpdated: onChatAutoDeleteUpdated,
       onChatAppearanceUpdated: onChatAppearanceUpdated,
       onScreenshotTaken: onScreenshotTaken,
+      onForumTopicUpdated: onForumTopicUpdated,
+      onUnreadBadgesUpdated: onUnreadBadgesUpdated,
       onReconnect: onReconnect,
     );
 
@@ -550,6 +558,24 @@ class ChatRealtimeManager {
       case WebSocketEventType.screenshotTaken:
         final scrChatId = event.data['chat_id']?.toString();
         _dispatchForChat(scrChatId, (s) => s.onScreenshotTaken?.call(event));
+        break;
+
+      case WebSocketEventType.forumTopicUpdated:
+        final topicChatId = event.data['chat_id']?.toString();
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          topicChatId,
+          (s) => s.onForumTopicUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.unreadBadgesUpdated:
+        final badgeChatId = event.data['chat_id']?.toString();
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          badgeChatId,
+          (s) => s.onUnreadBadgesUpdated?.call(event),
+        );
         break;
 
       default:
@@ -1222,6 +1248,17 @@ class ChatRealtimeManager {
       replyToChatName: drift.Value(msgData['reply_to_chat_name']?.toString()),
       replyToChatType: drift.Value(msgData['reply_to_chat_type']?.toString()),
       effectId: drift.Value(msgData['effect_id']?.toString()),
+      topicId: drift.Value(
+        (msgData['topic_id'] as num?)?.toInt() ??
+            int.tryParse(msgData['topic_id']?.toString() ?? ''),
+      ),
+      forwardsCount: drift.Value(
+        (msgData['forwards_count'] as num?)?.toInt() ?? 0,
+      ),
+      senderChatId: drift.Value(msgData['sender_chat_id']?.toString()),
+      senderChatName: drift.Value(msgData['sender_chat_name']?.toString()),
+      senderChatAvatarUrl:
+          drift.Value(msgData['sender_chat_avatar_url']?.toString()),
       savedTagsJson: msgData['saved_tags'] is List
           ? drift.Value(jsonEncode(msgData['saved_tags']))
           : const drift.Value.absent(),

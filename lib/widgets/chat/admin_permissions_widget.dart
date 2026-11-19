@@ -138,6 +138,7 @@ class AdminPermissionsWidgetState extends State<AdminPermissionsWidget> {
         canPinMessages: raw['can_pin_messages'] ?? false,
         canManageCalls: raw['can_manage_calls'] ?? false,
         canAddAdmins: raw['can_add_admins'] ?? false,
+        canManageTopics: raw['can_manage_topics'] ?? false,
       );
     }
     return const AdminRights();
@@ -228,6 +229,16 @@ class AdminPermissionsWidgetState extends State<AdminPermissionsWidget> {
         iconBuilder: (c) => iconoir.Phone(width: 20, height: 20, color: c),
         updater: (r, v) => r.copyWith(canManageCalls: v),
       ),
+      if (!_isChannel)
+        _AdminRightItem(
+          keyName: 'can_manage_topics',
+          title: 'Управление темами',
+          value: _rights.canManageTopics,
+          enabled: widget.rightsEditable,
+          iconBuilder: (c) =>
+              iconoir.ChatLines(width: 20, height: 20, color: c),
+          updater: (r, v) => r.copyWith(canManageTopics: v),
+        ),
       _AdminRightItem(
         keyName: 'can_add_admins',
         title: 'Назначение администраторов',

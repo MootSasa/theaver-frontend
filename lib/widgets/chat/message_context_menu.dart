@@ -82,7 +82,7 @@ class MessageContextMenu extends StatefulWidget {
   final bool hasProtectedContent;
   final Offset? initialDragStartGlobalPosition;
   final Offset? initialDragCurrentGlobalPosition;
-  final VoidCallback onReply;
+  final VoidCallback? onReply;
   final VoidCallback? onQuote;
   final void Function(String selectedText, int offset, int length)? onQuotePartial;
   final VoidCallback onCopy;
@@ -99,7 +99,8 @@ class MessageContextMenu extends StatefulWidget {
   final VoidCallback? onReport;
   final VoidCallback? onTagMessage;
   final VoidCallback? onReplyInAnotherChat;
-  final VoidCallback onDelete;
+  final VoidCallback? onViewStats;
+  final VoidCallback? onDelete;
   final Function(String emoji) onReaction;
   final Set<String> selectedEmojis;
 
@@ -119,7 +120,7 @@ class MessageContextMenu extends StatefulWidget {
     this.hasProtectedContent = false,
     this.initialDragStartGlobalPosition,
     this.initialDragCurrentGlobalPosition,
-    required this.onReply,
+    this.onReply,
     this.onQuote,
     this.onQuotePartial,
     required this.onCopy,
@@ -136,7 +137,8 @@ class MessageContextMenu extends StatefulWidget {
     this.onReport,
     this.onTagMessage,
     this.onReplyInAnotherChat,
-    required this.onDelete,
+    this.onViewStats,
+    this.onDelete,
     required this.onReaction,
     this.selectedEmojis = const {},
   }) : super(key: key);
@@ -1810,13 +1812,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
                             _buildReadReceiptItem(theme),
                             const Divider(height: 1),
                           ],
-                          _buildActionItem(
-                            (c) => iconoir.Reply(color: c, width: 20, height: 20),
-                            context.l10n.translate('chat_action_reply'),
-                            widget.onReply,
-                            theme,
-                            enabled: !isSending,
-                          ),
+                          if (widget.onReply != null)
+                            _buildActionItem(
+                              (c) => iconoir.Reply(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_action_reply'),
+                              widget.onReply!,
+                              theme,
+                              enabled: !isSending,
+                            ),
                           if (widget.onQuote != null)
                             _buildActionItem(
                               (c) => iconoir.Quote(color: c, width: 20, height: 20),
@@ -2063,7 +2066,21 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               theme,
                               enabled: !isSending,
                             ),
-                          const Divider(height: 1),
+                          if (widget.onViewStats != null)
+                            _buildActionItem(
+                              (c) => iconoir.StatsUpSquare(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Статистика',
+                              widget.onViewStats!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if ((widget.onReport != null && !widget.isMe) ||
+                              widget.onDelete != null)
+                            const Divider(height: 1),
                           if (widget.onReport != null && !widget.isMe)
                             _buildActionItem(
                               (c) => iconoir.WarningTriangle(
@@ -2077,13 +2094,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               isDestructive: true,
                               enabled: !isSending,
                             ),
-                          _buildActionItem(
-                            (c) => iconoir.Trash(color: c, width: 20, height: 20),
-                            context.l10n.translate('chat_action_delete'),
-                            widget.onDelete,
-                            theme,
-                            isDestructive: true,
-                          ),
+                          if (widget.onDelete != null)
+                            _buildActionItem(
+                              (c) => iconoir.Trash(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_action_delete'),
+                              widget.onDelete!,
+                              theme,
+                              isDestructive: true,
+                            ),
                         ],
                       ),
                     ),

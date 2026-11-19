@@ -990,6 +990,11 @@ class SyncService {
       replyToChatType: replyToChatType,
       effectId: effectId,
       savedTagsJson: null,
+      topicId: null,
+      forwardsCount: 0,
+      senderChatId: null,
+      senderChatName: null,
+      senderChatAvatarUrl: null,
     );
   }
 

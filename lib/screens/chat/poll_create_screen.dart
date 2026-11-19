@@ -14,11 +14,15 @@ import '../../widgets/settings/settings_floating_header.dart';
 class PollCreateScreen extends StatefulWidget {
   final String chatId;
   final bool isChannel;
+  final int? topicId;
+  final String? sendAsChatId;
 
   const PollCreateScreen({
     super.key,
     required this.chatId,
     this.isChannel = false,
+    this.topicId,
+    this.sendAsChatId,
   });
 
   @override
@@ -131,6 +135,9 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
             'correct_option_id': mappedCorrectOptionId,
           if (_isQuiz && _explanationController.text.trim().isNotEmpty)
             'explanation': _explanationController.text.trim(),
+          if (widget.topicId != null) 'topic_id': widget.topicId,
+          if (widget.sendAsChatId != null && widget.sendAsChatId!.isNotEmpty)
+            'send_as_chat_id': widget.sendAsChatId,
         },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );

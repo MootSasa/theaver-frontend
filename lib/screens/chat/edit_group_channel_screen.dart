@@ -18,8 +18,11 @@ import '../../utils/swipe_back_route.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/user/avatar_with_status.dart';
+import 'forum_topics_screen.dart';
+import 'settings/admin_log_screen.dart';
 import 'settings/admin_rights_screen.dart';
 import 'settings/channel_discussion_settings_screen.dart';
+import 'settings/channel_stats_screen.dart';
 import 'settings/chat_reactions_settings_screen.dart';
 import 'settings/group_permissions_screen.dart';
 import 'settings/invite_links_screen.dart';
@@ -44,6 +47,9 @@ class EditGroupChannelScreen extends StatefulWidget {
   final String? inviteLink;
   final bool initialHasProtectedContent;
   final bool canEditAdminSettings;
+  final bool initialIsForum;
+  final bool initialParticipantsHidden;
+  final bool initialAggressiveAntiSpam;
 
   const EditGroupChannelScreen({
     super.key,
@@ -65,6 +71,9 @@ class EditGroupChannelScreen extends StatefulWidget {
     this.inviteLink,
     this.initialHasProtectedContent = false,
     this.canEditAdminSettings = true,
+    this.initialIsForum = false,
+    this.initialParticipantsHidden = false,
+    this.initialAggressiveAntiSpam = false,
   });
 
   @override
@@ -86,6 +95,9 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   late bool _signMessages;
   late bool _showAuthorProfiles;
   late bool _hasProtectedContent;
+  late bool _isForum;
+  late bool _participantsHidden;
+  late bool _aggressiveAntiSpam;
   String? _linkedChatId;
   LinkedChatSummary? _linkedChat;
   late GroupDefaultPermissions _defaultPermissions;
@@ -116,6 +128,9 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     _historyForNew = widget.initialHistoryForNew;
     _slowModeInterval = widget.initialSlowModeInterval;
     _hasProtectedContent = widget.initialHasProtectedContent;
+    _isForum = !widget.isChannel && widget.initialIsForum;
+    _participantsHidden = !widget.isChannel && widget.initialParticipantsHidden;
+    _aggressiveAntiSpam = !widget.isChannel && widget.initialAggressiveAntiSpam;
     _signMessages = widget.initialSignMessages ?? false;
     _showAuthorProfiles = widget.isChannel
         ? (_signMessages && (widget.initialShowAuthorProfiles ?? false))
@@ -220,6 +235,18 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           if (res['my_role'] != null) {
             _myRole = res['my_role'].toString();
           }
+          if (!widget.isChannel) {
+            if (res['is_forum'] is bool) {
+              _isForum = res['is_forum'] as bool;
+            }
+            if (res['participants_hidden'] is bool) {
+              _participantsHidden = res['participants_hidden'] as bool;
+            }
+            if (res['has_aggressive_anti_spam_enabled'] is bool) {
+              _aggressiveAntiSpam =
+                  res['has_aggressive_anti_spam_enabled'] as bool;
+            }
+          }
           final adminPerms = AdminRights.tryParse(res['my_admin_permissions']);
           if (adminPerms != null) {
             _myAdminPermissions = adminPerms;
@@ -277,12 +304,19 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   int _enabledPermissionsCount(GroupDefaultPermissions p) {
     int count = 0;
     if (p.canSendMessages) count++;
-    if (p.canSendMedia) count++;
+    if (p.canSendPhotos) count++;
+    if (p.canSendVideos) count++;
+    if (p.canSendMusic) count++;
+    if (p.canSendFiles) count++;
+    if (p.canSendVoiceNotes) count++;
+    if (p.canSendVideoNotes) count++;
     if (p.canSendStickersGifs) count++;
     if (p.canSendPolls) count++;
+    if (p.canAddWebPagePreviews) count++;
     if (p.canInviteUsers) count++;
     if (p.canPinMessages) count++;
     if (p.canChangeInfo) count++;
+    if (_isForum && p.canManageTopics) count++;
     return count;
   }
 
@@ -369,6 +403,11 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
               'username': _isPublic ? cleanUsername : '',
               if (!widget.isChannel) 'history_for_new': _historyForNew,
               if (!widget.isChannel) 'slow_mode_interval': _slowModeInterval,
+              if (!widget.isChannel) 'is_forum': _isForum,
+              if (!widget.isChannel)
+                'participants_hidden': _participantsHidden,
+              if (!widget.isChannel)
+                'has_aggressive_anti_spam_enabled': _aggressiveAntiSpam,
               'has_protected_content': _hasProtectedContent,
               if (widget.isChannel) 'sign_messages': _signMessages,
               if (widget.isChannel)
@@ -427,6 +466,10 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         'show_author_profiles': _signMessages ? _showAuthorProfiles : false,
       'linked_chat_id': _linkedChatId ?? '',
       'has_protected_content': _hasProtectedContent,
+      if (!widget.isChannel) 'is_forum': _isForum,
+      if (!widget.isChannel) 'participants_hidden': _participantsHidden,
+      if (!widget.isChannel)
+        'has_aggressive_anti_spam_enabled': _aggressiveAntiSpam,
       if (_linkedChat != null) 'linked_chat': _linkedChat,
       'default_permissions': _defaultPermissions,
       'reaction_settings': _reactionSettings,
@@ -476,6 +519,9 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           chatId: widget.chatId,
           initialPermissions: _defaultPermissions,
           initialSlowMode: _slowModeInterval,
+          isForum: _isForum,
+          initialParticipantsHidden: _participantsHidden,
+          initialAggressiveAntiSpam: _aggressiveAntiSpam,
         ),
       ),
     );
@@ -487,6 +533,13 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         }
         if (res['slow_mode_interval'] is int) {
           _slowModeInterval = res['slow_mode_interval'] as int;
+        }
+        if (res['participants_hidden'] is bool) {
+          _participantsHidden = res['participants_hidden'] as bool;
+        }
+        if (res['has_aggressive_anti_spam_enabled'] is bool) {
+          _aggressiveAntiSpam =
+              res['has_aggressive_anti_spam_enabled'] as bool;
         }
         _subSettingsChanged = true;
       });
@@ -1125,6 +1178,54 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                     )
                   else ...[
                     TheavListRow(
+                      leading: iconoir.ChatLines(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Темы (Форум)',
+                      subtitle: 'Организовать обсуждения по отдельным веткам',
+                      trailing: TheavSwitch(
+                        value: _isForum,
+                        onChanged: (v) {
+                          HapticUtils.selection();
+                          setState(() => _isForum = v);
+                        },
+                      ),
+                      onTap: () {
+                        HapticUtils.selection();
+                        setState(() => _isForum = !_isForum);
+                      },
+                    ),
+                    if (_isForum)
+                      TheavListRow(
+                        leading: iconoir.List(
+                          width: 20,
+                          height: 20,
+                          color: palette.primary,
+                        ),
+                        title: 'Управление темами форума',
+                        showChevron: true,
+                        onTap: () {
+                          HapticUtils.tap();
+                          Navigator.push(
+                            context,
+                            SwipeBackPageRoute(
+                              builder: (_) => ForumTopicsScreen(
+                                chatId: widget.chatId,
+                                chatName: _nameController.text.trim().isNotEmpty
+                                    ? _nameController.text.trim()
+                                    : widget.initialName,
+                                chatAvatar: _avatarUrl,
+                                myRole: _myRole,
+                                myAdminPermissions: _myAdminPermissions,
+                                defaultPermissions: _defaultPermissions,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    TheavListRow(
                       leading: iconoir.Lock(
                         width: 20,
                         height: 20,
@@ -1132,7 +1233,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                       ),
                       title: 'Разрешения',
                       valueText:
-                          '${_enabledPermissionsCount(_defaultPermissions)}/7${slowBadge.isNotEmpty ? ' • $slowBadge' : ''}',
+                          '${_enabledPermissionsCount(_defaultPermissions)}/${_isForum ? 14 : 13}${slowBadge.isNotEmpty ? ' • $slowBadge' : ''}',
                       showChevron: true,
                       onTap: _openGroupPermissions,
                     ),
@@ -1181,6 +1282,54 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                     showChevron: true,
                     onTap: _openAdminsSheet,
                   ),
+                  TheavListRow(
+                    leading: iconoir.PageSearch(
+                      width: 20,
+                      height: 20,
+                      color: palette.primary,
+                    ),
+                    title: 'Недавние действия',
+                    showChevron: true,
+                    onTap: () {
+                      HapticUtils.tap();
+                      Navigator.push(
+                        context,
+                        SwipeBackPageRoute(
+                          builder: (_) => AdminLogScreen(
+                            chatId: widget.chatId,
+                            chatName: _nameController.text.trim().isNotEmpty
+                                ? _nameController.text.trim()
+                                : widget.initialName,
+                            isChannel: widget.isChannel,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  if (widget.isChannel)
+                    TheavListRow(
+                      leading: iconoir.StatsUpSquare(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Статистика',
+                      showChevron: true,
+                      onTap: () {
+                        HapticUtils.tap();
+                        Navigator.push(
+                          context,
+                          SwipeBackPageRoute(
+                            builder: (_) => ChannelStatsScreen(
+                              chatId: widget.chatId,
+                              channelName: _nameController.text.trim().isNotEmpty
+                                  ? _nameController.text.trim()
+                                  : widget.initialName,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   if (_myRole == 'owner')
                     TheavListRow(
                       leading: iconoir.Crown(

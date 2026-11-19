@@ -88,6 +88,7 @@ class ChatInputBar extends StatefulWidget {
   final Widget? forwardPreviewBanner;
   final int scheduledCount;
   final VoidCallback? onOpenScheduled;
+  final Widget? sendAsLeadingWidget;
 
   const ChatInputBar({
     Key? key,
@@ -153,6 +154,7 @@ class ChatInputBar extends StatefulWidget {
     this.forwardPreviewBanner,
     this.scheduledCount = 0,
     this.onOpenScheduled,
+    this.sendAsLeadingWidget,
   }) : super(key: key);
 
   @override
@@ -856,6 +858,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            if (widget.sendAsLeadingWidget != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 8, bottom: 7),
+                child: widget.sendAsLeadingWidget!,
+              ),
             Expanded(
               child: LiquidGlassInputField(
                 enabled: glassEnabled,

@@ -61,15 +61,30 @@ class _ChatReactionsSettingsScreenState
     '🍾',
   ];
 
+  static const List<int> _maxReactionsStops = [1, 2, 3, 4, 5, 6, 8, 11];
+  static const List<String> _maxReactionsLabels = [
+    '1',
+    '2',
+    '3',
+    '4',
+    '5',
+    '6',
+    '8',
+    '11',
+  ];
+
   late String _mode; // 'all' | 'selected' | 'none'
   late final Set<String> _selectedEmojis;
   late final List<String> _palette;
+  late int _maxReactionsPerPost;
   bool _isSaving = false;
 
   @override
   void initState() {
     super.initState();
     _mode = widget.initialSettings.mode;
+    _maxReactionsPerPost =
+        widget.initialSettings.maxReactionsPerPost.clamp(1, 11);
     _selectedEmojis = Set<String>.from(
       widget.initialSettings.allowedReactions,
     );
@@ -105,6 +120,7 @@ class _ChatReactionsSettingsScreenState
     final res = await ChatService.updateGroupSettings(widget.chatId, {
       'reaction_mode': _mode,
       'allowed_reactions': allowedList,
+      'max_reactions_per_post': _maxReactionsPerPost,
     });
 
     if (!mounted) return;
@@ -114,6 +130,7 @@ class _ChatReactionsSettingsScreenState
       final updated = ReactionSettings(
         mode: _mode,
         allowedReactions: List<String>.unmodifiable(allowedList),
+        maxReactionsPerPost: _maxReactionsPerPost,
       );
       GlassToastService().show(
         context,
@@ -131,6 +148,21 @@ class _ChatReactionsSettingsScreenState
         res['message']?.toString() ?? 'Не удалось сохранить настройки реакций',
       );
     }
+  }
+
+  int _nearestMaxReactionsIndex(int value) {
+    final exact = _maxReactionsStops.indexOf(value);
+    if (exact != -1) return exact;
+    int best = 0;
+    int bestDiff = 1 << 20;
+    for (int i = 0; i < _maxReactionsStops.length; i++) {
+      final diff = (_maxReactionsStops[i] - value).abs();
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = i;
+      }
+    }
+    return best;
   }
 
   String _modeExplanation() {
@@ -221,6 +253,26 @@ class _ChatReactionsSettingsScreenState
               ),
             ),
           ),
+          if (_mode != 'none') ...[
+            TheavInsetGroup(
+              header: 'МАКСИМУМ РЕАКЦИЙ НА ПОСТ',
+              footer:
+                  'Ограничивает количество различных эмодзи-реакций, которые можно поставить на одно сообщение (до $_maxReactionsPerPost).',
+              children: [
+                TheavSteppedSlider(
+                  title: 'Лимит реакций',
+                  selectedIndex: _nearestMaxReactionsIndex(_maxReactionsPerPost),
+                  labels: _maxReactionsLabels,
+                  onChanged: (idx) {
+                    setState(
+                      () => _maxReactionsPerPost = _maxReactionsStops[idx],
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+          ],
           AnimatedSize(
             duration: disableAnim
                 ? Duration.zero

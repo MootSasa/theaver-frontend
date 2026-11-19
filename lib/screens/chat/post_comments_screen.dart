@@ -20,8 +20,10 @@ import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../services/groups_channels_parity_service.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../services/peer_customization_cache.dart';
+import '../../services/screen_protection_service.dart';
 import '../../services/sticker_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
@@ -36,6 +38,7 @@ import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
+import '../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
@@ -43,6 +46,7 @@ import '../../widgets/message/fullscreen_photo_viewer.dart';
 import '../../widgets/message/group_message_avatar_row.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../settings/profile_screen.dart';
+import 'channel_screen.dart';
 import 'media_send_screen.dart';
 import 'poll_create_screen.dart';
 
@@ -133,6 +137,14 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   ChatSubscription? _channelSubscription;
   ChatSubscription? _groupSubscription;
 
+  // Wave 3B parity state
+  bool _canComment = true;
+  List<SendAsPeer> _sendAsPeers = [];
+  String? _selectedSendAsChatId;
+
+  String get _screenProtectionKey =>
+      'post_comments_${widget.channelId}_${widget.postMessage.id}';
+
   bool get _isMobilePlatform =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
   bool get _isSelectionMode => _selectedCommentIds.isNotEmpty;
@@ -191,7 +203,97 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     _showScrollDownFabNotifier.dispose();
     _channelSubscription?.cancel();
     _groupSubscription?.cancel();
+    unawaited(ScreenProtectionService.instance.release(_screenProtectionKey));
     super.dispose();
+  }
+
+  void _syncScreenProtection(bool protect) {
+    unawaited(ScreenProtectionService.instance.sync(_screenProtectionKey, protect));
+  }
+
+  Future<void> _syncProtectionFromDb() async {
+    try {
+      final db = AppDatabase();
+      final channelChat = await db.getChat(widget.channelId);
+      final linkedChat = (_linkedChatId != null && _linkedChatId!.isNotEmpty)
+          ? await db.getChat(_linkedChatId!)
+          : null;
+      if (!mounted) return;
+      final bool protect =
+          (channelChat?.hasProtectedContent == true) ||
+          (linkedChat?.hasProtectedContent == true);
+      _syncScreenProtection(protect);
+    } catch (_) {}
+  }
+
+  Future<void> _loadSendAsPeers() async {
+    final targetChatId = _linkedChatId;
+    if (targetChatId == null || targetChatId.isEmpty) return;
+    try {
+      final res = await GroupsChannelsParityService.getSendAsPeers(
+        targetChatId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _sendAsPeers = res.peers;
+        _selectedSendAsChatId = res.selectedSendAsChatId;
+      });
+    } catch (_) {}
+  }
+
+  SendAsPeer? get _activeSendAsPeer {
+    if (_sendAsPeers.isEmpty) return null;
+    final sel = _selectedSendAsChatId;
+    if (sel != null && sel.isNotEmpty) {
+      for (final p in _sendAsPeers) {
+        if (p.isChannel && (p.chatId == sel || p.id == sel)) {
+          return p;
+        }
+      }
+    }
+    for (final p in _sendAsPeers) {
+      if (p.isSelected) return p;
+    }
+    return _sendAsPeers.first;
+  }
+
+  Future<void> _openSendAsPicker() async {
+    final targetChatId = _linkedChatId;
+    if (targetChatId == null || targetChatId.isEmpty || _sendAsPeers.isEmpty) {
+      return;
+    }
+    final picked = await showSendAsPeerSheet(
+      context: context,
+      chatId: targetChatId,
+      peers: _sendAsPeers,
+      selectedSendAsChatId: _selectedSendAsChatId,
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _selectedSendAsChatId = picked.isChannel
+            ? (picked.chatId ?? picked.id)
+            : null;
+      });
+    }
+  }
+
+  void _openChannelProfileById(
+    String channelId, {
+    String? name,
+    String? avatarUrl,
+  }) {
+    if (channelId.isEmpty) return;
+    HapticUtils.tap();
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ChannelScreen(
+          channelId: channelId,
+          channelName: name,
+          channelAvatar: avatarUrl,
+        ),
+      ),
+    );
   }
 
   Future<void> _loadCachedKeyboardHeight() async {
@@ -490,6 +592,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       } catch (_) {}
     }
 
+    unawaited(_syncProtectionFromDb());
     await _refreshLatestComments();
   }
 
@@ -505,6 +608,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       _isLoading = false;
       if (res.success) {
         _errorMessage = null;
+        _canComment = res.canComment;
+        if (!res.canComment && _showEmojiPanel) {
+          _showEmojiPanel = false;
+        }
         if (res.linkedChatId != null && res.linkedChatId!.isNotEmpty) {
           _linkedChatId = res.linkedChatId;
         }
@@ -529,6 +636,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       }
     });
     _bindLinkedGroupSubscription();
+    unawaited(_syncProtectionFromDb());
+    if (_canComment && _linkedChatId != null && _linkedChatId!.isNotEmpty) {
+      unawaited(_loadSendAsPeers());
+    }
   }
 
   Future<void> _loadOlderComments() async {
@@ -589,6 +700,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     bool hasMediaSpoiler = false,
     bool asDocument = false,
   }) async {
+    if (!_canComment) return;
     final String controllerClean = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
     final String text = (cleanText ?? controllerClean).trimRight();
@@ -627,6 +739,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     }
 
     final replyTo = _replyToComment;
+    final bool capturedIsQuote = _isQuote;
+    final String? capturedQuoteText = _quoteText;
+    final int capturedQuoteOffset = _quoteOffset;
+    final int capturedQuoteLength = _quoteLength;
+    final String? activeSendAsChatId = _selectedSendAsChatId;
+    final SendAsPeer? activeSendAsPeer = _activeSendAsPeer;
+    final bool sendingAsChannel =
+        activeSendAsChatId != null &&
+        activeSendAsChatId.isNotEmpty &&
+        activeSendAsPeer != null &&
+        activeSendAsPeer.isChannel;
+
     final List<File> filesToSend = List<File>.from(_attachedFiles);
     _attachedFiles.clear();
     _attachedFileNames.clear();
@@ -691,7 +815,12 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             : null,
         isEdited: false,
         createdAt: DateTime.now().toUtc().toIso8601String(),
-        senderName: 'Вы',
+        senderName: sendingAsChannel ? activeSendAsPeer.name : 'Вы',
+        senderChatId: sendingAsChannel ? activeSendAsChatId : null,
+        senderChatName: sendingAsChannel ? activeSendAsPeer.name : null,
+        senderChatAvatarUrl: sendingAsChannel
+            ? activeSendAsPeer.avatarUrl
+            : null,
         sendStatus: 0,
         hasMediaSpoiler: hasMediaSpoiler,
         entities: resolvedEntities,
@@ -711,11 +840,16 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         messageId: widget.postMessage.id,
         content: text,
         replyToMessageId: replyTo?.id,
+        isQuote: capturedIsQuote,
+        quoteText: capturedQuoteText,
+        quoteOffset: capturedQuoteOffset,
+        quoteLength: capturedQuoteLength,
         entities: resolvedEntities.isNotEmpty ? resolvedEntities : null,
         fileUrl: fileUrl,
         fileName: fileName,
         messageType: messageType,
         hasMediaSpoiler: hasMediaSpoiler,
+        sendAsChatId: activeSendAsChatId,
       );
 
       if (!mounted) return;
@@ -768,6 +902,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   }
 
   Future<void> _sendStickerComment(StickerItem item) async {
+    if (!_canComment) return;
     final replyTo = _replyToComment;
     _cancelReply();
     final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
@@ -779,6 +914,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       fileUrl: item.fileUrl,
       fileName: 'sticker.${item.format}',
       messageType: 'sticker',
+      sendAsChatId: _selectedSendAsChatId,
     );
     if (sent != null && mounted) {
       setState(() {
@@ -791,6 +927,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   }
 
   Future<void> _sendGifComment(GifItemModel gif) async {
+    if (!_canComment) return;
     final replyTo = _replyToComment;
     _cancelReply();
     final sent = await ChatService.sendPostComment(
@@ -801,6 +938,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       fileUrl: gif.url,
       fileName: 'animation.gif',
       messageType: 'gif',
+      sendAsChatId: _selectedSendAsChatId,
     );
     if (sent != null && mounted) {
       setState(() {
@@ -1193,7 +1331,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
           await Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => PollCreateScreen(chatId: _linkedChatId!),
+              builder: (_) => PollCreateScreen(
+                chatId: _linkedChatId!,
+                sendAsChatId: _selectedSendAsChatId,
+              ),
             ),
           );
         }
@@ -1275,8 +1416,8 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       messageKey: key,
       isMe: isMe,
       currentUserId: _currentUserId,
-      onReply: () => _startReply(comment),
-      onQuote: comment.content.trim().isNotEmpty
+      onReply: _canComment ? () => _startReply(comment) : null,
+      onQuote: (_canComment && comment.content.trim().isNotEmpty)
           ? () => _startQuote(
               comment,
               comment.content,
@@ -1284,8 +1425,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               comment.content.length,
             )
           : null,
-      onQuotePartial: (selectedText, offset, length) =>
-          _startQuote(comment, selectedText, offset, length),
+      onQuotePartial: _canComment
+          ? (selectedText, offset, length) =>
+              _startQuote(comment, selectedText, offset, length)
+          : null,
       onSelect: () {
         setState(() => _selectedCommentIds.add(comment.id));
       },
@@ -1298,7 +1441,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
           messageIds: [comment.id],
         );
       },
-      onEdit: (isMe && comment.messageType == 'text')
+      onEdit: (_canComment && isMe && comment.messageType == 'text')
           ? () {
               setState(() {
                 _replyToComment = null;
@@ -1312,7 +1455,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               _focusInput();
             }
           : null,
-      onDelete: _confirmDeleteComment,
+      onDelete: isMe ? _confirmDeleteComment : null,
       onReaction: (msgId, emoji) => _toggleCommentReaction(msgId, emoji),
       selectedEmojis: comment.myReactions,
     );
@@ -1561,7 +1704,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                   ),
                 ),
               ChatBottomScrollEdge(height: math.max(safeBottom + 52.0, 52.0)),
-              if (_showEmojiPanel)
+              if (_canComment && _showEmojiPanel)
                 Positioned(
                   left: 0,
                   right: 0,
@@ -1590,50 +1733,65 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               Positioned(
                 left: 0,
                 right: 0,
-                bottom: effectiveBottom,
+                bottom: _canComment ? effectiveBottom : 0,
                 child: Container(
                   key: _inputKey,
-                  child: ChatInputBar(
-                    controller: _messageController,
-                    focusNode: _inputFocusNode,
-                    hintText: 'Добавить комментарий...',
-                    isUploading: _isUploading,
-                    uploadProgressNotifier: _uploadProgressNotifier,
-                    attachedFiles: _attachedFiles,
-                    attachedFileNames: _attachedFileNames,
-                    onRemoveAttachment: (idx) {
-                      if (idx >= 0 && idx < _attachedFiles.length) {
-                        setState(() {
-                          _attachedFiles.removeAt(idx);
-                          _attachedFileNames.removeAt(idx);
-                        });
-                      }
-                    },
-                    replyToMessage: _replyToComment,
-                    isQuote: _isQuote,
-                    quoteText: _quoteText,
-                    quoteOffset: _quoteOffset,
-                    quoteLength: _quoteLength,
-                    onCancelReply: _cancelReply,
-                    isEditing: _isEditing,
-                    onCancelEditing: _cancelEditing,
-                    isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
-                    onTapInputWhenEmojiOpen: _onEmojiToggle,
-                    onEmoji: _onEmojiToggle,
-                    onAttach: _showAttachmentPicker,
-                    onSend: _sendComment,
-                    onSendDetailed:
-                        (cleanText, entities, linkPreviewOptions, invertMedia) {
-                          _sendComment(
-                            cleanText: cleanText,
-                            entities: entities,
-                            linkPreviewOptions: linkPreviewOptions,
-                            invertMedia: invertMedia,
-                          );
-                        },
-                    currentUserId: _currentUserId,
-                    isSending: _isSending,
-                  ),
+                  child: _canComment
+                      ? ChatInputBar(
+                          controller: _messageController,
+                          focusNode: _inputFocusNode,
+                          hintText: 'Добавить комментарий...',
+                          isUploading: _isUploading,
+                          uploadProgressNotifier: _uploadProgressNotifier,
+                          attachedFiles: _attachedFiles,
+                          attachedFileNames: _attachedFileNames,
+                          onRemoveAttachment: (idx) {
+                            if (idx >= 0 && idx < _attachedFiles.length) {
+                              setState(() {
+                                _attachedFiles.removeAt(idx);
+                                _attachedFileNames.removeAt(idx);
+                              });
+                            }
+                          },
+                          replyToMessage: _replyToComment,
+                          isQuote: _isQuote,
+                          quoteText: _quoteText,
+                          quoteOffset: _quoteOffset,
+                          quoteLength: _quoteLength,
+                          onCancelReply: _cancelReply,
+                          isEditing: _isEditing,
+                          onCancelEditing: _cancelEditing,
+                          isEmojiPanelOpen:
+                              _showEmojiPanel && !_isKeyboardRising,
+                          onTapInputWhenEmojiOpen: _onEmojiToggle,
+                          onEmoji: _onEmojiToggle,
+                          onAttach: _showAttachmentPicker,
+                          onSend: _sendComment,
+                          onSendDetailed:
+                              (
+                                cleanText,
+                                entities,
+                                linkPreviewOptions,
+                                invertMedia,
+                              ) {
+                                _sendComment(
+                                  cleanText: cleanText,
+                                  entities: entities,
+                                  linkPreviewOptions: linkPreviewOptions,
+                                  invertMedia: invertMedia,
+                                );
+                              },
+                          sendAsLeadingWidget: _sendAsPeers.length > 1
+                              ? SendAsPeerSelectorPill(
+                                  peers: _sendAsPeers,
+                                  selectedPeer: _activeSendAsPeer,
+                                  onTap: _openSendAsPicker,
+                                )
+                              : null,
+                          currentUserId: _currentUserId,
+                          isSending: _isSending,
+                        )
+                      : _buildReadOnlyCommentsBanner(safeBottom),
                 ),
               ),
               Positioned(
@@ -1651,6 +1809,37 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildReadOnlyCommentsBanner(double safeBottom) {
+    final palette = context.theav;
+    return Container(
+      padding: EdgeInsets.fromLTRB(16, 12, 16, math.max(safeBottom, 12)),
+      decoration: BoxDecoration(
+        color: palette.surface.withValues(alpha: 0.94),
+        border: Border(
+          top: BorderSide(color: palette.divider, width: 0.6),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          iconoir.Lock(width: 16, height: 16, color: palette.subtext),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'Комментарии отключены. Доступен только просмотр истории.',
+              style: TextStyle(
+                fontSize: 13.5,
+                color: palette.subtext,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1735,34 +1924,55 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final bool showAvatarGutter = !isMe && comment.messageType != 'system';
     final bool isSelected = _selectedCommentIds.contains(comment.id);
 
+    final bool hasSenderChat =
+        comment.senderChatId != null && comment.senderChatId!.isNotEmpty;
+
     final PeerCustomization? senderCust =
-        (!comment.isFromAnonymousAdmin &&
+        (!hasSenderChat &&
+            !comment.isFromAnonymousAdmin &&
             comment.senderId.isNotEmpty &&
             comment.senderId != '0')
         ? (PeerCustomizationCache.instance.getSync(comment.senderId) ??
               comment.senderCustomization)
         : null;
 
-    final String resolvedSenderName = comment.isFromAnonymousAdmin
-        ? (comment.senderName.trim().isNotEmpty
-            ? comment.senderName
-            : (widget.channelName ?? 'Channel'))
-        : comment.senderName;
+    final String resolvedSenderName = hasSenderChat
+        ? (comment.senderChatName?.trim().isNotEmpty == true
+              ? comment.senderChatName!
+              : (comment.senderName.trim().isNotEmpty
+                    ? comment.senderName
+                    : 'Канал'))
+        : (comment.isFromAnonymousAdmin
+              ? (comment.senderName.trim().isNotEmpty
+                    ? comment.senderName
+                    : (widget.channelName ?? 'Channel'))
+              : comment.senderName);
+    final String? resolvedSenderAvatar = hasSenderChat
+        ? comment.senderChatAvatarUrl
+        : comment.senderAvatarUrl;
+
+    final VoidCallback? onSenderTap = _isSelectionMode
+        ? null
+        : (hasSenderChat
+              ? () => _openChannelProfileById(
+                  comment.senderChatId!,
+                  name: resolvedSenderName,
+                  avatarUrl: resolvedSenderAvatar,
+                )
+              : (comment.isFromAnonymousAdmin
+                    ? _openLinkedGroupProfile
+                    : () => _openUserProfile(comment)));
 
     final Widget? senderHeaderWidget = (showAvatarGutter && firstInCluster)
         ? SenderHeaderRow(
             senderName: resolvedSenderName,
-            nameColor: comment.isFromAnonymousAdmin
+            nameColor: (hasSenderChat || comment.isFromAnonymousAdmin)
                 ? Theme.of(context).colorScheme.primary
                 : _resolveSenderColor(comment),
             customization: senderCust,
-            adminTitle: comment.senderAdminTitle,
-            role: comment.senderRole,
-            onTapSender: _isSelectionMode
-                ? null
-                : (comment.isFromAnonymousAdmin
-                      ? _openLinkedGroupProfile
-                      : () => _openUserProfile(comment)),
+            adminTitle: hasSenderChat ? 'канал' : comment.senderAdminTitle,
+            role: hasSenderChat ? null : comment.senderRole,
+            onTapSender: onSenderTap,
           )
         : null;
 
@@ -1795,14 +2005,14 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
 
     if (showAvatarGutter) {
       rowWidget = GroupMessageAvatarRow(
-        senderId: comment.senderId,
+        senderId: hasSenderChat ? comment.senderChatId! : comment.senderId,
         senderName: resolvedSenderName,
-        senderAvatarUrl: comment.senderAvatarUrl,
+        senderAvatarUrl: resolvedSenderAvatar,
         showAvatar: lastInCluster,
         customizationOverride: senderCust,
         isSelectionMode: _isSelectionMode,
         isSelected: isSelected,
-        isFromAnonymousAdmin: comment.isFromAnonymousAdmin,
+        isFromAnonymousAdmin: !hasSenderChat && comment.isFromAnonymousAdmin,
         groupAvatarUrl: widget.channelAvatar,
         groupName: widget.channelName,
         onTapGroupAvatar: _openLinkedGroupProfile,
@@ -1814,16 +2024,14 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                   _selectedCommentIds.add(comment.id);
                 }
               })
-            : (comment.isFromAnonymousAdmin
-                  ? _openLinkedGroupProfile
-                  : () => _openUserProfile(comment)),
+            : onSenderTap,
         child: rowWidget,
       );
     }
 
     rowWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(comment),
-      enabled: !_isSelectionMode,
+      enabled: !_isSelectionMode && _canComment,
       child: rowWidget,
     );
 

@@ -50,6 +50,8 @@ enum WebSocketEventType {
   chatAutoDeleteUpdated,
   chatAppearanceUpdated,
   screenshotTaken,
+  forumTopicUpdated,
+  unreadBadgesUpdated,
   rpcResult,
   rpcError,
 }
@@ -197,6 +199,10 @@ class WebSocketEvent {
         return WebSocketEventType.chatAppearanceUpdated;
       case 'screenshot_taken':
         return WebSocketEventType.screenshotTaken;
+      case 'forum_topic_updated':
+        return WebSocketEventType.forumTopicUpdated;
+      case 'unread_badges_updated':
+        return WebSocketEventType.unreadBadgesUpdated;
       case 'rpc_result':
         return WebSocketEventType.rpcResult;
       case 'rpc_error':

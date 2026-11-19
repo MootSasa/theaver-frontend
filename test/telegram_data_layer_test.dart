@@ -111,11 +111,11 @@ void main() {
       );
       addTearDown(() async => await db.close());
 
-      expect(db.schemaVersion, 15);
+      expect(db.schemaVersion, 16);
       await db.ensureInitialized();
 
       final versionRow = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(versionRow.data['user_version'], 15);
+      expect(versionRow.data['user_version'], 16);
 
       final channel = await db.getChat('ch_1');
       expect(channel, isNotNull);

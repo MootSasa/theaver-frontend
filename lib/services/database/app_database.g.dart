@@ -284,6 +284,61 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
   late final GeneratedColumn<String> appearanceJson = GeneratedColumn<String>(
       'appearance_json', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isForumMeta =
+      const VerificationMeta('isForum');
+  @override
+  late final GeneratedColumn<bool> isForum = GeneratedColumn<bool>(
+      'is_forum', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_forum" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _participantsHiddenMeta =
+      const VerificationMeta('participantsHidden');
+  @override
+  late final GeneratedColumn<bool> participantsHidden = GeneratedColumn<bool>(
+      'participants_hidden', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("participants_hidden" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _hasAggressiveAntiSpamEnabledMeta =
+      const VerificationMeta('hasAggressiveAntiSpamEnabled');
+  @override
+  late final GeneratedColumn<bool> hasAggressiveAntiSpamEnabled =
+      GeneratedColumn<bool>(
+          'has_aggressive_anti_spam_enabled', aliasedName, false,
+          type: DriftSqlType.bool,
+          requiredDuringInsert: false,
+          defaultConstraints: GeneratedColumn.constraintIsAlways(
+              'CHECK ("has_aggressive_anti_spam_enabled" IN (0, 1))'),
+          defaultValue: const Constant(false));
+  static const VerificationMeta _maxReactionsPerPostMeta =
+      const VerificationMeta('maxReactionsPerPost');
+  @override
+  late final GeneratedColumn<int> maxReactionsPerPost = GeneratedColumn<int>(
+      'max_reactions_per_post', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(11));
+  static const VerificationMeta _unreadMentionsCountMeta =
+      const VerificationMeta('unreadMentionsCount');
+  @override
+  late final GeneratedColumn<int> unreadMentionsCount = GeneratedColumn<int>(
+      'unread_mentions_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _unreadReactionsCountMeta =
+      const VerificationMeta('unreadReactionsCount');
+  @override
+  late final GeneratedColumn<int> unreadReactionsCount = GeneratedColumn<int>(
+      'unread_reactions_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -323,7 +378,13 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         hasProtectedContent,
         pinnedMessageIdsJson,
         messageAutoDeleteTime,
-        appearanceJson
+        appearanceJson,
+        isForum,
+        participantsHidden,
+        hasAggressiveAntiSpamEnabled,
+        maxReactionsPerPost,
+        unreadMentionsCount,
+        unreadReactionsCount
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -549,6 +610,41 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           appearanceJson.isAcceptableOrUnknown(
               data['appearance_json']!, _appearanceJsonMeta));
     }
+    if (data.containsKey('is_forum')) {
+      context.handle(_isForumMeta,
+          isForum.isAcceptableOrUnknown(data['is_forum']!, _isForumMeta));
+    }
+    if (data.containsKey('participants_hidden')) {
+      context.handle(
+          _participantsHiddenMeta,
+          participantsHidden.isAcceptableOrUnknown(
+              data['participants_hidden']!, _participantsHiddenMeta));
+    }
+    if (data.containsKey('has_aggressive_anti_spam_enabled')) {
+      context.handle(
+          _hasAggressiveAntiSpamEnabledMeta,
+          hasAggressiveAntiSpamEnabled.isAcceptableOrUnknown(
+              data['has_aggressive_anti_spam_enabled']!,
+              _hasAggressiveAntiSpamEnabledMeta));
+    }
+    if (data.containsKey('max_reactions_per_post')) {
+      context.handle(
+          _maxReactionsPerPostMeta,
+          maxReactionsPerPost.isAcceptableOrUnknown(
+              data['max_reactions_per_post']!, _maxReactionsPerPostMeta));
+    }
+    if (data.containsKey('unread_mentions_count')) {
+      context.handle(
+          _unreadMentionsCountMeta,
+          unreadMentionsCount.isAcceptableOrUnknown(
+              data['unread_mentions_count']!, _unreadMentionsCountMeta));
+    }
+    if (data.containsKey('unread_reactions_count')) {
+      context.handle(
+          _unreadReactionsCountMeta,
+          unreadReactionsCount.isAcceptableOrUnknown(
+              data['unread_reactions_count']!, _unreadReactionsCountMeta));
+    }
     return context;
   }
 
@@ -642,6 +738,19 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           data['${effectivePrefix}message_auto_delete_time'])!,
       appearanceJson: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}appearance_json']),
+      isForum: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_forum'])!,
+      participantsHidden: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}participants_hidden'])!,
+      hasAggressiveAntiSpamEnabled: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool,
+          data['${effectivePrefix}has_aggressive_anti_spam_enabled'])!,
+      maxReactionsPerPost: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}max_reactions_per_post'])!,
+      unreadMentionsCount: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}unread_mentions_count'])!,
+      unreadReactionsCount: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}unread_reactions_count'])!,
     );
   }
 
@@ -690,6 +799,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final String? pinnedMessageIdsJson;
   final int messageAutoDeleteTime;
   final String? appearanceJson;
+  final bool isForum;
+  final bool participantsHidden;
+  final bool hasAggressiveAntiSpamEnabled;
+  final int maxReactionsPerPost;
+  final int unreadMentionsCount;
+  final int unreadReactionsCount;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -728,7 +843,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       required this.hasProtectedContent,
       this.pinnedMessageIdsJson,
       required this.messageAutoDeleteTime,
-      this.appearanceJson});
+      this.appearanceJson,
+      required this.isForum,
+      required this.participantsHidden,
+      required this.hasAggressiveAntiSpamEnabled,
+      required this.maxReactionsPerPost,
+      required this.unreadMentionsCount,
+      required this.unreadReactionsCount});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -808,6 +929,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
     if (!nullToAbsent || appearanceJson != null) {
       map['appearance_json'] = Variable<String>(appearanceJson);
     }
+    map['is_forum'] = Variable<bool>(isForum);
+    map['participants_hidden'] = Variable<bool>(participantsHidden);
+    map['has_aggressive_anti_spam_enabled'] =
+        Variable<bool>(hasAggressiveAntiSpamEnabled);
+    map['max_reactions_per_post'] = Variable<int>(maxReactionsPerPost);
+    map['unread_mentions_count'] = Variable<int>(unreadMentionsCount);
+    map['unread_reactions_count'] = Variable<int>(unreadReactionsCount);
     return map;
   }
 
@@ -888,6 +1016,12 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       appearanceJson: appearanceJson == null && nullToAbsent
           ? const Value.absent()
           : Value(appearanceJson),
+      isForum: Value(isForum),
+      participantsHidden: Value(participantsHidden),
+      hasAggressiveAntiSpamEnabled: Value(hasAggressiveAntiSpamEnabled),
+      maxReactionsPerPost: Value(maxReactionsPerPost),
+      unreadMentionsCount: Value(unreadMentionsCount),
+      unreadReactionsCount: Value(unreadReactionsCount),
     );
   }
 
@@ -945,6 +1079,16 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       messageAutoDeleteTime:
           serializer.fromJson<int>(json['messageAutoDeleteTime']),
       appearanceJson: serializer.fromJson<String?>(json['appearanceJson']),
+      isForum: serializer.fromJson<bool>(json['isForum']),
+      participantsHidden: serializer.fromJson<bool>(json['participantsHidden']),
+      hasAggressiveAntiSpamEnabled:
+          serializer.fromJson<bool>(json['hasAggressiveAntiSpamEnabled']),
+      maxReactionsPerPost:
+          serializer.fromJson<int>(json['maxReactionsPerPost']),
+      unreadMentionsCount:
+          serializer.fromJson<int>(json['unreadMentionsCount']),
+      unreadReactionsCount:
+          serializer.fromJson<int>(json['unreadReactionsCount']),
     );
   }
   @override
@@ -992,6 +1136,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'pinnedMessageIdsJson': serializer.toJson<String?>(pinnedMessageIdsJson),
       'messageAutoDeleteTime': serializer.toJson<int>(messageAutoDeleteTime),
       'appearanceJson': serializer.toJson<String?>(appearanceJson),
+      'isForum': serializer.toJson<bool>(isForum),
+      'participantsHidden': serializer.toJson<bool>(participantsHidden),
+      'hasAggressiveAntiSpamEnabled':
+          serializer.toJson<bool>(hasAggressiveAntiSpamEnabled),
+      'maxReactionsPerPost': serializer.toJson<int>(maxReactionsPerPost),
+      'unreadMentionsCount': serializer.toJson<int>(unreadMentionsCount),
+      'unreadReactionsCount': serializer.toJson<int>(unreadReactionsCount),
     };
   }
 
@@ -1033,7 +1184,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           bool? hasProtectedContent,
           Value<String?> pinnedMessageIdsJson = const Value.absent(),
           int? messageAutoDeleteTime,
-          Value<String?> appearanceJson = const Value.absent()}) =>
+          Value<String?> appearanceJson = const Value.absent(),
+          bool? isForum,
+          bool? participantsHidden,
+          bool? hasAggressiveAntiSpamEnabled,
+          int? maxReactionsPerPost,
+          int? unreadMentionsCount,
+          int? unreadReactionsCount}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -1100,6 +1257,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
             messageAutoDeleteTime ?? this.messageAutoDeleteTime,
         appearanceJson:
             appearanceJson.present ? appearanceJson.value : this.appearanceJson,
+        isForum: isForum ?? this.isForum,
+        participantsHidden: participantsHidden ?? this.participantsHidden,
+        hasAggressiveAntiSpamEnabled:
+            hasAggressiveAntiSpamEnabled ?? this.hasAggressiveAntiSpamEnabled,
+        maxReactionsPerPost: maxReactionsPerPost ?? this.maxReactionsPerPost,
+        unreadMentionsCount: unreadMentionsCount ?? this.unreadMentionsCount,
+        unreadReactionsCount: unreadReactionsCount ?? this.unreadReactionsCount,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -1188,6 +1352,22 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       appearanceJson: data.appearanceJson.present
           ? data.appearanceJson.value
           : this.appearanceJson,
+      isForum: data.isForum.present ? data.isForum.value : this.isForum,
+      participantsHidden: data.participantsHidden.present
+          ? data.participantsHidden.value
+          : this.participantsHidden,
+      hasAggressiveAntiSpamEnabled: data.hasAggressiveAntiSpamEnabled.present
+          ? data.hasAggressiveAntiSpamEnabled.value
+          : this.hasAggressiveAntiSpamEnabled,
+      maxReactionsPerPost: data.maxReactionsPerPost.present
+          ? data.maxReactionsPerPost.value
+          : this.maxReactionsPerPost,
+      unreadMentionsCount: data.unreadMentionsCount.present
+          ? data.unreadMentionsCount.value
+          : this.unreadMentionsCount,
+      unreadReactionsCount: data.unreadReactionsCount.present
+          ? data.unreadReactionsCount.value
+          : this.unreadReactionsCount,
     );
   }
 
@@ -1231,7 +1411,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('hasProtectedContent: $hasProtectedContent, ')
           ..write('pinnedMessageIdsJson: $pinnedMessageIdsJson, ')
           ..write('messageAutoDeleteTime: $messageAutoDeleteTime, ')
-          ..write('appearanceJson: $appearanceJson')
+          ..write('appearanceJson: $appearanceJson, ')
+          ..write('isForum: $isForum, ')
+          ..write('participantsHidden: $participantsHidden, ')
+          ..write(
+              'hasAggressiveAntiSpamEnabled: $hasAggressiveAntiSpamEnabled, ')
+          ..write('maxReactionsPerPost: $maxReactionsPerPost, ')
+          ..write('unreadMentionsCount: $unreadMentionsCount, ')
+          ..write('unreadReactionsCount: $unreadReactionsCount')
           ..write(')'))
         .toString();
   }
@@ -1275,7 +1462,13 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         hasProtectedContent,
         pinnedMessageIdsJson,
         messageAutoDeleteTime,
-        appearanceJson
+        appearanceJson,
+        isForum,
+        participantsHidden,
+        hasAggressiveAntiSpamEnabled,
+        maxReactionsPerPost,
+        unreadMentionsCount,
+        unreadReactionsCount
       ]);
   @override
   bool operator ==(Object other) =>
@@ -1318,7 +1511,14 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.hasProtectedContent == this.hasProtectedContent &&
           other.pinnedMessageIdsJson == this.pinnedMessageIdsJson &&
           other.messageAutoDeleteTime == this.messageAutoDeleteTime &&
-          other.appearanceJson == this.appearanceJson);
+          other.appearanceJson == this.appearanceJson &&
+          other.isForum == this.isForum &&
+          other.participantsHidden == this.participantsHidden &&
+          other.hasAggressiveAntiSpamEnabled ==
+              this.hasAggressiveAntiSpamEnabled &&
+          other.maxReactionsPerPost == this.maxReactionsPerPost &&
+          other.unreadMentionsCount == this.unreadMentionsCount &&
+          other.unreadReactionsCount == this.unreadReactionsCount);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -1360,6 +1560,12 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<String?> pinnedMessageIdsJson;
   final Value<int> messageAutoDeleteTime;
   final Value<String?> appearanceJson;
+  final Value<bool> isForum;
+  final Value<bool> participantsHidden;
+  final Value<bool> hasAggressiveAntiSpamEnabled;
+  final Value<int> maxReactionsPerPost;
+  final Value<int> unreadMentionsCount;
+  final Value<int> unreadReactionsCount;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -1400,6 +1606,12 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.pinnedMessageIdsJson = const Value.absent(),
     this.messageAutoDeleteTime = const Value.absent(),
     this.appearanceJson = const Value.absent(),
+    this.isForum = const Value.absent(),
+    this.participantsHidden = const Value.absent(),
+    this.hasAggressiveAntiSpamEnabled = const Value.absent(),
+    this.maxReactionsPerPost = const Value.absent(),
+    this.unreadMentionsCount = const Value.absent(),
+    this.unreadReactionsCount = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -1441,6 +1653,12 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.pinnedMessageIdsJson = const Value.absent(),
     this.messageAutoDeleteTime = const Value.absent(),
     this.appearanceJson = const Value.absent(),
+    this.isForum = const Value.absent(),
+    this.participantsHidden = const Value.absent(),
+    this.hasAggressiveAntiSpamEnabled = const Value.absent(),
+    this.maxReactionsPerPost = const Value.absent(),
+    this.unreadMentionsCount = const Value.absent(),
+    this.unreadReactionsCount = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -1485,6 +1703,12 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<String>? pinnedMessageIdsJson,
     Expression<int>? messageAutoDeleteTime,
     Expression<String>? appearanceJson,
+    Expression<bool>? isForum,
+    Expression<bool>? participantsHidden,
+    Expression<bool>? hasAggressiveAntiSpamEnabled,
+    Expression<int>? maxReactionsPerPost,
+    Expression<int>? unreadMentionsCount,
+    Expression<int>? unreadReactionsCount,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1540,6 +1764,16 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       if (messageAutoDeleteTime != null)
         'message_auto_delete_time': messageAutoDeleteTime,
       if (appearanceJson != null) 'appearance_json': appearanceJson,
+      if (isForum != null) 'is_forum': isForum,
+      if (participantsHidden != null) 'participants_hidden': participantsHidden,
+      if (hasAggressiveAntiSpamEnabled != null)
+        'has_aggressive_anti_spam_enabled': hasAggressiveAntiSpamEnabled,
+      if (maxReactionsPerPost != null)
+        'max_reactions_per_post': maxReactionsPerPost,
+      if (unreadMentionsCount != null)
+        'unread_mentions_count': unreadMentionsCount,
+      if (unreadReactionsCount != null)
+        'unread_reactions_count': unreadReactionsCount,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1583,6 +1817,12 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<String?>? pinnedMessageIdsJson,
       Value<int>? messageAutoDeleteTime,
       Value<String?>? appearanceJson,
+      Value<bool>? isForum,
+      Value<bool>? participantsHidden,
+      Value<bool>? hasAggressiveAntiSpamEnabled,
+      Value<int>? maxReactionsPerPost,
+      Value<int>? unreadMentionsCount,
+      Value<int>? unreadReactionsCount,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -1628,6 +1868,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       messageAutoDeleteTime:
           messageAutoDeleteTime ?? this.messageAutoDeleteTime,
       appearanceJson: appearanceJson ?? this.appearanceJson,
+      isForum: isForum ?? this.isForum,
+      participantsHidden: participantsHidden ?? this.participantsHidden,
+      hasAggressiveAntiSpamEnabled:
+          hasAggressiveAntiSpamEnabled ?? this.hasAggressiveAntiSpamEnabled,
+      maxReactionsPerPost: maxReactionsPerPost ?? this.maxReactionsPerPost,
+      unreadMentionsCount: unreadMentionsCount ?? this.unreadMentionsCount,
+      unreadReactionsCount: unreadReactionsCount ?? this.unreadReactionsCount,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1759,6 +2006,25 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     if (appearanceJson.present) {
       map['appearance_json'] = Variable<String>(appearanceJson.value);
     }
+    if (isForum.present) {
+      map['is_forum'] = Variable<bool>(isForum.value);
+    }
+    if (participantsHidden.present) {
+      map['participants_hidden'] = Variable<bool>(participantsHidden.value);
+    }
+    if (hasAggressiveAntiSpamEnabled.present) {
+      map['has_aggressive_anti_spam_enabled'] =
+          Variable<bool>(hasAggressiveAntiSpamEnabled.value);
+    }
+    if (maxReactionsPerPost.present) {
+      map['max_reactions_per_post'] = Variable<int>(maxReactionsPerPost.value);
+    }
+    if (unreadMentionsCount.present) {
+      map['unread_mentions_count'] = Variable<int>(unreadMentionsCount.value);
+    }
+    if (unreadReactionsCount.present) {
+      map['unread_reactions_count'] = Variable<int>(unreadReactionsCount.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1806,6 +2072,13 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('pinnedMessageIdsJson: $pinnedMessageIdsJson, ')
           ..write('messageAutoDeleteTime: $messageAutoDeleteTime, ')
           ..write('appearanceJson: $appearanceJson, ')
+          ..write('isForum: $isForum, ')
+          ..write('participantsHidden: $participantsHidden, ')
+          ..write(
+              'hasAggressiveAntiSpamEnabled: $hasAggressiveAntiSpamEnabled, ')
+          ..write('maxReactionsPerPost: $maxReactionsPerPost, ')
+          ..write('unreadMentionsCount: $unreadMentionsCount, ')
+          ..write('unreadReactionsCount: $unreadReactionsCount, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2212,6 +2485,38 @@ class $MessagesTable extends Messages
   late final GeneratedColumn<String> savedTagsJson = GeneratedColumn<String>(
       'saved_tags_json', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _topicIdMeta =
+      const VerificationMeta('topicId');
+  @override
+  late final GeneratedColumn<int> topicId = GeneratedColumn<int>(
+      'topic_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _forwardsCountMeta =
+      const VerificationMeta('forwardsCount');
+  @override
+  late final GeneratedColumn<int> forwardsCount = GeneratedColumn<int>(
+      'forwards_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _senderChatIdMeta =
+      const VerificationMeta('senderChatId');
+  @override
+  late final GeneratedColumn<String> senderChatId = GeneratedColumn<String>(
+      'sender_chat_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderChatNameMeta =
+      const VerificationMeta('senderChatName');
+  @override
+  late final GeneratedColumn<String> senderChatName = GeneratedColumn<String>(
+      'sender_chat_name', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderChatAvatarUrlMeta =
+      const VerificationMeta('senderChatAvatarUrl');
+  @override
+  late final GeneratedColumn<String> senderChatAvatarUrl =
+      GeneratedColumn<String>('sender_chat_avatar_url', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         localId,
@@ -2269,7 +2574,12 @@ class $MessagesTable extends Messages
         replyToChatName,
         replyToChatType,
         effectId,
-        savedTagsJson
+        savedTagsJson,
+        topicId,
+        forwardsCount,
+        senderChatId,
+        senderChatName,
+        senderChatAvatarUrl
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2584,6 +2894,34 @@ class $MessagesTable extends Messages
           savedTagsJson.isAcceptableOrUnknown(
               data['saved_tags_json']!, _savedTagsJsonMeta));
     }
+    if (data.containsKey('topic_id')) {
+      context.handle(_topicIdMeta,
+          topicId.isAcceptableOrUnknown(data['topic_id']!, _topicIdMeta));
+    }
+    if (data.containsKey('forwards_count')) {
+      context.handle(
+          _forwardsCountMeta,
+          forwardsCount.isAcceptableOrUnknown(
+              data['forwards_count']!, _forwardsCountMeta));
+    }
+    if (data.containsKey('sender_chat_id')) {
+      context.handle(
+          _senderChatIdMeta,
+          senderChatId.isAcceptableOrUnknown(
+              data['sender_chat_id']!, _senderChatIdMeta));
+    }
+    if (data.containsKey('sender_chat_name')) {
+      context.handle(
+          _senderChatNameMeta,
+          senderChatName.isAcceptableOrUnknown(
+              data['sender_chat_name']!, _senderChatNameMeta));
+    }
+    if (data.containsKey('sender_chat_avatar_url')) {
+      context.handle(
+          _senderChatAvatarUrlMeta,
+          senderChatAvatarUrl.isAcceptableOrUnknown(
+              data['sender_chat_avatar_url']!, _senderChatAvatarUrlMeta));
+    }
     return context;
   }
 
@@ -2708,6 +3046,17 @@ class $MessagesTable extends Messages
           .read(DriftSqlType.string, data['${effectivePrefix}effect_id']),
       savedTagsJson: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}saved_tags_json']),
+      topicId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}topic_id']),
+      forwardsCount: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}forwards_count'])!,
+      senderChatId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sender_chat_id']),
+      senderChatName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}sender_chat_name']),
+      senderChatAvatarUrl: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}sender_chat_avatar_url']),
     );
   }
 
@@ -2774,6 +3123,11 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
   final String? replyToChatType;
   final String? effectId;
   final String? savedTagsJson;
+  final int? topicId;
+  final int forwardsCount;
+  final String? senderChatId;
+  final String? senderChatName;
+  final String? senderChatAvatarUrl;
   const DbMessage(
       {required this.localId,
       this.serverId,
@@ -2830,7 +3184,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       this.replyToChatName,
       this.replyToChatType,
       this.effectId,
-      this.savedTagsJson});
+      this.savedTagsJson,
+      this.topicId,
+      required this.forwardsCount,
+      this.senderChatId,
+      this.senderChatName,
+      this.senderChatAvatarUrl});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -2954,6 +3313,19 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
     }
     if (!nullToAbsent || savedTagsJson != null) {
       map['saved_tags_json'] = Variable<String>(savedTagsJson);
+    }
+    if (!nullToAbsent || topicId != null) {
+      map['topic_id'] = Variable<int>(topicId);
+    }
+    map['forwards_count'] = Variable<int>(forwardsCount);
+    if (!nullToAbsent || senderChatId != null) {
+      map['sender_chat_id'] = Variable<String>(senderChatId);
+    }
+    if (!nullToAbsent || senderChatName != null) {
+      map['sender_chat_name'] = Variable<String>(senderChatName);
+    }
+    if (!nullToAbsent || senderChatAvatarUrl != null) {
+      map['sender_chat_avatar_url'] = Variable<String>(senderChatAvatarUrl);
     }
     return map;
   }
@@ -3080,6 +3452,19 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       savedTagsJson: savedTagsJson == null && nullToAbsent
           ? const Value.absent()
           : Value(savedTagsJson),
+      topicId: topicId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(topicId),
+      forwardsCount: Value(forwardsCount),
+      senderChatId: senderChatId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderChatId),
+      senderChatName: senderChatName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderChatName),
+      senderChatAvatarUrl: senderChatAvatarUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderChatAvatarUrl),
     );
   }
 
@@ -3151,6 +3536,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       replyToChatType: serializer.fromJson<String?>(json['replyToChatType']),
       effectId: serializer.fromJson<String?>(json['effectId']),
       savedTagsJson: serializer.fromJson<String?>(json['savedTagsJson']),
+      topicId: serializer.fromJson<int?>(json['topicId']),
+      forwardsCount: serializer.fromJson<int>(json['forwardsCount']),
+      senderChatId: serializer.fromJson<String?>(json['senderChatId']),
+      senderChatName: serializer.fromJson<String?>(json['senderChatName']),
+      senderChatAvatarUrl:
+          serializer.fromJson<String?>(json['senderChatAvatarUrl']),
     );
   }
   @override
@@ -3214,6 +3605,11 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       'replyToChatType': serializer.toJson<String?>(replyToChatType),
       'effectId': serializer.toJson<String?>(effectId),
       'savedTagsJson': serializer.toJson<String?>(savedTagsJson),
+      'topicId': serializer.toJson<int?>(topicId),
+      'forwardsCount': serializer.toJson<int>(forwardsCount),
+      'senderChatId': serializer.toJson<String?>(senderChatId),
+      'senderChatName': serializer.toJson<String?>(senderChatName),
+      'senderChatAvatarUrl': serializer.toJson<String?>(senderChatAvatarUrl),
     };
   }
 
@@ -3273,7 +3669,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           Value<String?> replyToChatName = const Value.absent(),
           Value<String?> replyToChatType = const Value.absent(),
           Value<String?> effectId = const Value.absent(),
-          Value<String?> savedTagsJson = const Value.absent()}) =>
+          Value<String?> savedTagsJson = const Value.absent(),
+          Value<int?> topicId = const Value.absent(),
+          int? forwardsCount,
+          Value<String?> senderChatId = const Value.absent(),
+          Value<String?> senderChatName = const Value.absent(),
+          Value<String?> senderChatAvatarUrl = const Value.absent()}) =>
       DbMessage(
         localId: localId ?? this.localId,
         serverId: serverId.present ? serverId.value : this.serverId,
@@ -3365,6 +3766,15 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         effectId: effectId.present ? effectId.value : this.effectId,
         savedTagsJson:
             savedTagsJson.present ? savedTagsJson.value : this.savedTagsJson,
+        topicId: topicId.present ? topicId.value : this.topicId,
+        forwardsCount: forwardsCount ?? this.forwardsCount,
+        senderChatId:
+            senderChatId.present ? senderChatId.value : this.senderChatId,
+        senderChatName:
+            senderChatName.present ? senderChatName.value : this.senderChatName,
+        senderChatAvatarUrl: senderChatAvatarUrl.present
+            ? senderChatAvatarUrl.value
+            : this.senderChatAvatarUrl,
       );
   DbMessage copyWithCompanion(MessagesCompanion data) {
     return DbMessage(
@@ -3482,6 +3892,19 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       savedTagsJson: data.savedTagsJson.present
           ? data.savedTagsJson.value
           : this.savedTagsJson,
+      topicId: data.topicId.present ? data.topicId.value : this.topicId,
+      forwardsCount: data.forwardsCount.present
+          ? data.forwardsCount.value
+          : this.forwardsCount,
+      senderChatId: data.senderChatId.present
+          ? data.senderChatId.value
+          : this.senderChatId,
+      senderChatName: data.senderChatName.present
+          ? data.senderChatName.value
+          : this.senderChatName,
+      senderChatAvatarUrl: data.senderChatAvatarUrl.present
+          ? data.senderChatAvatarUrl.value
+          : this.senderChatAvatarUrl,
     );
   }
 
@@ -3543,7 +3966,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           ..write('replyToChatName: $replyToChatName, ')
           ..write('replyToChatType: $replyToChatType, ')
           ..write('effectId: $effectId, ')
-          ..write('savedTagsJson: $savedTagsJson')
+          ..write('savedTagsJson: $savedTagsJson, ')
+          ..write('topicId: $topicId, ')
+          ..write('forwardsCount: $forwardsCount, ')
+          ..write('senderChatId: $senderChatId, ')
+          ..write('senderChatName: $senderChatName, ')
+          ..write('senderChatAvatarUrl: $senderChatAvatarUrl')
           ..write(')'))
         .toString();
   }
@@ -3605,7 +4033,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         replyToChatName,
         replyToChatType,
         effectId,
-        savedTagsJson
+        savedTagsJson,
+        topicId,
+        forwardsCount,
+        senderChatId,
+        senderChatName,
+        senderChatAvatarUrl
       ]);
   @override
   bool operator ==(Object other) =>
@@ -3666,7 +4099,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           other.replyToChatName == this.replyToChatName &&
           other.replyToChatType == this.replyToChatType &&
           other.effectId == this.effectId &&
-          other.savedTagsJson == this.savedTagsJson);
+          other.savedTagsJson == this.savedTagsJson &&
+          other.topicId == this.topicId &&
+          other.forwardsCount == this.forwardsCount &&
+          other.senderChatId == this.senderChatId &&
+          other.senderChatName == this.senderChatName &&
+          other.senderChatAvatarUrl == this.senderChatAvatarUrl);
 }
 
 class MessagesCompanion extends UpdateCompanion<DbMessage> {
@@ -3726,6 +4164,11 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
   final Value<String?> replyToChatType;
   final Value<String?> effectId;
   final Value<String?> savedTagsJson;
+  final Value<int?> topicId;
+  final Value<int> forwardsCount;
+  final Value<String?> senderChatId;
+  final Value<String?> senderChatName;
+  final Value<String?> senderChatAvatarUrl;
   final Value<int> rowid;
   const MessagesCompanion({
     this.localId = const Value.absent(),
@@ -3784,6 +4227,11 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.replyToChatType = const Value.absent(),
     this.effectId = const Value.absent(),
     this.savedTagsJson = const Value.absent(),
+    this.topicId = const Value.absent(),
+    this.forwardsCount = const Value.absent(),
+    this.senderChatId = const Value.absent(),
+    this.senderChatName = const Value.absent(),
+    this.senderChatAvatarUrl = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -3843,6 +4291,11 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.replyToChatType = const Value.absent(),
     this.effectId = const Value.absent(),
     this.savedTagsJson = const Value.absent(),
+    this.topicId = const Value.absent(),
+    this.forwardsCount = const Value.absent(),
+    this.senderChatId = const Value.absent(),
+    this.senderChatName = const Value.absent(),
+    this.senderChatAvatarUrl = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : localId = Value(localId),
         chatId = Value(chatId),
@@ -3906,6 +4359,11 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     Expression<String>? replyToChatType,
     Expression<String>? effectId,
     Expression<String>? savedTagsJson,
+    Expression<int>? topicId,
+    Expression<int>? forwardsCount,
+    Expression<String>? senderChatId,
+    Expression<String>? senderChatName,
+    Expression<String>? senderChatAvatarUrl,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -3972,6 +4430,12 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       if (replyToChatType != null) 'reply_to_chat_type': replyToChatType,
       if (effectId != null) 'effect_id': effectId,
       if (savedTagsJson != null) 'saved_tags_json': savedTagsJson,
+      if (topicId != null) 'topic_id': topicId,
+      if (forwardsCount != null) 'forwards_count': forwardsCount,
+      if (senderChatId != null) 'sender_chat_id': senderChatId,
+      if (senderChatName != null) 'sender_chat_name': senderChatName,
+      if (senderChatAvatarUrl != null)
+        'sender_chat_avatar_url': senderChatAvatarUrl,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -4033,6 +4497,11 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       Value<String?>? replyToChatType,
       Value<String?>? effectId,
       Value<String?>? savedTagsJson,
+      Value<int?>? topicId,
+      Value<int>? forwardsCount,
+      Value<String?>? senderChatId,
+      Value<String?>? senderChatName,
+      Value<String?>? senderChatAvatarUrl,
       Value<int>? rowid}) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -4092,6 +4561,11 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       replyToChatType: replyToChatType ?? this.replyToChatType,
       effectId: effectId ?? this.effectId,
       savedTagsJson: savedTagsJson ?? this.savedTagsJson,
+      topicId: topicId ?? this.topicId,
+      forwardsCount: forwardsCount ?? this.forwardsCount,
+      senderChatId: senderChatId ?? this.senderChatId,
+      senderChatName: senderChatName ?? this.senderChatName,
+      senderChatAvatarUrl: senderChatAvatarUrl ?? this.senderChatAvatarUrl,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -4271,6 +4745,22 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     if (savedTagsJson.present) {
       map['saved_tags_json'] = Variable<String>(savedTagsJson.value);
     }
+    if (topicId.present) {
+      map['topic_id'] = Variable<int>(topicId.value);
+    }
+    if (forwardsCount.present) {
+      map['forwards_count'] = Variable<int>(forwardsCount.value);
+    }
+    if (senderChatId.present) {
+      map['sender_chat_id'] = Variable<String>(senderChatId.value);
+    }
+    if (senderChatName.present) {
+      map['sender_chat_name'] = Variable<String>(senderChatName.value);
+    }
+    if (senderChatAvatarUrl.present) {
+      map['sender_chat_avatar_url'] =
+          Variable<String>(senderChatAvatarUrl.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -4336,6 +4826,11 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
           ..write('replyToChatType: $replyToChatType, ')
           ..write('effectId: $effectId, ')
           ..write('savedTagsJson: $savedTagsJson, ')
+          ..write('topicId: $topicId, ')
+          ..write('forwardsCount: $forwardsCount, ')
+          ..write('senderChatId: $senderChatId, ')
+          ..write('senderChatName: $senderChatName, ')
+          ..write('senderChatAvatarUrl: $senderChatAvatarUrl, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -5064,6 +5559,12 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<String?> pinnedMessageIdsJson,
   Value<int> messageAutoDeleteTime,
   Value<String?> appearanceJson,
+  Value<bool> isForum,
+  Value<bool> participantsHidden,
+  Value<bool> hasAggressiveAntiSpamEnabled,
+  Value<int> maxReactionsPerPost,
+  Value<int> unreadMentionsCount,
+  Value<int> unreadReactionsCount,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -5105,6 +5606,12 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<String?> pinnedMessageIdsJson,
   Value<int> messageAutoDeleteTime,
   Value<String?> appearanceJson,
+  Value<bool> isForum,
+  Value<bool> participantsHidden,
+  Value<bool> hasAggressiveAntiSpamEnabled,
+  Value<int> maxReactionsPerPost,
+  Value<int> unreadMentionsCount,
+  Value<int> unreadReactionsCount,
   Value<int> rowid,
 });
 
@@ -5246,6 +5753,29 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<String> get appearanceJson => $composableBuilder(
       column: $table.appearanceJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isForum => $composableBuilder(
+      column: $table.isForum, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get participantsHidden => $composableBuilder(
+      column: $table.participantsHidden,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasAggressiveAntiSpamEnabled => $composableBuilder(
+      column: $table.hasAggressiveAntiSpamEnabled,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get maxReactionsPerPost => $composableBuilder(
+      column: $table.maxReactionsPerPost,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get unreadMentionsCount => $composableBuilder(
+      column: $table.unreadMentionsCount,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get unreadReactionsCount => $composableBuilder(
+      column: $table.unreadReactionsCount,
       builder: (column) => ColumnFilters(column));
 }
 
@@ -5392,6 +5922,29 @@ class $$ChatsTableOrderingComposer
   ColumnOrderings<String> get appearanceJson => $composableBuilder(
       column: $table.appearanceJson,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isForum => $composableBuilder(
+      column: $table.isForum, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get participantsHidden => $composableBuilder(
+      column: $table.participantsHidden,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasAggressiveAntiSpamEnabled => $composableBuilder(
+      column: $table.hasAggressiveAntiSpamEnabled,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get maxReactionsPerPost => $composableBuilder(
+      column: $table.maxReactionsPerPost,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get unreadMentionsCount => $composableBuilder(
+      column: $table.unreadMentionsCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get unreadReactionsCount => $composableBuilder(
+      column: $table.unreadReactionsCount,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -5516,6 +6069,24 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<String> get appearanceJson => $composableBuilder(
       column: $table.appearanceJson, builder: (column) => column);
+
+  GeneratedColumn<bool> get isForum =>
+      $composableBuilder(column: $table.isForum, builder: (column) => column);
+
+  GeneratedColumn<bool> get participantsHidden => $composableBuilder(
+      column: $table.participantsHidden, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasAggressiveAntiSpamEnabled => $composableBuilder(
+      column: $table.hasAggressiveAntiSpamEnabled, builder: (column) => column);
+
+  GeneratedColumn<int> get maxReactionsPerPost => $composableBuilder(
+      column: $table.maxReactionsPerPost, builder: (column) => column);
+
+  GeneratedColumn<int> get unreadMentionsCount => $composableBuilder(
+      column: $table.unreadMentionsCount, builder: (column) => column);
+
+  GeneratedColumn<int> get unreadReactionsCount => $composableBuilder(
+      column: $table.unreadReactionsCount, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -5579,6 +6150,12 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<String?> pinnedMessageIdsJson = const Value.absent(),
             Value<int> messageAutoDeleteTime = const Value.absent(),
             Value<String?> appearanceJson = const Value.absent(),
+            Value<bool> isForum = const Value.absent(),
+            Value<bool> participantsHidden = const Value.absent(),
+            Value<bool> hasAggressiveAntiSpamEnabled = const Value.absent(),
+            Value<int> maxReactionsPerPost = const Value.absent(),
+            Value<int> unreadMentionsCount = const Value.absent(),
+            Value<int> unreadReactionsCount = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -5620,6 +6197,12 @@ class $$ChatsTableTableManager extends RootTableManager<
             pinnedMessageIdsJson: pinnedMessageIdsJson,
             messageAutoDeleteTime: messageAutoDeleteTime,
             appearanceJson: appearanceJson,
+            isForum: isForum,
+            participantsHidden: participantsHidden,
+            hasAggressiveAntiSpamEnabled: hasAggressiveAntiSpamEnabled,
+            maxReactionsPerPost: maxReactionsPerPost,
+            unreadMentionsCount: unreadMentionsCount,
+            unreadReactionsCount: unreadReactionsCount,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -5661,6 +6244,12 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<String?> pinnedMessageIdsJson = const Value.absent(),
             Value<int> messageAutoDeleteTime = const Value.absent(),
             Value<String?> appearanceJson = const Value.absent(),
+            Value<bool> isForum = const Value.absent(),
+            Value<bool> participantsHidden = const Value.absent(),
+            Value<bool> hasAggressiveAntiSpamEnabled = const Value.absent(),
+            Value<int> maxReactionsPerPost = const Value.absent(),
+            Value<int> unreadMentionsCount = const Value.absent(),
+            Value<int> unreadReactionsCount = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -5702,6 +6291,12 @@ class $$ChatsTableTableManager extends RootTableManager<
             pinnedMessageIdsJson: pinnedMessageIdsJson,
             messageAutoDeleteTime: messageAutoDeleteTime,
             appearanceJson: appearanceJson,
+            isForum: isForum,
+            participantsHidden: participantsHidden,
+            hasAggressiveAntiSpamEnabled: hasAggressiveAntiSpamEnabled,
+            maxReactionsPerPost: maxReactionsPerPost,
+            unreadMentionsCount: unreadMentionsCount,
+            unreadReactionsCount: unreadReactionsCount,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -5780,6 +6375,11 @@ typedef $$MessagesTableCreateCompanionBuilder = MessagesCompanion Function({
   Value<String?> replyToChatType,
   Value<String?> effectId,
   Value<String?> savedTagsJson,
+  Value<int?> topicId,
+  Value<int> forwardsCount,
+  Value<String?> senderChatId,
+  Value<String?> senderChatName,
+  Value<String?> senderChatAvatarUrl,
   Value<int> rowid,
 });
 typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
@@ -5839,6 +6439,11 @@ typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
   Value<String?> replyToChatType,
   Value<String?> effectId,
   Value<String?> savedTagsJson,
+  Value<int?> topicId,
+  Value<int> forwardsCount,
+  Value<String?> senderChatId,
+  Value<String?> senderChatName,
+  Value<String?> senderChatAvatarUrl,
   Value<int> rowid,
 });
 
@@ -6036,6 +6641,23 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get savedTagsJson => $composableBuilder(
       column: $table.savedTagsJson, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get topicId => $composableBuilder(
+      column: $table.topicId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get forwardsCount => $composableBuilder(
+      column: $table.forwardsCount, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderChatId => $composableBuilder(
+      column: $table.senderChatId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderChatName => $composableBuilder(
+      column: $table.senderChatName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderChatAvatarUrl => $composableBuilder(
+      column: $table.senderChatAvatarUrl,
+      builder: (column) => ColumnFilters(column));
 }
 
 class $$MessagesTableOrderingComposer
@@ -6238,6 +6860,25 @@ class $$MessagesTableOrderingComposer
   ColumnOrderings<String> get savedTagsJson => $composableBuilder(
       column: $table.savedTagsJson,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get topicId => $composableBuilder(
+      column: $table.topicId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get forwardsCount => $composableBuilder(
+      column: $table.forwardsCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderChatId => $composableBuilder(
+      column: $table.senderChatId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderChatName => $composableBuilder(
+      column: $table.senderChatName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderChatAvatarUrl => $composableBuilder(
+      column: $table.senderChatAvatarUrl,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$MessagesTableAnnotationComposer
@@ -6416,6 +7057,21 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get savedTagsJson => $composableBuilder(
       column: $table.savedTagsJson, builder: (column) => column);
+
+  GeneratedColumn<int> get topicId =>
+      $composableBuilder(column: $table.topicId, builder: (column) => column);
+
+  GeneratedColumn<int> get forwardsCount => $composableBuilder(
+      column: $table.forwardsCount, builder: (column) => column);
+
+  GeneratedColumn<String> get senderChatId => $composableBuilder(
+      column: $table.senderChatId, builder: (column) => column);
+
+  GeneratedColumn<String> get senderChatName => $composableBuilder(
+      column: $table.senderChatName, builder: (column) => column);
+
+  GeneratedColumn<String> get senderChatAvatarUrl => $composableBuilder(
+      column: $table.senderChatAvatarUrl, builder: (column) => column);
 }
 
 class $$MessagesTableTableManager extends RootTableManager<
@@ -6497,6 +7153,11 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<String?> replyToChatType = const Value.absent(),
             Value<String?> effectId = const Value.absent(),
             Value<String?> savedTagsJson = const Value.absent(),
+            Value<int?> topicId = const Value.absent(),
+            Value<int> forwardsCount = const Value.absent(),
+            Value<String?> senderChatId = const Value.absent(),
+            Value<String?> senderChatName = const Value.absent(),
+            Value<String?> senderChatAvatarUrl = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion(
@@ -6556,6 +7217,11 @@ class $$MessagesTableTableManager extends RootTableManager<
             replyToChatType: replyToChatType,
             effectId: effectId,
             savedTagsJson: savedTagsJson,
+            topicId: topicId,
+            forwardsCount: forwardsCount,
+            senderChatId: senderChatId,
+            senderChatName: senderChatName,
+            senderChatAvatarUrl: senderChatAvatarUrl,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -6615,6 +7281,11 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<String?> replyToChatType = const Value.absent(),
             Value<String?> effectId = const Value.absent(),
             Value<String?> savedTagsJson = const Value.absent(),
+            Value<int?> topicId = const Value.absent(),
+            Value<int> forwardsCount = const Value.absent(),
+            Value<String?> senderChatId = const Value.absent(),
+            Value<String?> senderChatName = const Value.absent(),
+            Value<String?> senderChatAvatarUrl = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion.insert(
@@ -6674,6 +7345,11 @@ class $$MessagesTableTableManager extends RootTableManager<
             replyToChatType: replyToChatType,
             effectId: effectId,
             savedTagsJson: savedTagsJson,
+            topicId: topicId,
+            forwardsCount: forwardsCount,
+            senderChatId: senderChatId,
+            senderChatName: senderChatName,
+            senderChatAvatarUrl: senderChatAvatarUrl,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

@@ -71,6 +71,21 @@ const double _kActionIconSize = 20.0;
 
 // ------------------------------
 
+/// Custom action item rendered in the expanded `FloatingGlassAppBar` menu.
+class FloatingChatMenuItem {
+  final String label;
+  final Widget Function(Color color) iconBuilder;
+  final VoidCallback onTap;
+  final bool isDestructive;
+
+  const FloatingChatMenuItem({
+    required this.label,
+    required this.iconBuilder,
+    required this.onTap,
+    this.isDestructive = false,
+  });
+}
+
 /// Floating AppBar split into 3 distinct glass/matte pills:
 /// 1. Left circular pill: Back button (44x44).
 /// 2. Center capsule pill: Chat name & status text.
@@ -116,6 +131,7 @@ class FloatingGlassAppBar extends StatefulWidget {
   final VoidCallback? onForwardSelected;
   final VoidCallback? onDeleteSelected;
   final bool hasProtectedContent;
+  final List<FloatingChatMenuItem> extraMenuItems;
 
   const FloatingGlassAppBar({
     Key? key,
@@ -159,6 +175,7 @@ class FloatingGlassAppBar extends StatefulWidget {
     this.onForwardSelected,
     this.onDeleteSelected,
     this.hasProtectedContent = false,
+    this.extraMenuItems = const [],
   }) : super(key: key);
 
   @override
@@ -258,6 +275,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     if (widget.onAutoDelete != null) count++;
     if (widget.onChatAppearance != null) count++;
     if (widget.onReport != null || !widget.isSavedChat) count++;
+    count += widget.extraMenuItems.length;
     return 18.0 + count * 42.0;
   }
 
@@ -548,6 +566,19 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                   onToggleSavedViewMode: widget.onToggleSavedViewMode != null
                                       ? () { _closeMenu(); widget.onToggleSavedViewMode?.call(); }
                                       : null,
+                                  extraMenuItems: widget.extraMenuItems
+                                      .map(
+                                        (e) => FloatingChatMenuItem(
+                                          label: e.label,
+                                          iconBuilder: e.iconBuilder,
+                                          isDestructive: e.isDestructive,
+                                          onTap: () {
+                                            _closeMenu();
+                                            e.onTap();
+                                          },
+                                        ),
+                                      )
+                                      .toList(),
                                 )
                               : _RightPillContent(
                                   key: const ValueKey<String>('chat_right_pill_content'),
@@ -593,6 +624,19 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                     onToggleSavedViewMode: widget.onToggleSavedViewMode != null
                                         ? () { _closeMenu(); widget.onToggleSavedViewMode?.call(); }
                                         : null,
+                                    extraMenuItems: widget.extraMenuItems
+                                        .map(
+                                          (e) => FloatingChatMenuItem(
+                                            label: e.label,
+                                            iconBuilder: e.iconBuilder,
+                                            isDestructive: e.isDestructive,
+                                            onTap: () {
+                                              _closeMenu();
+                                              e.onTap();
+                                            },
+                                          ),
+                                        )
+                                        .toList(),
                                   )
                                 : _RightPillContent(
                                     key: const ValueKey<String>('chat_right_pill_matte_content'),
@@ -651,6 +695,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       widget.isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),
       l10n.translate('chat_menu_clear_history'),
       l10n.translate('chat_menu_report'),
+      for (final extra in widget.extraMenuItems) extra.label,
     ];
 
     double maxTextWidth = 0.0;
@@ -1112,6 +1157,7 @@ class _ChatActionsMorphMenu extends StatelessWidget {
   final VoidCallback? onAutoDelete;
   final VoidCallback? onChatAppearance;
   final VoidCallback? onToggleSavedViewMode;
+  final List<FloatingChatMenuItem> extraMenuItems;
 
   const _ChatActionsMorphMenu({
     super.key,
@@ -1130,6 +1176,7 @@ class _ChatActionsMorphMenu extends StatelessWidget {
     this.onAutoDelete,
     this.onChatAppearance,
     this.onToggleSavedViewMode,
+    this.extraMenuItems = const [],
   });
 
   @override
@@ -1193,6 +1240,14 @@ class _ChatActionsMorphMenu extends StatelessWidget {
                       'Оформление',
                       onChatAppearance!,
                       iconBuilder: (c) => iconoir.Palette(color: c, width: 20, height: 20),
+                    ),
+                  for (final extra in extraMenuItems)
+                    _menuItem(
+                      context,
+                      extra.label,
+                      extra.onTap,
+                      iconBuilder: extra.iconBuilder,
+                      isDestructive: extra.isDestructive,
                     ),
                   _menuItem(
                     context,

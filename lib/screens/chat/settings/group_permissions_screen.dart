@@ -5,6 +5,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
+import '../../../services/groups_channels_parity_service.dart';
 import '../../../utils/haptic_utils.dart';
 import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
@@ -18,12 +19,18 @@ class GroupPermissionsScreen extends StatefulWidget {
   final String chatId;
   final GroupDefaultPermissions initialPermissions;
   final int initialSlowMode;
+  final bool isForum;
+  final bool initialParticipantsHidden;
+  final bool initialAggressiveAntiSpam;
 
   const GroupPermissionsScreen({
     super.key,
     required this.chatId,
     required this.initialPermissions,
     required this.initialSlowMode,
+    this.isForum = false,
+    this.initialParticipantsHidden = false,
+    this.initialAggressiveAntiSpam = false,
   });
 
   @override
@@ -44,6 +51,8 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
 
   late GroupDefaultPermissions _permissions;
   late int _slowModeInterval;
+  late bool _participantsHidden;
+  late bool _aggressiveAntiSpam;
   bool _mediaExpanded = true;
   bool _isSaving = false;
   bool _savedAtLeastOnce = false;
@@ -57,6 +66,8 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     super.initState();
     _permissions = widget.initialPermissions;
     _slowModeInterval = _nearestSlowModeStop(widget.initialSlowMode);
+    _participantsHidden = widget.initialParticipantsHidden;
+    _aggressiveAntiSpam = widget.initialAggressiveAntiSpam;
     _mediaExpanded = _permissions.canSendMessages;
     unawaited(_loadLists());
   }
@@ -135,6 +146,8 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     final res = await ChatService.updateGroupSettings(widget.chatId, {
       'default_permissions': _permissions.toJson(),
       'slow_mode_interval': _slowModeInterval,
+      'participants_hidden': _participantsHidden,
+      'has_aggressive_anti_spam_enabled': _aggressiveAntiSpam,
     });
 
     if (!mounted) return;
@@ -166,6 +179,8 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     return {
       'default_permissions': _permissions,
       'slow_mode_interval': _slowModeInterval,
+      'participants_hidden': _participantsHidden,
+      'has_aggressive_anti_spam_enabled': _aggressiveAntiSpam,
       'saved': _savedAtLeastOnce,
       'members_changed': _membersChanged,
     };
@@ -255,8 +270,7 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                       color: palette.subtext,
                     ),
                     title: 'Медиа и вложения',
-                    valueText:
-                        '${(_permissions.canSendMedia ? 1 : 0) + (_permissions.canSendStickersGifs ? 1 : 0) + (_permissions.canSendPolls ? 1 : 0)}/3',
+                    valueText: '${_enabledMediaCount(_permissions)}/9',
                     trailing: AnimatedRotation(
                       turns: _mediaExpanded ? 0.25 : 0.0,
                       duration: disableAnim
@@ -281,14 +295,76 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                         height: 18,
                         color: palette.primary,
                       ),
-                      title: 'Отправка медиа',
-                      value: _permissions.canSendMedia,
-                      onChanged: (v) {
-                        HapticUtils.selection();
-                        setState(() {
-                          _permissions = _permissions.copyWith(canSendMedia: v);
-                        });
-                      },
+                      title: 'Фотографии',
+                      value: _permissions.canSendPhotos,
+                      onChanged: (v) => _setGranularMedia(
+                        _permissions.copyWith(canSendPhotos: v),
+                      ),
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.VideoCamera(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Видеозаписи',
+                      value: _permissions.canSendVideos,
+                      onChanged: (v) => _setGranularMedia(
+                        _permissions.copyWith(canSendVideos: v),
+                      ),
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.MusicDoubleNote(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Музыка',
+                      value: _permissions.canSendMusic,
+                      onChanged: (v) => _setGranularMedia(
+                        _permissions.copyWith(canSendMusic: v),
+                      ),
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.Page(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Файлы',
+                      value: _permissions.canSendFiles,
+                      onChanged: (v) => _setGranularMedia(
+                        _permissions.copyWith(canSendFiles: v),
+                      ),
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.Microphone(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Голосовые сообщения',
+                      value: _permissions.canSendVoiceNotes,
+                      onChanged: (v) => _setGranularMedia(
+                        _permissions.copyWith(canSendVoiceNotes: v),
+                      ),
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.Camera(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Видеосообщения',
+                      value: _permissions.canSendVideoNotes,
+                      onChanged: (v) => _setGranularMedia(
+                        _permissions.copyWith(canSendVideoNotes: v),
+                      ),
                     ),
                     _nestedSwitchRow(
                       palette: palette,
@@ -320,6 +396,24 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                         HapticUtils.selection();
                         setState(() {
                           _permissions = _permissions.copyWith(canSendPolls: v);
+                        });
+                      },
+                    ),
+                    _nestedSwitchRow(
+                      palette: palette,
+                      icon: iconoir.Link(
+                        width: 18,
+                        height: 18,
+                        color: palette.primary,
+                      ),
+                      title: 'Предпросмотр ссылок',
+                      value: _permissions.canAddWebPagePreviews,
+                      onChanged: (v) {
+                        HapticUtils.selection();
+                        setState(() {
+                          _permissions = _permissions.copyWith(
+                            canAddWebPagePreviews: v,
+                          );
                         });
                       },
                     ),
@@ -400,6 +494,34 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                     });
                   },
                 ),
+                if (widget.isForum)
+                  TheavListRow(
+                    leading: iconoir.ChatLines(
+                      width: 20,
+                      height: 20,
+                      color: palette.primary,
+                    ),
+                    title: 'Создание и управление темами',
+                    trailing: TheavSwitch(
+                      value: _permissions.canManageTopics,
+                      onChanged: (v) {
+                        HapticUtils.selection();
+                        setState(() {
+                          _permissions = _permissions.copyWith(
+                            canManageTopics: v,
+                          );
+                        });
+                      },
+                    ),
+                    onTap: () {
+                      HapticUtils.selection();
+                      setState(() {
+                        _permissions = _permissions.copyWith(
+                          canManageTopics: !_permissions.canManageTopics,
+                        );
+                      });
+                    },
+                  ),
               ],
             ),
             const SizedBox(height: 8),
@@ -413,6 +535,57 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                   labels: _slowModeLabels,
                   onChanged: (idx) {
                     setState(() => _slowModeInterval = _slowModeStops[idx]);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              header: 'МОДЕРАЦИЯ И ПРИВАТНОСТЬ',
+              children: [
+                TheavListRow(
+                  leading: iconoir.EyeClosed(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Скрыть список участников',
+                  subtitle: 'Участники видят только администраторов группы',
+                  trailing: TheavSwitch(
+                    value: _participantsHidden,
+                    onChanged: (v) {
+                      HapticUtils.selection();
+                      setState(() => _participantsHidden = v);
+                    },
+                  ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    setState(
+                      () => _participantsHidden = !_participantsHidden,
+                    );
+                  },
+                ),
+                TheavListRow(
+                  leading: iconoir.ShieldCheck(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: 'Агрессивный антиспам',
+                  subtitle:
+                      'Автоматическое удаление спам-сообщений и подозрительных ссылок',
+                  trailing: TheavSwitch(
+                    value: _aggressiveAntiSpam,
+                    onChanged: (v) {
+                      HapticUtils.selection();
+                      setState(() => _aggressiveAntiSpam = v);
+                    },
+                  ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    setState(
+                      () => _aggressiveAntiSpam = !_aggressiveAntiSpam,
+                    );
                   },
                 ),
               ],
@@ -449,6 +622,33 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
         ),
       ),
     );
+  }
+
+  int _enabledMediaCount(GroupDefaultPermissions p) {
+    int count = 0;
+    if (p.canSendPhotos) count++;
+    if (p.canSendVideos) count++;
+    if (p.canSendMusic) count++;
+    if (p.canSendFiles) count++;
+    if (p.canSendVoiceNotes) count++;
+    if (p.canSendVideoNotes) count++;
+    if (p.canSendStickersGifs) count++;
+    if (p.canSendPolls) count++;
+    if (p.canAddWebPagePreviews) count++;
+    return count;
+  }
+
+  void _setGranularMedia(GroupDefaultPermissions next) {
+    HapticUtils.selection();
+    final anyMedia = next.canSendPhotos ||
+        next.canSendVideos ||
+        next.canSendMusic ||
+        next.canSendFiles ||
+        next.canSendVoiceNotes ||
+        next.canSendVideoNotes;
+    setState(() {
+      _permissions = next.copyWith(canSendMedia: anyMedia);
+    });
   }
 
   Widget _nestedSwitchRow({
@@ -538,6 +738,44 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
   }
 
   Future<void> _openBlacklistSheet() async {
+    final searchCtrl = TextEditingController();
+    var pagedBanned = List<ChatParticipant>.from(_bannedMembers);
+    var loading = false;
+    var loadingMore = false;
+    var hasMore = pagedBanned.length >= 50;
+    Timer? debounce;
+
+    Future<void> fetchPage(
+      StateSetter setSheetState, {
+      required bool reset,
+    }) async {
+      if (!reset && (loadingMore || !hasMore)) return;
+      setSheetState(() {
+        if (reset) {
+          loading = true;
+        } else {
+          loadingMore = true;
+        }
+      });
+      final res = await GroupsChannelsParityService.getBannedMembersPaged(
+        widget.chatId,
+        query: searchCtrl.text,
+        limit: 50,
+        offset: reset ? 0 : pagedBanned.length,
+      );
+      if (!mounted) return;
+      setSheetState(() {
+        if (reset) pagedBanned = [];
+        pagedBanned.addAll(res.bannedMembers);
+        hasMore = res.hasMore;
+        loading = false;
+        loadingMore = false;
+        if (reset && searchCtrl.text.trim().isEmpty) {
+          _bannedMembers = List<ChatParticipant>.from(pagedBanned);
+        }
+      });
+    }
+
     await showTheavModalSheet<void>(
       context: context,
       title: 'Чёрный список (${_bannedMembers.length})',
@@ -551,6 +789,21 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
               children: [
                 TheavInsetGroup(
                   children: [
+                    TheavInlineTextField(
+                      controller: searchCtrl,
+                      placeholder: 'Поиск в чёрном списке...',
+                      prefix: iconoir.Search(
+                        width: 18,
+                        height: 18,
+                        color: palette.subtext,
+                      ),
+                      onChanged: (_) {
+                        debounce?.cancel();
+                        debounce = Timer(const Duration(milliseconds: 280), () {
+                          unawaited(fetchPage(setSheetState, reset: true));
+                        });
+                      },
+                    ),
                     TheavListRow(
                       leading: iconoir.UserXmark(
                         width: 20,
@@ -561,25 +814,36 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                       isDestructive: true,
                       onTap: () async {
                         await _openAddBanPicker();
-                        if (ctx.mounted) setSheetState(() {});
+                        if (ctx.mounted) {
+                          await fetchPage(setSheetState, reset: true);
+                        }
                       },
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                if (_bannedMembers.isEmpty)
+                if (loading)
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(
+                      child: CircularProgressIndicator(strokeWidth: 2.2),
+                    ),
+                  )
+                else if (pagedBanned.isEmpty)
                   Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      'Заблокированные пользователи не смогут вернуться в группу и просматривать её.',
+                      searchCtrl.text.trim().isNotEmpty
+                          ? 'Никого не найдено.'
+                          : 'Заблокированные пользователи не смогут вернуться в группу и просматривать её.',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 13.5, color: palette.subtext),
                     ),
                   )
-                else
+                else ...[
                   TheavInsetGroup(
                     children: [
-                      for (final banned in _bannedMembers)
+                      for (final banned in pagedBanned)
                         TheavListRow(
                           leading: AvatarWithStatus(
                             userId: banned.id,
@@ -601,18 +865,36 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                             label: 'Разблокировать',
                             onTap: () async {
                               await _unbanUser(banned);
-                              if (ctx.mounted) setSheetState(() {});
+                              if (ctx.mounted) {
+                                setSheetState(() {
+                                  pagedBanned.removeWhere(
+                                    (m) => m.id == banned.id,
+                                  );
+                                });
+                              }
                             },
                           ),
                         ),
                     ],
                   ),
+                  if (hasMore)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: TheavFloatingPillButton(
+                        label: loadingMore ? 'Загрузка...' : 'Загрузить ещё',
+                        enabled: !loadingMore,
+                        onTap: () => fetchPage(setSheetState, reset: false),
+                      ),
+                    ),
+                ],
               ],
             ),
           );
         },
       ),
     );
+    debounce?.cancel();
+    searchCtrl.dispose();
   }
 
   String _formatRestrictionsSummary(ChatParticipant member) {
@@ -728,11 +1010,19 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
         MemberRestrictions(
           canSendMessages: _permissions.canSendMessages,
           canSendMedia: _permissions.canSendMedia,
+          canSendPhotos: _permissions.canSendPhotos,
+          canSendVideos: _permissions.canSendVideos,
+          canSendMusic: _permissions.canSendMusic,
+          canSendFiles: _permissions.canSendFiles,
+          canSendVoiceNotes: _permissions.canSendVoiceNotes,
+          canSendVideoNotes: _permissions.canSendVideoNotes,
           canSendStickersGifs: _permissions.canSendStickersGifs,
           canSendPolls: _permissions.canSendPolls,
+          canAddWebPagePreviews: _permissions.canAddWebPagePreviews,
           canPinMessages: _permissions.canPinMessages,
           canInviteUsers: _permissions.canInviteUsers,
           canChangeInfo: _permissions.canChangeInfo,
+          canManageTopics: _permissions.canManageTopics,
         );
     Duration? duration;
     var saving = false;
@@ -751,6 +1041,16 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
             (label: '1 месяц', value: const Duration(days: 30)),
           ];
 
+          void setMediaSub(MemberRestrictions next) {
+            final anyMedia = next.canSendPhotos ||
+                next.canSendVideos ||
+                next.canSendMusic ||
+                next.canSendFiles ||
+                next.canSendVoiceNotes ||
+                next.canSendVideoNotes;
+            setSheetState(() => current = next.copyWith(canSendMedia: anyMedia));
+          }
+
           return SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
             child: Column(
@@ -768,10 +1068,37 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                       ),
                     ),
                     _sheetToggle(
-                      'Отправка медиа',
-                      current.canSendMedia,
-                      (v) => setSheetState(
-                        () => current = current.copyWith(canSendMedia: v),
+                      'Фотографии',
+                      current.canSendPhotos,
+                      (v) => setMediaSub(current.copyWith(canSendPhotos: v)),
+                    ),
+                    _sheetToggle(
+                      'Видеозаписи',
+                      current.canSendVideos,
+                      (v) => setMediaSub(current.copyWith(canSendVideos: v)),
+                    ),
+                    _sheetToggle(
+                      'Музыка',
+                      current.canSendMusic,
+                      (v) => setMediaSub(current.copyWith(canSendMusic: v)),
+                    ),
+                    _sheetToggle(
+                      'Файлы',
+                      current.canSendFiles,
+                      (v) => setMediaSub(current.copyWith(canSendFiles: v)),
+                    ),
+                    _sheetToggle(
+                      'Голосовые сообщения',
+                      current.canSendVoiceNotes,
+                      (v) => setMediaSub(
+                        current.copyWith(canSendVoiceNotes: v),
+                      ),
+                    ),
+                    _sheetToggle(
+                      'Видеосообщения',
+                      current.canSendVideoNotes,
+                      (v) => setMediaSub(
+                        current.copyWith(canSendVideoNotes: v),
                       ),
                     ),
                     _sheetToggle(
@@ -790,6 +1117,14 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                       ),
                     ),
                     _sheetToggle(
+                      'Предпросмотр ссылок',
+                      current.canAddWebPagePreviews,
+                      (v) => setSheetState(
+                        () => current =
+                            current.copyWith(canAddWebPagePreviews: v),
+                      ),
+                    ),
+                    _sheetToggle(
                       'Добавление участников',
                       current.canInviteUsers,
                       (v) => setSheetState(
@@ -803,6 +1138,21 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                         () => current = current.copyWith(canPinMessages: v),
                       ),
                     ),
+                    _sheetToggle(
+                      'Изменение профиля',
+                      current.canChangeInfo,
+                      (v) => setSheetState(
+                        () => current = current.copyWith(canChangeInfo: v),
+                      ),
+                    ),
+                    if (widget.isForum)
+                      _sheetToggle(
+                        'Управление темами',
+                        current.canManageTopics,
+                        (v) => setSheetState(
+                          () => current = current.copyWith(canManageTopics: v),
+                        ),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 12),

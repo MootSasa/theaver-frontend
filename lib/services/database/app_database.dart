@@ -61,6 +61,17 @@ class Chats extends Table {
   IntColumn get messageAutoDeleteTime =>
       integer().withDefault(const Constant(0))();
   TextColumn get appearanceJson => text().nullable()();
+  BoolColumn get isForum => boolean().withDefault(const Constant(false))();
+  BoolColumn get participantsHidden =>
+      boolean().withDefault(const Constant(false))();
+  BoolColumn get hasAggressiveAntiSpamEnabled =>
+      boolean().withDefault(const Constant(false))();
+  IntColumn get maxReactionsPerPost =>
+      integer().withDefault(const Constant(11))();
+  IntColumn get unreadMentionsCount =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get unreadReactionsCount =>
+      integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -145,6 +156,11 @@ class Messages extends Table {
   TextColumn get replyToChatType => text().nullable()();
   TextColumn get effectId => text().nullable()();
   TextColumn get savedTagsJson => text().nullable()();
+  IntColumn get topicId => integer().nullable()();
+  IntColumn get forwardsCount => integer().withDefault(const Constant(0))();
+  TextColumn get senderChatId => text().nullable()();
+  TextColumn get senderChatName => text().nullable()();
+  TextColumn get senderChatAvatarUrl => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {localId};
@@ -267,7 +283,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -288,6 +304,9 @@ class AppDatabase extends _$AppDatabase {
           );
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(chat_id, thread_root_message_id, created_at) WHERE thread_root_message_id IS NOT NULL',
+          );
+          await customStatement(
+            'CREATE INDEX IF NOT EXISTS idx_messages_chat_topic ON messages(chat_id, topic_id, created_at) WHERE topic_id IS NOT NULL',
           );
         },
         onUpgrade: (Migrator m, int from, int to) async {
@@ -515,6 +534,54 @@ class AppDatabase extends _$AppDatabase {
             await _addColumnIfMissing('messages', 'reply_to_chat_type', 'TEXT');
             await _addColumnIfMissing('messages', 'effect_id', 'TEXT');
             await _addColumnIfMissing('messages', 'saved_tags_json', 'TEXT');
+          }
+          if (from < 16) {
+            await _addColumnIfMissing(
+              'chats',
+              'is_forum',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'participants_hidden',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'has_aggressive_anti_spam_enabled',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'max_reactions_per_post',
+              'INTEGER NOT NULL DEFAULT 11',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'unread_mentions_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'unread_reactions_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'topic_id', 'INTEGER');
+            await _addColumnIfMissing(
+              'messages',
+              'forwards_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'sender_chat_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'sender_chat_name', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'sender_chat_avatar_url',
+              'TEXT',
+            );
+            await customStatement(
+              'CREATE INDEX IF NOT EXISTS idx_messages_chat_topic ON messages(chat_id, topic_id, created_at) WHERE topic_id IS NOT NULL',
+            );
           }
         },
       );
@@ -1003,11 +1070,15 @@ class AppDatabase extends _$AppDatabase {
     String? beforeCreatedAt,
     int limit = 50,
     bool includeThreadComments = false,
+    int? topicId,
   }) async {
     await ensureInitialized();
     final stmt = select(messages);
     stmt.where((t) {
       Expression<bool> cond = t.chatId.equals(chatId);
+      if (topicId != null) {
+        cond = cond & t.topicId.equals(topicId);
+      }
       if (!includeThreadComments) {
         cond = cond &
             (t.threadRootMessageId.isNull() | t.threadRootMessageId.equals(''));
@@ -1025,15 +1096,35 @@ class AppDatabase extends _$AppDatabase {
     return stmt.get();
   }
 
+  /// Получить сообщения чата (алиас с опциональным фильтром по теме форума)
+  Future<List<DbMessage>> getMessagesForChat(
+    String chatId, {
+    String? beforeCreatedAt,
+    int limit = 50,
+    bool includeThreadComments = false,
+    int? topicId,
+  }) =>
+      getMessages(
+        chatId,
+        beforeCreatedAt: beforeCreatedAt,
+        limit: limit,
+        includeThreadComments: includeThreadComments,
+        topicId: topicId,
+      );
+
   /// Реактивный поток сообщений основной ленты чата (включая зеркалированные посты канала, но без комментариев внутри тредов)
   Stream<List<DbMessage>> watchMessagesForChat(
     String chatId, {
     int limit = 50,
     bool includeThreadComments = false,
+    int? topicId,
   }) {
     final stmt = select(messages)
       ..where((t) {
         Expression<bool> cond = t.chatId.equals(chatId);
+        if (topicId != null) {
+          cond = cond & t.topicId.equals(topicId);
+        }
         if (!includeThreadComments) {
           cond = cond &
               (t.threadRootMessageId.isNull() |
@@ -1305,6 +1396,43 @@ class AppDatabase extends _$AppDatabase {
     });
   }
 
+  /// Пакетно обновить счётчики пересылок сообщений
+  Future<void> updateMessagesForwards(
+    Map<String, int> forwardsByServerId,
+  ) async {
+    if (forwardsByServerId.isEmpty) return;
+    await ensureInitialized();
+    await batch((b) {
+      forwardsByServerId.forEach((messageId, forwardsCount) {
+        if (messageId.isEmpty) return;
+        b.update(
+          messages,
+          MessagesCompanion(forwardsCount: Value(forwardsCount)),
+          where: (t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId),
+        );
+      });
+    });
+  }
+
+  /// Обновить счётчики непрочитанных упоминаний и реакций в чате
+  Future<void> updateChatUnreadBadges(
+    String chatId, {
+    required int unreadMentionsCount,
+    required int unreadReactionsCount,
+  }) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        unreadMentionsCount:
+            Value(unreadMentionsCount < 0 ? 0 : unreadMentionsCount),
+        unreadReactionsCount:
+            Value(unreadReactionsCount < 0 ? 0 : unreadReactionsCount),
+      ),
+    );
+  }
+
   /// Обновить количество комментариев и список последних комментаторов поста канала
   Future<void> updatePostCommentsMeta({
     required String messageId,
@@ -1562,6 +1690,10 @@ class AppDatabase extends _$AppDatabase {
     bool? hasProtectedContent,
     String? pinnedMessageIdsJson,
     bool updatePinnedMessageIds = false,
+    bool? isForum,
+    bool? participantsHidden,
+    bool? hasAggressiveAntiSpamEnabled,
+    int? maxReactionsPerPost,
   }) async {
     if (chatId.isEmpty) return;
     await ensureInitialized();
@@ -1596,6 +1728,16 @@ class AppDatabase extends _$AppDatabase {
             : const Value.absent(),
         pinnedMessageIdsJson: updatePinnedMessageIds
             ? Value(pinnedMessageIdsJson)
+            : const Value.absent(),
+        isForum: isForum != null ? Value(isForum) : const Value.absent(),
+        participantsHidden: participantsHidden != null
+            ? Value(participantsHidden)
+            : const Value.absent(),
+        hasAggressiveAntiSpamEnabled: hasAggressiveAntiSpamEnabled != null
+            ? Value(hasAggressiveAntiSpamEnabled)
+            : const Value.absent(),
+        maxReactionsPerPost: maxReactionsPerPost != null
+            ? Value(maxReactionsPerPost)
             : const Value.absent(),
       ),
     );

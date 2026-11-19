@@ -115,6 +115,29 @@ class MainActivity : FlutterFragmentActivity() {
         PushDetectorHandler.register(flutterEngine, applicationContext)
         NativeNotificationsChannel.register(flutterEngine, applicationContext)
         ApkInstallerHandler.register(flutterEngine, applicationContext)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.theaver.messenger/screen_security"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setSecureFlag" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    runOnUiThread {
+                        try {
+                            if (enabled) {
+                                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                            } else {
+                                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("screen_security_error", e.message, null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     /**

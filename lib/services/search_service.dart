@@ -608,11 +608,21 @@ class SearchService {
     required String query,
     String type = 'all',
     String? chatId,
+    String? fromUserId,
+    String? messageType,
+    String? minDate,
+    String? maxDate,
     int limit = 20,
     int offset = 0,
   }) async {
     final trimmed = query.trim();
-    if (trimmed.isEmpty && type != 'users') {
+    final hasInChatFilter = chatId != null &&
+        chatId.trim().isNotEmpty &&
+        ((fromUserId != null && fromUserId.trim().isNotEmpty) ||
+            (messageType != null && messageType.trim().isNotEmpty) ||
+            (minDate != null && minDate.trim().isNotEmpty) ||
+            (maxDate != null && maxDate.trim().isNotEmpty));
+    if (trimmed.isEmpty && type != 'users' && !hasInChatFilter) {
       return const UnifiedSearchResult();
     }
 
@@ -624,6 +634,14 @@ class SearchService {
         'limit': limit.toString(),
         if (offset > 0) 'offset': offset.toString(),
         if (chatId != null && chatId.trim().isNotEmpty) 'chat_id': chatId.trim(),
+        if (fromUserId != null && fromUserId.trim().isNotEmpty)
+          'from_user_id': fromUserId.trim(),
+        if (messageType != null && messageType.trim().isNotEmpty)
+          'message_type': messageType.trim(),
+        if (minDate != null && minDate.trim().isNotEmpty)
+          'min_date': minDate.trim(),
+        if (maxDate != null && maxDate.trim().isNotEmpty)
+          'max_date': maxDate.trim(),
       };
 
       final uri = Uri.parse('${AppConfig.baseUrl}/api/search')

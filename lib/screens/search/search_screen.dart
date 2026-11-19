@@ -4,11 +4,13 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/community_service.dart';
+import '../../services/groups_channels_parity_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/profile_customization.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../utils/image_utils.dart';
 import '../../widgets/common/peer_badges_widget.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
@@ -37,6 +39,19 @@ class _SearchScreenState extends State<SearchScreen> {
   bool _isLoading = false;
   final Set<String> _joiningPeerIds = {};
 
+  // In-chat search filters
+  String? _messageTypeFilter;
+  String? _fromUserId;
+  String? _fromUserName;
+  DateTime? _minDate;
+  DateTime? _maxDate;
+
+  bool get _hasActiveInChatFilters =>
+      _messageTypeFilter != null ||
+      (_fromUserId != null && _fromUserId!.isNotEmpty) ||
+      _minDate != null ||
+      _maxDate != null;
+
   @override
   void initState() {
     super.initState();
@@ -54,14 +69,18 @@ class _SearchScreenState extends State<SearchScreen> {
       });
       _debounce?.cancel();
       final trimmed = _searchQuery.trim();
-      if (trimmed.isEmpty) {
+      final bool allowFilterOnly =
+          widget.initialChatId != null && _hasActiveInChatFilters;
+      if (trimmed.isEmpty && !allowFilterOnly) {
         setState(() {
           _result = UnifiedSearchResult.empty;
           _isLoading = false;
         });
         return;
       }
-      _performLocalSearch(trimmed);
+      if (trimmed.isNotEmpty) {
+        _performLocalSearch(trimmed);
+      }
       _debounce = Timer(const Duration(milliseconds: 280), _performSearch);
     }
   }
@@ -81,7 +100,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Future<void> _performSearch() async {
     final q = _searchQuery.trim();
-    if (q.isEmpty) return;
+    final bool allowFilterOnly =
+        widget.initialChatId != null && _hasActiveInChatFilters;
+    if (q.isEmpty && !allowFilterOnly) return;
 
     setState(() => _isLoading = true);
     try {
@@ -89,10 +110,16 @@ class _SearchScreenState extends State<SearchScreen> {
         query: q,
         type: widget.initialChatId != null ? 'messages' : 'all',
         chatId: widget.initialChatId,
+        fromUserId: _fromUserId,
+        messageType: _messageTypeFilter,
+        minDate: _minDate?.toUtc().toIso8601String(),
+        maxDate: _maxDate?.toUtc().toIso8601String(),
       );
       if (mounted && _searchQuery.trim() == q) {
         setState(() {
-          _result = _result.mergeWithServer(res);
+          _result = (q.isEmpty || _hasActiveInChatFilters)
+              ? res
+              : _result.mergeWithServer(res);
           _isLoading = false;
         });
       }
@@ -100,6 +127,143 @@ class _SearchScreenState extends State<SearchScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  void _triggerInChatFilterSearch() {
+    _debounce?.cancel();
+    if (_searchQuery.trim().isEmpty && !_hasActiveInChatFilters) {
+      setState(() {
+        _result = UnifiedSearchResult.empty;
+        _isLoading = false;
+      });
+      return;
+    }
+    _performSearch();
+  }
+
+  Future<void> _pickSenderFilter() async {
+    final cid = widget.initialChatId;
+    if (cid == null || cid.isEmpty) return;
+    final page = await GroupsChannelsParityService.getMembersFiltered(
+      cid,
+      limit: 50,
+    );
+    if (!mounted) return;
+    final pickedId = await showTheavModalSheet<String>(
+      context: context,
+      title: 'Сообщения от участника',
+      builder: (ctx) => ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+        children: [
+          TheavInsetGroup(
+            children: [
+              TheavListRow(
+                leading: const iconoir.Group(width: 20, height: 20),
+                title: 'Все участники',
+                trailing: TheavCheckCircle(selected: _fromUserId == null),
+                onTap: () => Navigator.pop(ctx, ''),
+              ),
+              for (final member in page.members)
+                TheavListRow(
+                  leading: AvatarWithStatus(
+                    userId: member.id,
+                    avatarUrl: member.avatarUrl,
+                    name: member.displayName.isNotEmpty
+                        ? member.displayName
+                        : member.username,
+                    radius: 18,
+                    isOnline: member.isOnline,
+                  ),
+                  title: member.displayName.isNotEmpty
+                      ? member.displayName
+                      : '@${member.username}',
+                  subtitle:
+                      member.username.isNotEmpty ? '@${member.username}' : null,
+                  trailing: TheavCheckCircle(
+                    selected: _fromUserId == member.id,
+                  ),
+                  onTap: () => Navigator.pop(ctx, member.id),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (!mounted || pickedId == null) return;
+    if (pickedId.isEmpty) {
+      setState(() {
+        _fromUserId = null;
+        _fromUserName = null;
+      });
+    } else {
+      final matched = page.members.where((m) => m.id == pickedId).firstOrNull;
+      setState(() {
+        _fromUserId = pickedId;
+        _fromUserName = matched == null
+            ? pickedId
+            : (matched.displayName.isNotEmpty
+                  ? matched.displayName
+                  : '@${matched.username}');
+      });
+    }
+    _triggerInChatFilterSearch();
+  }
+
+  Future<void> _pickDateRangeFilter() async {
+    if (_minDate != null || _maxDate != null) {
+      setState(() {
+        _minDate = null;
+        _maxDate = null;
+      });
+      _triggerInChatFilterSearch();
+      return;
+    }
+    final now = DateTime.now();
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: now,
+      initialDateRange: _minDate != null && _maxDate != null
+          ? DateTimeRange(start: _minDate!, end: _maxDate!)
+          : DateTimeRange(
+              start: now.subtract(const Duration(days: 7)),
+              end: now,
+            ),
+    );
+    if (!mounted || range == null) return;
+    setState(() {
+      _minDate = DateTime(
+        range.start.year,
+        range.start.month,
+        range.start.day,
+      );
+      _maxDate = DateTime(
+        range.end.year,
+        range.end.month,
+        range.end.day,
+        23,
+        59,
+        59,
+      );
+    });
+    _triggerInChatFilterSearch();
+  }
+
+  void _insertHashtagPrefix() {
+    final text = _searchController.text;
+    if (text.trim().isEmpty) {
+      _searchController.text = '#';
+      _searchController.selection = const TextSelection.collapsed(offset: 1);
+      return;
+    }
+    if (!text.startsWith('#')) {
+      final updated = '#$text';
+      _searchController.text = updated;
+      _searchController.selection = TextSelection.collapsed(
+        offset: updated.length,
+      );
     }
   }
 
@@ -173,15 +337,125 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
       body: Column(
         children: [
-          if (!isInChatSearch) _buildFilterChips(context),
+          if (!isInChatSearch)
+            _buildFilterChips(context)
+          else
+            _buildInChatFilterBar(context),
           Expanded(child: _buildBody(context)),
         ],
       ),
     );
   }
 
+  Widget _buildInChatFilterBar(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final unselectedBg = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.black.withValues(alpha: 0.06);
+
+    const typeChips = <(String?, String)>[
+      (null, 'Все'),
+      ('photo', 'Фото'),
+      ('video', 'Видео'),
+      ('file', 'Файлы'),
+      ('audio', 'Аудио'),
+      ('voice', 'Голосовые'),
+      ('links', 'Ссылки'),
+    ];
+
+    final String dateLabel = (_minDate != null && _maxDate != null)
+        ? '${_minDate!.day}.${_minDate!.month}–${_maxDate!.day}.${_maxDate!.month} ×'
+        : 'Дата';
+    final bool hasDate = _minDate != null || _maxDate != null;
+    final bool hasSender = _fromUserId != null && _fromUserId!.isNotEmpty;
+
+    Widget buildChip({
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+      Widget? icon,
+    }) {
+      return GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? primary : unselectedBg,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[icon, const SizedBox(width: 5)],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: selected ? Colors.white : onSurface,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        children: [
+          for (final (typeKey, label) in typeChips) ...[
+            buildChip(
+              label: label,
+              selected: _messageTypeFilter == typeKey,
+              onTap: () {
+                setState(() => _messageTypeFilter = typeKey);
+                _triggerInChatFilterSearch();
+              },
+            ),
+            const SizedBox(width: 8),
+          ],
+          buildChip(
+            label: hasSender ? '${_fromUserName ?? _fromUserId} ▾' : 'От кого',
+            selected: hasSender,
+            icon: iconoir.User(
+              width: 14,
+              height: 14,
+              color: hasSender ? Colors.white : onSurface,
+            ),
+            onTap: _pickSenderFilter,
+          ),
+          const SizedBox(width: 8),
+          buildChip(
+            label: dateLabel,
+            selected: hasDate,
+            icon: iconoir.Calendar(
+              width: 14,
+              height: 14,
+              color: hasDate ? Colors.white : onSurface,
+            ),
+            onTap: _pickDateRangeFilter,
+          ),
+          const SizedBox(width: 8),
+          buildChip(
+            label: '#хэштег',
+            selected: _searchQuery.trim().startsWith('#'),
+            onTap: _insertHashtagPrefix,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildFilterChips(BuildContext context) {
-    final filters = const <(String, String)>[
+    const filters = <(String, String)>[
       ('all', 'Все'),
       ('chats', 'Чаты'),
       ('users', 'Люди и боты'),
@@ -236,7 +510,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildBody(BuildContext context) {
     final l10n = context.l10n;
-    if (_searchQuery.trim().isEmpty) {
+    final bool isInChatSearch = widget.initialChatId != null;
+    if (_searchQuery.trim().isEmpty &&
+        !(isInChatSearch && _hasActiveInChatFilters)) {
       return Center(
         child: Text(
           l10n.translate('search_start_typing'),

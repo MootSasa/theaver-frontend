@@ -29,7 +29,9 @@ import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../services/groups_channels_parity_service.dart';
 import '../../widgets/chat/dm_parity_sheets.dart';
+import '../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../models/profile_customization.dart';
 import '../../services/profile_instant_cache.dart';
@@ -65,8 +67,10 @@ import '../chat/channel_screen.dart';
 import '../chat/edit_group_channel_screen.dart';
 import '../chat/group_chat_screen.dart';
 import '../chat/private_chat_screen.dart';
+import '../chat/settings/admin_log_screen.dart';
 import '../chat/settings/admin_rights_screen.dart';
 import '../chat/settings/channel_discussion_settings_screen.dart';
+import '../chat/settings/channel_stats_screen.dart';
 import '../chat/settings/chat_reactions_settings_screen.dart';
 import '../chat/settings/group_permissions_screen.dart';
 import '../chat/settings/invite_links_screen.dart';
@@ -187,6 +191,20 @@ class ProfileScreenState extends State<ProfileScreen>
   String _myRole = 'member';
   List<ProfileMemberItem> _members = [];
   List<ChatParticipant> _participants = [];
+  bool _isForum = false;
+  bool _participantsHidden = false;
+  bool _hasProtectedContent = false;
+  bool _hasAggressiveAntiSpam = false;
+
+  // Фильтрация, поиск и пагинация участников
+  final TextEditingController _memberSearchController = TextEditingController();
+  Timer? _memberSearchDebounce;
+  String _memberFilter = 'all';
+  List<ChatParticipant> _filteredParticipants = [];
+  bool _hasActiveMemberFilter = false;
+  bool _membersHasMore = false;
+  bool _isLoadingMembersPage = false;
+  int _membersOffset = 0;
 
   // Музыкальный статус
   String? _musicTitle;
@@ -603,6 +621,8 @@ class ProfileScreenState extends State<ProfileScreen>
       );
     }
     _wheelSnapTimer?.cancel();
+    _memberSearchDebounce?.cancel();
+    _memberSearchController.dispose();
     _keyboardFocusNode.dispose();
     if (_isSelf) {
       AvatarSyncService().removeListener(_onAvatarSyncChanged);
@@ -1031,6 +1051,10 @@ class ProfileScreenState extends State<ProfileScreen>
               : details.showAuthorProfiles;
           _linkedChatId = details.linkedChatId;
           _linkedChat = details.linkedChat;
+          _isForum = details.isForum;
+          _participantsHidden = details.participantsHidden;
+          _hasProtectedContent = details.hasProtectedContent;
+          _hasAggressiveAntiSpam = details.hasAggressiveAntiSpamEnabled;
           if (details.defaultPermissions != null) {
             _defaultPermissions = details.defaultPermissions!;
           }
@@ -1124,6 +1148,20 @@ class ProfileScreenState extends State<ProfileScreen>
               _avatarUrls = [srvAvatar, ..._avatarUrls];
             }
           }
+          if (settingsData['is_forum'] is bool) {
+            _isForum = settingsData['is_forum'] as bool;
+          }
+          if (settingsData['participants_hidden'] is bool) {
+            _participantsHidden = settingsData['participants_hidden'] as bool;
+          }
+          if (settingsData['has_protected_content'] is bool) {
+            _hasProtectedContent =
+                settingsData['has_protected_content'] as bool;
+          }
+          if (settingsData['has_aggressive_anti_spam_enabled'] is bool) {
+            _hasAggressiveAntiSpam =
+                settingsData['has_aggressive_anti_spam_enabled'] as bool;
+          }
         }
 
         if (groupMembers.isNotEmpty) {
@@ -1135,6 +1173,8 @@ class ProfileScreenState extends State<ProfileScreen>
               gm.copyWith(
                 isOnline: presenceById[gm.id]?.isOnline ?? gm.isOnline,
                 lastSeen: presenceById[gm.id]?.lastSeen ?? gm.lastSeen,
+                lastSeenStatus:
+                    presenceById[gm.id]?.lastSeenStatus ?? gm.lastSeenStatus,
               ),
           ]);
         }
@@ -1150,6 +1190,7 @@ class ProfileScreenState extends State<ProfileScreen>
                   role: p.role,
                   isOnline: p.isOnline,
                   lastSeen: p.lastSeen?.toIso8601String(),
+                  lastSeenStatus: p.lastSeenStatus,
                 ),
               )
               .toList();
@@ -1324,6 +1365,11 @@ class ProfileScreenState extends State<ProfileScreen>
       replyToChatType: m.replyToChatType,
       effectId: m.effectId,
       savedTagsJson: m.savedTags.isNotEmpty ? jsonEncode(m.savedTags) : null,
+      topicId: m.topicId,
+      forwardsCount: m.forwardsCount,
+      senderChatId: m.senderChatId,
+      senderChatName: m.senderChatName,
+      senderChatAvatarUrl: m.senderChatAvatarUrl,
     );
   }
 
@@ -1985,27 +2031,162 @@ class ProfileScreenState extends State<ProfileScreen>
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
     final l10n = context.l10n;
+
+    if (_isGroup || _isChannel) {
+      if (_myRole == 'owner') {
+        final action = await showTheavModalSheet<String>(
+          context: context,
+          title: _isChannel ? 'Управление каналом' : 'Управление группой',
+          builder: (ctx) {
+            final palette = ctx.theav;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+              child: TheavInsetGroup(
+                children: [
+                  TheavListRow(
+                    leading: iconoir.UserCrown(
+                      width: 22,
+                      height: 22,
+                      color: palette.primary,
+                    ),
+                    title: 'Передать права владельца и выйти',
+                    subtitle: 'Права владельца перейдут выбранному участнику',
+                    showChevron: true,
+                    onTap: () => Navigator.pop(ctx, 'transfer'),
+                  ),
+                  TheavListRow(
+                    leading: const iconoir.Trash(
+                      width: 22,
+                      height: 22,
+                      color: Colors.redAccent,
+                    ),
+                    title: _isChannel
+                        ? 'Удалить канал для всех'
+                        : 'Удалить группу для всех',
+                    subtitle: 'История и все участники будут удалены',
+                    isDestructive: true,
+                    onTap: () => Navigator.pop(ctx, 'delete'),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+        if (!mounted || action == null) return;
+        if (action == 'transfer') {
+          await _showOwnerTransferPickerAndLeave(cid);
+          return;
+        }
+        if (action == 'delete') {
+          final confirmedDelete = await showTheavDialog<bool>(
+            context: context,
+            title: _isChannel
+                ? 'Удалить канал для всех?'
+                : 'Удалить группу для всех?',
+            message: 'Это действие необратимо. Вся переписка будет удалена.',
+            actions: [
+              TheavDialogAction<bool>(
+                label: _tr(l10n, 'profile_cancel', 'Отмена'),
+                result: false,
+              ),
+              TheavDialogAction<bool>(
+                label: _tr(l10n, 'profile_delete_action', 'Удалить'),
+                result: true,
+                isDestructive: true,
+              ),
+            ],
+          );
+          if (confirmedDelete != true || !mounted) return;
+          try {
+            final res = await ChatService.deleteChat(cid);
+            if (res['success'] != true) {
+              if (mounted) {
+                _showToast(
+                  res['message']?.toString() ??
+                      _tr(
+                        l10n,
+                        'profile_delete_chat_error',
+                        'Ошибка при удалении чата',
+                      ),
+                );
+              }
+              return;
+            }
+            await AppDatabase().deleteChat(cid);
+            await AppDatabase().deleteMessagesForChat(cid);
+            if (mounted) {
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            }
+          } catch (_) {
+            if (mounted) {
+              _showToast(
+                _tr(
+                  l10n,
+                  'profile_delete_chat_error',
+                  'Ошибка при удалении чата',
+                ),
+              );
+            }
+          }
+        }
+        return;
+      }
+
+      final confirmedLeave = await showTheavDialog<bool>(
+        context: context,
+        title: _isGroup
+            ? _tr(l10n, 'profile_leave_group_title', 'Покинуть группу?')
+            : _tr(l10n, 'profile_leave_channel_title', 'Покинуть канал?'),
+        message: _tr(
+          l10n,
+          'profile_leave_confirm_message',
+          'Вы уверены, что хотите выйти?',
+        ),
+        actions: [
+          TheavDialogAction<bool>(
+            label: _tr(l10n, 'profile_cancel', 'Отмена'),
+            result: false,
+          ),
+          TheavDialogAction<bool>(
+            label: _tr(l10n, 'profile_leave_action', 'Покинуть'),
+            result: true,
+            isDestructive: true,
+          ),
+        ],
+      );
+      if (confirmedLeave != true || !mounted) return;
+      try {
+        final res = await ChatService.leaveChatDetailed(cid);
+        if (res['success'] != true) {
+          if (mounted) {
+            _showToast(
+              res['message']?.toString() ?? 'Не удалось покинуть чат',
+            );
+          }
+          return;
+        }
+        if (mounted) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+      } catch (_) {
+        if (mounted) {
+          _showToast('Не удалось покинуть чат');
+        }
+      }
+      return;
+    }
+
     bool revoke = false;
     final peerName = _getDisplayName();
 
     final confirmed = await showTheavDialog<bool>(
       context: context,
-      title: _isGroup
-          ? _tr(l10n, 'profile_leave_group_title', 'Покинуть группу?')
-          : (_isChannel
-              ? _tr(l10n, 'profile_leave_channel_title', 'Покинуть канал?')
-              : _tr(l10n, 'profile_delete_chat_title', 'Удалить чат?')),
-      message: _isGroup || _isChannel
-          ? _tr(
-              l10n,
-              'profile_leave_confirm_message',
-              'Вы уверены, что хотите выйти?',
-            )
-          : _tr(
-              l10n,
-              'profile_delete_chat_confirm_message',
-              'Чат и вся переписка будут удалены.',
-            ),
+      title: _tr(l10n, 'profile_delete_chat_title', 'Удалить чат?'),
+      message: _tr(
+        l10n,
+        'profile_delete_chat_confirm_message',
+        'Чат и вся переписка будут удалены.',
+      ),
       content: _isUser
           ? StatefulBuilder(
               builder: (ctx, setDialogState) {
@@ -2050,9 +2231,7 @@ class ProfileScreenState extends State<ProfileScreen>
           result: false,
         ),
         TheavDialogAction<bool>(
-          label: _isGroup || _isChannel
-              ? _tr(l10n, 'profile_leave_action', 'Покинуть')
-              : _tr(l10n, 'profile_delete_action', 'Удалить'),
+          label: _tr(l10n, 'profile_delete_action', 'Удалить'),
           result: true,
           isDestructive: true,
         ),
@@ -2090,6 +2269,91 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  Future<void> _showOwnerTransferPickerAndLeave(String cid) async {
+    final currentUid = _accountManager.currentAccount?.userId;
+    var candidates = _resolvedParticipantsForList
+        .where((p) => p.id != currentUid && !p.isBot && p.role != 'owner')
+        .toList();
+    if (candidates.isEmpty) {
+      final page = await GroupsChannelsParityService.getMembersFiltered(
+        cid,
+        limit: 100,
+      );
+      candidates = page.members
+          .where((p) => p.id != currentUid && !p.isBot && p.role != 'owner')
+          .toList();
+    }
+    if (!mounted) return;
+    if (candidates.isEmpty) {
+      _showToast('В чате нет других участников для передачи прав');
+      return;
+    }
+
+    final picked = await showTheavModalSheet<ChatParticipant>(
+      context: context,
+      title: 'Новый владелец',
+      builder: (ctx) => ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+        children: [
+          TheavInsetGroup(
+            footer:
+                'После передачи прав вы автоматически покинете ${_isChannel ? 'канал' : 'группу'}.',
+            children: [
+              for (final member in candidates)
+                TheavListRow(
+                  leading: AvatarWithStatus(
+                    userId: member.id,
+                    avatarUrl: member.avatarUrl,
+                    name: member.displayName.isNotEmpty
+                        ? member.displayName
+                        : member.username,
+                    radius: 20,
+                    isOnline: member.isOnline,
+                  ),
+                  title: member.displayName.isNotEmpty
+                      ? member.displayName
+                      : '@${member.username}',
+                  subtitle: member.role == 'admin'
+                      ? 'Администратор'
+                      : 'Участник',
+                  onTap: () => Navigator.pop(ctx, member),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: 'Передать права и выйти?',
+      message:
+          'Назначить ${picked.displayName.isNotEmpty ? picked.displayName : picked.username} новым владельцем и выйти?',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Передать и выйти',
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true || !mounted) return;
+
+    final res = await ChatService.leaveChatDetailed(
+      cid,
+      newOwnerId: picked.id,
+    );
+    if (!mounted) return;
+    if (res['success'] != true) {
+      _showToast(res['message']?.toString() ?? 'Не удалось передать права');
+      return;
+    }
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
   Future<void> _openEditGroupOrChannel() async {
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
@@ -2115,7 +2379,11 @@ class ProfileScreenState extends State<ProfileScreen>
           initialDefaultPermissions: _defaultPermissions,
           initialReactionSettings: _reactionSettings,
           inviteLink: _inviteLink,
+          initialHasProtectedContent: _hasProtectedContent,
           canEditAdminSettings: _canManageGroupAdminSettings,
+          initialIsForum: _isForum,
+          initialParticipantsHidden: _participantsHidden,
+          initialAggressiveAntiSpam: _hasAggressiveAntiSpam,
         ),
       ),
     );
@@ -2170,6 +2438,19 @@ class ProfileScreenState extends State<ProfileScreen>
         if (result['invite_link'] != null) {
           _inviteLink = result['invite_link'].toString();
         }
+        if (result['is_forum'] is bool) {
+          _isForum = result['is_forum'] as bool;
+        }
+        if (result['participants_hidden'] is bool) {
+          _participantsHidden = result['participants_hidden'] as bool;
+        }
+        if (result['has_protected_content'] is bool) {
+          _hasProtectedContent = result['has_protected_content'] as bool;
+        }
+        if (result['has_aggressive_anti_spam_enabled'] is bool) {
+          _hasAggressiveAntiSpam =
+              result['has_aggressive_anti_spam_enabled'] as bool;
+        }
       });
       unawaited(_loadGroupOrChannelProfile());
       widget.onUpdate?.call();
@@ -2212,6 +2493,9 @@ class ProfileScreenState extends State<ProfileScreen>
           chatId: cid,
           initialPermissions: _defaultPermissions,
           initialSlowMode: _slowModeInterval,
+          isForum: _isForum,
+          initialParticipantsHidden: _participantsHidden,
+          initialAggressiveAntiSpam: _hasAggressiveAntiSpam,
         ),
       ),
     );
@@ -2223,6 +2507,13 @@ class ProfileScreenState extends State<ProfileScreen>
         }
         if (res['slow_mode_interval'] is int) {
           _slowModeInterval = res['slow_mode_interval'] as int;
+        }
+        if (res['participants_hidden'] is bool) {
+          _participantsHidden = res['participants_hidden'] as bool;
+        }
+        if (res['has_aggressive_anti_spam_enabled'] is bool) {
+          _hasAggressiveAntiSpam =
+              res['has_aggressive_anti_spam_enabled'] as bool;
         }
       });
       unawaited(_loadGroupOrChannelProfile());
@@ -2309,24 +2600,68 @@ class ProfileScreenState extends State<ProfileScreen>
 
     if (query.isEmpty || !mounted) return;
     try {
-      final token = await AuthService.getToken();
-      final dio = Dio();
       String targetUserId = query.replaceFirst('@', '');
 
       // Если введён username — ищем пользователя через единый поиск
       final foundUsers = await SearchService.searchUsers(query: targetUserId);
       if (foundUsers.isNotEmpty) {
         final exact = foundUsers.where(
-          (u) => u.username.toLowerCase() == targetUserId.toLowerCase() || u.id == targetUserId,
+          (u) =>
+              u.username.toLowerCase() == targetUserId.toLowerCase() ||
+              u.id == targetUserId,
         );
         targetUserId = exact.isNotEmpty ? exact.first.id : foundUsers.first.id;
       }
 
-      await dio.post(
-        '${AppConfig.baseUrl}/api/chats/$cid/members',
-        data: {'user_id': targetUserId},
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      final addRes = await GroupsChannelsParityService.addMembersDetailed(
+        cid,
+        [targetUserId],
       );
+      if (!mounted) return;
+
+      if (addRes.skippedPrivacyUserIds.isNotEmpty) {
+        final copyInvite = await showTheavDialog<bool>(
+          context: context,
+          title: 'Приглашение по ссылке',
+          message:
+              'Настройки конфиденциальности этого пользователя не позволяют добавить его в чат напрямую. Вы можете отправить пригласительную ссылку.',
+          actions: [
+            const TheavDialogAction<bool>(label: 'Закрыть', result: false),
+            TheavDialogAction<bool>(
+              label: _inviteLink.isNotEmpty
+                  ? 'Скопировать ссылку'
+                  : 'Открыть ссылки',
+              result: true,
+              isPrimary: true,
+            ),
+          ],
+        );
+        if (copyInvite == true && mounted) {
+          if (_inviteLink.isNotEmpty) {
+            await Clipboard.setData(ClipboardData(text: _inviteLink));
+            _showToast('Пригласительная ссылка скопирована');
+          } else {
+            await _openInviteLinksQuickSettings();
+          }
+        }
+        if (addRes.addedUserIds.isNotEmpty) {
+          await _loadGroupOrChannelProfile();
+        }
+        return;
+      }
+
+      if (!addRes.success) {
+        _showToast(
+          addRes.message ??
+              _tr(
+                l10n,
+                'profile_member_add_error',
+                'Не удалось добавить участника',
+              ),
+        );
+        return;
+      }
+
       await _loadGroupOrChannelProfile();
       if (mounted) {
         _showToast(_tr(l10n, 'profile_member_added', 'Участник добавлен'));
@@ -2643,14 +2978,25 @@ class ProfileScreenState extends State<ProfileScreen>
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
 
-    int enabledPermsCount = 0;
-    if (_defaultPermissions.canSendMessages) enabledPermsCount++;
-    if (_defaultPermissions.canSendMedia) enabledPermsCount++;
-    if (_defaultPermissions.canSendStickersGifs) enabledPermsCount++;
-    if (_defaultPermissions.canSendPolls) enabledPermsCount++;
-    if (_defaultPermissions.canInviteUsers) enabledPermsCount++;
-    if (_defaultPermissions.canPinMessages) enabledPermsCount++;
-    if (_defaultPermissions.canChangeInfo) enabledPermsCount++;
+    final permChecks = <bool>[
+      _defaultPermissions.canSendMessages,
+      _defaultPermissions.canSendMedia,
+      _defaultPermissions.canSendPhotos,
+      _defaultPermissions.canSendVideos,
+      _defaultPermissions.canSendMusic,
+      _defaultPermissions.canSendFiles,
+      _defaultPermissions.canSendVoiceNotes,
+      _defaultPermissions.canSendVideoNotes,
+      _defaultPermissions.canSendStickersGifs,
+      _defaultPermissions.canSendPolls,
+      _defaultPermissions.canAddWebPagePreviews,
+      _defaultPermissions.canInviteUsers,
+      _defaultPermissions.canPinMessages,
+      _defaultPermissions.canChangeInfo,
+      if (_isForum) _defaultPermissions.canManageTopics,
+    ];
+    final int enabledPermsCount = permChecks.where((e) => e).length;
+    final int totalPermsCount = permChecks.length;
 
     final reactionsLabel = _reactionSettings.isNone
         ? 'Выкл'
@@ -2677,7 +3023,7 @@ class ProfileScreenState extends State<ProfileScreen>
         _buildQuickSettingRow(
           icon: iconoir.Lock(width: 20, height: 20, color: accentColor),
           title: 'Разрешения',
-          trailingText: '$enabledPermsCount/7',
+          trailingText: '$enabledPermsCount/$totalPermsCount',
           accentColor: accentColor,
           textColor: textColor,
           subColor: subColor,
@@ -2701,6 +3047,35 @@ class ProfileScreenState extends State<ProfileScreen>
         subColor: subColor,
         onTap: _openInviteLinksQuickSettings,
       ),
+      _buildQuickSettingRow(
+        icon: iconoir.Clock(width: 20, height: 20, color: accentColor),
+        title: 'Недавние действия',
+        trailingText: '',
+        accentColor: accentColor,
+        textColor: textColor,
+        subColor: subColor,
+        onTap: _openAdminLogScreen,
+      ),
+      if (_isChannel) ...[
+        _buildQuickSettingRow(
+          icon: iconoir.StatsUpSquare(width: 20, height: 20, color: accentColor),
+          title: 'Статистика',
+          trailingText: '',
+          accentColor: accentColor,
+          textColor: textColor,
+          subColor: subColor,
+          onTap: _openChannelStatsScreen,
+        ),
+        _buildQuickSettingRow(
+          icon: iconoir.Megaphone(width: 20, height: 20, color: accentColor),
+          title: 'Похожие каналы',
+          trailingText: '',
+          accentColor: accentColor,
+          textColor: textColor,
+          subColor: subColor,
+          onTap: _openSimilarChannelsSheet,
+        ),
+      ],
     ];
 
     final inner = Column(
@@ -2769,6 +3144,139 @@ class ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Future<void> _openAdminLogScreen() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    await Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => AdminLogScreen(
+          chatId: cid,
+          chatName: _getDisplayName(),
+          isChannel: _isChannel,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openChannelStatsScreen() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    await Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ChannelStatsScreen(
+          chatId: cid,
+          channelName: _getDisplayName(),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSimilarChannelsSheet() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    HapticUtils.tap();
+    await showSimilarChannelsSheet(
+      context: context,
+      chatId: cid,
+      onOpenChannel: (ch) {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ChannelScreen(
+              channelId: ch.id,
+              channelName: ch.name,
+              channelAvatar: ch.avatarUrl,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildChannelSimilarChannelsCard(
+    BuildContext context, {
+    required bool isGlass,
+    required bool isLite,
+    required bool isDark,
+    required bool hasColoredTheme,
+  }) {
+    final effectiveDark = isDark || hasColoredTheme;
+    final palette = context.theav;
+    final textColor = effectiveDark ? Colors.white : palette.onSurface;
+    final subColor = effectiveDark
+        ? Colors.white.withValues(alpha: 0.65)
+        : palette.subtext;
+    final accentColor =
+        effectiveDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final row = _buildQuickSettingRow(
+      icon: iconoir.Megaphone(width: 20, height: 20, color: accentColor),
+      title: 'Похожие каналы',
+      trailingText: '',
+      accentColor: accentColor,
+      textColor: textColor,
+      subColor: subColor,
+      onTap: _openSimilarChannelsSheet,
+    );
+
+    final glassProvider = isGlass ? LiquidGlassProvider.maybeOf(context) : null;
+    if (isGlass && glassProvider != null) {
+      final glassStyle = glassProvider.createStyle(
+        context: context,
+        isDarkOverride: effectiveDark,
+        isLiteOverride: isLite,
+        color: effectiveDark
+            ? const Color(0x33202025)
+            : const Color(0x66FFFFFF),
+        refractionIndex: 1.15,
+        refractionWidth: 22.0,
+        shape: const LiquidGlassShape.continuousRoundedRectangle(
+          cornerRadius: 24,
+        ),
+      );
+      return LiquidGlassLens(
+        style: glassStyle,
+        child: Container(
+          decoration: effectiveDark
+              ? null
+              : BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    width: 0.5,
+                  ),
+                ),
+          child: Material(type: MaterialType.transparency, child: row),
+        ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          decoration: BoxDecoration(
+            color: effectiveDark
+                ? const Color(0x99262628)
+                : const Color(0xB3FFFFFF),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: effectiveDark
+                  ? Colors.white.withValues(alpha: 0.12)
+                  : Colors.black.withValues(alpha: 0.08),
+              width: 0.5,
+            ),
+          ),
+          child: Material(type: MaterialType.transparency, child: row),
+        ),
+      ),
+    );
+  }
+
   Widget _buildQuickSettingRow({
     required Widget icon,
     required String title,
@@ -2828,9 +3336,75 @@ class ProfileScreenState extends State<ProfileScreen>
             avatarUrl: m.avatarUrl,
             role: m.role,
             isOnline: m.isOnline,
+            lastSeenStatus: m.lastSeenStatus,
           ),
         )
         .toList();
+  }
+
+  void _onMemberSearchChanged(String _) {
+    _memberSearchDebounce?.cancel();
+    _memberSearchDebounce = Timer(const Duration(milliseconds: 280), () {
+      _fetchMembersPage(reset: true);
+    });
+  }
+
+  void _onMemberFilterChanged(String filter) {
+    if (_memberFilter == filter) return;
+    HapticUtils.selection();
+    setState(() => _memberFilter = filter);
+    _fetchMembersPage(reset: true);
+  }
+
+  Future<void> _fetchMembersPage({required bool reset}) async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty || _isLoadingMembersPage) return;
+
+    final query = _memberSearchController.text.trim();
+    if (reset && query.isEmpty && _memberFilter == 'all') {
+      setState(() {
+        _hasActiveMemberFilter = false;
+        _filteredParticipants = [];
+        _membersOffset = 0;
+        _membersHasMore = false;
+      });
+      return;
+    }
+
+    final int nextOffset = reset
+        ? 0
+        : (_hasActiveMemberFilter
+              ? _membersOffset
+              : _resolvedParticipantsForList.length);
+
+    setState(() => _isLoadingMembersPage = true);
+    final res = await GroupsChannelsParityService.getMembersFiltered(
+      cid,
+      query: query.isEmpty ? null : query,
+      filter: _memberFilter,
+      limit: 50,
+      offset: nextOffset,
+    );
+    if (!mounted) return;
+
+    setState(() {
+      _isLoadingMembersPage = false;
+      if (reset) {
+        _filteredParticipants = res.members;
+      } else {
+        final base = _hasActiveMemberFilter
+            ? List<ChatParticipant>.from(_filteredParticipants)
+            : List<ChatParticipant>.from(_resolvedParticipantsForList);
+        final seen = {for (final p in base) p.id};
+        for (final m in res.members) {
+          if (seen.add(m.id)) base.add(m);
+        }
+        _filteredParticipants = base;
+      }
+      _hasActiveMemberFilter = true;
+      _membersHasMore = res.hasMore;
+      _membersOffset = nextOffset + res.members.length;
+    });
   }
 
   Widget _buildUpgradedMembersSection(
@@ -2847,9 +3421,25 @@ class ProfileScreenState extends State<ProfileScreen>
     final dividerColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
-    final list = _resolvedParticipantsForList;
+    final baseList = _resolvedParticipantsForList;
+    final list = _hasActiveMemberFilter ? _filteredParticipants : baseList;
+    final bool isHiddenForViewer =
+        _participantsHidden && !_canManageGroupAdminSettings;
+    final bool canLoadMore = _hasActiveMemberFilter
+        ? _membersHasMore
+        : (baseList.length < _memberCount);
 
-    if (list.isEmpty && !_canAddGroupMembers) {
+    final filterChips = <({String key, String label})>[
+      (key: 'all', label: 'Все'),
+      (key: 'admins', label: 'Админы'),
+      (key: 'bots', label: 'Боты'),
+      (key: 'restricted', label: 'Ограничения'),
+    ];
+
+    if (list.isEmpty &&
+        !_canAddGroupMembers &&
+        !_hasActiveMemberFilter &&
+        !isHiddenForViewer) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
         child: Column(
@@ -2882,6 +3472,100 @@ class ProfileScreenState extends State<ProfileScreen>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (isHiddenForViewer)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+            child: TheavInsetGroup(
+              margin: EdgeInsets.zero,
+              children: [
+                TheavListRow(
+                  leading: iconoir.EyeClosed(
+                    width: 20,
+                    height: 20,
+                    color: subColor,
+                  ),
+                  title: 'Список участников скрыт администраторами',
+                  subtitle: _memberCount > 0
+                      ? 'В чате $_memberCount участников'
+                      : null,
+                ),
+              ],
+            ),
+          )
+        else ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+            child: TheavInsetGroup(
+              margin: EdgeInsets.zero,
+              children: [
+                TheavInlineTextField(
+                  controller: _memberSearchController,
+                  placeholder: 'Поиск участников...',
+                  prefix: iconoir.Search(
+                    width: 18,
+                    height: 18,
+                    color: subColor,
+                  ),
+                  suffix: _memberSearchController.text.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            _memberSearchController.clear();
+                            _fetchMembersPage(reset: true);
+                          },
+                          child: iconoir.Xmark(
+                            width: 16,
+                            height: 16,
+                            color: subColor,
+                          ),
+                        )
+                      : null,
+                  onChanged: _onMemberSearchChanged,
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 40,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              itemCount: filterChips.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (ctx, idx) {
+                final chip = filterChips[idx];
+                final selected = _memberFilter == chip.key;
+                return GestureDetector(
+                  onTap: () => _onMemberFilterChanged(chip.key),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? accentColor
+                          : (isDark
+                                ? Colors.white.withValues(alpha: 0.08)
+                                : Colors.black.withValues(alpha: 0.06)),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      chip.label,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w500,
+                        color: selected ? Colors.white : textColor,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
         if (_canAddGroupMembers) ...[
           InkWell(
             onTap: () {
@@ -2925,21 +3609,77 @@ class ProfileScreenState extends State<ProfileScreen>
           if (list.isNotEmpty)
             Divider(height: 1, indent: 70, color: dividerColor),
         ],
-        for (int i = 0; i < list.length; i++) ...[
-          _buildUpgradedMemberRow(
-            context,
-            list[i],
-            l10n: l10n,
-            isDark: isDark,
-            accentColor: accentColor,
-            textColor: textColor,
-            subColor: subColor,
-          ),
-          if (i < list.length - 1)
-            Divider(height: 1, indent: 70, color: dividerColor),
+        if (_isLoadingMembersPage && list.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (list.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Text(
+              _tr(l10n, 'group_no_members', 'Участники не найдены'),
+              style: TextStyle(color: subColor, fontSize: 14),
+            ),
+          )
+        else ...[
+          for (int i = 0; i < list.length; i++) ...[
+            _buildUpgradedMemberRow(
+              context,
+              list[i],
+              l10n: l10n,
+              isDark: isDark,
+              accentColor: accentColor,
+              textColor: textColor,
+              subColor: subColor,
+            ),
+            if (i < list.length - 1)
+              Divider(height: 1, indent: 70, color: dividerColor),
+          ],
+          if (canLoadMore)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: _isLoadingMembersPage
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : TheavFloatingPillButton(
+                      height: 36,
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      label: 'Показать ещё',
+                      onTap: () => _fetchMembersPage(reset: false),
+                    ),
+            ),
         ],
       ],
     );
+  }
+
+  String _formatParticipantPresence(
+    BuildContext context,
+    ChatParticipant member,
+    AppLocalizations l10n,
+  ) {
+    if (member.isOnline) {
+      return _tr(l10n, 'profile_online', 'в сети');
+    }
+    switch (member.lastSeenStatus) {
+      case 'recently':
+        return 'был(а) недавно';
+      case 'within_week':
+        return 'на этой неделе';
+      case 'within_month':
+        return 'в этом месяце';
+      case 'long_time_ago':
+        return 'давно';
+      default:
+        if (member.lastSeen != null) {
+          return DateTimeUtils.formatLastSeen(member.lastSeen, context);
+        }
+        return _tr(l10n, 'status_offline', 'был(а) недавно');
+    }
   }
 
   Widget _buildUpgradedMemberRow(
@@ -3066,9 +3806,7 @@ class ProfileScreenState extends State<ProfileScreen>
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    member.isOnline
-                        ? _tr(l10n, 'profile_online', 'в сети')
-                        : _tr(l10n, 'status_offline', 'был(а) недавно'),
+                    _formatParticipantPresence(context, member, l10n),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -5278,6 +6016,16 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 _canManageGroupAdminSettings) ...[
                                               const SizedBox(height: 12),
                                               _buildGroupAdminQuickSettingsCard(
+                                                context,
+                                                isGlass: isGlass,
+                                                isLite: isLite,
+                                                isDark: effectiveIsDark,
+                                                hasColoredTheme:
+                                                    hasColoredTheme,
+                                              ),
+                                            ] else if (_isChannel) ...[
+                                              const SizedBox(height: 12),
+                                              _buildChannelSimilarChannelsCard(
                                                 context,
                                                 isGlass: isGlass,
                                                 isLite: isLite,

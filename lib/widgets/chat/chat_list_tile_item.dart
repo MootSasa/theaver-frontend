@@ -282,35 +282,100 @@ class ChatListTileItem extends StatelessWidget {
             ],
           ),
         const SizedBox(height: 4),
-        if (hasUnread)
-          Container(
-            height: 18,
-            constraints: const BoxConstraints(minWidth: 18),
-            padding: chat.unreadCount == -1
-                ? EdgeInsets.zero
-                : const EdgeInsets.symmetric(horizontal: 5),
-            decoration: BoxDecoration(
-              color: badgeBgColor,
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: Center(
-              widthFactor: 1.0,
-              heightFactor: 1.0,
-              child: chat.unreadCount == -1
-                  ? const SizedBox(width: 18, height: 18)
-                  : Text(
-                      chat.unreadCount > 99
-                          ? '99+'
-                          : chat.unreadCount.toString(),
+        if (hasUnread ||
+            chat.unreadMentionsCount > 0 ||
+            chat.unreadReactionsCount > 0)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (chat.unreadMentionsCount > 0) ...[
+                Container(
+                  height: 18,
+                  constraints: const BoxConstraints(minWidth: 18),
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  decoration: BoxDecoration(
+                    color: primaryColor,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Center(
+                    widthFactor: 1.0,
+                    heightFactor: 1.0,
+                    child: Text(
+                      chat.unreadMentionsCount > 99
+                          ? '@ 99+'
+                          : '@',
                       style: TextStyle(
-                        color: badgeTextColor,
+                        color: theme.colorScheme.onPrimary,
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         height: 1.0,
                       ),
-                      textAlign: TextAlign.center,
                     ),
-            ),
+                  ),
+                ),
+                if (chat.unreadReactionsCount > 0 || hasUnread)
+                  const SizedBox(width: 4),
+              ],
+              if (chat.unreadReactionsCount > 0) ...[
+                Container(
+                  height: 18,
+                  constraints: const BoxConstraints(minWidth: 18),
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  decoration: BoxDecoration(
+                    color: primaryColor.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border.all(
+                      color: primaryColor.withValues(alpha: 0.45),
+                      width: 0.8,
+                    ),
+                  ),
+                  child: Center(
+                    widthFactor: 1.0,
+                    heightFactor: 1.0,
+                    child: Text(
+                      '♡',
+                      style: TextStyle(
+                        color: primaryColor,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.bold,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+                if (hasUnread) const SizedBox(width: 4),
+              ],
+              if (hasUnread)
+                Container(
+                  height: 18,
+                  constraints: const BoxConstraints(minWidth: 18),
+                  padding: chat.unreadCount == -1
+                      ? EdgeInsets.zero
+                      : const EdgeInsets.symmetric(horizontal: 5),
+                  decoration: BoxDecoration(
+                    color: badgeBgColor,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Center(
+                    widthFactor: 1.0,
+                    heightFactor: 1.0,
+                    child: chat.unreadCount == -1
+                        ? const SizedBox(width: 18, height: 18)
+                        : Text(
+                            chat.unreadCount > 99
+                                ? '99+'
+                                : chat.unreadCount.toString(),
+                            style: TextStyle(
+                              color: badgeTextColor,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              height: 1.0,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                  ),
+                ),
+            ],
           )
         else
           const SizedBox(height: 18),
@@ -362,11 +427,17 @@ class ChatListTileItem extends StatelessWidget {
                                 height: 15,
                                 color: typeIconColor,
                               )
-                            : iconoir.Group(
-                                width: 15,
-                                height: 15,
-                                color: typeIconColor,
-                              ),
+                            : (chat.isForum
+                                  ? iconoir.ChatLines(
+                                      width: 15,
+                                      height: 15,
+                                      color: typeIconColor,
+                                    )
+                                  : iconoir.Group(
+                                      width: 15,
+                                      height: 15,
+                                      color: typeIconColor,
+                                    )),
                       ),
                     Flexible(
                       child: Text(

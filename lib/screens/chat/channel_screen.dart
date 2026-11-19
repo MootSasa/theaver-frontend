@@ -68,9 +68,13 @@ import '../../widgets/chat/telegram_delete_messages_sheet.dart';
 import 'pinned_messages_screen.dart';
 import 'scheduled_messages_screen.dart';
 import '../../services/message_context_menu_service.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/screen_protection_service.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
+import '../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../widgets/chat/pinned_message_banner.dart';
 import '../settings/profile_screen.dart';
+import 'settings/channel_stats_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
@@ -322,6 +326,16 @@ class _ChannelScreenState extends State<ChannelScreen>
     _reactionSettings = chat.reactionSettings;
     _hasActiveCall = chat.hasActiveCall;
     _hasProtectedContent = chat.hasProtectedContent;
+    unawaited(
+      ScreenProtectionService.instance.sync(
+        'channel_${widget.channelId}',
+        _hasProtectedContent,
+      ),
+    );
+    _isMuted = NotificationSettingsProvider().isChatMuted(
+      widget.channelId,
+      chatType: 'channel',
+    );
     _participants = chat.participants;
     if (chat.pinnedMessage != null) {
       _pinnedMessage = chat.pinnedMessage;
@@ -401,24 +415,43 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
-  void _applyViewsMap(Map<String, int> viewsById) {
-    if (viewsById.isEmpty) return;
+  void _applyViewsMap(
+    Map<String, int> viewsById, {
+    Map<String, int> forwardsById = const {},
+  }) {
+    if (viewsById.isEmpty && forwardsById.isEmpty) return;
     bool changed = false;
     if (mounted) {
       setState(() {
         for (int i = 0; i < _messages.length; i++) {
-          final nextViews = viewsById[_messages[i].id];
-          if (nextViews != null && nextViews != _messages[i].viewsCount) {
-            _messages[i] = _messages[i].copyWith(viewsCount: nextViews);
+          final id = _messages[i].id;
+          final nextViews = viewsById[id];
+          final nextForwards = forwardsById[id];
+          final viewsChanged =
+              nextViews != null && nextViews != _messages[i].viewsCount;
+          final forwardsChanged =
+              nextForwards != null && nextForwards != _messages[i].forwardsCount;
+          if (viewsChanged || forwardsChanged) {
+            _messages[i] = _messages[i].copyWith(
+              viewsCount: nextViews ?? _messages[i].viewsCount,
+              forwardsCount: nextForwards ?? _messages[i].forwardsCount,
+            );
             changed = true;
           }
         }
         for (int i = 0; i < _detachedLatestBackup.length; i++) {
-          final nextViews = viewsById[_detachedLatestBackup[i].id];
-          if (nextViews != null &&
-              nextViews != _detachedLatestBackup[i].viewsCount) {
-            _detachedLatestBackup[i] =
-                _detachedLatestBackup[i].copyWith(viewsCount: nextViews);
+          final id = _detachedLatestBackup[i].id;
+          final nextViews = viewsById[id];
+          final nextForwards = forwardsById[id];
+          if ((nextViews != null &&
+                  nextViews != _detachedLatestBackup[i].viewsCount) ||
+              (nextForwards != null &&
+                  nextForwards != _detachedLatestBackup[i].forwardsCount)) {
+            _detachedLatestBackup[i] = _detachedLatestBackup[i].copyWith(
+              viewsCount: nextViews ?? _detachedLatestBackup[i].viewsCount,
+              forwardsCount:
+                  nextForwards ?? _detachedLatestBackup[i].forwardsCount,
+            );
           }
         }
         if (changed) {
@@ -427,7 +460,12 @@ class _ChannelScreenState extends State<ChannelScreen>
       });
     }
     try {
-      AppDatabase().updateMessagesViews(viewsById);
+      if (viewsById.isNotEmpty) {
+        AppDatabase().updateMessagesViews(viewsById);
+      }
+      if (forwardsById.isNotEmpty) {
+        AppDatabase().updateMessagesForwards(forwardsById);
+      }
     } catch (_) {}
   }
 
@@ -496,6 +534,10 @@ class _ChannelScreenState extends State<ChannelScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _highlightMessageId = widget.highlightMessageId;
+    _isMuted = NotificationSettingsProvider().isChatMuted(
+      widget.channelId,
+      chatType: 'channel',
+    );
     ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
 
     _emojiPanelController = AnimationController(
@@ -1150,6 +1192,7 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   void _handleMessageViewsUpdatedData(Map<String, dynamic> data) {
     final viewsById = <String, int>{};
+    final forwardsById = <String, int>{};
     final rawViews = data['views'];
     if (rawViews is List) {
       for (final item in rawViews) {
@@ -1162,9 +1205,18 @@ class _ChannelScreenState extends State<ChannelScreen>
           if (id.isNotEmpty && count != null && count >= 0) {
             viewsById[id] = count;
           }
+          if (id.isNotEmpty && item.containsKey('forwards_count')) {
+            final rawFwd = item['forwards_count'];
+            final fwd = rawFwd is num
+                ? rawFwd.toInt()
+                : int.tryParse(rawFwd?.toString() ?? '');
+            if (fwd != null && fwd >= 0) {
+              forwardsById[id] = fwd;
+            }
+          }
         }
       }
-    } else if (data['message_id'] != null && data['views_count'] != null) {
+    } else if (data['message_id'] != null) {
       final id = data['message_id'].toString().trim();
       final rawCount = data['views_count'];
       final count = rawCount is num
@@ -1173,9 +1225,18 @@ class _ChannelScreenState extends State<ChannelScreen>
       if (id.isNotEmpty && count != null && count >= 0) {
         viewsById[id] = count;
       }
+      if (id.isNotEmpty && data.containsKey('forwards_count')) {
+        final rawFwd = data['forwards_count'];
+        final fwd = rawFwd is num
+            ? rawFwd.toInt()
+            : int.tryParse(rawFwd?.toString() ?? '');
+        if (fwd != null && fwd >= 0) {
+          forwardsById[id] = fwd;
+        }
+      }
     }
-    if (viewsById.isNotEmpty) {
-      _applyViewsMap(viewsById);
+    if (viewsById.isNotEmpty || forwardsById.isNotEmpty) {
+      _applyViewsMap(viewsById, forwardsById: forwardsById);
     }
   }
 
@@ -1301,6 +1362,12 @@ class _ChannelScreenState extends State<ChannelScreen>
       if (data.containsKey('has_protected_content')) {
         final val = data['has_protected_content'];
         _hasProtectedContent = val == true || val == 1 || val == 'true';
+        unawaited(
+          ScreenProtectionService.instance.sync(
+            'channel_${widget.channelId}',
+            _hasProtectedContent,
+          ),
+        );
       }
       if (data.containsKey('subscriber_count') ||
           data.containsKey('member_count')) {
@@ -3770,6 +3837,9 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   @override
   void dispose() {
+    unawaited(
+      ScreenProtectionService.instance.release('channel_${widget.channelId}'),
+    );
     WidgetsBinding.instance.removeObserver(this);
     _transitionTimer?.cancel();
     _syncDebounceTimer?.cancel();
@@ -4066,6 +4136,54 @@ class _ChannelScreenState extends State<ChannelScreen>
               }
             : null,
         onReport: () {},
+        extraMenuItems: [
+          if (_isAdmin)
+            FloatingChatMenuItem(
+              label: 'Статистика канала',
+              iconBuilder: (c) => iconoir.StatsUpSquare(
+                color: c,
+                width: 20,
+                height: 20,
+              ),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  SwipeBackPageRoute(
+                    builder: (_) => ChannelStatsScreen(
+                      chatId: widget.channelId,
+                      channelName: displayName,
+                    ),
+                  ),
+                );
+              },
+            ),
+          FloatingChatMenuItem(
+            label: 'Похожие каналы',
+            iconBuilder: (c) => iconoir.Megaphone(
+              color: c,
+              width: 20,
+              height: 20,
+            ),
+            onTap: () {
+              showSimilarChannelsSheet(
+                context: context,
+                chatId: widget.channelId,
+                onOpenChannel: (ch) {
+                  Navigator.push(
+                    context,
+                    SwipeBackPageRoute(
+                      builder: (_) => ChannelScreen(
+                        channelId: ch.id,
+                        channelName: ch.name,
+                        channelAvatar: ch.avatarUrl,
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ],
       ),
       body: AnimatedBuilder(
         animation: _emojiPanelAnimation,
@@ -4945,7 +5063,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           }
         });
       },
-      onReply: _canPostInChannel ? () => _startReply(message) : () {},
+      onReply: _canPostInChannel ? () => _startReply(message) : null,
       onQuote: (_canPostInChannel && !isVideoNote && !isVoiceNote && !isPoll)
           ? () => _startQuote(message, message.content, 0, message.content.length)
           : null,
@@ -4975,7 +5093,15 @@ class _ChannelScreenState extends State<ChannelScreen>
               _focusInputField();
             }
           : null,
-      onDelete: _canDeleteMessages ? (msg) => _confirmDeleteMessage(msg) : (_) {},
+      onViewStats: _isAdmin
+          ? () => showPostStatsSheet(
+                context: context,
+                chatId: widget.channelId,
+                messageId: message.id,
+                previewText: message.content,
+              )
+          : null,
+      onDelete: _canDeleteMessages ? (msg) => _confirmDeleteMessage(msg) : null,
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
     );

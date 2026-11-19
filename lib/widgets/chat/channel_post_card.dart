@@ -1406,6 +1406,16 @@ class ChannelPostCard extends StatelessWidget {
         iconoir.Eye(width: 14.0, height: 14.0, color: subtextColor),
         const SizedBox(width: 4.0),
         Text(viewsStr, style: metaStyle),
+        if (msg.forwardsCount > 0) ...[
+          const SizedBox(width: 8.0),
+          iconoir.ForwardMessage(
+            width: 13.0,
+            height: 13.0,
+            color: subtextColor,
+          ),
+          const SizedBox(width: 3.0),
+          Text(formatViewsCount(msg.forwardsCount), style: metaStyle),
+        ],
         if (inlineSignature != null && inlineSignature.isNotEmpty) ...[
           Text(' · ', style: metaStyle),
           Flexible(

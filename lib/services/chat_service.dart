@@ -65,31 +65,80 @@ List<int> _parseIntList(dynamic raw) {
 class GroupDefaultPermissions {
   final bool canSendMessages;
   final bool canSendMedia;
+  final bool canSendPhotos;
+  final bool canSendVideos;
+  final bool canSendMusic;
+  final bool canSendFiles;
+  final bool canSendVoiceNotes;
+  final bool canSendVideoNotes;
   final bool canSendStickersGifs;
   final bool canSendPolls;
+  final bool canAddWebPagePreviews;
   final bool canPinMessages;
   final bool canInviteUsers;
   final bool canChangeInfo;
+  final bool canManageTopics;
 
   const GroupDefaultPermissions({
     this.canSendMessages = true,
     this.canSendMedia = true,
+    this.canSendPhotos = true,
+    this.canSendVideos = true,
+    this.canSendMusic = true,
+    this.canSendFiles = true,
+    this.canSendVoiceNotes = true,
+    this.canSendVideoNotes = true,
     this.canSendStickersGifs = true,
     this.canSendPolls = true,
+    this.canAddWebPagePreviews = true,
     this.canPinMessages = false,
     this.canInviteUsers = true,
     this.canChangeInfo = false,
+    this.canManageTopics = false,
   });
 
   factory GroupDefaultPermissions.fromJson(Map<String, dynamic> json) {
+    final legacyMedia = json['can_send_media'] != false;
+    final photos = json.containsKey('can_send_photos')
+        ? json['can_send_photos'] != false
+        : legacyMedia;
+    final videos = json.containsKey('can_send_videos')
+        ? json['can_send_videos'] != false
+        : legacyMedia;
+    final music = json.containsKey('can_send_music')
+        ? json['can_send_music'] != false
+        : legacyMedia;
+    final files = json.containsKey('can_send_files')
+        ? json['can_send_files'] != false
+        : legacyMedia;
+    final voiceNotes = json.containsKey('can_send_voice_notes')
+        ? json['can_send_voice_notes'] != false
+        : legacyMedia;
+    final videoNotes = json.containsKey('can_send_video_notes')
+        ? json['can_send_video_notes'] != false
+        : legacyMedia;
+    final anyMedia = json.containsKey('can_send_media')
+        ? legacyMedia
+        : (photos || videos || music || files || voiceNotes || videoNotes);
+
     return GroupDefaultPermissions(
       canSendMessages: json['can_send_messages'] != false,
-      canSendMedia: json['can_send_media'] != false,
+      canSendMedia: anyMedia,
+      canSendPhotos: photos,
+      canSendVideos: videos,
+      canSendMusic: music,
+      canSendFiles: files,
+      canSendVoiceNotes: voiceNotes,
+      canSendVideoNotes: videoNotes,
       canSendStickersGifs: json['can_send_stickers_gifs'] != false,
       canSendPolls: json['can_send_polls'] != false,
+      canAddWebPagePreviews: json.containsKey('can_add_web_page_previews')
+          ? json['can_add_web_page_previews'] != false
+          : true,
       canPinMessages: _parseBoolFlag(json['can_pin_messages']),
       canInviteUsers: json['can_invite_users'] != false,
       canChangeInfo: _parseBoolFlag(json['can_change_info']),
+      canManageTopics: _parseBoolFlag(json['can_manage_topics']),
     );
   }
 
@@ -118,30 +167,55 @@ class GroupDefaultPermissions {
   Map<String, dynamic> toJson() => {
         'can_send_messages': canSendMessages,
         'can_send_media': canSendMedia,
+        'can_send_photos': canSendPhotos,
+        'can_send_videos': canSendVideos,
+        'can_send_music': canSendMusic,
+        'can_send_files': canSendFiles,
+        'can_send_voice_notes': canSendVoiceNotes,
+        'can_send_video_notes': canSendVideoNotes,
         'can_send_stickers_gifs': canSendStickersGifs,
         'can_send_polls': canSendPolls,
+        'can_add_web_page_previews': canAddWebPagePreviews,
         'can_pin_messages': canPinMessages,
         'can_invite_users': canInviteUsers,
         'can_change_info': canChangeInfo,
+        'can_manage_topics': canManageTopics,
       };
 
   GroupDefaultPermissions copyWith({
     bool? canSendMessages,
     bool? canSendMedia,
+    bool? canSendPhotos,
+    bool? canSendVideos,
+    bool? canSendMusic,
+    bool? canSendFiles,
+    bool? canSendVoiceNotes,
+    bool? canSendVideoNotes,
     bool? canSendStickersGifs,
     bool? canSendPolls,
+    bool? canAddWebPagePreviews,
     bool? canPinMessages,
     bool? canInviteUsers,
     bool? canChangeInfo,
+    bool? canManageTopics,
   }) {
     return GroupDefaultPermissions(
       canSendMessages: canSendMessages ?? this.canSendMessages,
       canSendMedia: canSendMedia ?? this.canSendMedia,
+      canSendPhotos: canSendPhotos ?? this.canSendPhotos,
+      canSendVideos: canSendVideos ?? this.canSendVideos,
+      canSendMusic: canSendMusic ?? this.canSendMusic,
+      canSendFiles: canSendFiles ?? this.canSendFiles,
+      canSendVoiceNotes: canSendVoiceNotes ?? this.canSendVoiceNotes,
+      canSendVideoNotes: canSendVideoNotes ?? this.canSendVideoNotes,
       canSendStickersGifs: canSendStickersGifs ?? this.canSendStickersGifs,
       canSendPolls: canSendPolls ?? this.canSendPolls,
+      canAddWebPagePreviews:
+          canAddWebPagePreviews ?? this.canAddWebPagePreviews,
       canPinMessages: canPinMessages ?? this.canPinMessages,
       canInviteUsers: canInviteUsers ?? this.canInviteUsers,
       canChangeInfo: canChangeInfo ?? this.canChangeInfo,
+      canManageTopics: canManageTopics ?? this.canManageTopics,
     );
   }
 
@@ -151,12 +225,21 @@ class GroupDefaultPermissions {
     return GroupDefaultPermissions(
       canSendMessages: canSendMessages && restrictions.canSendMessages,
       canSendMedia: canSendMedia && restrictions.canSendMedia,
+      canSendPhotos: canSendPhotos && restrictions.canSendPhotos,
+      canSendVideos: canSendVideos && restrictions.canSendVideos,
+      canSendMusic: canSendMusic && restrictions.canSendMusic,
+      canSendFiles: canSendFiles && restrictions.canSendFiles,
+      canSendVoiceNotes: canSendVoiceNotes && restrictions.canSendVoiceNotes,
+      canSendVideoNotes: canSendVideoNotes && restrictions.canSendVideoNotes,
       canSendStickersGifs:
           canSendStickersGifs && restrictions.canSendStickersGifs,
       canSendPolls: canSendPolls && restrictions.canSendPolls,
+      canAddWebPagePreviews:
+          canAddWebPagePreviews && restrictions.canAddWebPagePreviews,
       canPinMessages: canPinMessages && restrictions.canPinMessages,
       canInviteUsers: canInviteUsers && restrictions.canInviteUsers,
       canChangeInfo: canChangeInfo && restrictions.canChangeInfo,
+      canManageTopics: canManageTopics && restrictions.canManageTopics,
     );
   }
 
@@ -167,21 +250,37 @@ class GroupDefaultPermissions {
           runtimeType == other.runtimeType &&
           canSendMessages == other.canSendMessages &&
           canSendMedia == other.canSendMedia &&
+          canSendPhotos == other.canSendPhotos &&
+          canSendVideos == other.canSendVideos &&
+          canSendMusic == other.canSendMusic &&
+          canSendFiles == other.canSendFiles &&
+          canSendVoiceNotes == other.canSendVoiceNotes &&
+          canSendVideoNotes == other.canSendVideoNotes &&
           canSendStickersGifs == other.canSendStickersGifs &&
           canSendPolls == other.canSendPolls &&
+          canAddWebPagePreviews == other.canAddWebPagePreviews &&
           canPinMessages == other.canPinMessages &&
           canInviteUsers == other.canInviteUsers &&
-          canChangeInfo == other.canChangeInfo;
+          canChangeInfo == other.canChangeInfo &&
+          canManageTopics == other.canManageTopics;
 
   @override
   int get hashCode => Object.hash(
         canSendMessages,
         canSendMedia,
+        canSendPhotos,
+        canSendVideos,
+        canSendMusic,
+        canSendFiles,
+        canSendVoiceNotes,
+        canSendVideoNotes,
         canSendStickersGifs,
         canSendPolls,
+        canAddWebPagePreviews,
         canPinMessages,
         canInviteUsers,
         canChangeInfo,
+        canManageTopics,
       );
 }
 
@@ -196,6 +295,7 @@ class AdminRights {
   final bool canPinMessages;
   final bool canManageCalls;
   final bool canAddAdmins;
+  final bool canManageTopics;
 
   const AdminRights({
     this.canChangeInfo = false,
@@ -207,6 +307,7 @@ class AdminRights {
     this.canPinMessages = true,
     this.canManageCalls = false,
     this.canAddAdmins = false,
+    this.canManageTopics = false,
   });
 
   const AdminRights.all()
@@ -218,7 +319,8 @@ class AdminRights {
         canInviteUsers = true,
         canPinMessages = true,
         canManageCalls = true,
-        canAddAdmins = true;
+        canAddAdmins = true,
+        canManageTopics = true;
 
   factory AdminRights.fromJson(Map<String, dynamic> json) {
     return AdminRights(
@@ -236,6 +338,7 @@ class AdminRights {
       canAddAdmins: _parseBoolFlag(
         json['can_add_admins'] ?? json['can_promote_members'],
       ),
+      canManageTopics: _parseBoolFlag(json['can_manage_topics']),
     );
   }
 
@@ -265,6 +368,7 @@ class AdminRights {
         'can_pin_messages': canPinMessages,
         'can_manage_calls': canManageCalls,
         'can_add_admins': canAddAdmins,
+        'can_manage_topics': canManageTopics,
       };
 
   AdminRights copyWith({
@@ -277,6 +381,7 @@ class AdminRights {
     bool? canPinMessages,
     bool? canManageCalls,
     bool? canAddAdmins,
+    bool? canManageTopics,
   }) {
     return AdminRights(
       canChangeInfo: canChangeInfo ?? this.canChangeInfo,
@@ -288,6 +393,7 @@ class AdminRights {
       canPinMessages: canPinMessages ?? this.canPinMessages,
       canManageCalls: canManageCalls ?? this.canManageCalls,
       canAddAdmins: canAddAdmins ?? this.canAddAdmins,
+      canManageTopics: canManageTopics ?? this.canManageTopics,
     );
   }
 
@@ -304,7 +410,8 @@ class AdminRights {
           canInviteUsers == other.canInviteUsers &&
           canPinMessages == other.canPinMessages &&
           canManageCalls == other.canManageCalls &&
-          canAddAdmins == other.canAddAdmins;
+          canAddAdmins == other.canAddAdmins &&
+          canManageTopics == other.canManageTopics;
 
   @override
   int get hashCode => Object.hash(
@@ -317,6 +424,7 @@ class AdminRights {
         canPinMessages,
         canManageCalls,
         canAddAdmins,
+        canManageTopics,
       );
 }
 
@@ -324,42 +432,99 @@ class AdminRights {
 class MemberRestrictions {
   final bool canSendMessages;
   final bool canSendMedia;
+  final bool canSendPhotos;
+  final bool canSendVideos;
+  final bool canSendMusic;
+  final bool canSendFiles;
+  final bool canSendVoiceNotes;
+  final bool canSendVideoNotes;
   final bool canSendStickersGifs;
   final bool canSendPolls;
+  final bool canAddWebPagePreviews;
   final bool canPinMessages;
   final bool canInviteUsers;
   final bool canChangeInfo;
+  final bool canManageTopics;
 
   const MemberRestrictions({
     this.canSendMessages = true,
     this.canSendMedia = true,
+    this.canSendPhotos = true,
+    this.canSendVideos = true,
+    this.canSendMusic = true,
+    this.canSendFiles = true,
+    this.canSendVoiceNotes = true,
+    this.canSendVideoNotes = true,
     this.canSendStickersGifs = true,
     this.canSendPolls = true,
+    this.canAddWebPagePreviews = true,
     this.canPinMessages = false,
     this.canInviteUsers = true,
     this.canChangeInfo = false,
+    this.canManageTopics = false,
   });
 
   const MemberRestrictions.readOnly()
       : canSendMessages = false,
         canSendMedia = false,
+        canSendPhotos = false,
+        canSendVideos = false,
+        canSendMusic = false,
+        canSendFiles = false,
+        canSendVoiceNotes = false,
+        canSendVideoNotes = false,
         canSendStickersGifs = false,
         canSendPolls = false,
+        canAddWebPagePreviews = false,
         canPinMessages = false,
         canInviteUsers = false,
-        canChangeInfo = false;
+        canChangeInfo = false,
+        canManageTopics = false;
 
   bool get isReadOnly => !canSendMessages;
 
   factory MemberRestrictions.fromJson(Map<String, dynamic> json) {
+    final legacyMedia = json['can_send_media'] != false;
+    final photos = json.containsKey('can_send_photos')
+        ? json['can_send_photos'] != false
+        : legacyMedia;
+    final videos = json.containsKey('can_send_videos')
+        ? json['can_send_videos'] != false
+        : legacyMedia;
+    final music = json.containsKey('can_send_music')
+        ? json['can_send_music'] != false
+        : legacyMedia;
+    final files = json.containsKey('can_send_files')
+        ? json['can_send_files'] != false
+        : legacyMedia;
+    final voiceNotes = json.containsKey('can_send_voice_notes')
+        ? json['can_send_voice_notes'] != false
+        : legacyMedia;
+    final videoNotes = json.containsKey('can_send_video_notes')
+        ? json['can_send_video_notes'] != false
+        : legacyMedia;
+    final anyMedia = json.containsKey('can_send_media')
+        ? legacyMedia
+        : (photos || videos || music || files || voiceNotes || videoNotes);
+
     return MemberRestrictions(
       canSendMessages: json['can_send_messages'] != false,
-      canSendMedia: json['can_send_media'] != false,
+      canSendMedia: anyMedia,
+      canSendPhotos: photos,
+      canSendVideos: videos,
+      canSendMusic: music,
+      canSendFiles: files,
+      canSendVoiceNotes: voiceNotes,
+      canSendVideoNotes: videoNotes,
       canSendStickersGifs: json['can_send_stickers_gifs'] != false,
       canSendPolls: json['can_send_polls'] != false,
+      canAddWebPagePreviews: json.containsKey('can_add_web_page_previews')
+          ? json['can_add_web_page_previews'] != false
+          : true,
       canPinMessages: _parseBoolFlag(json['can_pin_messages']),
       canInviteUsers: json['can_invite_users'] != false,
       canChangeInfo: _parseBoolFlag(json['can_change_info']),
+      canManageTopics: _parseBoolFlag(json['can_manage_topics']),
     );
   }
 
@@ -386,30 +551,55 @@ class MemberRestrictions {
   Map<String, dynamic> toJson() => {
         'can_send_messages': canSendMessages,
         'can_send_media': canSendMedia,
+        'can_send_photos': canSendPhotos,
+        'can_send_videos': canSendVideos,
+        'can_send_music': canSendMusic,
+        'can_send_files': canSendFiles,
+        'can_send_voice_notes': canSendVoiceNotes,
+        'can_send_video_notes': canSendVideoNotes,
         'can_send_stickers_gifs': canSendStickersGifs,
         'can_send_polls': canSendPolls,
+        'can_add_web_page_previews': canAddWebPagePreviews,
         'can_pin_messages': canPinMessages,
         'can_invite_users': canInviteUsers,
         'can_change_info': canChangeInfo,
+        'can_manage_topics': canManageTopics,
       };
 
   MemberRestrictions copyWith({
     bool? canSendMessages,
     bool? canSendMedia,
+    bool? canSendPhotos,
+    bool? canSendVideos,
+    bool? canSendMusic,
+    bool? canSendFiles,
+    bool? canSendVoiceNotes,
+    bool? canSendVideoNotes,
     bool? canSendStickersGifs,
     bool? canSendPolls,
+    bool? canAddWebPagePreviews,
     bool? canPinMessages,
     bool? canInviteUsers,
     bool? canChangeInfo,
+    bool? canManageTopics,
   }) {
     return MemberRestrictions(
       canSendMessages: canSendMessages ?? this.canSendMessages,
       canSendMedia: canSendMedia ?? this.canSendMedia,
+      canSendPhotos: canSendPhotos ?? this.canSendPhotos,
+      canSendVideos: canSendVideos ?? this.canSendVideos,
+      canSendMusic: canSendMusic ?? this.canSendMusic,
+      canSendFiles: canSendFiles ?? this.canSendFiles,
+      canSendVoiceNotes: canSendVoiceNotes ?? this.canSendVoiceNotes,
+      canSendVideoNotes: canSendVideoNotes ?? this.canSendVideoNotes,
       canSendStickersGifs: canSendStickersGifs ?? this.canSendStickersGifs,
       canSendPolls: canSendPolls ?? this.canSendPolls,
+      canAddWebPagePreviews:
+          canAddWebPagePreviews ?? this.canAddWebPagePreviews,
       canPinMessages: canPinMessages ?? this.canPinMessages,
       canInviteUsers: canInviteUsers ?? this.canInviteUsers,
       canChangeInfo: canChangeInfo ?? this.canChangeInfo,
+      canManageTopics: canManageTopics ?? this.canManageTopics,
     );
   }
 
@@ -420,21 +610,37 @@ class MemberRestrictions {
           runtimeType == other.runtimeType &&
           canSendMessages == other.canSendMessages &&
           canSendMedia == other.canSendMedia &&
+          canSendPhotos == other.canSendPhotos &&
+          canSendVideos == other.canSendVideos &&
+          canSendMusic == other.canSendMusic &&
+          canSendFiles == other.canSendFiles &&
+          canSendVoiceNotes == other.canSendVoiceNotes &&
+          canSendVideoNotes == other.canSendVideoNotes &&
           canSendStickersGifs == other.canSendStickersGifs &&
           canSendPolls == other.canSendPolls &&
+          canAddWebPagePreviews == other.canAddWebPagePreviews &&
           canPinMessages == other.canPinMessages &&
           canInviteUsers == other.canInviteUsers &&
-          canChangeInfo == other.canChangeInfo;
+          canChangeInfo == other.canChangeInfo &&
+          canManageTopics == other.canManageTopics;
 
   @override
   int get hashCode => Object.hash(
         canSendMessages,
         canSendMedia,
+        canSendPhotos,
+        canSendVideos,
+        canSendMusic,
+        canSendFiles,
+        canSendVoiceNotes,
+        canSendVideoNotes,
         canSendStickersGifs,
         canSendPolls,
+        canAddWebPagePreviews,
         canPinMessages,
         canInviteUsers,
         canChangeInfo,
+        canManageTopics,
       );
 }
 
@@ -442,10 +648,12 @@ class MemberRestrictions {
 class ReactionSettings {
   final String mode; // 'all' | 'selected' | 'none'
   final List<String> allowedReactions;
+  final int maxReactionsPerPost;
 
   const ReactionSettings({
     this.mode = 'all',
     this.allowedReactions = const [],
+    this.maxReactionsPerPost = 11,
   });
 
   bool get isNone => mode == 'none';
@@ -482,9 +690,15 @@ class ReactionSettings {
         }
       } catch (_) {}
     }
+    final rawMax = _parseIntValue(
+      json['max_reactions_per_post'] ?? json['maxReactionsPerPost'],
+      defaultValue: 11,
+    );
+    final clampedMax = rawMax < 1 ? 1 : (rawMax > 11 ? 11 : rawMax);
     return ReactionSettings(
       mode: normalizedMode,
       allowedReactions: List<String>.unmodifiable(allowed),
+      maxReactionsPerPost: clampedMax,
     );
   }
 
@@ -508,9 +722,21 @@ class ReactionSettings {
 
   static ReactionSettings? fromChatJson(Map<String, dynamic> json) {
     final nested = tryParse(json['reaction_settings']);
-    if (nested != null) return nested;
+    if (nested != null) {
+      if (json.containsKey('max_reactions_per_post')) {
+        final rawMax = _parseIntValue(
+          json['max_reactions_per_post'],
+          defaultValue: nested.maxReactionsPerPost,
+        );
+        return nested.copyWith(
+          maxReactionsPerPost: rawMax < 1 ? 1 : (rawMax > 11 ? 11 : rawMax),
+        );
+      }
+      return nested;
+    }
     if (json.containsKey('reaction_mode') ||
-        json.containsKey('allowed_reactions')) {
+        json.containsKey('allowed_reactions') ||
+        json.containsKey('max_reactions_per_post')) {
       return ReactionSettings.fromJson(json);
     }
     return null;
@@ -520,15 +746,18 @@ class ReactionSettings {
         'mode': mode,
         'reaction_mode': mode,
         'allowed_reactions': allowedReactions,
+        'max_reactions_per_post': maxReactionsPerPost,
       };
 
   ReactionSettings copyWith({
     String? mode,
     List<String>? allowedReactions,
+    int? maxReactionsPerPost,
   }) {
     return ReactionSettings(
       mode: mode ?? this.mode,
       allowedReactions: allowedReactions ?? this.allowedReactions,
+      maxReactionsPerPost: maxReactionsPerPost ?? this.maxReactionsPerPost,
     );
   }
 
@@ -538,10 +767,15 @@ class ReactionSettings {
       other is ReactionSettings &&
           runtimeType == other.runtimeType &&
           mode == other.mode &&
+          maxReactionsPerPost == other.maxReactionsPerPost &&
           listEquals(allowedReactions, other.allowedReactions);
 
   @override
-  int get hashCode => Object.hash(mode, Object.hashAll(allowedReactions));
+  int get hashCode => Object.hash(
+        mode,
+        maxReactionsPerPost,
+        Object.hashAll(allowedReactions),
+      );
 }
 
 /// Compact summary of a recent commenter on a channel post.
@@ -674,6 +908,7 @@ class PostCommentsResult {
   final List<Message> comments;
   final String? linkedChatId;
   final bool hasMore;
+  final bool canComment;
   final bool success;
   final String? errorMessage;
 
@@ -682,6 +917,7 @@ class PostCommentsResult {
     this.comments = const [],
     this.linkedChatId,
     this.hasMore = false,
+    this.canComment = true,
     this.success = true,
     this.errorMessage,
   });
@@ -706,6 +942,7 @@ class PostCommentsResult {
       comments: parsedComments,
       linkedChatId: _nonEmptyString(json['linked_chat_id']),
       hasMore: json['has_more'] == true,
+      canComment: json['can_comment'] != false,
       success: json['success'] != false,
       errorMessage:
           _nonEmptyString(json['message']) ?? _nonEmptyString(json['error']),
@@ -1080,6 +1317,13 @@ class Chat {
   final PeerCustomization? peerCustomization;
   final int messageAutoDeleteTime;
   final Map<String, dynamic>? appearance;
+  final bool isForum;
+  final bool participantsHidden;
+  final bool hasAggressiveAntiSpamEnabled;
+  final int maxReactionsPerPost;
+  final int unreadMentionsCount;
+  final int unreadReactionsCount;
+  final String? mySendAsChatId;
 
   Chat({
     required this.id,
@@ -1126,6 +1370,13 @@ class Chat {
     this.peerCustomization,
     this.messageAutoDeleteTime = 0,
     this.appearance,
+    this.isForum = false,
+    this.participantsHidden = false,
+    this.hasAggressiveAntiSpamEnabled = false,
+    this.maxReactionsPerPost = 11,
+    this.unreadMentionsCount = 0,
+    this.unreadReactionsCount = 0,
+    this.mySendAsChatId,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   /// Whether this chat belongs to a community channel
@@ -1362,6 +1613,17 @@ class Chat {
       appearance: json['appearance'] is Map
           ? Map<String, dynamic>.from(json['appearance'] as Map)
           : null,
+      isForum: _parseBoolFlag(json['is_forum']),
+      participantsHidden: _parseBoolFlag(json['participants_hidden']),
+      hasAggressiveAntiSpamEnabled:
+          _parseBoolFlag(json['has_aggressive_anti_spam_enabled']),
+      maxReactionsPerPost: _parseIntValue(
+        json['max_reactions_per_post'],
+        defaultValue: 11,
+      ).clamp(1, 11),
+      unreadMentionsCount: _parseIntValue(json['unread_mentions_count']),
+      unreadReactionsCount: _parseIntValue(json['unread_reactions_count']),
+      mySendAsChatId: _nonEmptyString(json['my_send_as_chat_id']),
     );
   }
 
@@ -1446,6 +1708,12 @@ class Chat {
       pinnedMessageIds: effectiveDbPinnedIds,
       messageAutoDeleteTime: model.messageAutoDeleteTime,
       appearance: dbAppearance,
+      isForum: model.isForum,
+      participantsHidden: model.participantsHidden,
+      hasAggressiveAntiSpamEnabled: model.hasAggressiveAntiSpamEnabled,
+      maxReactionsPerPost: model.maxReactionsPerPost.clamp(1, 11),
+      unreadMentionsCount: model.unreadMentionsCount,
+      unreadReactionsCount: model.unreadReactionsCount,
     );
   }
 
@@ -1500,6 +1768,12 @@ class Chat {
       appearanceJson: appearance != null
           ? drift.Value(jsonEncode(appearance))
           : const drift.Value.absent(),
+      isForum: drift.Value(isForum),
+      participantsHidden: drift.Value(participantsHidden),
+      hasAggressiveAntiSpamEnabled: drift.Value(hasAggressiveAntiSpamEnabled),
+      maxReactionsPerPost: drift.Value(maxReactionsPerPost.clamp(1, 11)),
+      unreadMentionsCount: drift.Value(unreadMentionsCount),
+      unreadReactionsCount: drift.Value(unreadReactionsCount),
     );
   }
 
@@ -1551,6 +1825,14 @@ class Chat {
     int? messageAutoDeleteTime,
     Map<String, dynamic>? appearance,
     bool clearAppearance = false,
+    bool? isForum,
+    bool? participantsHidden,
+    bool? hasAggressiveAntiSpamEnabled,
+    int? maxReactionsPerPost,
+    int? unreadMentionsCount,
+    int? unreadReactionsCount,
+    String? mySendAsChatId,
+    bool clearMySendAsChatId = false,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -1603,6 +1885,16 @@ class Chat {
       messageAutoDeleteTime:
           messageAutoDeleteTime ?? this.messageAutoDeleteTime,
       appearance: clearAppearance ? null : (appearance ?? this.appearance),
+      isForum: isForum ?? this.isForum,
+      participantsHidden: participantsHidden ?? this.participantsHidden,
+      hasAggressiveAntiSpamEnabled:
+          hasAggressiveAntiSpamEnabled ?? this.hasAggressiveAntiSpamEnabled,
+      maxReactionsPerPost: maxReactionsPerPost ?? this.maxReactionsPerPost,
+      unreadMentionsCount: unreadMentionsCount ?? this.unreadMentionsCount,
+      unreadReactionsCount: unreadReactionsCount ?? this.unreadReactionsCount,
+      mySendAsChatId: clearMySendAsChatId
+          ? null
+          : (mySendAsChatId ?? this.mySendAsChatId),
     );
   }
 }
@@ -1963,6 +2255,11 @@ class Message {
   final String? replyToChatType;
   final String? effectId;
   final List<String> savedTags;
+  final int? topicId;
+  final int forwardsCount;
+  final String? senderChatId;
+  final String? senderChatName;
+  final String? senderChatAvatarUrl;
 
   Message({
     required this.id,
@@ -2028,6 +2325,11 @@ class Message {
     this.replyToChatType,
     this.effectId,
     this.savedTags = const [],
+    this.topicId,
+    this.forwardsCount = 0,
+    this.senderChatId,
+    this.senderChatName,
+    this.senderChatAvatarUrl,
   });
 
   /// Whether this message has a reply or quote
@@ -2449,6 +2751,12 @@ class Message {
       replyToChatType: parsedReplyToChatType,
       effectId: _nonEmptyString(json['effect_id']),
       savedTags: parsedSavedTags,
+      topicId: (json['topic_id'] as num?)?.toInt() ??
+          int.tryParse(json['topic_id']?.toString() ?? ''),
+      forwardsCount: _parseIntValue(json['forwards_count']),
+      senderChatId: _nonEmptyString(json['sender_chat_id']),
+      senderChatName: _nonEmptyString(json['sender_chat_name']),
+      senderChatAvatarUrl: _nonEmptyString(json['sender_chat_avatar_url']),
     );
   }
 
@@ -2643,6 +2951,11 @@ class Message {
       replyToChatName: _nonEmptyString(model.replyToChatName),
       replyToChatType: _nonEmptyString(model.replyToChatType),
       effectId: _nonEmptyString(model.effectId),
+      topicId: model.topicId,
+      forwardsCount: model.forwardsCount,
+      senderChatId: _nonEmptyString(model.senderChatId),
+      senderChatName: _nonEmptyString(model.senderChatName),
+      senderChatAvatarUrl: _nonEmptyString(model.senderChatAvatarUrl),
       savedTags: () {
         if (model.savedTagsJson == null || model.savedTagsJson!.isEmpty) {
           return const <String>[];
@@ -2750,6 +3063,11 @@ class Message {
       replyToChatName: drift.Value(replyToChatName),
       replyToChatType: drift.Value(replyToChatType),
       effectId: drift.Value(effectId),
+      topicId: drift.Value(topicId),
+      forwardsCount: drift.Value(forwardsCount),
+      senderChatId: drift.Value(senderChatId),
+      senderChatName: drift.Value(senderChatName),
+      senderChatAvatarUrl: drift.Value(senderChatAvatarUrl),
       savedTagsJson: savedTags.isNotEmpty
           ? drift.Value(jsonEncode(savedTags))
           : const drift.Value.absent(),
@@ -2821,6 +3139,11 @@ class Message {
     String? replyToChatType,
     String? effectId,
     List<String>? savedTags,
+    int? topicId,
+    int? forwardsCount,
+    String? senderChatId,
+    String? senderChatName,
+    String? senderChatAvatarUrl,
   }) {
     return Message(
       id: id ?? this.id,
@@ -2886,6 +3209,11 @@ class Message {
       replyToChatType: replyToChatType ?? this.replyToChatType,
       effectId: effectId ?? this.effectId,
       savedTags: savedTags ?? this.savedTags,
+      topicId: topicId ?? this.topicId,
+      forwardsCount: forwardsCount ?? this.forwardsCount,
+      senderChatId: senderChatId ?? this.senderChatId,
+      senderChatName: senderChatName ?? this.senderChatName,
+      senderChatAvatarUrl: senderChatAvatarUrl ?? this.senderChatAvatarUrl,
     );
   }
 
@@ -2943,6 +3271,13 @@ class ChatDetails {
   final String? activeCallId;
   final int messageAutoDeleteTime;
   final Map<String, dynamic>? appearance;
+  final bool isForum;
+  final bool participantsHidden;
+  final bool hasAggressiveAntiSpamEnabled;
+  final int maxReactionsPerPost;
+  final int unreadMentionsCount;
+  final int unreadReactionsCount;
+  final String? mySendAsChatId;
 
   ChatDetails({
     required this.id,
@@ -2988,6 +3323,13 @@ class ChatDetails {
     this.activeCallId,
     this.messageAutoDeleteTime = 0,
     this.appearance,
+    this.isForum = false,
+    this.participantsHidden = false,
+    this.hasAggressiveAntiSpamEnabled = false,
+    this.maxReactionsPerPost = 11,
+    this.unreadMentionsCount = 0,
+    this.unreadReactionsCount = 0,
+    this.mySendAsChatId,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   bool get isOwner => myRole == 'owner';
@@ -3019,16 +3361,29 @@ class ChatDetails {
       isOwner ||
       (myRole == 'admin' && (myAdminPermissions?.canPostMessages ?? true));
 
+  bool get canManageTopicsEffective =>
+      isOwner ||
+      (myRole == 'admin' && (myAdminPermissions?.canManageTopics ?? false)) ||
+      (chatType == 'group' && isMember && (defaultPermissions?.canManageTopics ?? false));
+
   GroupDefaultPermissions get effectivePermissions {
     if (isAdmin) {
-      return const GroupDefaultPermissions(
+      return GroupDefaultPermissions(
         canSendMessages: true,
         canSendMedia: true,
+        canSendPhotos: true,
+        canSendVideos: true,
+        canSendMusic: true,
+        canSendFiles: true,
+        canSendVoiceNotes: true,
+        canSendVideoNotes: true,
         canSendStickersGifs: true,
         canSendPolls: true,
+        canAddWebPagePreviews: true,
         canPinMessages: true,
         canInviteUsers: true,
         canChangeInfo: true,
+        canManageTopics: isOwner || (myAdminPermissions?.canManageTopics ?? true),
       );
     }
     final base = defaultPermissions ?? const GroupDefaultPermissions();
@@ -3087,6 +3442,14 @@ class ChatDetails {
     int? messageAutoDeleteTime,
     Map<String, dynamic>? appearance,
     bool clearAppearance = false,
+    bool? isForum,
+    bool? participantsHidden,
+    bool? hasAggressiveAntiSpamEnabled,
+    int? maxReactionsPerPost,
+    int? unreadMentionsCount,
+    int? unreadReactionsCount,
+    String? mySendAsChatId,
+    bool clearMySendAsChatId = false,
   }) {
     return ChatDetails(
       id: id ?? this.id,
@@ -3138,6 +3501,16 @@ class ChatDetails {
       messageAutoDeleteTime:
           messageAutoDeleteTime ?? this.messageAutoDeleteTime,
       appearance: clearAppearance ? null : (appearance ?? this.appearance),
+      isForum: isForum ?? this.isForum,
+      participantsHidden: participantsHidden ?? this.participantsHidden,
+      hasAggressiveAntiSpamEnabled:
+          hasAggressiveAntiSpamEnabled ?? this.hasAggressiveAntiSpamEnabled,
+      maxReactionsPerPost: maxReactionsPerPost ?? this.maxReactionsPerPost,
+      unreadMentionsCount: unreadMentionsCount ?? this.unreadMentionsCount,
+      unreadReactionsCount: unreadReactionsCount ?? this.unreadReactionsCount,
+      mySendAsChatId: clearMySendAsChatId
+          ? null
+          : (mySendAsChatId ?? this.mySendAsChatId),
     );
   }
 
@@ -3259,6 +3632,17 @@ class ChatDetails {
       appearance: json['appearance'] is Map
           ? Map<String, dynamic>.from(json['appearance'] as Map)
           : null,
+      isForum: _parseBoolFlag(json['is_forum']),
+      participantsHidden: _parseBoolFlag(json['participants_hidden']),
+      hasAggressiveAntiSpamEnabled:
+          _parseBoolFlag(json['has_aggressive_anti_spam_enabled']),
+      maxReactionsPerPost: _parseIntValue(
+        json['max_reactions_per_post'],
+        defaultValue: 11,
+      ).clamp(1, 11),
+      unreadMentionsCount: _parseIntValue(json['unread_mentions_count']),
+      unreadReactionsCount: _parseIntValue(json['unread_reactions_count']),
+      mySendAsChatId: _nonEmptyString(json['my_send_as_chat_id']),
     );
   }
 }
@@ -3272,6 +3656,7 @@ class ChatParticipant {
   final String role;
   final bool isOnline;
   final DateTime? lastSeen;
+  final String? lastSeenStatus;
   final bool isBot;
   final bool isVerified;
   final String adminTitle;
@@ -3290,6 +3675,7 @@ class ChatParticipant {
     required this.role,
     this.isOnline = false,
     this.lastSeen,
+    this.lastSeenStatus,
     this.isBot = false,
     this.isVerified = false,
     this.adminTitle = '',
@@ -3309,6 +3695,7 @@ class ChatParticipant {
     String? role,
     bool? isOnline,
     DateTime? lastSeen,
+    String? lastSeenStatus,
     bool? isBot,
     bool? isVerified,
     String? adminTitle,
@@ -3327,6 +3714,7 @@ class ChatParticipant {
       role: role ?? this.role,
       isOnline: isOnline ?? this.isOnline,
       lastSeen: lastSeen ?? this.lastSeen,
+      lastSeenStatus: lastSeenStatus ?? this.lastSeenStatus,
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
       adminTitle: adminTitle ?? this.adminTitle,
@@ -3347,6 +3735,7 @@ class ChatParticipant {
         'role': role,
         'is_online': isOnline,
         if (lastSeen != null) 'last_seen': lastSeen!.toUtc().toIso8601String(),
+        if (lastSeenStatus != null) 'last_seen_status': lastSeenStatus,
         'is_bot': isBot,
         'is_verified': isVerified,
         'admin_title': adminTitle,
@@ -3379,6 +3768,7 @@ class ChatParticipant {
       role: json['role']?.toString() ?? 'member',
       isOnline: json['is_online'] == true,
       lastSeen: DateTimeUtils.parseUtcDateTime(json['last_seen']),
+      lastSeenStatus: _nonEmptyString(json['last_seen_status']),
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
       adminTitle: (json['admin_title'] ?? '').toString(),
@@ -3592,6 +3982,7 @@ class ChatService {
     String? afterMessageId,
     String? tag,
     String? savedPeerKey,
+    int? topicId,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3604,6 +3995,9 @@ class ChatService {
       }
 
       var url = '${AppConfig.baseUrl}/api/chats/$chatId/messages?limit=$limit';
+      if (topicId != null && topicId > 0) {
+        url += '&topic_id=$topicId';
+      }
       if (tag != null && tag.isNotEmpty) {
         url += '&tag=${Uri.encodeQueryComponent(tag)}';
       }
@@ -3768,6 +4162,8 @@ class ChatService {
     String? placeName,
     String? address,
     Map<String, dynamic>? contact,
+    int? topicId,
+    String? sendAsChatId,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -3874,6 +4270,12 @@ class ChatService {
       }
       if (contact != null && contact.isNotEmpty) {
         body['contact'] = contact;
+      }
+      if (topicId != null && topicId > 0) {
+        body['topic_id'] = topicId;
+      }
+      if (sendAsChatId != null && sendAsChatId.isNotEmpty) {
+        body['send_as_chat_id'] = int.tryParse(sendAsChatId) ?? sendAsChatId;
       }
 
       // Try WebSocket RPC first when connected
@@ -4018,6 +4420,8 @@ class ChatService {
     bool isSilent = false,
     bool sendAsAnonymous = false,
     bool hasMediaSpoiler = false,
+    int? topicId,
+    String? sendAsChatId,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -4048,6 +4452,12 @@ class ChatService {
       }
       if (hasMediaSpoiler) {
         body['has_media_spoiler'] = true;
+      }
+      if (topicId != null && topicId > 0) {
+        body['topic_id'] = topicId;
+      }
+      if (sendAsChatId != null && sendAsChatId.isNotEmpty) {
+        body['send_as_chat_id'] = int.tryParse(sendAsChatId) ?? sendAsChatId;
       }
       if (effectId != null && effectId.isNotEmpty) {
         body['effect_id'] = effectId;
@@ -4695,6 +5105,10 @@ class ChatService {
         return {
           'success': true,
           'unread_count': data['unread_count'] ?? 0,
+          'unread_mentions_count':
+              _parseIntValue(data['unread_mentions_count']),
+          'unread_reactions_count':
+              _parseIntValue(data['unread_reactions_count']),
           'first_unread_message_id': data['first_unread_message_id'],
           'first_unread_message_created_at':
               data['first_unread_message_created_at'],
@@ -5119,6 +5533,8 @@ class ChatService {
     required List<String> messageIds,
     bool hideSender = false,
     bool hideCaption = false,
+    int? topicId,
+    String? sendAsChatId,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -5141,6 +5557,9 @@ class ChatService {
           'message_ids': parsedIds,
           'hide_sender': hideSender,
           if (hideCaption) 'hide_caption': true,
+          if (topicId != null && topicId > 0) 'topic_id': topicId,
+          if (sendAsChatId != null && sendAsChatId.isNotEmpty)
+            'send_as_chat_id': int.tryParse(sendAsChatId) ?? sendAsChatId,
         }),
       );
 
@@ -5482,6 +5901,7 @@ class ChatService {
     if (event.type == WebSocketEventType.messageViewsUpdated ||
         rawType == 'message_views_updated') {
       final viewsMap = <String, int>{};
+      final forwardsMap = <String, int>{};
       final rawViews = event.data['views'];
       if (rawViews is List) {
         for (final item in rawViews) {
@@ -5490,6 +5910,15 @@ class ChatService {
             final count = _parseIntValue(item['views_count'], defaultValue: -1);
             if (msgId.isNotEmpty && count >= 0) {
               viewsMap[msgId] = count;
+            }
+            if (msgId.isNotEmpty && item.containsKey('forwards_count')) {
+              final fwdCount = _parseIntValue(
+                item['forwards_count'],
+                defaultValue: -1,
+              );
+              if (fwdCount >= 0) {
+                forwardsMap[msgId] = fwdCount;
+              }
             }
           }
         }
@@ -5502,6 +5931,15 @@ class ChatService {
         if (msgId.isNotEmpty && count >= 0) {
           viewsMap[msgId] = count;
         }
+        if (msgId.isNotEmpty && event.data.containsKey('forwards_count')) {
+          final fwdCount = _parseIntValue(
+            event.data['forwards_count'],
+            defaultValue: -1,
+          );
+          if (fwdCount >= 0) {
+            forwardsMap[msgId] = fwdCount;
+          }
+        }
       }
       if (viewsMap.isNotEmpty) {
         try {
@@ -5510,8 +5948,49 @@ class ChatService {
           debugPrint('ChatService WS message_views_updated DB error: $e');
         }
       }
+      if (forwardsMap.isNotEmpty) {
+        try {
+          await targetDb.updateMessagesForwards(forwardsMap);
+        } catch (e) {
+          debugPrint('ChatService WS message_views_updated forwards DB error: $e');
+        }
+      }
       _realtimeController.add(ChatRealtimeUpdate(
         type: WebSocketEventType.messageViewsUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.unreadBadgesUpdated ||
+        rawType == 'unread_badges_updated') {
+      if (chatId.isNotEmpty) {
+        final mentionsCnt = _parseIntValue(event.data['unread_mentions_count']);
+        final reactionsCnt =
+            _parseIntValue(event.data['unread_reactions_count']);
+        try {
+          await targetDb.updateChatUnreadBadges(
+            chatId,
+            unreadMentionsCount: mentionsCnt,
+            unreadReactionsCount: reactionsCnt,
+          );
+        } catch (e) {
+          debugPrint('ChatService WS unread_badges_updated DB error: $e');
+        }
+      }
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.unreadBadgesUpdated,
+        chatId: chatId,
+        data: Map<String, dynamic>.from(event.data),
+      ));
+      return;
+    }
+
+    if (event.type == WebSocketEventType.forumTopicUpdated ||
+        rawType == 'forum_topic_updated') {
+      _realtimeController.add(ChatRealtimeUpdate(
+        type: WebSocketEventType.forumTopicUpdated,
         chatId: chatId,
         data: Map<String, dynamic>.from(event.data),
       ));
@@ -5603,6 +6082,24 @@ class ChatService {
                   : null,
               updatePinnedMessageIds:
                   event.data.containsKey('pinned_message_ids'),
+              isForum: event.data.containsKey('is_forum')
+                  ? _parseBoolFlag(event.data['is_forum'])
+                  : null,
+              participantsHidden: event.data.containsKey('participants_hidden')
+                  ? _parseBoolFlag(event.data['participants_hidden'])
+                  : null,
+              hasAggressiveAntiSpamEnabled:
+                  event.data.containsKey('has_aggressive_anti_spam_enabled')
+                      ? _parseBoolFlag(
+                          event.data['has_aggressive_anti_spam_enabled'],
+                        )
+                      : null,
+              maxReactionsPerPost: event.data.containsKey('max_reactions_per_post')
+                  ? _parseIntValue(
+                      event.data['max_reactions_per_post'],
+                      defaultValue: 11,
+                    ).clamp(1, 11)
+                  : null,
             );
           }
         } catch (e) {
@@ -5897,11 +6394,17 @@ class ChatService {
     required String messageId,
     required String content,
     String? replyToMessageId,
+    bool isQuote = false,
+    String? quoteText,
+    int quoteOffset = 0,
+    int quoteLength = 0,
     List<MessageEntity>? entities,
     String? fileUrl,
     String? fileName,
     String messageType = 'text',
     bool hasMediaSpoiler = false,
+    String? groupedId,
+    String? sendAsChatId,
   }) async {
     try {
       final headers = await _authHeaders();
@@ -5912,11 +6415,19 @@ class ChatService {
         'message_type': messageType,
         if (replyToMessageId != null && replyToMessageId.isNotEmpty)
           'reply_to_message_id': replyToMessageId,
+        if (isQuote) 'is_quote': true,
+        if (isQuote && quoteText != null && quoteText.isNotEmpty)
+          'quote_text': quoteText,
+        if (isQuote && quoteOffset > 0) 'quote_offset': quoteOffset,
+        if (isQuote && quoteLength > 0) 'quote_length': quoteLength,
         if (entities != null && entities.isNotEmpty)
           'entities': entities.map((e) => e.toJson()).toList(),
         if (fileUrl != null && fileUrl.isNotEmpty) 'file_url': fileUrl,
         if (fileName != null && fileName.isNotEmpty) 'file_name': fileName,
         if (hasMediaSpoiler) 'has_media_spoiler': true,
+        if (groupedId != null && groupedId.isNotEmpty) 'grouped_id': groupedId,
+        if (sendAsChatId != null && sendAsChatId.isNotEmpty)
+          'send_as_chat_id': int.tryParse(sendAsChatId) ?? sendAsChatId,
       };
 
       final response = await http.post(
@@ -6083,6 +6594,24 @@ class ChatService {
                 reactions != null ? jsonEncode(reactions.toJson()) : null,
             hasProtectedContent: payload.containsKey('has_protected_content')
                 ? _parseBoolFlag(payload['has_protected_content'])
+                : null,
+            isForum: payload.containsKey('is_forum')
+                ? _parseBoolFlag(payload['is_forum'])
+                : null,
+            participantsHidden: payload.containsKey('participants_hidden')
+                ? _parseBoolFlag(payload['participants_hidden'])
+                : null,
+            hasAggressiveAntiSpamEnabled:
+                payload.containsKey('has_aggressive_anti_spam_enabled')
+                    ? _parseBoolFlag(
+                        payload['has_aggressive_anti_spam_enabled'],
+                      )
+                    : null,
+            maxReactionsPerPost: payload.containsKey('max_reactions_per_post')
+                ? _parseIntValue(
+                    payload['max_reactions_per_post'],
+                    defaultValue: 11,
+                  ).clamp(1, 11)
                 : null,
           );
         } catch (_) {}

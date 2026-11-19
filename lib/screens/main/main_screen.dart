@@ -19,6 +19,7 @@ import '../../screens/settings/profile_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../screens/chat/channel_screen.dart';
+import '../../screens/chat/forum_topics_screen.dart';
 import '../../screens/chat/system_notifications_screen.dart';
 import '../../services/search_service.dart';
 import '../../services/auth_service.dart';
@@ -3483,11 +3484,17 @@ class _MainScreenState extends State<MainScreen>
         Navigator.push(
           context,
           SwipeBackPageRoute(
-            builder: (_) => GroupChatScreen(
-              chatId: chat.id,
-              groupName: chat.name,
-              groupAvatar: chat.avatarUrl,
-            ),
+            builder: (_) => chat.isForum
+                ? ForumTopicsScreen(
+                    chatId: chat.id,
+                    chatName: chat.name,
+                    chatAvatar: chat.avatarUrl,
+                  )
+                : GroupChatScreen(
+                    chatId: chat.id,
+                    groupName: chat.name,
+                    groupAvatar: chat.avatarUrl,
+                  ),
           ),
         ).then((_) => onReturn());
         break;

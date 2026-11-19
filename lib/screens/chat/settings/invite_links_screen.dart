@@ -10,6 +10,7 @@ import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../services/websocket_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 import '../../../widgets/user/avatar_with_status.dart';
@@ -618,9 +619,36 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
               ),
               if (primaryItem != null) ...[
                 const SizedBox(height: 8),
-                Text(
-                  'Использований: ${primaryItem.uses}',
-                  style: TextStyle(fontSize: 12.5, color: palette.subtext),
+                GestureDetector(
+                  onTap: primaryItem.id > 0
+                      ? () => showInviteLinkImportersSheet(
+                            context: context,
+                            chatId: widget.chatId,
+                            linkItem: primaryItem,
+                          )
+                      : null,
+                  child: Row(
+                    children: [
+                      Text(
+                        'Использований: ${primaryItem.uses}',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                          color: primaryItem.id > 0
+                              ? palette.primary
+                              : palette.subtext,
+                        ),
+                      ),
+                      if (primaryItem.id > 0) ...[
+                        const SizedBox(width: 4),
+                        iconoir.NavArrowRight(
+                          width: 14,
+                          height: 14,
+                          color: palette.primary,
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
               ],
               const SizedBox(height: 14),
@@ -765,6 +793,13 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
               ),
               onSelected: (action) {
                 switch (action) {
+                  case 'importers':
+                    showInviteLinkImportersSheet(
+                      context: context,
+                      chatId: widget.chatId,
+                      linkItem: item,
+                    );
+                    break;
                   case 'copy':
                     _copyLink(item.link);
                     break;
@@ -783,6 +818,11 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
                 }
               },
               itemBuilder: (_) => [
+                if (item.id > 0)
+                  const PopupMenuItem(
+                    value: 'importers',
+                    child: Text('Кто присоединился'),
+                  ),
                 const PopupMenuItem(
                   value: 'copy',
                   child: Text('Копировать'),

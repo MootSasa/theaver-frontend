@@ -33,6 +33,7 @@ class ProfileMemberItem {
   final String role; // 'owner', 'admin', 'member'
   final bool isOnline;
   final String? lastSeen;
+  final String? lastSeenStatus;
 
   const ProfileMemberItem({
     required this.userId,
@@ -43,6 +44,7 @@ class ProfileMemberItem {
     this.role = 'member',
     this.isOnline = false,
     this.lastSeen,
+    this.lastSeenStatus,
   });
 
   String get displayName {
@@ -62,6 +64,7 @@ class ProfileMemberItem {
       role: (json['role'] ?? 'member').toString(),
       isOnline: json['is_online'] == true,
       lastSeen: json['last_seen']?.toString(),
+      lastSeenStatus: json['last_seen_status']?.toString(),
     );
   }
 }
@@ -415,9 +418,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    member.isOnline
-                        ? _tr(context, 'profile_online', 'в сети')
-                        : _tr(context, 'status_offline', 'был(а) недавно'),
+                    _formatMemberPresence(context, member),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -466,6 +467,24 @@ class ProfileSectionPageContent extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _formatMemberPresence(BuildContext context, ProfileMemberItem member) {
+    if (member.isOnline) {
+      return _tr(context, 'profile_online', 'в сети');
+    }
+    switch (member.lastSeenStatus) {
+      case 'recently':
+        return 'был(а) недавно';
+      case 'within_week':
+        return 'на этой неделе';
+      case 'within_month':
+        return 'в этом месяце';
+      case 'long_time_ago':
+        return 'давно';
+      default:
+        return _tr(context, 'status_offline', 'был(а) недавно');
+    }
   }
 
   void _showMemberActionsSheet(BuildContext context, ProfileMemberItem member) {
