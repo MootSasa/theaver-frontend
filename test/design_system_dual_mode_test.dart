@@ -42,6 +42,9 @@ Widget _buildHost({
         fillColor: Color(0xFF1C1C1E),
       ),
     ),
+    builder: (context, appChild) => MinimizedMiniAppHost(
+      child: appChild ?? const SizedBox.shrink(),
+    ),
     home: Scaffold(
       body: SafeArea(child: child),
     ),
@@ -579,8 +582,10 @@ void main() {
       });
 
       testWidgets(
-          'MiniAppWebViewSheet matches Telegram full-screen chrome and applies LiquidGlassLens only on overflow menu',
+          'MiniAppWebViewSheet matches Telegram chrome, minimizes to bottom bar, restores, and closes cleanly',
           (tester) async {
+        addTearDown(MiniAppSessionController.instance.resetForTesting);
+
         final bool expectGlass =
             mode == GlassMode.lite || mode == GlassMode.full;
 
@@ -597,27 +602,41 @@ void main() {
           _buildHost(
             glassMode: mode,
             child: Builder(
-              builder: (context) => Center(
-                child: ElevatedButton(
-                  onPressed: () {
-                    showTheavModalSheet<void>(
-                      context: context,
-                      enableDrag: false,
-                      useRootNavigator: true,
-                      builder: (_) => const SizedBox.shrink(),
-                      customSheetBuilder: (_) => const MiniAppWebViewSheet(
-                        launchData: launchData,
-                        botName: 'BotMother',
-                        botUsername: 'BotMother',
-                        isVerified: true,
-                      ),
-                    );
-                  },
-                  child: const Text('OpenMiniApp'),
+              builder: (context) => SizedBox.expand(
+                key: const ValueKey('mini_app_safe_body'),
+                child: Center(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      showTheavModalSheet<void>(
+                        context: context,
+                        enableDrag: false,
+                        useRootNavigator: true,
+                        builder: (_) => const SizedBox.shrink(),
+                        customSheetBuilder: (_) => const MiniAppWebViewSheet(
+                          launchData: launchData,
+                          botName: 'BotMother',
+                          botUsername: 'BotMother',
+                          isVerified: true,
+                        ),
+                      );
+                    },
+                    child: const Text('OpenMiniApp'),
+                  ),
                 ),
               ),
             ),
           ),
+        );
+
+        final double screenHeight =
+            tester.view.physicalSize.height / tester.view.devicePixelRatio;
+        expect(
+          tester.getSize(find.byKey(const ValueKey('mini_app_safe_body'))).height,
+          moreOrLessEquals(screenHeight, epsilon: 0.5),
+        );
+        expect(
+          find.byKey(const ValueKey('minimized_mini_app_bar')),
+          findsNothing,
         );
 
         await tester.tap(find.text('OpenMiniApp'));
@@ -625,9 +644,10 @@ void main() {
 
         final sheetFinder = find.byType(MiniAppWebViewSheet);
         expect(sheetFinder, findsOneWidget);
-
-        final double screenHeight =
-            tester.view.physicalSize.height / tester.view.devicePixelRatio;
+        expect(
+          find.byKey(const ValueKey('minimized_mini_app_bar')),
+          findsNothing,
+        );
         expect(
           tester.getSize(sheetFinder).height,
           moreOrLessEquals(screenHeight, epsilon: 0.5),
@@ -710,26 +730,92 @@ void main() {
           expect(menuLensFinder, findsNothing);
         }
 
-        // Dismiss overflow menu before toggling collapse/expand height.
+        // Dismiss overflow menu before tapping downward chevron to minimize.
         await tester.tapAt(tester.getCenter(sheetFinder));
         await tester.pumpAndSettle();
         expect(menuFinder, findsNothing);
 
+        // Minimize via downward chevron -> collapses into Telegram-style bottom bar.
         await tester.tap(
           find.byKey(const ValueKey('mini_app_collapse_expand_button')),
         );
         await tester.pumpAndSettle();
+
+        expect(sheetFinder, findsNothing);
+        final miniBarFinder =
+            find.byKey(const ValueKey('minimized_mini_app_bar'));
+        expect(miniBarFinder, findsOneWidget);
+        expect(find.text('BotMother'), findsOneWidget);
         expect(
-          tester.getSize(sheetFinder).height,
-          lessThan(screenHeight * 0.85),
+          find.byKey(const ValueKey('minimized_mini_app_close_button')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('minimized_mini_app_expand_button')),
+          findsOneWidget,
         );
 
+        // Underlying SafeArea bottom padding increases so chat bars sit above the dock.
+        final BuildContext safeBodyCtx = tester.element(
+          find.byKey(const ValueKey('mini_app_safe_body')),
+        );
+        expect(
+          screenHeight -
+              tester
+                  .getSize(find.byKey(const ValueKey('mini_app_safe_body')))
+                  .height,
+          greaterThan(48.0),
+        );
+        expect(safeBodyCtx.mounted, isTrue);
+
+        // LiquidGlassLens on minimized bar in glass mode (without Opacity/FadeTransition); matte otherwise.
+        final barLensFinder = find.descendant(
+          of: miniBarFinder,
+          matching: find.byType(LiquidGlassLens),
+        );
+        if (expectGlass) {
+          expect(barLensFinder, findsOneWidget);
+          expect(
+            find.ancestor(
+              of: barLensFinder,
+              matching: find.descendant(
+                of: miniBarFinder,
+                matching: find.byWidgetPredicate(
+                  (w) => w is Opacity || w is FadeTransition,
+                ),
+              ),
+            ),
+            findsNothing,
+          );
+        } else {
+          expect(barLensFinder, findsNothing);
+        }
+
+        // Expand back to full-screen Mini App via upward chevron.
+        await tester.tap(
+          find.byKey(const ValueKey('minimized_mini_app_expand_button')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(sheetFinder, findsOneWidget);
+        expect(miniBarFinder, findsNothing);
+
+        // Minimize again and close via minimized bar close button.
         await tester.tap(
           find.byKey(const ValueKey('mini_app_collapse_expand_button')),
         );
         await tester.pumpAndSettle();
+        expect(miniBarFinder, findsOneWidget);
+
+        await tester.tap(
+          find.byKey(const ValueKey('minimized_mini_app_close_button')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(miniBarFinder, findsNothing);
+        expect(sheetFinder, findsNothing);
         expect(
-          tester.getSize(sheetFinder).height,
+          tester.getSize(find.byKey(const ValueKey('mini_app_safe_body'))).height,
           moreOrLessEquals(screenHeight, epsilon: 0.5),
         );
       });

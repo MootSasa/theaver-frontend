@@ -48,6 +48,7 @@ import 'screens/chat/user_profile_screen.dart';
 import 'screens/search/search_screen.dart';
 import 'utils/swipe_back_route.dart';
 import 'services/tiling_layout_controller.dart';
+import 'widgets/bot/mini_app_webview_sheet.dart';
 import 'widgets/chat/floating_video_note_overlay.dart';
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
@@ -278,7 +279,10 @@ class TheaverApp extends StatelessWidget {
                   children: [
                     ActiveCallTopBanner(
                       onRestoreCall: () => _restoreActiveCall(context),
-                      child: child ?? const SizedBox.shrink(),
+                      child: MinimizedMiniAppHost(
+                        navigatorKey: DeepLinkService().navigatorKey,
+                        child: child ?? const SizedBox.shrink(),
+                      ),
                     ),
                     CallPipOverlay(
                       onRestoreCall: () => _restoreActiveCall(context),

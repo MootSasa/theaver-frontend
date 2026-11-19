@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -16,8 +17,8 @@ import '../../services/mini_app_js_bridge.dart';
 import '../../utils/haptic_utils.dart';
 import '../design_system/theav_design_system.dart';
 
-/// Launches a bot Mini App by signing `initData` via `/api/bots/:botId/webapp/launch`
-/// and opening [MiniAppWebViewSheet] full-screen over the root navigator.
+/// Launches a bot Mini App (or restores a matching minimized [MiniAppSession])
+/// full-screen over the root navigator.
 Future<void> openMiniAppSheet(
   BuildContext context, {
   required String botId,
@@ -32,6 +33,21 @@ Future<void> openMiniAppSheet(
   String buttonText = '',
   ValueChanged<String>? onSwitchInlineQuery,
 }) async {
+  final sessionCtrl = MiniAppSessionController.instance;
+  final existing = sessionCtrl.minimizedSession;
+  if (existing != null && existing.isMinimized) {
+    final normalizedId = botId.replaceFirst(RegExp(r'^@+'), '').toLowerCase();
+    final sameBot = existing.launchData.botId == botId ||
+        (normalizedId.isNotEmpty &&
+            existing.botUsername.toLowerCase() == normalizedId);
+    final sameUrl = url == null || url.isEmpty || url == existing.launchData.url;
+    if (sameBot && appShortName == null && sameUrl) {
+      await sessionCtrl.restore();
+      return;
+    }
+    sessionCtrl.closeMinimized(existing);
+  }
+
   final theme = Theme.of(context);
   final themeParams = MiniAppJsBridge.buildThemeParams(theme);
   final launch = await BotService.launchWebApp(
@@ -56,6 +72,17 @@ Future<void> openMiniAppSheet(
       ? launch.botUsername
       : (botUsername ?? '');
 
+  final session = MiniAppSession(
+    launchData: launch,
+    botName: effectiveBotName,
+    botUsername: effectiveBotUser,
+    isVerified: isVerified ?? launch.botIsVerified,
+    chatId: chatId,
+    mode: mode,
+    buttonText: buttonText,
+    onSwitchInlineQuery: onSwitchInlineQuery,
+  );
+
   await showTheavModalSheet<void>(
     context: context,
     enableDrag: false,
@@ -65,23 +92,602 @@ Future<void> openMiniAppSheet(
       launchData: launch,
       botName: effectiveBotName,
       botUsername: effectiveBotUser,
-      isVerified: isVerified ?? launch.botIsVerified,
+      isVerified: session.isVerified,
       chatId: chatId,
       mode: mode,
       buttonText: buttonText,
       onSwitchInlineQuery: onSwitchInlineQuery,
+      session: session,
     ),
     builder: (_) => const SizedBox.shrink(),
   );
 }
 
-class _ButtonState {
+class MiniAppActionButtonState {
   bool isVisible = false;
   bool isActive = true;
   bool isProgressVisible = false;
   String text = 'Продолжить';
   Color? color;
   Color? textColor;
+}
+
+/// Persistent live Mini App state retained across full-screen <-> minimized dock
+/// bar transitions so the underlying `WebViewController` and JS session never reload.
+class MiniAppSession {
+  final MiniAppLaunchData launchData;
+  final String botName;
+  final String botUsername;
+  final bool isVerified;
+  final String? chatId;
+  final String mode;
+  final String buttonText;
+  final ValueChanged<String>? onSwitchInlineQuery;
+
+  WebViewController? controller;
+  double loadProgress = 0.0;
+  bool isWebContentReady = false;
+  bool allowVerticalSwipe = true;
+  bool backButtonVisible = false;
+  bool settingsButtonVisible = false;
+  bool closingConfirmation = false;
+  Color? customHeaderColor;
+  Color? customBackgroundColor;
+  Color? customBottomBarColor;
+  final MiniAppActionButtonState mainButton = MiniAppActionButtonState()..text = 'Continue';
+  final MiniAppActionButtonState secondaryButton = MiniAppActionButtonState()..text = 'Cancel';
+
+  bool isMinimized = false;
+  NavigatorState? lastNavigator;
+
+  VoidCallback? onSheetStateChanged;
+  VoidCallback? onRequestBridgeInjection;
+  ValueChanged<String>? onInboundBridgeMessage;
+
+  MiniAppSession({
+    required this.launchData,
+    this.botName = '',
+    this.botUsername = '',
+    this.isVerified = false,
+    this.chatId,
+    this.mode = 'menu',
+    this.buttonText = '',
+    this.onSwitchInlineQuery,
+  });
+
+  String get displayTitle => botName.isNotEmpty
+      ? botName
+      : (launchData.botDisplayName.isNotEmpty
+          ? launchData.botDisplayName
+          : 'Mini App');
+
+  void ensureWebViewInitialized() {
+    if (controller != null || WebViewPlatform.instance == null) return;
+    final uri = Uri.tryParse(launchData.url);
+    if (uri == null) return;
+
+    final ctrl = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..addJavaScriptChannel(
+        'TheaverWebAppBridge',
+        onMessageReceived: (JavaScriptMessage msg) {
+          handleBridgeMessageFromJs(msg.message);
+        },
+      )
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onProgress: (p) {
+            loadProgress = p / 100.0;
+            onSheetStateChanged?.call();
+          },
+          onPageStarted: (_) {
+            onRequestBridgeInjection?.call();
+          },
+          onPageFinished: (_) {
+            loadProgress = 1.0;
+            isWebContentReady = true;
+            onSheetStateChanged?.call();
+            onRequestBridgeInjection?.call();
+          },
+          onNavigationRequest: (req) {
+            final targetUri = Uri.tryParse(req.url);
+            if (targetUri == null) return NavigationDecision.prevent;
+            final sch = targetUri.scheme.toLowerCase();
+            if (sch == 'http' || sch == 'https') {
+              return NavigationDecision.navigate;
+            }
+            return NavigationDecision.prevent;
+          },
+        ),
+      );
+    ctrl.loadRequest(uri);
+    controller = ctrl;
+  }
+
+  void handleBridgeMessageFromJs(String raw) {
+    final handler = onInboundBridgeMessage;
+    if (handler != null) {
+      handler(raw);
+      return;
+    }
+    final evt = MiniAppJsBridge.parseBridgeMessage(raw);
+    if (evt == null) return;
+    if (evt.eventType == 'web_app_set_header_color') {
+      final col = MiniAppJsBridge.parseHexColor(
+        (evt.eventData['color'] ?? evt.eventData['value'])?.toString(),
+      );
+      if (col != null) {
+        customHeaderColor = col;
+        MiniAppSessionController.instance.notifySessionUpdated();
+      }
+    } else if (evt.eventType == 'web_app_close') {
+      MiniAppSessionController.instance.closeMinimized(this);
+    }
+  }
+
+  Future<void> dispatchEvent(
+    String eventType, [
+    Map<String, dynamic> eventData = const {},
+    String? reqId,
+  ]) async {
+    final ctrl = controller;
+    if (ctrl == null) return;
+    final js =
+        'if (window.__theaverWebAppReceive) { window.__theaverWebAppReceive(${jsonEncode(eventType)}, ${jsonEncode(eventData)}, ${jsonEncode(reqId ?? '')}); }';
+    try {
+      await ctrl.runJavaScript(js);
+    } catch (_) {}
+  }
+}
+
+/// Coordinates a minimized bottom-docked [MiniAppSession] across navigation routes.
+class MiniAppSessionController extends ChangeNotifier {
+  MiniAppSessionController._();
+
+  static final MiniAppSessionController instance = MiniAppSessionController._();
+
+  MiniAppSession? _minimizedSession;
+
+  MiniAppSession? get minimizedSession => _minimizedSession;
+
+  bool get hasMinimizedSession =>
+      _minimizedSession != null && _minimizedSession!.isMinimized;
+
+  void minimize(MiniAppSession session, {NavigatorState? navigator}) {
+    session.isMinimized = true;
+    if (navigator != null) {
+      session.lastNavigator = navigator;
+    }
+    _minimizedSession = session;
+    session.dispatchEvent('deactivated');
+    session.dispatchEvent('viewport_changed', const {
+      'height': 0,
+      'is_expanded': false,
+      'is_state_stable': true,
+    });
+    notifyListeners();
+  }
+
+  void notifySessionUpdated() {
+    notifyListeners();
+  }
+
+  Future<void> restore({
+    GlobalKey<NavigatorState>? fallbackNavigatorKey,
+  }) async {
+    final session = _minimizedSession;
+    if (session == null) return;
+
+    final NavigatorState? nav =
+        (session.lastNavigator != null && session.lastNavigator!.mounted)
+            ? session.lastNavigator
+            : fallbackNavigatorKey?.currentState;
+    if (nav == null || !nav.mounted) return;
+
+    final BuildContext? restoreContext = nav.overlay?.context;
+    if (restoreContext == null || !restoreContext.mounted) return;
+
+    session.isMinimized = false;
+    _minimizedSession = null;
+    notifyListeners();
+    session.dispatchEvent('activated');
+
+    await showTheavModalSheet<void>(
+      context: restoreContext,
+      enableDrag: false,
+      barrierDismissible: true,
+      useRootNavigator: true,
+      customSheetBuilder: (_) => MiniAppWebViewSheet(
+        launchData: session.launchData,
+        botName: session.botName,
+        botUsername: session.botUsername,
+        isVerified: session.isVerified,
+        chatId: session.chatId,
+        mode: session.mode,
+        buttonText: session.buttonText,
+        onSwitchInlineQuery: session.onSwitchInlineQuery,
+        session: session,
+      ),
+      builder: (_) => const SizedBox.shrink(),
+    );
+  }
+
+  void closeMinimized([MiniAppSession? target]) {
+    if (_minimizedSession == null) return;
+    if (target != null && !identical(_minimizedSession, target)) return;
+    _minimizedSession!.isMinimized = false;
+    _minimizedSession = null;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void resetForTesting() {
+    if (_minimizedSession == null) return;
+    _minimizedSession!.isMinimized = false;
+    _minimizedSession = null;
+    notifyListeners();
+  }
+}
+
+class _MinimizedMiniAppHostScope extends InheritedWidget {
+  const _MinimizedMiniAppHostScope({required super.child});
+
+  static bool maybeOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_MinimizedMiniAppHostScope>() !=
+      null;
+
+  @override
+  bool updateShouldNotify(_MinimizedMiniAppHostScope oldWidget) => false;
+}
+
+/// Wraps the app navigator subtree to present a Telegram-style minimized bottom
+/// Mini App bar (`[ x BotName ^ ]`) and lift underlying `SafeArea` / chat input bars.
+class MinimizedMiniAppHost extends StatefulWidget {
+  final Widget child;
+  final GlobalKey<NavigatorState>? navigatorKey;
+
+  const MinimizedMiniAppHost({
+    super.key,
+    required this.child,
+    this.navigatorKey,
+  });
+
+  @override
+  State<MinimizedMiniAppHost> createState() => _MinimizedMiniAppHostState();
+}
+
+class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animController;
+  late final Animation<double> _curvedAnim;
+  late final Animation<Offset> _slideAnim;
+  MiniAppSession? _displayedSession;
+
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      reverseDuration: const Duration(milliseconds: 180),
+    );
+    _curvedAnim = CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _slideAnim = Tween<Offset>(
+      begin: const Offset(0.0, 1.0),
+      end: Offset.zero,
+    ).animate(_curvedAnim);
+
+    MiniAppSessionController.instance.addListener(_onSessionChanged);
+    final current = MiniAppSessionController.instance.minimizedSession;
+    if (current != null && current.isMinimized) {
+      _displayedSession = current;
+      _animController.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    MiniAppSessionController.instance.removeListener(_onSessionChanged);
+    _animController.dispose();
+    super.dispose();
+  }
+
+  void _onSessionChanged() {
+    if (!mounted) return;
+    final current = MiniAppSessionController.instance.minimizedSession;
+    if (current != null && current.isMinimized) {
+      setState(() => _displayedSession = current);
+      if (_animController.status != AnimationStatus.forward &&
+          _animController.status != AnimationStatus.completed) {
+        _animController.forward();
+      }
+    } else if (_displayedSession != null) {
+      if (_animController.status == AnimationStatus.dismissed) {
+        setState(() => _displayedSession = null);
+      } else if (_animController.status != AnimationStatus.reverse) {
+        _animController.reverse().whenComplete(() {
+          if (mounted &&
+              MiniAppSessionController.instance.minimizedSession == null) {
+            setState(() => _displayedSession = null);
+          }
+        });
+      } else {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _handleCloseMinimized(MiniAppSession session) async {
+    if (session.closingConfirmation) {
+      final NavigatorState? nav =
+          (session.lastNavigator != null && session.lastNavigator!.mounted)
+              ? session.lastNavigator
+              : widget.navigatorKey?.currentState;
+      final BuildContext? dialogCtx = nav?.overlay?.context;
+      if (dialogCtx != null && dialogCtx.mounted) {
+        final confirm = await showTheavDialog<bool>(
+              context: dialogCtx,
+              title: 'Закрыть Mini App?',
+              message: 'Внесённые изменения могут не сохраниться.',
+              actions: const [
+                TheavDialogAction<bool>(label: 'Остаться', result: false),
+                TheavDialogAction<bool>(
+                  label: 'Закрыть',
+                  result: true,
+                  isDestructive: true,
+                ),
+              ],
+            ) ??
+            false;
+        if (!confirm || !mounted) return;
+      }
+    }
+    MiniAppSessionController.instance.closeMinimized(session);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = _displayedSession;
+    if (session == null && _animController.isDismissed) {
+      return _MinimizedMiniAppHostScope(child: widget.child);
+    }
+
+    final mq = MediaQuery.of(context);
+    final bool keyboardVisible = mq.viewInsets.bottom > 0;
+    final double barBottomInset = math.min(mq.padding.bottom, 10.0);
+    final double totalBarHeight = 48.0 + barBottomInset;
+
+    return _MinimizedMiniAppHostScope(
+      child: AnimatedBuilder(
+        animation: _curvedAnim,
+        builder: (context, _) {
+          final double t = _curvedAnim.value.clamp(0.0, 1.0);
+          final double targetBottom =
+              math.max(mq.padding.bottom, totalBarHeight + 2.0);
+          final double extraBottom = keyboardVisible
+              ? mq.padding.bottom
+              : ui.lerpDouble(mq.padding.bottom, targetBottom, t)!;
+
+          final Widget adjustedChild = (!keyboardVisible && t > 0.001)
+              ? MediaQuery(
+                  data: mq.copyWith(
+                    padding: mq.padding.copyWith(bottom: extraBottom),
+                    viewPadding: mq.viewPadding.copyWith(bottom: extraBottom),
+                  ),
+                  child: widget.child,
+                )
+              : widget.child;
+
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              adjustedChild,
+              if (!keyboardVisible &&
+                  session != null &&
+                  _animController.value > 0.0)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SlideTransition(
+                    position: _slideAnim,
+                    child: MinimizedMiniAppBar(
+                      key: const ValueKey('minimized_mini_app_bar'),
+                      session: session,
+                      bottomInset: barBottomInset,
+                      onRestore: () => MiniAppSessionController.instance.restore(
+                        fallbackNavigatorKey: widget.navigatorKey,
+                      ),
+                      onClose: () => _handleCloseMinimized(session),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Telegram-style minimized bottom bar (`[ x BotName ^ ]`) docked above the
+/// bottom gesture inset with theme-derived surface/Liquid Glass styling.
+class MinimizedMiniAppBar extends StatelessWidget {
+  final MiniAppSession session;
+  final double bottomInset;
+  final VoidCallback onRestore;
+  final VoidCallback onClose;
+
+  const MinimizedMiniAppBar({
+    super.key,
+    required this.session,
+    required this.bottomInset,
+    required this.onRestore,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final resolved = MiniAppJsBridge.resolveThemeColors(Theme.of(context));
+    final style = TheavSurfaceStyle.of(context);
+
+    final Color barBg = session.customHeaderColor ?? resolved.headerBg;
+    final Color barFg = session.customHeaderColor != null
+        ? (barBg.computeLuminance() <= 0.55 ? Colors.white : Colors.black87)
+        : resolved.headerFg;
+    final Color barDivider = session.customHeaderColor != null
+        ? barFg.withValues(alpha: 0.14)
+        : resolved.divider;
+
+    final bool useGlassBar = style.isGlass &&
+        style.glassProvider != null &&
+        session.customHeaderColor == null;
+
+    return SizedBox(
+      height: 48.0 + bottomInset,
+      width: double.infinity,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          if (useGlassBar)
+            Positioned(
+              left: 4,
+              right: 4,
+              top: 0,
+              bottom: -14,
+              child: LiquidGlassLens(
+                style: style.glassProvider!.createStyle(
+                  context: context,
+                  cornerRadius: 14,
+                  refractionIndex: style.isFull ? 1.10 : 1.05,
+                  refractionWidth: 18.0,
+                  borderWidth: 1.0,
+                  color: barBg.withValues(alpha: style.isDark ? 0.76 : 0.84),
+                ),
+                child: const SizedBox.expand(),
+              ),
+            )
+          else
+            Positioned(
+              left: 4,
+              right: 4,
+              top: 0,
+              bottom: 0,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: barBg,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(14),
+                  ),
+                  border: Border(
+                    top: BorderSide(color: barDivider, width: 0.8),
+                    left: BorderSide(color: barDivider, width: 0.8),
+                    right: BorderSide(color: barDivider, width: 0.8),
+                  ),
+                ),
+              ),
+            ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(4, 0, 4, bottomInset),
+            child: Material(
+              type: MaterialType.transparency,
+              child: SizedBox(
+                height: 48,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 46,
+                      height: 48,
+                      child: Semantics(
+                        button: true,
+                        label: 'Закрыть',
+                        child: InkWell(
+                          key: const ValueKey('minimized_mini_app_close_button'),
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: () {
+                            HapticUtils.tap();
+                            onClose();
+                          },
+                          child: Center(
+                            child: Icon(
+                              Icons.close_rounded,
+                              size: 22,
+                              color: barFg,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          HapticUtils.selection();
+                          onRestore();
+                        },
+                        onVerticalDragEnd: (d) {
+                          if ((d.primaryVelocity ?? 0.0) < -200.0) {
+                            HapticUtils.selection();
+                            onRestore();
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 4, right: 8),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              session.displayTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 16.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.15,
+                                color: barFg,
+                                decoration: TextDecoration.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 46,
+                      height: 48,
+                      child: Semantics(
+                        button: true,
+                        label: 'Развернуть',
+                        child: InkWell(
+                          key: const ValueKey('minimized_mini_app_expand_button'),
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: () {
+                            HapticUtils.selection();
+                            onRestore();
+                          },
+                          child: Center(
+                            child: Icon(
+                              Icons.keyboard_arrow_up_rounded,
+                              size: 26,
+                              color: barFg,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _MiniAppDragOffset extends SingleChildRenderObjectWidget {
@@ -342,20 +948,19 @@ class _MiniAppGridPlaceholderState extends State<MiniAppGridPlaceholder>
   }
 }
 
-/// Telegram-style Mini App container with opaque WebView viewport, status-bar-aware
-/// full-screen / compact collapse transitions, centered title + verified seal,
-/// 2x2 placeholder loader, and targeted Liquid Glass ONLY on the transient
-/// overflow menu and optional secondary action button.
+/// Full-screen Telegram-style Mini App container with theme-derived palette,
+/// centered title + verified seal, 2x2 placeholder loader, minimize-to-bottom-bar
+/// support, and targeted Liquid Glass on transient overflow menu & secondary button.
 class MiniAppWebViewSheet extends StatefulWidget {
   final MiniAppLaunchData launchData;
   final String botName;
   final String botUsername;
   final bool isVerified;
-  final bool initialExpanded;
   final String? chatId;
   final String mode;
   final String buttonText;
   final ValueChanged<String>? onSwitchInlineQuery;
+  final MiniAppSession? session;
 
   const MiniAppWebViewSheet({
     super.key,
@@ -363,11 +968,11 @@ class MiniAppWebViewSheet extends StatefulWidget {
     this.botName = '',
     this.botUsername = '',
     this.isVerified = false,
-    this.initialExpanded = true,
     this.chatId,
     this.mode = 'menu',
     this.buttonText = '',
     this.onSwitchInlineQuery,
+    this.session,
   });
 
   @override
@@ -376,12 +981,9 @@ class MiniAppWebViewSheet extends StatefulWidget {
 
 class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     with TickerProviderStateMixin {
-  WebViewController? _controller;
-  double _loadProgress = 0.0;
-  bool _isWebContentReady = false;
-  late bool _isExpanded;
+  late final MiniAppSession _session;
   bool _isMenuOpen = false;
-  bool _allowVerticalSwipe = true;
+  bool _isMinimizing = false;
 
   double _dragOffsetY = 0.0;
   double _dragResetFrom = 0.0;
@@ -389,17 +991,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   late final AnimationController _dragResetController;
   late final AnimationController _menuAnimController;
 
-  bool _backButtonVisible = false;
-  bool _settingsButtonVisible = false;
-  bool _closingConfirmation = false;
-  Color? _customHeaderColor;
-  Color? _customBackgroundColor;
-  Color? _customBottomBarColor;
   Color? _lastSyncedWebViewBg;
   Map<String, String>? _lastThemeParams;
-
-  final _ButtonState _mainButton = _ButtonState()..text = 'Continue';
-  final _ButtonState _secondaryButton = _ButtonState()..text = 'Cancel';
 
   bool get _hasPlatformWebView => WebViewPlatform.instance != null;
 
@@ -418,10 +1011,26 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
+  void _onSessionStateChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    _isExpanded = widget.initialExpanded;
+    _session = widget.session ??
+        MiniAppSession(
+          launchData: widget.launchData,
+          botName: widget.botName,
+          botUsername: widget.botUsername,
+          isVerified: widget.isVerified,
+          chatId: widget.chatId,
+          mode: widget.mode,
+          buttonText: widget.buttonText,
+          onSwitchInlineQuery: widget.onSwitchInlineQuery,
+        );
     _dragResetController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 180),
@@ -437,9 +1046,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       vsync: this,
       duration: const Duration(milliseconds: 160),
     );
-    if (_hasPlatformWebView) {
-      _initWebView();
-    }
+
+    _session.onSheetStateChanged = _onSessionStateChanged;
+    _session.onRequestBridgeInjection = _injectBridge;
+    _session.onInboundBridgeMessage = _handleBridgeMessage;
+    _session.ensureWebViewInitialized();
   }
 
   @override
@@ -450,16 +1061,28 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   @override
   void dispose() {
+    if (identical(_session.onSheetStateChanged, _onSessionStateChanged)) {
+      _session.onSheetStateChanged = null;
+    }
+    if (identical(_session.onRequestBridgeInjection, _injectBridge)) {
+      _session.onRequestBridgeInjection = null;
+    }
+    if (identical(_session.onInboundBridgeMessage, _handleBridgeMessage)) {
+      _session.onInboundBridgeMessage = null;
+    }
+    if (!_isMinimizing) {
+      MiniAppSessionController.instance.closeMinimized(_session);
+    }
     _dragResetController.dispose();
     _menuAnimController.dispose();
     super.dispose();
   }
 
   void _syncWebViewBg() {
-    final ctrl = _controller;
+    final ctrl = _session.controller;
     if (ctrl == null || !mounted) return;
     final themeColors = MiniAppJsBridge.resolveThemeColors(Theme.of(context));
-    final effectiveBg = _customBackgroundColor ?? themeColors.bodyBg;
+    final effectiveBg = _session.customBackgroundColor ?? themeColors.bodyBg;
     if (_lastSyncedWebViewBg != effectiveBg) {
       _lastSyncedWebViewBg = effectiveBg;
       try {
@@ -470,7 +1093,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   void _syncThemeWithWebView() {
     _syncWebViewBg();
-    final ctrl = _controller;
+    final ctrl = _session.controller;
     if (ctrl == null || !mounted) return;
     final theme = Theme.of(context);
     final nextParams = MiniAppJsBridge.buildThemeParams(theme);
@@ -484,65 +1107,18 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _lastThemeParams = nextParams;
   }
 
-  void _initWebView() {
-    final uri = Uri.tryParse(widget.launchData.url);
-    if (uri == null) return;
-
-    final ctrl = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel(
-        'TheaverWebAppBridge',
-        onMessageReceived: (JavaScriptMessage msg) {
-          _handleBridgeMessage(msg.message);
-        },
-      )
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (p) {
-            if (mounted) {
-              setState(() => _loadProgress = p / 100.0);
-            }
-          },
-          onPageStarted: (_) {
-            _injectBridge();
-          },
-          onPageFinished: (_) {
-            if (mounted) {
-              setState(() {
-                _loadProgress = 1.0;
-                _isWebContentReady = true;
-              });
-            }
-            _injectBridge();
-          },
-          onNavigationRequest: (req) {
-            final targetUri = Uri.tryParse(req.url);
-            if (targetUri == null) return NavigationDecision.prevent;
-            final sch = targetUri.scheme.toLowerCase();
-            if (sch == 'http' || sch == 'https') {
-              return NavigationDecision.navigate;
-            }
-            return NavigationDecision.prevent;
-          },
-        ),
-      );
-    ctrl.loadRequest(uri);
-    _controller = ctrl;
-  }
-
   Future<void> _injectBridge() async {
-    final ctrl = _controller;
+    final ctrl = _session.controller;
     if (ctrl == null || !mounted) return;
     final theme = Theme.of(context);
     final themeParams = MiniAppJsBridge.buildThemeParams(theme);
-    final screenH = MediaQuery.sizeOf(context).height;
-    final vpHeight = screenH * (_isExpanded ? 1.0 : 0.78);
+    final vpHeight = MediaQuery.sizeOf(context).height;
     final js = MiniAppJsBridge.buildInjectionScript(
-      widget.launchData,
+      _session.launchData,
       themeParams,
       colorScheme: theme.brightness == Brightness.dark ? 'dark' : 'light',
       viewportHeight: vpHeight,
-      isExpanded: _isExpanded,
+      isExpanded: true,
       platform: _runtimePlatformName,
     );
     try {
@@ -556,15 +1132,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     String eventType, [
     Map<String, dynamic> eventData = const {},
     String? reqId,
-  ]) async {
-    final ctrl = _controller;
-    if (ctrl == null) return;
-    final js =
-        'if (window.__theaverWebAppReceive) { window.__theaverWebAppReceive(${jsonEncode(eventType)}, ${jsonEncode(eventData)}, ${jsonEncode(reqId ?? '')}); }';
-    try {
-      await ctrl.runJavaScript(js);
-    } catch (_) {}
-  }
+  ]) =>
+      _session.dispatchEvent(eventType, eventData, reqId);
 
   Future<void> _handleBridgeMessage(String raw) async {
     final evt = MiniAppJsBridge.parseBridgeMessage(raw);
@@ -573,16 +1142,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
     switch (evt.eventType) {
       case 'web_app_ready':
-        if (!_isWebContentReady && mounted) {
-          setState(() => _isWebContentReady = true);
+        if (!_session.isWebContentReady && mounted) {
+          setState(() => _session.isWebContentReady = true);
         }
         break;
 
       case 'web_app_expand':
-        if (!_isExpanded && mounted) {
-          setState(() => _isExpanded = true);
-          _notifyViewportChanged();
-        }
+        _notifyViewportChanged();
         break;
 
       case 'web_app_close':
@@ -593,10 +1159,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         final payload = (data['data'] ?? '').toString();
         if (payload.isNotEmpty) {
           final res = await BotService.sendWebAppData(
-            botId: widget.launchData.botId,
+            botId: _session.launchData.botId,
             data: payload,
-            buttonText: widget.buttonText,
-            chatId: widget.chatId,
+            buttonText: _session.buttonText,
+            chatId: _session.chatId,
           );
           if (mounted) {
             if (res['success'] == true) {
@@ -613,13 +1179,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
       case 'web_app_switch_inline_query':
         final query = (data['query'] ?? '').toString();
-        final uname = widget.botUsername.isNotEmpty
-            ? widget.botUsername
-            : widget.launchData.botUsername;
+        final uname = _session.botUsername.isNotEmpty
+            ? _session.botUsername
+            : _session.launchData.botUsername;
         final text = uname.isNotEmpty ? '@$uname $query' : query;
         if (mounted) {
           Navigator.of(context).maybePop();
-          widget.onSwitchInlineQuery?.call(text);
+          _session.onSwitchInlineQuery?.call(text);
         }
         break;
 
@@ -636,14 +1202,14 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_set_header_color':
         final col = _resolveSpecialColor(data);
         if (mounted) {
-          setState(() => _customHeaderColor = col);
+          setState(() => _session.customHeaderColor = col);
         }
         break;
 
       case 'web_app_set_background_color':
         final col = _resolveSpecialColor(data);
         if (mounted) {
-          setState(() => _customBackgroundColor = col);
+          setState(() => _session.customBackgroundColor = col);
           _syncWebViewBg();
         }
         break;
@@ -651,41 +1217,45 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_set_bottom_bar_color':
         final col = _resolveSpecialColor(data);
         if (mounted) {
-          setState(() => _customBottomBarColor = col);
+          setState(() => _session.customBottomBarColor = col);
         }
         break;
 
       case 'web_app_setup_back_button':
         if (mounted) {
-          setState(() => _backButtonVisible = data['is_visible'] == true);
+          setState(
+            () => _session.backButtonVisible = data['is_visible'] == true,
+          );
         }
         break;
 
       case 'web_app_setup_settings_button':
         if (mounted) {
-          setState(() => _settingsButtonVisible = data['is_visible'] == true);
+          setState(
+            () => _session.settingsButtonVisible = data['is_visible'] == true,
+          );
         }
         break;
 
       case 'web_app_setup_closing_behavior':
-        _closingConfirmation = data['need_confirmation'] == true;
+        _session.closingConfirmation = data['need_confirmation'] == true;
         break;
 
       case 'web_app_setup_swipe_behavior':
         if (data.containsKey('allow_vertical_swipe')) {
-          _allowVerticalSwipe = data['allow_vertical_swipe'] != false;
+          _session.allowVerticalSwipe = data['allow_vertical_swipe'] != false;
         }
         break;
 
       case 'web_app_setup_main_button':
         if (mounted) {
-          setState(() => _applyButtonSetup(_mainButton, data));
+          setState(() => _applyButtonSetup(_session.mainButton, data));
         }
         break;
 
       case 'web_app_setup_secondary_button':
         if (mounted) {
-          setState(() => _applyButtonSetup(_secondaryButton, data));
+          setState(() => _applyButtonSetup(_session.secondaryButton, data));
         }
         break;
 
@@ -721,7 +1291,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               context: context,
               title: 'Разрешить сообщения?',
               message:
-                  'Бот @${widget.botUsername.isNotEmpty ? widget.botUsername : widget.launchData.botUsername} запрашивает разрешение отправлять вам сообщения.',
+                  'Бот @${_session.botUsername.isNotEmpty ? _session.botUsername : _session.launchData.botUsername} запрашивает разрешение отправлять вам сообщения.',
               actions: const [
                 TheavDialogAction<bool>(label: 'Запретить', result: false),
                 TheavDialogAction<bool>(
@@ -734,7 +1304,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             false;
         if (allowed) {
           await BotService.setWriteAccess(
-            botId: widget.launchData.botId,
+            botId: _session.launchData.botId,
             allowed: true,
           );
         }
@@ -768,7 +1338,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'cloud_storage_keys':
-        final keys = await BotService.cloudStorageKeys(widget.launchData.botId);
+        final keys =
+            await BotService.cloudStorageKeys(_session.launchData.botId);
         await _dispatchEventToWebView(
           'cloud_storage_result',
           keys == null
@@ -782,8 +1353,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         final rawKeys = data['keys'] is List
             ? (data['keys'] as List).map((e) => e.toString()).toList()
             : <String>[];
-        final items =
-            await BotService.cloudStorageGet(widget.launchData.botId, rawKeys);
+        final items = await BotService.cloudStorageGet(
+          _session.launchData.botId,
+          rawKeys,
+        );
         await _dispatchEventToWebView(
           'cloud_storage_result',
           items == null
@@ -795,7 +1368,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
       case 'cloud_storage_set':
         final ok = await BotService.cloudStorageSet(
-          widget.launchData.botId,
+          _session.launchData.botId,
           (data['key'] ?? '').toString(),
           (data['value'] ?? '').toString(),
         );
@@ -811,7 +1384,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             ? (data['keys'] as List).map((e) => e.toString()).toList()
             : <String>[];
         final ok = await BotService.cloudStorageRemove(
-          widget.launchData.botId,
+          _session.launchData.botId,
           rawKeys,
         );
         await _dispatchEventToWebView(
@@ -823,7 +1396,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
-  void _applyButtonSetup(_ButtonState state, Map<String, dynamic> data) {
+  void _applyButtonSetup(MiniAppActionButtonState state, Map<String, dynamic> data) {
     if (data.containsKey('is_visible')) {
       state.isVisible = data['is_visible'] == true;
     }
@@ -899,16 +1472,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   void _notifyViewportChanged() {
     if (!mounted) return;
-    final h = MediaQuery.sizeOf(context).height * (_isExpanded ? 1.0 : 0.78);
+    final h = MediaQuery.sizeOf(context).height;
     _dispatchEventToWebView('viewport_changed', {
       'height': h.round(),
-      'is_expanded': _isExpanded,
+      'is_expanded': true,
       'is_state_stable': true,
     });
   }
 
   Future<void> _attemptClose({bool force = false}) async {
-    if (!force && _closingConfirmation) {
+    if (!force && _session.closingConfirmation) {
       final confirm = await showTheavDialog<bool>(
             context: context,
             title: 'Закрыть Mini App?',
@@ -925,7 +1498,22 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           false;
       if (!confirm || !mounted) return;
     }
+    _isMinimizing = false;
+    MiniAppSessionController.instance.closeMinimized(_session);
     if (mounted) {
+      Navigator.of(context).maybePop();
+    }
+  }
+
+  void _minimizeMiniApp() {
+    HapticUtils.selection();
+    _closeMenu();
+    if (_MinimizedMiniAppHostScope.maybeOf(context)) {
+      _isMinimizing = true;
+      final nav = Navigator.of(context, rootNavigator: true);
+      MiniAppSessionController.instance.minimize(_session, navigator: nav);
+      nav.maybePop();
+    } else {
       Navigator.of(context).maybePop();
     }
   }
@@ -945,24 +1533,14 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
-  void _toggleExpandState() {
-    HapticUtils.selection();
-    setState(() {
-      _isMenuOpen = false;
-      _isExpanded = !_isExpanded;
-      _dragOffsetY = 0.0;
-    });
-    _notifyViewportChanged();
-  }
-
   void _handleHeaderDragStart(DragStartDetails _) {
-    if (!_allowVerticalSwipe) return;
+    if (!_session.allowVerticalSwipe) return;
     _dragResetController.stop();
     _dragAccumulated = 0.0;
   }
 
   void _handleHeaderDragUpdate(DragUpdateDetails details) {
-    if (!_allowVerticalSwipe) return;
+    if (!_session.allowVerticalSwipe) return;
     _dragAccumulated += details.delta.dy;
     final double nextOffset = (_dragOffsetY + details.delta.dy).clamp(0.0, 260.0);
     if ((nextOffset - _dragOffsetY).abs() > 0.1) {
@@ -989,38 +1567,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   void _handleHeaderDragEnd(DragEndDetails details) {
-    if (!_allowVerticalSwipe) return;
+    if (!_session.allowVerticalSwipe) return;
     final double dy = _dragAccumulated;
     final double vy = details.primaryVelocity ?? 0.0;
     _dragAccumulated = 0.0;
 
-    if (!_isExpanded) {
-      if (dy < -36 || vy < -320) {
-        setState(() {
-          _isExpanded = true;
-          _dragOffsetY = 0.0;
-        });
-        _notifyViewportChanged();
-        return;
-      }
-      if (dy > 90 || vy > 620) {
-        _attemptClose();
-        return;
-      }
-      _resetDragOffset();
-      return;
-    }
-
-    if (dy >= 175 || vy >= 850) {
-      _attemptClose();
-      return;
-    }
-    if (dy > 70 && dy < 175 && vy < 850) {
-      setState(() {
-        _isExpanded = false;
-        _dragOffsetY = 0.0;
-      });
-      _notifyViewportChanged();
+    if (dy >= 90 || vy >= 620) {
+      _minimizeMiniApp();
       return;
     }
     _resetDragOffset();
@@ -1033,45 +1586,40 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final resolved = MiniAppJsBridge.resolveThemeColors(theme);
     final palette = resolved.palette;
     final media = MediaQuery.of(context);
-    final double sheetHeight =
-        media.size.height * (_isExpanded ? 1.0 : 0.78);
-    final double topInset = _isExpanded ? media.padding.top : 0.0;
-    final double topRadius = _isExpanded ? 0.0 : 18.0;
+    final double sheetHeight = media.size.height;
+    final double topInset = media.padding.top;
 
-    final Color bodyBg = _customBackgroundColor ?? resolved.bodyBg;
-    final Color bodyFg = _customBackgroundColor != null
-        ? (_customBackgroundColor!.computeLuminance() <= 0.55
+    final Color bodyBg = _session.customBackgroundColor ?? resolved.bodyBg;
+    final Color bodyFg = _session.customBackgroundColor != null
+        ? (_session.customBackgroundColor!.computeLuminance() <= 0.55
             ? Colors.white
             : Colors.black87)
         : palette.onSurface;
-    final Color headerBg = _customHeaderColor ?? resolved.headerBg;
+    final Color headerBg = _session.customHeaderColor ?? resolved.headerBg;
     final bool isHeaderDark = headerBg.computeLuminance() <= 0.55;
-    final Color headerFg = _customHeaderColor != null
+    final Color headerFg = _session.customHeaderColor != null
         ? (isHeaderDark ? Colors.white : Colors.black87)
         : resolved.headerFg;
-    final Color headerDivider = _customHeaderColor != null
+    final Color headerDivider = _session.customHeaderColor != null
         ? headerFg.withValues(alpha: 0.12)
         : resolved.divider;
-    final Color sealColor =
-        _customHeaderColor != null ? headerFg.withValues(alpha: 0.85) : palette.primary;
+    final Color sealColor = _session.customHeaderColor != null
+        ? headerFg.withValues(alpha: 0.85)
+        : palette.primary;
     final Color sealCheckColor =
         (sealColor.computeLuminance() - headerBg.computeLuminance()).abs() > 0.18
             ? headerBg
             : palette.onPrimary;
 
-    final String displayTitle = widget.botName.isNotEmpty
-        ? widget.botName
-        : (widget.launchData.botDisplayName.isNotEmpty
-            ? widget.launchData.botDisplayName
-            : 'Mini App');
-    final String effectiveUsername = widget.botUsername.isNotEmpty
-        ? widget.botUsername
-        : widget.launchData.botUsername;
+    final String displayTitle = _session.displayTitle;
+    final String effectiveUsername = _session.botUsername.isNotEmpty
+        ? _session.botUsername
+        : _session.launchData.botUsername;
     final String unameLower = effectiveUsername.toLowerCase().trim();
     final String displayHandle =
         effectiveUsername.isNotEmpty ? '@$effectiveUsername' : '';
-    final bool effectiveIsVerified = widget.isVerified ||
-        widget.launchData.botIsVerified ||
+    final bool effectiveIsVerified = _session.isVerified ||
+        _session.launchData.botIsVerified ||
         unameLower == 'botmother' ||
         unameLower == 'botfather';
 
@@ -1093,139 +1641,114 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         ),
         child: Padding(
           padding: EdgeInsets.only(top: topInset),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (!_isExpanded)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.only(top: 9, bottom: 4),
-                  alignment: Alignment.center,
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: headerFg.withValues(alpha: 0.28),
-                      borderRadius: BorderRadius.circular(2),
+          child: SizedBox(
+            height: 54,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: IconButton(
+                      key: const ValueKey('mini_app_close_or_back_button'),
+                      tooltip:
+                          _session.backButtonVisible ? 'Назад' : 'Закрыть',
+                      onPressed: _session.backButtonVisible
+                          ? () {
+                              _closeMenu();
+                              _dispatchEventToWebView('back_button_pressed');
+                            }
+                          : () => _attemptClose(),
+                      icon: Icon(
+                        _session.backButtonVisible
+                            ? Icons.arrow_back_rounded
+                            : Icons.close_rounded,
+                        size: 24,
+                        color: headerFg,
+                      ),
                     ),
                   ),
                 ),
-              SizedBox(
-                height: 54,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 4),
-                        child: IconButton(
-                          key: const ValueKey('mini_app_close_or_back_button'),
-                          tooltip: _backButtonVisible ? 'Назад' : 'Закрыть',
-                          onPressed: _backButtonVisible
-                              ? () {
-                                  _closeMenu();
-                                  _dispatchEventToWebView(
-                                    'back_button_pressed',
-                                  );
-                                }
-                              : () => _attemptClose(),
-                          icon: Icon(
-                            _backButtonVisible
-                                ? Icons.arrow_back_rounded
-                                : Icons.close_rounded,
-                            size: 24,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 96),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          displayTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 18.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.15,
                             color: headerFg,
                           ),
                         ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 96),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              displayTitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 18.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: -0.15,
-                                color: headerFg,
-                              ),
+                      if (effectiveIsVerified) ...[
+                        const SizedBox(width: 6),
+                        MiniAppVerifiedSeal(
+                          key: const ValueKey('mini_app_verified_seal'),
+                          size: 19,
+                          color: sealColor,
+                          checkColor: sealCheckColor,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 42,
+                          height: 42,
+                          child: IconButton(
+                            key: const ValueKey(
+                              'mini_app_collapse_expand_button',
+                            ),
+                            tooltip: 'Свернуть',
+                            padding: EdgeInsets.zero,
+                            onPressed: _minimizeMiniApp,
+                            icon: Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              size: 26,
+                              color: headerFg,
                             ),
                           ),
-                          if (effectiveIsVerified) ...[
-                            const SizedBox(width: 6),
-                            MiniAppVerifiedSeal(
-                              key: const ValueKey('mini_app_verified_seal'),
-                              size: 19,
-                              color: sealColor,
-                              checkColor: sealCheckColor,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 42,
-                              height: 42,
-                              child: IconButton(
-                                key: const ValueKey(
-                                  'mini_app_collapse_expand_button',
-                                ),
-                                tooltip: _isExpanded ? 'Свернуть' : 'Развернуть',
-                                padding: EdgeInsets.zero,
-                                onPressed: _toggleExpandState,
-                                icon: AnimatedRotation(
-                                  turns: _isExpanded ? 0.0 : 0.5,
-                                  duration: const Duration(milliseconds: 200),
-                                  curve: Curves.easeOutCubic,
-                                  child: Icon(
-                                    Icons.keyboard_arrow_down_rounded,
-                                    size: 26,
-                                    color: headerFg,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            SizedBox(
-                              width: 42,
-                              height: 42,
-                              child: IconButton(
-                                key: const ValueKey('mini_app_more_menu_button'),
-                                tooltip: 'Ещё',
-                                padding: EdgeInsets.zero,
-                                onPressed: () {
-                                  HapticUtils.tap();
-                                  _toggleMenu();
-                                },
-                                icon: Icon(
-                                  Icons.more_vert_rounded,
-                                  size: 23,
-                                  color: headerFg,
-                                ),
-                              ),
-                            ),
-                          ],
                         ),
-                      ),
+                        SizedBox(
+                          width: 42,
+                          height: 42,
+                          child: IconButton(
+                            key: const ValueKey('mini_app_more_menu_button'),
+                            tooltip: 'Ещё',
+                            padding: EdgeInsets.zero,
+                            onPressed: () {
+                              HapticUtils.tap();
+                              _toggleMenu();
+                            },
+                            icon: Icon(
+                              Icons.more_vert_rounded,
+                              size: 23,
+                              color: headerFg,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1234,17 +1757,17 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final Widget viewportBody = Expanded(
       child: ColoredBox(
         color: bodyBg,
-        child: _hasPlatformWebView && _controller != null
+        child: _hasPlatformWebView && _session.controller != null
             ? Stack(
                 fit: StackFit.expand,
                 children: [
                   RepaintBoundary(
                     child: ColoredBox(
                       color: bodyBg,
-                      child: WebViewWidget(controller: _controller!),
+                      child: WebViewWidget(controller: _session.controller!),
                     ),
                   ),
-                  if (!_isWebContentReady)
+                  if (!_session.isWebContentReady)
                     Positioned.fill(
                       child: ColoredBox(
                         color: bodyBg,
@@ -1258,7 +1781,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                         ),
                       ),
                     ),
-                  if (_loadProgress > 0 && _loadProgress < 1.0)
+                  if (_session.loadProgress > 0 &&
+                      _session.loadProgress < 1.0)
                     Positioned(
                       left: 0,
                       right: 0,
@@ -1266,7 +1790,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: FractionallySizedBox(
-                          widthFactor: _loadProgress.clamp(0.06, 1.0),
+                          widthFactor: _session.loadProgress.clamp(0.06, 1.0),
                           child: SizedBox(
                             height: 2.5,
                             child: ColoredBox(
@@ -1287,8 +1811,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       ),
     );
 
-    final Color bottomBarBg = _customBottomBarColor ?? headerBg;
-    final Color bottomDivider = _customBottomBarColor != null
+    final Color bottomBarBg = _session.customBottomBarColor ?? headerBg;
+    final Color bottomDivider = _session.customBottomBarColor != null
         ? (bottomBarBg.computeLuminance() <= 0.55
             ? Colors.white12
             : Colors.black12)
@@ -1300,7 +1824,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         children: [
           headerBlock,
           viewportBody,
-          if (_mainButton.isVisible || _secondaryButton.isVisible)
+          if (_session.mainButton.isVisible ||
+              _session.secondaryButton.isVisible)
             Container(
               padding: EdgeInsets.fromLTRB(
                 14,
@@ -1319,10 +1844,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               ),
               child: Row(
                 children: [
-                  if (_secondaryButton.isVisible)
+                  if (_session.secondaryButton.isVisible)
                     Expanded(
                       child: _buildActionButton(
-                        _secondaryButton,
+                        _session.secondaryButton,
                         defaultBg: palette.primary.withValues(alpha: 0.14),
                         defaultFg: palette.primary,
                         onPressed: () => _dispatchEventToWebView(
@@ -1332,12 +1857,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                         isSecondaryGlassCandidate: true,
                       ),
                     ),
-                  if (_secondaryButton.isVisible && _mainButton.isVisible)
+                  if (_session.secondaryButton.isVisible &&
+                      _session.mainButton.isVisible)
                     const SizedBox(width: 10),
-                  if (_mainButton.isVisible)
+                  if (_session.mainButton.isVisible)
                     Expanded(
                       child: _buildActionButton(
-                        _mainButton,
+                        _session.mainButton,
                         defaultBg: palette.primary,
                         defaultFg: theme.colorScheme.onPrimary,
                         onPressed: () => _dispatchEventToWebView(
@@ -1356,13 +1882,6 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       ),
     );
 
-    final Widget roundedSheetBody = topRadius > 0.0
-        ? ClipRRect(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(topRadius)),
-            child: sheetBody,
-          )
-        : sheetBody;
-
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: isHeaderDark
           ? SystemUiOverlayStyle.light.copyWith(
@@ -1376,15 +1895,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         heightFactor: 1.0,
         child: _MiniAppDragOffset(
           offsetY: _dragOffsetY,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
+          child: SizedBox(
             height: sheetHeight,
             width: double.infinity,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
-                Positioned.fill(child: roundedSheetBody),
+                Positioned.fill(child: sheetBody),
                 if (_isMenuOpen) ...[
                   Positioned.fill(
                     child: GestureDetector(
@@ -1394,7 +1911,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                   ),
                   _buildOverflowMenu(
                     context,
-                    topOffset: topInset + (_isExpanded ? 0.0 : 17.0) + 52.0,
+                    topOffset: topInset + 52.0,
                     style: style,
                     headerBg: headerBg,
                     headerFg: headerFg,
@@ -1433,16 +1950,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               fgColor: headerFg,
               onTap: () async {
                 _closeMenu();
-                if (_controller != null) {
+                if (_session.controller != null) {
                   setState(() {
-                    _isWebContentReady = false;
-                    _loadProgress = 0.08;
+                    _session.isWebContentReady = false;
+                    _session.loadProgress = 0.08;
                   });
-                  await _controller!.reload();
+                  await _session.controller!.reload();
                 }
               },
             ),
-            if (_settingsButtonVisible)
+            if (_session.settingsButtonVisible)
               _buildMenuItem(
                 icon: iconoir.Settings(
                   width: 18,
@@ -1457,20 +1974,14 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 },
               ),
             _buildMenuItem(
-              icon: _isExpanded
-                  ? iconoir.NavArrowDown(
-                      width: 18,
-                      height: 18,
-                      color: headerFg,
-                    )
-                  : iconoir.NavArrowUp(
-                      width: 18,
-                      height: 18,
-                      color: headerFg,
-                    ),
-              label: _isExpanded ? 'Компактный вид' : 'На весь экран',
+              icon: iconoir.NavArrowDown(
+                width: 18,
+                height: 18,
+                color: headerFg,
+              ),
+              label: 'Свернуть',
               fgColor: headerFg,
-              onTap: _toggleExpandState,
+              onTap: _minimizeMiniApp,
             ),
             _buildMenuItem(
               icon: iconoir.Copy(
@@ -1483,7 +1994,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               onTap: () async {
                 _closeMenu();
                 await Clipboard.setData(
-                  ClipboardData(text: widget.launchData.url),
+                  ClipboardData(text: _session.launchData.url),
                 );
                 if (context.mounted) {
                   GlassToastService().show(context, 'Ссылка скопирована');
@@ -1500,7 +2011,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               fgColor: headerFg,
               onTap: () async {
                 _closeMenu();
-                final u = Uri.tryParse(widget.launchData.url);
+                final u = Uri.tryParse(_session.launchData.url);
                 if (u != null) {
                   await launchUrl(u, mode: LaunchMode.externalApplication);
                 }
@@ -1593,7 +2104,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   Widget _buildActionButton(
-    _ButtonState state, {
+    MiniAppActionButtonState state, {
     required Color defaultBg,
     required Color defaultFg,
     required VoidCallback onPressed,
@@ -1692,8 +2203,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     required String displayHandle,
     required MiniAppThemeColors resolved,
   }) {
-    final uri = Uri.tryParse(widget.launchData.url);
-    final host = uri?.host ?? widget.launchData.url;
+    final uri = Uri.tryParse(_session.launchData.url);
+    final host = uri?.host ?? _session.launchData.url;
     final palette = resolved.palette;
     final Color cardBg = resolved.surfaceBg;
     final Color titleColor = palette.onSurface;
