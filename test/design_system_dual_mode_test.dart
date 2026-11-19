@@ -755,10 +755,15 @@ void main() {
           findsOneWidget,
         );
 
-        // Dedicated dock region shrinks Scaffold cleanly without overlapping it.
+        // Dedicated dock region shrinks Scaffold cleanly without overlapping it,
+        // has no top border, and adds upward concave corner fillets into main screen.
         final dockFinder =
             find.byKey(const ValueKey('minimized_mini_app_dock_region'));
+        final filletsFinder =
+            find.byKey(const ValueKey('minimized_mini_app_dock_fillets'));
         expect(dockFinder, findsOneWidget);
+        expect(tester.widget(dockFinder), isA<ColoredBox>());
+        expect(filletsFinder, findsOneWidget);
         final Rect scaffoldRect = tester.getRect(find.byType(Scaffold));
         expect(scaffoldRect.height, lessThan(screenHeight - 48.0));
         expect(
@@ -809,6 +814,7 @@ void main() {
         );
         expect(miniBarFinder, findsNothing);
         expect(dockFinder, findsNothing);
+        expect(filletsFinder, findsNothing);
 
         // Minimize again and close via minimized bar close button.
         await tester.tap(
@@ -817,6 +823,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(miniBarFinder, findsOneWidget);
         expect(dockFinder, findsOneWidget);
+        expect(filletsFinder, findsOneWidget);
 
         await tester.tap(
           find.byKey(const ValueKey('minimized_mini_app_close_button')),
@@ -825,6 +832,7 @@ void main() {
 
         expect(miniBarFinder, findsNothing);
         expect(dockFinder, findsNothing);
+        expect(filletsFinder, findsNothing);
         expect(sheetFinder, findsNothing);
         expect(
           tester.getSize(find.byType(Scaffold)).height,
@@ -1048,6 +1056,11 @@ void main() {
     final dockFinder =
         find.byKey(const ValueKey('minimized_mini_app_dock_region'));
     expect(dockFinder, findsOneWidget);
+    expect(tester.widget(dockFinder), isA<ColoredBox>());
+    expect(
+      find.byKey(const ValueKey('minimized_mini_app_dock_fillets')),
+      findsOneWidget,
+    );
     final double screenHeight =
         tester.view.physicalSize.height / tester.view.devicePixelRatio;
     final Rect scaffoldRect = tester.getRect(find.byType(Scaffold));

@@ -651,6 +651,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                 )
               : widget.child;
 
+          final double cornerRadius = 14.0 * effectiveT;
           final Widget? dockRegion = (!keyboardVisible &&
                   _displayedSessions.isNotEmpty &&
                   effectiveT > 0.0)
@@ -661,14 +662,9 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                     heightFactor: effectiveT,
                     child: SlideTransition(
                       position: _slideAnim,
-                      child: DecoratedBox(
+                      child: ColoredBox(
                         key: const ValueKey('minimized_mini_app_dock_region'),
-                        decoration: BoxDecoration(
-                          color: resolved.bodyBg,
-                          border: Border(
-                            top: BorderSide(color: resolved.divider, width: 0.6),
-                          ),
-                        ),
+                        color: resolved.bodyBg,
                         child: Padding(
                           padding: EdgeInsets.only(
                             top: topPad,
@@ -693,7 +689,33 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
 
           final Widget columnLayout = Column(
             children: [
-              Expanded(child: adjustedChild),
+              Expanded(
+                child: dockRegion != null
+                    ? Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          adjustedChild,
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: cornerRadius,
+                            child: IgnorePointer(
+                              key: const ValueKey(
+                                'minimized_mini_app_dock_fillets',
+                              ),
+                              child: CustomPaint(
+                                painter: _DockUpwardFilletsPainter(
+                                  color: resolved.bodyBg,
+                                  radius: cornerRadius,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : adjustedChild,
+              ),
               if (dockRegion != null) dockRegion,
             ],
           );
@@ -721,6 +743,57 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
         },
       ),
     );
+  }
+}
+
+/// Paints small concave corner fillets at the bottom-left and bottom-right of
+/// the main screen area curving upward from the minimized dock surface.
+class _DockUpwardFilletsPainter extends CustomPainter {
+  const _DockUpwardFilletsPainter({
+    required this.color,
+    required this.radius,
+  });
+
+  final Color color;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double r = math.min(radius, math.min(size.height, size.width * 0.5));
+    if (r <= 0.1) return;
+
+    final Paint paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+
+    final Path leftFillet = Path()
+      ..moveTo(0, size.height)
+      ..lineTo(0, size.height - r)
+      ..arcToPoint(
+        Offset(r, size.height),
+        radius: Radius.circular(r),
+        clockwise: false,
+      )
+      ..close();
+
+    final Path rightFillet = Path()
+      ..moveTo(size.width - r, size.height)
+      ..arcToPoint(
+        Offset(size.width, size.height - r),
+        radius: Radius.circular(r),
+        clockwise: false,
+      )
+      ..lineTo(size.width, size.height)
+      ..close();
+
+    canvas.drawPath(leftFillet, paint);
+    canvas.drawPath(rightFillet, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DockUpwardFilletsPainter oldDelegate) {
+    return oldDelegate.color != color || oldDelegate.radius != radius;
   }
 }
 
