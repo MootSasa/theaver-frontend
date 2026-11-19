@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -624,64 +623,86 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
       return _MinimizedMiniAppHostScope(child: widget.child);
     }
 
+    final resolved = MiniAppJsBridge.resolveThemeColors(Theme.of(context));
     final mq = MediaQuery.of(context);
     final bool keyboardVisible = mq.viewInsets.bottom > 0;
-    final double barBottomInset =
-        math.max(4.0, math.min(mq.padding.bottom, 10.0));
-    final int extraCount =
-        _displayedSessions.length > 1 ? _displayedSessions.length - 1 : 0;
-    final double deckOffset =
-        extraCount >= 2 ? 12.0 : (extraCount == 1 ? 7.0 : 0.0);
-    final double totalBarHeight = deckOffset + 48.0 + barBottomInset;
+    final double barBottomInset = math.max(6.0, mq.padding.bottom + 4.0);
+    const double topPad = 6.0;
 
     return _MinimizedMiniAppHostScope(
       child: AnimatedBuilder(
         animation: _curvedAnim,
         builder: (context, _) {
-          final double t = _curvedAnim.value.clamp(0.0, 1.0);
-          final double targetBottom =
-              math.max(mq.padding.bottom, totalBarHeight + 4.0);
-          final double extraBottom = keyboardVisible
-              ? mq.padding.bottom
-              : ui.lerpDouble(mq.padding.bottom, targetBottom, t)!;
+          final double rawT = _curvedAnim.value.clamp(0.0, 1.0);
+          final double effectiveT = keyboardVisible ? 0.0 : rawT;
+          final double insetFactor = (1.0 - effectiveT).clamp(0.0, 1.0);
 
-          final Widget adjustedChild = (!keyboardVisible && t > 0.001)
+          final Widget adjustedChild = (!keyboardVisible && effectiveT > 0.001)
               ? MediaQuery(
                   data: mq.copyWith(
-                    padding: mq.padding.copyWith(bottom: extraBottom),
-                    viewPadding: mq.viewPadding.copyWith(bottom: extraBottom),
+                    padding: mq.padding.copyWith(
+                      bottom: mq.padding.bottom * insetFactor,
+                    ),
+                    viewPadding: mq.viewPadding.copyWith(
+                      bottom: mq.viewPadding.bottom * insetFactor,
+                    ),
                   ),
                   child: widget.child,
                 )
               : widget.child;
 
-          return Stack(
-            fit: StackFit.expand,
-            children: [
-              adjustedChild,
-              if (!keyboardVisible &&
+          final Widget? dockRegion = (!keyboardVisible &&
                   _displayedSessions.isNotEmpty &&
-                  _animController.value > 0.0)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: SlideTransition(
-                    position: _slideAnim,
-                    child: MinimizedMiniAppBar(
-                      key: const ValueKey('minimized_mini_app_bar'),
-                      sessions: _displayedSessions,
-                      bottomInset: barBottomInset,
-                      onActivate: () => MiniAppSessionController.instance
-                          .onMinimizedBarActivate(
-                        fallbackNavigatorKey: widget.navigatorKey,
+                  effectiveT > 0.0)
+              ? ClipRect(
+                  clipBehavior: effectiveT < 0.999 ? Clip.hardEdge : Clip.none,
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    heightFactor: effectiveT,
+                    child: SlideTransition(
+                      position: _slideAnim,
+                      child: DecoratedBox(
+                        key: const ValueKey('minimized_mini_app_dock_region'),
+                        decoration: BoxDecoration(
+                          color: resolved.bodyBg,
+                          border: Border(
+                            top: BorderSide(color: resolved.divider, width: 0.6),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            top: topPad,
+                            bottom: barBottomInset,
+                          ),
+                          child: MinimizedMiniAppBar(
+                            key: const ValueKey('minimized_mini_app_bar'),
+                            sessions: _displayedSessions,
+                            onActivate: () => MiniAppSessionController.instance
+                                .onMinimizedBarActivate(
+                              fallbackNavigatorKey: widget.navigatorKey,
+                            ),
+                            onClose: () =>
+                                _handleCloseSession(_displayedSessions.last),
+                          ),
+                        ),
                       ),
-                      onClose: () =>
-                          _handleCloseSession(_displayedSessions.last),
                     ),
                   ),
-                ),
-              if (switcherOpen)
+                )
+              : null;
+
+          final Widget columnLayout = Column(
+            children: [
+              Expanded(child: adjustedChild),
+              if (dockRegion != null) dockRegion,
+            ],
+          );
+
+          if (switcherOpen) {
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                columnLayout,
                 MiniAppTabsSwitcher(
                   key: const ValueKey('mini_app_tabs_switcher'),
                   sessions: ctrl.minimizedSessions,
@@ -693,8 +714,10 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                   onCloseSession: _handleCloseSession,
                   onCloseAll: _handleCloseAllSessions,
                 ),
-            ],
-          );
+              ],
+            );
+          }
+          return columnLayout;
         },
       ),
     );
@@ -705,14 +728,12 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
 /// stacked back-card rim indicators when 2+ Mini Apps are minimized.
 class MinimizedMiniAppBar extends StatelessWidget {
   final List<MiniAppSession> sessions;
-  final double bottomInset;
   final VoidCallback onActivate;
   final VoidCallback onClose;
 
   const MinimizedMiniAppBar({
     super.key,
     required this.sessions,
-    required this.bottomInset,
     required this.onActivate,
     required this.onClose,
   });
@@ -851,7 +872,7 @@ class MinimizedMiniAppBar extends StatelessWidget {
     );
 
     return SizedBox(
-      height: deckOffset + 48.0 + bottomInset,
+      height: deckOffset + 48.0,
       width: double.infinity,
       child: Stack(
         clipBehavior: Clip.none,
@@ -900,6 +921,7 @@ class MinimizedMiniAppBar extends StatelessWidget {
                     style: style.glassProvider!.createStyle(
                       context: context,
                       cornerRadius: 18,
+                      isLiteOverride: true,
                       refractionIndex: style.isFull ? 1.10 : 1.05,
                       refractionWidth: 18.0,
                       borderWidth: 1.0,

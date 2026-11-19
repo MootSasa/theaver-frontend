@@ -755,9 +755,15 @@ void main() {
           findsOneWidget,
         );
 
-        // Underlying SafeArea bottom padding increases so chat bars sit above the dock.
-        final BuildContext safeBodyCtx = tester.element(
-          find.byKey(const ValueKey('mini_app_safe_body')),
+        // Dedicated dock region shrinks Scaffold cleanly without overlapping it.
+        final dockFinder =
+            find.byKey(const ValueKey('minimized_mini_app_dock_region'));
+        expect(dockFinder, findsOneWidget);
+        final Rect scaffoldRect = tester.getRect(find.byType(Scaffold));
+        expect(scaffoldRect.height, lessThan(screenHeight - 48.0));
+        expect(
+          scaffoldRect.bottom,
+          lessThanOrEqualTo(tester.getTopLeft(dockFinder).dy + 0.5),
         );
         expect(
           screenHeight -
@@ -766,7 +772,6 @@ void main() {
                   .height,
           greaterThan(48.0),
         );
-        expect(safeBodyCtx.mounted, isTrue);
 
         // LiquidGlassLens on minimized bar in glass mode (without Opacity/FadeTransition); matte otherwise.
         final barLensFinder = find.descendant(
@@ -798,7 +803,12 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(sheetFinder, findsOneWidget);
+        expect(
+          tester.getSize(sheetFinder).height,
+          moreOrLessEquals(screenHeight, epsilon: 0.5),
+        );
         expect(miniBarFinder, findsNothing);
+        expect(dockFinder, findsNothing);
 
         // Minimize again and close via minimized bar close button.
         await tester.tap(
@@ -806,6 +816,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(miniBarFinder, findsOneWidget);
+        expect(dockFinder, findsOneWidget);
 
         await tester.tap(
           find.byKey(const ValueKey('minimized_mini_app_close_button')),
@@ -813,7 +824,12 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(miniBarFinder, findsNothing);
+        expect(dockFinder, findsNothing);
         expect(sheetFinder, findsNothing);
+        expect(
+          tester.getSize(find.byType(Scaffold)).height,
+          moreOrLessEquals(screenHeight, epsilon: 0.5),
+        );
         expect(
           tester.getSize(find.byKey(const ValueKey('mini_app_safe_body'))).height,
           moreOrLessEquals(screenHeight, epsilon: 0.5),
@@ -1029,6 +1045,17 @@ void main() {
 
     expect(MiniAppSessionController.instance.minimizedCount, 2);
     expect(barFinder, findsOneWidget);
+    final dockFinder =
+        find.byKey(const ValueKey('minimized_mini_app_dock_region'));
+    expect(dockFinder, findsOneWidget);
+    final double screenHeight =
+        tester.view.physicalSize.height / tester.view.devicePixelRatio;
+    final Rect scaffoldRect = tester.getRect(find.byType(Scaffold));
+    expect(
+      scaffoldRect.bottom,
+      lessThanOrEqualTo(tester.getTopLeft(dockFinder).dy + 0.5),
+    );
+    expect(scaffoldRect.height, lessThan(screenHeight - 55.0));
     expect(find.text('Walt (ранее Кошелёк)'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('minimized_mini_app_extra_count')),
