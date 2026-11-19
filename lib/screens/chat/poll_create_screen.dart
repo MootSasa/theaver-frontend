@@ -13,8 +13,13 @@ import '../../widgets/settings/settings_floating_header.dart';
 /// (сохранение/отправка строго через правую кнопку `✓` в [SettingsFloatingHeader]).
 class PollCreateScreen extends StatefulWidget {
   final String chatId;
+  final bool isChannel;
 
-  const PollCreateScreen({super.key, required this.chatId});
+  const PollCreateScreen({
+    super.key,
+    required this.chatId,
+    this.isChannel = false,
+  });
 
   @override
   State<PollCreateScreen> createState() => _PollCreateScreenState();
@@ -22,6 +27,7 @@ class PollCreateScreen extends StatefulWidget {
 
 class _PollCreateScreenState extends State<PollCreateScreen> {
   final _questionController = TextEditingController();
+  final _explanationController = TextEditingController();
   final List<TextEditingController> _optionControllers = [
     TextEditingController(),
     TextEditingController(),
@@ -33,8 +39,17 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
   bool _isSending = false;
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.isChannel) {
+      _isAnonymous = true;
+    }
+  }
+
+  @override
   void dispose() {
     _questionController.dispose();
+    _explanationController.dispose();
     for (final c in _optionControllers) {
       c.dispose();
     }
@@ -109,11 +124,13 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
         data: {
           'question': _questionController.text.trim(),
           'options': options,
-          'is_anonymous': _isAnonymous,
+          'is_anonymous': widget.isChannel ? true : _isAnonymous,
           'is_multiple_choice': _isQuiz ? false : _isMultipleChoice,
           'is_quiz': _isQuiz,
           if (_isQuiz && mappedCorrectOptionId != null)
             'correct_option_id': mappedCorrectOptionId,
+          if (_isQuiz && _explanationController.text.trim().isNotEmpty)
+            'explanation': _explanationController.text.trim(),
         },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
@@ -237,6 +254,23 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
                 ),
             ],
           ),
+          if (_isQuiz) ...[
+            const SizedBox(height: 8),
+            TheavInsetGroup(
+              header: 'ПОЯСНЕНИЕ',
+              dividerIndent: 16,
+              children: [
+                TheavInlineTextField(
+                  controller: _explanationController,
+                  placeholder: 'Пояснение к правильному ответу (необязательно)',
+                  maxLength: 200,
+                  maxLines: 3,
+                  minLines: 1,
+                  showCounter: true,
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 8),
           TheavInsetGroup(
             header: 'ПАРАМЕТРЫ',
@@ -244,12 +278,19 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
             children: [
               TheavListRow(
                 title: l10n.translate('poll_create_anonymous'),
-                subtitle: l10n.translate('poll_create_anonymous_desc'),
+                subtitle: widget.isChannel
+                    ? 'В каналах все опросы анонимны'
+                    : l10n.translate('poll_create_anonymous_desc'),
+                enabled: !widget.isChannel,
                 trailing: TheavSwitch(
-                  value: _isAnonymous,
-                  onChanged: (v) => setState(() => _isAnonymous = v),
+                  value: widget.isChannel ? true : _isAnonymous,
+                  onChanged: widget.isChannel
+                      ? null
+                      : (v) => setState(() => _isAnonymous = v),
                 ),
-                onTap: () => setState(() => _isAnonymous = !_isAnonymous),
+                onTap: widget.isChannel
+                    ? null
+                    : () => setState(() => _isAnonymous = !_isAnonymous),
               ),
               TheavListRow(
                 title: l10n.translate('poll_create_multiple'),

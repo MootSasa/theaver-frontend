@@ -395,6 +395,8 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
       for (final chat in chats) {
         if (chat.unreadCount > 0) {
           unawaited(ChatService.markMessagesAsRead(chatId: chat.id));
+        } else if (chat.unreadCount == -1) {
+          unawaited(ChatService.unmarkChatUnread(chat.id));
         }
       }
     } else {
@@ -403,6 +405,9 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
         unreadProvider?.setCount(id, -1);
       }
       if (_isSelectMode) _exitSelectMode();
+      for (final chat in chats) {
+        unawaited(ChatService.markChatUnread(chat.id));
+      }
     }
   }
 
@@ -410,9 +415,9 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
     final deletable = chats.where((c) => c.chatType != 'saved').toList();
     if (deletable.isEmpty) return;
 
-    final confirmed =
-        await ChatBatchDialogs.confirmDeleteChats(context, deletable);
-    if (!confirmed || !mounted) return;
+    final delRes =
+        await ChatBatchDialogs.confirmDeleteChatsWithOptions(context, deletable);
+    if (!delRes.confirmed || !mounted) return;
 
     final db = _db();
     final ids = deletable.map((c) => c.id).toList();
@@ -420,7 +425,10 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
     if (_isSelectMode) _exitSelectMode();
 
     for (final chat in deletable) {
-      await ChatService.deleteChat(chat.id);
+      await ChatService.deleteChat(
+        chat.id,
+        revoke: chat.chatType == 'private' && delRes.revoke,
+      );
     }
   }
 
@@ -428,6 +436,13 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
     if (!inAdjacentTile && widget.onOpenChat != null) {
       widget.onOpenChat!(chat);
       return;
+    }
+    if (chat.unreadCount == -1) {
+      unawaited(_db().updateUnreadCount(chat.id, 0));
+      try {
+        context.read<UnreadCountProvider>().setCount(chat.id, 0);
+      } catch (_) {}
+      unawaited(ChatService.unmarkChatUnread(chat.id));
     }
     ChatBatchDialogs.openChat(
       context,

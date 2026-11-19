@@ -171,6 +171,18 @@ class SyncService {
           await _db.setChatArchived(archiveChatId, isArchived);
         }
         break;
+      case 'chat_unread_marked':
+        final markChatId = payload['chat_id']?.toString() ?? chatId;
+        final isMarked = payload['is_marked_unread'] == true;
+        if (markChatId != null && markChatId.isNotEmpty) {
+          final existingChat = await _db.getChat(markChatId);
+          if (isMarked && (existingChat == null || existingChat.unreadCount == 0)) {
+            await _db.updateUnreadCount(markChatId, -1);
+          } else if (!isMarked && existingChat?.unreadCount == -1) {
+            await _db.updateUnreadCount(markChatId, 0);
+          }
+        }
+        break;
       case 'delete_chat':
       case 'chat_deleted':
         if (chatId != null) {
@@ -493,24 +505,55 @@ class SyncService {
       }
     }
 
-    String? mediaPayloadStr;
-    if (payload['media_payload'] != null) {
-      mediaPayloadStr = payload['media_payload'] is String
-          ? payload['media_payload'] as String
-          : jsonEncode(payload['media_payload']);
+    Map<String, dynamic>? incomingMediaMap;
+    if (payload['media_payload'] is Map) {
+      incomingMediaMap =
+          Map<String, dynamic>.from(payload['media_payload'] as Map);
+    } else if (payload['media_payload'] is String &&
+        (payload['media_payload'] as String).isNotEmpty) {
+      try {
+        final dec = jsonDecode(payload['media_payload'] as String);
+        if (dec is Map) incomingMediaMap = Map<String, dynamic>.from(dec);
+      } catch (_) {}
+    } else if (payload['poll'] is Map) {
+      incomingMediaMap = Map<String, dynamic>.from(payload['poll'] as Map);
     }
 
-    final isPollUpdate = payload['message_type'] == 'poll';
+    final existingMsg = await _db.getMessageByServerId(serverId);
+    Map<String, dynamic>? existingMediaMap;
+    if (existingMsg?.mediaPayload != null &&
+        existingMsg!.mediaPayload!.isNotEmpty) {
+      try {
+        final dec = jsonDecode(existingMsg.mediaPayload!);
+        if (dec is Map) existingMediaMap = Map<String, dynamic>.from(dec);
+      } catch (_) {}
+    }
+
+    final mergedMedia = ChatService.mergeIncomingMediaPayload(
+      existingMediaMap,
+      incomingMediaMap,
+      replyMarkup: payload['reply_markup'],
+    );
+    final String? mediaPayloadStr =
+        mergedMedia != null ? jsonEncode(mergedMedia) : null;
+
+    final isPollUpdate = payload['message_type'] == 'poll' ||
+        existingMsg?.messageType == 'poll';
     final bool? hasMediaSpoiler = payload.containsKey('has_media_spoiler')
         ? (payload['has_media_spoiler'] == true ||
             payload['has_media_spoiler'] == 1)
         : null;
+    final bool effectiveIsEdited = payload.containsKey('is_edited')
+        ? (payload['is_edited'] == true
+            ? true
+            : (existingMsg?.isEdited ?? false))
+        : (isPollUpdate ? (existingMsg?.isEdited ?? false) : true);
     await _db.updateMessageContent(
       serverId,
-      payload['content']?.toString() ?? '',
+      payload['content']?.toString() ?? existingMsg?.content ?? '',
       entitiesStr,
       mediaPayloadStr,
-      !isPollUpdate,
+      effectiveIsEdited,
       hasMediaSpoiler,
     );
     final chatId = payload['chat_id']?.toString();

@@ -1293,6 +1293,10 @@ class Chat {
         : (parsedPinnedMessageId != null && parsedPinnedMessageId > 0
             ? <int>[parsedPinnedMessageId]
             : const <int>[]);
+    final bool parsedMarkedUnread = _parseBoolFlag(json['is_marked_unread']);
+    final int rawUnreadCount = _parseIntValue(json['unread_count']);
+    final int effectiveUnreadCount =
+        (parsedMarkedUnread && rawUnreadCount == 0) ? -1 : rawUnreadCount;
 
     return Chat(
       id: json['id']?.toString() ?? json['chat_id']?.toString() ?? '',
@@ -1306,7 +1310,7 @@ class Chat {
       lastMessageFileUrl: json['last_message_file_url']?.toString() ??
           json['file_url']?.toString(),
       updatedAt: json['updated_at']?.toString() ?? '',
-      unreadCount: _parseIntValue(json['unread_count']),
+      unreadCount: effectiveUnreadCount,
       isOnline: _parseBoolFlag(json['is_online']),
       lastSeen: json['last_seen']?.toString(),
       isPinned: _parseBoolFlag(json['is_pinned']),
@@ -2775,6 +2779,12 @@ class ChatDetails {
   final bool myIsAnonymous;
   final ReactionSettings? reactionSettings;
   final int slowModeInterval;
+  final int slowModeWaitSeconds;
+  final int slowModeNextSendDate;
+  final int memberCount;
+  final int subscriberCount;
+  final int pendingJoinRequestsCount;
+  final bool isMarkedUnread;
   final bool historyForNewMembers;
   final bool hasActiveCall;
   final String? activeCallId;
@@ -2812,6 +2822,12 @@ class ChatDetails {
     this.myIsAnonymous = false,
     this.reactionSettings,
     this.slowModeInterval = 0,
+    this.slowModeWaitSeconds = 0,
+    this.slowModeNextSendDate = 0,
+    this.memberCount = 0,
+    this.subscriberCount = 0,
+    this.pendingJoinRequestsCount = 0,
+    this.isMarkedUnread = false,
     this.historyForNewMembers = true,
     this.hasActiveCall = false,
     this.activeCallId,
@@ -2819,6 +2835,27 @@ class ChatDetails {
 
   bool get isOwner => myRole == 'owner';
   bool get isAdmin => myRole == 'owner' || myRole == 'admin';
+
+  int get effectiveMemberCount => subscriberCount > 0
+      ? subscriberCount
+      : (memberCount > 0 ? memberCount : participants.length);
+
+  bool get canManageCallsEffective =>
+      isOwner ||
+      (myRole == 'admin' && (myAdminPermissions?.canManageCalls ?? true));
+
+  bool get canChangeInfoEffective {
+    if (isOwner) return true;
+    if (myRole == 'admin') return myAdminPermissions?.canChangeInfo ?? true;
+    if (chatType != 'group' || !isMember) return false;
+    final defaultCan = defaultPermissions?.canChangeInfo ?? false;
+    if (!defaultCan) return false;
+    if (myRestrictions == null) return true;
+    if (restrictedUntil != null && DateTime.now().isAfter(restrictedUntil!)) {
+      return true;
+    }
+    return myRestrictions!.canChangeInfo;
+  }
 
   bool get canPostInChannel =>
       chatType != 'channel' ||
@@ -2880,6 +2917,12 @@ class ChatDetails {
     bool? myIsAnonymous,
     ReactionSettings? reactionSettings,
     int? slowModeInterval,
+    int? slowModeWaitSeconds,
+    int? slowModeNextSendDate,
+    int? memberCount,
+    int? subscriberCount,
+    int? pendingJoinRequestsCount,
+    bool? isMarkedUnread,
     bool? historyForNewMembers,
     bool? hasActiveCall,
     String? activeCallId,
@@ -2921,6 +2964,13 @@ class ChatDetails {
       myIsAnonymous: myIsAnonymous ?? this.myIsAnonymous,
       reactionSettings: reactionSettings ?? this.reactionSettings,
       slowModeInterval: slowModeInterval ?? this.slowModeInterval,
+      slowModeWaitSeconds: slowModeWaitSeconds ?? this.slowModeWaitSeconds,
+      slowModeNextSendDate: slowModeNextSendDate ?? this.slowModeNextSendDate,
+      memberCount: memberCount ?? this.memberCount,
+      subscriberCount: subscriberCount ?? this.subscriberCount,
+      pendingJoinRequestsCount:
+          pendingJoinRequestsCount ?? this.pendingJoinRequestsCount,
+      isMarkedUnread: isMarkedUnread ?? this.isMarkedUnread,
       historyForNewMembers: historyForNewMembers ?? this.historyForNewMembers,
       hasActiveCall: hasActiveCall ?? this.hasActiveCall,
       activeCallId:
@@ -2975,6 +3025,22 @@ class ChatDetails {
       json['has_protected_content'] ?? json['noforwards'],
     );
 
+    final int parsedMemberCount = _parseIntValue(json['member_count']);
+    final int parsedSubscriberCount = _parseIntValue(json['subscriber_count']);
+    final int normalizedMemberCount =
+        parsedMemberCount > 0 ? parsedMemberCount : participantsList.length;
+    final int normalizedSubscriberCount =
+        parsedSubscriberCount > 0 ? parsedSubscriberCount : normalizedMemberCount;
+    final int parsedSlowWait = _parseIntValue(json['slow_mode_wait_seconds']);
+    final int parsedSlowNext = _parseIntValue(json['slow_mode_next_send_date']);
+    int effectiveSlowWait = parsedSlowWait;
+    if (effectiveSlowWait <= 0 && parsedSlowNext > 0) {
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if (parsedSlowNext > nowSec) {
+        effectiveSlowWait = parsedSlowNext - nowSec;
+      }
+    }
+
     return ChatDetails(
       id: json['id']?.toString() ?? '',
       chatType: parsedChatType,
@@ -3014,6 +3080,13 @@ class ChatDetails {
       myIsAnonymous: _parseBoolFlag(json['my_is_anonymous']),
       reactionSettings: ReactionSettings.fromChatJson(json),
       slowModeInterval: _parseIntValue(json['slow_mode_interval']),
+      slowModeWaitSeconds: effectiveSlowWait,
+      slowModeNextSendDate: parsedSlowNext,
+      memberCount: normalizedMemberCount,
+      subscriberCount: normalizedSubscriberCount,
+      pendingJoinRequestsCount:
+          _parseIntValue(json['pending_join_requests_count']),
+      isMarkedUnread: _parseBoolFlag(json['is_marked_unread']),
       historyForNewMembers:
           (json['history_for_new_members'] ?? json['history_for_new']) != false,
       hasActiveCall:
@@ -3188,6 +3261,12 @@ class ChatService {
     String? description,
     String? username,
     bool? isPublic,
+    bool? signMessages,
+    bool? showAuthorProfiles,
+    bool? historyForNewMembers,
+    bool? allowInvites,
+    bool? hasProtectedContent,
+    bool? createDiscussionGroup,
     required List<String> participantIds,
   }) async {
     try {
@@ -3203,6 +3282,15 @@ class ChatService {
         if (description != null && description.isNotEmpty) 'description': description,
         if (username != null && username.isNotEmpty) 'username': username,
         if (isPublic != null) 'is_public': isPublic,
+        if (signMessages != null) 'sign_messages': signMessages,
+        if (showAuthorProfiles != null) 'show_author_profiles': showAuthorProfiles,
+        if (historyForNewMembers != null)
+          'history_for_new_members': historyForNewMembers,
+        if (allowInvites != null) 'allow_invites': allowInvites,
+        if (hasProtectedContent != null)
+          'has_protected_content': hasProtectedContent,
+        if (createDiscussionGroup != null)
+          'create_discussion_group': createDiscussionGroup,
       };
 
       final response = await http.post(
@@ -4543,11 +4631,17 @@ class ChatService {
   /// - Private: removes the user from the chat
   /// - Group: if owner, deletes the entire chat; otherwise leaves
   /// - Channel: unsubscribes
-  static Future<Map<String, dynamic>> deleteChat(String chatId) async {
+  static Future<Map<String, dynamic>> deleteChat(
+    String chatId, {
+    bool revoke = false,
+  }) async {
     try {
       final token = await AuthService.getToken();
+      final uri = revoke
+          ? Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId?revoke=true')
+          : Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId');
       final response = await http.delete(
-        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId'),
+        uri,
         headers: {
           'Content-Type': 'application/json',
           if (token != null) 'Authorization': 'Bearer $token',
@@ -6271,6 +6365,132 @@ class ChatService {
       debugPrint('Get chat active call error: $e');
       return null;
     }
+  }
+
+  /// Marks a chat as manually unread on the server (`POST /api/chats/:id/mark-unread`).
+  static Future<Map<String, dynamic>> markChatUnread(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/mark-unread'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        return Map<String, dynamic>.from(data);
+      }
+      return {
+        'success': false,
+        'message': _extractErrorMessage(data, 'Failed to mark chat unread'),
+      };
+    } catch (e) {
+      debugPrint('markChatUnread error: $e');
+      return {'success': false, 'message': 'Network error: $e'};
+    }
+  }
+
+  /// Clears manual unread marker on the server (`DELETE /api/chats/:id/mark-unread`).
+  static Future<Map<String, dynamic>> unmarkChatUnread(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final response = await http.delete(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/mark-unread'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        return Map<String, dynamic>.from(data);
+      }
+      return {
+        'success': false,
+        'message': _extractErrorMessage(data, 'Failed to unmark chat unread'),
+      };
+    } catch (e) {
+      debugPrint('unmarkChatUnread error: $e');
+      return {'success': false, 'message': 'Network error: $e'};
+    }
+  }
+
+  /// Transfers ownership of a group or channel to another active member (`POST /api/chats/:id/transfer-ownership`).
+  static Future<Map<String, dynamic>> transferChatOwnership({
+    required String chatId,
+    required String newOwnerId,
+    String? password,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/transfer-ownership'),
+        headers: headers,
+        body: jsonEncode({
+          'new_owner_id': int.tryParse(newOwnerId) ?? newOwnerId,
+          if (password != null && password.isNotEmpty) 'password': password,
+        }),
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        return Map<String, dynamic>.from(data);
+      }
+      return {
+        'success': false,
+        'error': data is Map ? data['error']?.toString() : null,
+        'message': _extractErrorMessage(data, 'Failed to transfer ownership'),
+      };
+    } catch (e) {
+      debugPrint('transferChatOwnership error: $e');
+      return {'success': false, 'message': 'Network error: $e'};
+    }
+  }
+
+  /// Merges incoming `media_payload` updates (such as neutral poll broadcasts or
+  /// bot `reply_markup` edits) with existing local state so neutral broadcasts
+  /// omitting `voted_option_ids` preserve the local user's voted options.
+  static Map<String, dynamic>? mergeIncomingMediaPayload(
+    Map<String, dynamic>? existing,
+    Map<String, dynamic>? incoming, {
+    dynamic replyMarkup,
+  }) {
+    if (incoming == null && replyMarkup == null) {
+      return existing != null ? Map<String, dynamic>.from(existing) : null;
+    }
+    final merged = incoming != null
+        ? Map<String, dynamic>.from(incoming)
+        : (existing != null
+            ? Map<String, dynamic>.from(existing)
+            : <String, dynamic>{});
+
+    if (replyMarkup != null) {
+      merged['reply_markup'] = replyMarkup;
+    }
+
+    final isPollPayload =
+        merged.containsKey('poll_id') || merged.containsKey('options');
+    final hasExplicitVotes =
+        incoming != null && incoming.containsKey('voted_option_ids');
+    if (isPollPayload &&
+        !hasExplicitVotes &&
+        existing != null &&
+        existing['voted_option_ids'] is List) {
+      merged['voted_option_ids'] =
+          List<dynamic>.from(existing['voted_option_ids'] as List);
+    }
+    if (incoming != null &&
+        !merged.containsKey('reply_markup') &&
+        existing != null &&
+        existing['reply_markup'] != null &&
+        isPollPayload) {
+      merged['reply_markup'] = existing['reply_markup'];
+    }
+    return merged;
   }
 }
 

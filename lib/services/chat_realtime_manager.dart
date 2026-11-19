@@ -461,6 +461,25 @@ class ChatRealtimeManager {
         );
         break;
 
+      case WebSocketEventType.chatUnreadMarked:
+        final markChatId = event.data['chat_id']?.toString();
+        final isMarked = event.data['is_marked_unread'] == true;
+        if (markChatId != null && markChatId.isNotEmpty) {
+          try {
+            final dbChat = await AppDatabase().getChat(markChatId);
+            if (isMarked && (dbChat == null || dbChat.unreadCount == 0)) {
+              await AppDatabase().updateUnreadCount(markChatId, -1);
+            } else if (!isMarked && dbChat?.unreadCount == -1) {
+              await AppDatabase().updateUnreadCount(markChatId, 0);
+            }
+          } catch (_) {}
+        }
+        _dispatchForChat(
+          markChatId,
+          (s) => s.onUnreadCountUpdated?.call(event),
+        );
+        break;
+
       default:
         final rawNorm = (event.rawType.isNotEmpty
                 ? event.rawType
@@ -613,7 +632,7 @@ class ChatRealtimeManager {
     final chatId = event.data['chat_id']?.toString();
     final messageId =
         event.data['message_id']?.toString() ?? event.data['id']?.toString();
-    final content = event.data['content']?.toString() ?? '';
+    final content = event.data['content']?.toString();
 
     if (messageId != null) {
       String? entitiesStr;
@@ -622,23 +641,63 @@ class ChatRealtimeManager {
             ? event.data['entities'] as String
             : jsonEncode(event.data['entities']);
       }
-      String? mediaPayloadStr;
-      if (event.data['media_payload'] != null) {
-        mediaPayloadStr = event.data['media_payload'] is String
-            ? event.data['media_payload'] as String
-            : jsonEncode(event.data['media_payload']);
+      Map<String, dynamic>? incomingMediaMap;
+      if (event.data['media_payload'] is Map) {
+        incomingMediaMap =
+            Map<String, dynamic>.from(event.data['media_payload'] as Map);
+      } else if (event.data['media_payload'] is String &&
+          (event.data['media_payload'] as String).isNotEmpty) {
+        try {
+          final dec = jsonDecode(event.data['media_payload'] as String);
+          if (dec is Map) incomingMediaMap = Map<String, dynamic>.from(dec);
+        } catch (_) {}
+      } else if (event.data['poll'] is Map) {
+        incomingMediaMap =
+            Map<String, dynamic>.from(event.data['poll'] as Map);
       }
+
+      DbMessage? existingMsg;
+      try {
+        existingMsg = await AppDatabase().getMessageByServerId(messageId);
+      } catch (_) {}
+
+      Map<String, dynamic>? existingMediaMap;
+      if (existingMsg?.mediaPayload != null &&
+          existingMsg!.mediaPayload!.isNotEmpty) {
+        try {
+          final dec = jsonDecode(existingMsg.mediaPayload!);
+          if (dec is Map) existingMediaMap = Map<String, dynamic>.from(dec);
+        } catch (_) {}
+      }
+
+      final mergedMedia = ChatService.mergeIncomingMediaPayload(
+        existingMediaMap,
+        incomingMediaMap,
+        replyMarkup: event.data['reply_markup'],
+      );
+      final String? mediaPayloadStr =
+          mergedMedia != null ? jsonEncode(mergedMedia) : null;
+
       final bool? hasMediaSpoiler = event.data.containsKey('has_media_spoiler')
           ? (event.data['has_media_spoiler'] == true ||
               event.data['has_media_spoiler'] == 1)
           : null;
+      final isPollEvent = event.data['message_type'] == 'poll' ||
+          existingMsg?.messageType == 'poll';
+      final bool effectiveIsEdited = event.data.containsKey('is_edited')
+          ? (event.data['is_edited'] == true
+              ? true
+              : (existingMsg?.isEdited ?? false))
+          : (isPollEvent ? (existingMsg?.isEdited ?? false) : true);
+      final effectiveContent = content ?? existingMsg?.content ?? '';
+
       try {
         await AppDatabase().updateMessageContent(
           messageId,
-          content,
+          effectiveContent,
           entitiesStr,
           mediaPayloadStr,
-          true,
+          effectiveIsEdited,
           hasMediaSpoiler,
         );
         if (chatId != null) {

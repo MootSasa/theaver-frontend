@@ -311,6 +311,8 @@ class _PollMessageWidgetState extends State<PollMessageWidget> {
   bool get _isClosed => _pollData?['is_closed'] == true;
   int? get _correctOptionId =>
       PollMessageWidget.parseInt(_pollData?['correct_option_id']);
+  String get _explanation =>
+      (_pollData?['explanation'] ?? '').toString().trim();
 
   List<Map<String, dynamic>> get _options {
     final raw = _pollData?['options'];
@@ -857,6 +859,42 @@ class _PollMessageWidgetState extends State<PollMessageWidget> {
                         ),
                       ),
                     ),
+                  ),
+                ),
+
+              // Quiz explanation callout
+              if (_isQuiz && showResults && _explanation.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 4.0, bottom: 6.0),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10.0,
+                    vertical: 8.0,
+                  ),
+                  decoration: BoxDecoration(
+                    color: barAccent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10.0),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.lightbulb_outline_rounded,
+                        size: 16.0,
+                        color: barAccent,
+                      ),
+                      const SizedBox(width: 6.0),
+                      Expanded(
+                        child: Text(
+                          _explanation,
+                          style: TextStyle(
+                            fontSize: 13.0,
+                            height: 1.3,
+                            color: widget.textColor,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
 

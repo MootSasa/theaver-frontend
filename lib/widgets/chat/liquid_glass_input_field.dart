@@ -1045,7 +1045,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressStart: (details) {
-            if (widget.isSending || isSlowmodeLocked) return;
+            if (widget.isSending) return;
             if (canSend) {
               if (widget.onSendLongPress != null) {
                 HapticUtils.impact();
@@ -1053,6 +1053,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
               }
               return;
             }
+            if (isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onStartVideoRecord?.call();
             } else {

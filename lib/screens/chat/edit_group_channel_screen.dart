@@ -43,6 +43,7 @@ class EditGroupChannelScreen extends StatefulWidget {
   final ReactionSettings? initialReactionSettings;
   final String? inviteLink;
   final bool initialHasProtectedContent;
+  final bool canEditAdminSettings;
 
   const EditGroupChannelScreen({
     super.key,
@@ -63,6 +64,7 @@ class EditGroupChannelScreen extends StatefulWidget {
     this.initialReactionSettings,
     this.inviteLink,
     this.initialHasProtectedContent = false,
+    this.canEditAdminSettings = true,
   });
 
   @override
@@ -93,6 +95,10 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   AdminRights? _myAdminPermissions;
   List<ChatParticipant> _members = [];
 
+  bool get _canEditAdminSettingsEffective =>
+      widget.canEditAdminSettings &&
+      (_myRole == 'owner' || _myRole == 'admin');
+
   String? _usernameServerError;
   bool _isSaving = false;
   bool _subSettingsChanged = false;
@@ -120,6 +126,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         widget.initialDefaultPermissions ?? const GroupDefaultPermissions();
     _reactionSettings = widget.initialReactionSettings ?? const ReactionSettings();
     _inviteLink = widget.inviteLink;
+    _myRole = widget.canEditAdminSettings ? 'admin' : 'member';
 
     _usernameController.addListener(() {
       if (_usernameServerError != null) {
@@ -137,9 +144,12 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
 
   Future<void> _loadChatSettings() async {
     try {
+      final shouldLoadMembers = widget.canEditAdminSettings || !widget.isChannel;
       final results = await Future.wait([
         ChatService.getGroupSettings(widget.chatId),
-        ChatService.getGroupMembers(widget.chatId),
+        shouldLoadMembers
+            ? ChatService.getGroupMembers(widget.chatId)
+            : Future.value(<ChatParticipant>[]),
       ]);
       if (!mounted) return;
 
@@ -331,7 +341,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
       );
       return;
     }
-    if (!_isUsernameValid) {
+    if (_canEditAdminSettingsEffective && !_isUsernameValid) {
       GlassToastService().show(
         context,
         _usernameValidationHint ?? 'Некорректный формат @username',
@@ -350,19 +360,26 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
       }
 
       final cleanUsername = _cleanUsername;
-      final payload = <String, dynamic>{
-        'name': newName,
-        'description': _descriptionController.text.trim(),
-        if (finalAvatarUrl != null) 'avatar_url': finalAvatarUrl,
-        'is_public': _isPublic,
-        'username': _isPublic ? cleanUsername : '',
-        if (!widget.isChannel) 'history_for_new': _historyForNew,
-        if (!widget.isChannel) 'slow_mode_interval': _slowModeInterval,
-        'has_protected_content': _hasProtectedContent,
-        if (widget.isChannel) 'sign_messages': _signMessages,
-        if (widget.isChannel)
-          'show_author_profiles': _signMessages ? _showAuthorProfiles : false,
-      };
+      final payload = _canEditAdminSettingsEffective
+          ? <String, dynamic>{
+              'name': newName,
+              'description': _descriptionController.text.trim(),
+              if (finalAvatarUrl != null) 'avatar_url': finalAvatarUrl,
+              'is_public': _isPublic,
+              'username': _isPublic ? cleanUsername : '',
+              if (!widget.isChannel) 'history_for_new': _historyForNew,
+              if (!widget.isChannel) 'slow_mode_interval': _slowModeInterval,
+              'has_protected_content': _hasProtectedContent,
+              if (widget.isChannel) 'sign_messages': _signMessages,
+              if (widget.isChannel)
+                'show_author_profiles':
+                    _signMessages ? _showAuthorProfiles : false,
+            }
+          : <String, dynamic>{
+              'name': newName,
+              'description': _descriptionController.text.trim(),
+              if (finalAvatarUrl != null) 'avatar_url': finalAvatarUrl,
+            };
 
       final res = await ChatService.updateGroupSettings(widget.chatId, payload);
       if (!mounted) return;
@@ -669,6 +686,147 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     }
   }
 
+  Future<void> _openTransferOwnershipFlow() async {
+    HapticUtils.tap();
+    if (_members.isEmpty) {
+      final loaded = await ChatService.getGroupMembers(widget.chatId);
+      if (mounted) setState(() => _members = loaded);
+    }
+    if (!mounted) return;
+
+    final currentUserId = AccountManager().currentAccount?.userId;
+    final candidates = _members
+        .where((m) => m.id != currentUserId && !m.isBot && !m.isBanned)
+        .toList()
+      ..sort((a, b) {
+        final aIsAdmin = a.role == 'admin' ? 0 : 1;
+        final bIsAdmin = b.role == 'admin' ? 0 : 1;
+        if (aIsAdmin != bIsAdmin) return aIsAdmin.compareTo(bIsAdmin);
+        return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+      });
+
+    if (candidates.isEmpty) {
+      GlassToastService().show(context, 'Нет участников для передачи прав');
+      return;
+    }
+
+    final picked = await showTheavModalSheet<ChatParticipant>(
+      context: context,
+      title: 'Передать права владельца',
+      builder: (ctx) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+        child: TheavInsetGroup(
+          children: [
+            for (final member in candidates)
+              TheavListRow(
+                leading: AvatarWithStatus(
+                  userId: member.id,
+                  avatarUrl: member.avatarUrl,
+                  name: member.displayName,
+                  radius: 20,
+                ),
+                title: member.displayName.isNotEmpty
+                    ? member.displayName
+                    : '@${member.username}',
+                subtitle: member.role == 'admin'
+                    ? (member.adminTitle.isNotEmpty
+                        ? member.adminTitle
+                        : 'Администратор')
+                    : (widget.isChannel ? 'Подписчик' : 'Участник'),
+                showChevron: true,
+                onTap: () => Navigator.pop(ctx, member),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+
+    final candidateName = picked.displayName.isNotEmpty
+        ? picked.displayName
+        : '@${picked.username}';
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: 'Передать права владельца?',
+      message:
+          'Вы передадите все права владельца участнику $candidateName. Это действие нельзя отменить.',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Передать',
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true || !mounted) return;
+
+    var res = await ChatService.transferChatOwnership(
+      chatId: widget.chatId,
+      newOwnerId: picked.id,
+    );
+    if (!mounted) return;
+
+    final errCode = res['error']?.toString() ?? '';
+    final errMsgLower = (res['message']?.toString() ?? '').toLowerCase();
+    final needsPassword = res['success'] != true &&
+        (errCode == 'PASSWORD_HASH_INVALID' ||
+            errMsgLower.contains('password') ||
+            errMsgLower.contains('парол'));
+
+    if (needsPassword) {
+      final pwdController = TextEditingController();
+      final submitted = await showTheavDialog<bool>(
+        context: context,
+        title: 'Подтверждение 2FA',
+        message: 'Введите облачный пароль для передачи прав владельца',
+        content: TheavInsetGroup(
+          margin: EdgeInsets.zero,
+          children: [
+            TheavInlineTextField(
+              controller: pwdController,
+              placeholder: 'Облачный пароль',
+              obscureText: true,
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: const [
+          TheavDialogAction<bool>(label: 'Отмена', result: false),
+          TheavDialogAction<bool>(
+            label: 'Подтвердить',
+            result: true,
+            isPrimary: true,
+          ),
+        ],
+      );
+      final pwd = pwdController.text;
+      pwdController.dispose();
+      if (submitted != true || pwd.isEmpty || !mounted) return;
+
+      res = await ChatService.transferChatOwnership(
+        chatId: widget.chatId,
+        newOwnerId: picked.id,
+        password: pwd,
+      );
+      if (!mounted) return;
+    }
+
+    if (res['success'] == true) {
+      setState(() {
+        _myRole = 'admin';
+        _subSettingsChanged = true;
+      });
+      GlassToastService().show(context, 'Права владельца переданы');
+      unawaited(_loadChatSettings());
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось передать права владельца',
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.theav;
@@ -797,231 +955,246 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
             ),
             const SizedBox(height: 8),
 
-            // Тип: Публичный vs Частный + @username
-            TheavInsetGroup(
-              footer: _isPublic ? _usernameValidationHint : null,
-              children: [
-                TheavListRow(
-                  leading: iconoir.Globe(
-                    width: 20,
-                    height: 20,
-                    color: palette.primary,
-                  ),
-                  title: widget.isChannel
-                      ? _tr('channel_public_toggle', 'Публичный канал')
-                      : _tr('group_info_public', 'Публичная группа'),
-                  subtitle: _isPublic
-                      ? 'Можно найти через поиск и открыть по @username'
-                      : 'Доступ только по пригласительной ссылке',
-                  trailing: TheavSwitch(
-                    value: _isPublic,
-                    onChanged: (v) {
-                      HapticUtils.selection();
-                      setState(() => _isPublic = v);
-                    },
-                  ),
-                  onTap: () {
-                    HapticUtils.selection();
-                    setState(() => _isPublic = !_isPublic);
-                  },
-                ),
-                if (_isPublic)
-                  TheavInlineTextField(
-                    controller: _usernameController,
-                    label: 'Публичный @username',
-                    placeholder: 'username',
-                    prefix: Text(
-                      '@',
-                      style: TextStyle(
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w600,
-                        color: palette.primary,
-                      ),
-                    ),
-                    suffix: _cleanUsername.isNotEmpty
-                        ? (_isUsernameValid
-                            ? const iconoir.CheckCircle(
-                                width: 18,
-                                height: 18,
-                                color: Color(0xFF34C759),
-                              )
-                            : iconoir.WarningCircle(
-                                width: 18,
-                                height: 18,
-                                color: palette.error,
-                              ))
-                        : null,
-                  ),
-                TheavListRow(
-                  leading: iconoir.Lock(
-                    width: 20,
-                    height: 20,
-                    color: palette.primary,
-                  ),
-                  title: 'Запретить копирование и пересылку',
-                  subtitle: 'Участники не смогут копировать и сохранять контент',
-                  trailing: TheavSwitch(
-                    value: _hasProtectedContent,
-                    onChanged: (v) {
-                      HapticUtils.selection();
-                      setState(() => _hasProtectedContent = v);
-                    },
-                  ),
-                  onTap: () {
-                    HapticUtils.selection();
-                    setState(
-                      () => _hasProtectedContent = !_hasProtectedContent,
-                    );
-                  },
-                ),
-              ],
-            ),
-
-            // Подпись авторов в канале
-            if (widget.isChannel) ...[
-              const SizedBox(height: 8),
+            if (_canEditAdminSettingsEffective) ...[
+              // Тип: Публичный vs Частный + @username
               TheavInsetGroup(
+                footer: _isPublic ? _usernameValidationHint : null,
                 children: [
                   TheavListRow(
-                    leading: iconoir.EditPencil(
+                    leading: iconoir.Globe(
                       width: 20,
                       height: 20,
                       color: palette.primary,
                     ),
-                    title: 'Подписывать сообщения',
-                    subtitle: 'Показывать имя автора в нижней строке поста',
+                    title: widget.isChannel
+                        ? _tr('channel_public_toggle', 'Публичный канал')
+                        : _tr('group_info_public', 'Публичная группа'),
+                    subtitle: _isPublic
+                        ? 'Можно найти через поиск и открыть по @username'
+                        : 'Доступ только по пригласительной ссылке',
                     trailing: TheavSwitch(
-                      value: _signMessages,
+                      value: _isPublic,
                       onChanged: (v) {
                         HapticUtils.selection();
-                        setState(() {
-                          _signMessages = v;
-                          if (!v) _showAuthorProfiles = false;
-                        });
+                        setState(() => _isPublic = v);
                       },
                     ),
                     onTap: () {
                       HapticUtils.selection();
-                      setState(() {
-                        _signMessages = !_signMessages;
-                        if (!_signMessages) _showAuthorProfiles = false;
-                      });
+                      setState(() => _isPublic = !_isPublic);
                     },
                   ),
-                  if (_signMessages)
-                    AnimatedSize(
-                      duration: disableAnim
-                          ? Duration.zero
-                          : const Duration(milliseconds: 200),
-                      curve: Curves.easeOutCubic,
-                      child: TheavListRow(
-                        leading: iconoir.User(
-                          width: 20,
-                          height: 20,
+                  if (_isPublic)
+                    TheavInlineTextField(
+                      controller: _usernameController,
+                      label: 'Публичный @username',
+                      placeholder: 'username',
+                      prefix: Text(
+                        '@',
+                        style: TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w600,
                           color: palette.primary,
                         ),
-                        title: 'Профили авторов',
-                        subtitle:
-                            'Отображать аватар и ссылку на профиль автора поста',
-                        trailing: TheavSwitch(
-                          value: _showAuthorProfiles,
-                          onChanged: (v) {
-                            HapticUtils.selection();
-                            setState(() => _showAuthorProfiles = v);
-                          },
-                        ),
-                        onTap: () {
-                          HapticUtils.selection();
-                          setState(
-                            () => _showAuthorProfiles = !_showAuthorProfiles,
-                          );
-                        },
                       ),
+                      suffix: _cleanUsername.isNotEmpty
+                          ? (_isUsernameValid
+                              ? const iconoir.CheckCircle(
+                                  width: 18,
+                                  height: 18,
+                                  color: Color(0xFF34C759),
+                                )
+                              : iconoir.WarningCircle(
+                                  width: 18,
+                                  height: 18,
+                                  color: palette.error,
+                                ))
+                          : null,
                     ),
-                ],
-              ),
-            ],
-
-            // Telegram-навигация управления
-            const SizedBox(height: 8),
-            TheavInsetGroup(
-              children: [
-                if (widget.isChannel)
-                  TheavListRow(
-                    leading: iconoir.ChatLines(
-                      width: 20,
-                      height: 20,
-                      color: palette.primary,
-                    ),
-                    title: 'Обсуждение',
-                    valueText: _linkedChat?.name.isNotEmpty == true
-                        ? _linkedChat!.name
-                        : ((_linkedChatId ?? '').isNotEmpty
-                            ? 'Группа #$_linkedChatId'
-                            : 'Добавить группу'),
-                    showChevron: true,
-                    onTap: _openDiscussionSettings,
-                  )
-                else ...[
                   TheavListRow(
                     leading: iconoir.Lock(
                       width: 20,
                       height: 20,
                       color: palette.primary,
                     ),
-                    title: 'Разрешения',
-                    valueText:
-                        '${_enabledPermissionsCount(_defaultPermissions)}/7${slowBadge.isNotEmpty ? ' • $slowBadge' : ''}',
-                    showChevron: true,
-                    onTap: _openGroupPermissions,
+                    title: 'Запретить копирование и пересылку',
+                    subtitle:
+                        'Участники не смогут копировать и сохранять контент',
+                    trailing: TheavSwitch(
+                      value: _hasProtectedContent,
+                      onChanged: (v) {
+                        HapticUtils.selection();
+                        setState(() => _hasProtectedContent = v);
+                      },
+                    ),
+                    onTap: () {
+                      HapticUtils.selection();
+                      setState(
+                        () => _hasProtectedContent = !_hasProtectedContent,
+                      );
+                    },
                   ),
+                ],
+              ),
+
+              // Подпись авторов в канале
+              if (widget.isChannel) ...[
+                const SizedBox(height: 8),
+                TheavInsetGroup(
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.EditPencil(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Подписывать сообщения',
+                      subtitle: 'Показывать имя автора в нижней строке поста',
+                      trailing: TheavSwitch(
+                        value: _signMessages,
+                        onChanged: (v) {
+                          HapticUtils.selection();
+                          setState(() {
+                            _signMessages = v;
+                            if (!v) _showAuthorProfiles = false;
+                          });
+                        },
+                      ),
+                      onTap: () {
+                        HapticUtils.selection();
+                        setState(() {
+                          _signMessages = !_signMessages;
+                          if (!_signMessages) _showAuthorProfiles = false;
+                        });
+                      },
+                    ),
+                    if (_signMessages)
+                      AnimatedSize(
+                        duration: disableAnim
+                            ? Duration.zero
+                            : const Duration(milliseconds: 200),
+                        curve: Curves.easeOutCubic,
+                        child: TheavListRow(
+                          leading: iconoir.User(
+                            width: 20,
+                            height: 20,
+                            color: palette.primary,
+                          ),
+                          title: 'Профили авторов',
+                          subtitle:
+                              'Отображать аватар и ссылку на профиль автора поста',
+                          trailing: TheavSwitch(
+                            value: _showAuthorProfiles,
+                            onChanged: (v) {
+                              HapticUtils.selection();
+                              setState(() => _showAuthorProfiles = v);
+                            },
+                          ),
+                          onTap: () {
+                            HapticUtils.selection();
+                            setState(
+                              () =>
+                                  _showAuthorProfiles = !_showAuthorProfiles,
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+
+              // Telegram-навигация управления
+              const SizedBox(height: 8),
+              TheavInsetGroup(
+                children: [
+                  if (widget.isChannel)
+                    TheavListRow(
+                      leading: iconoir.ChatLines(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Обсуждение',
+                      valueText: _linkedChat?.name.isNotEmpty == true
+                          ? _linkedChat!.name
+                          : ((_linkedChatId ?? '').isNotEmpty
+                              ? 'Группа #$_linkedChatId'
+                              : 'Добавить группу'),
+                      showChevron: true,
+                      onTap: _openDiscussionSettings,
+                    )
+                  else ...[
+                    TheavListRow(
+                      leading: iconoir.Lock(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Разрешения',
+                      valueText:
+                          '${_enabledPermissionsCount(_defaultPermissions)}/7${slowBadge.isNotEmpty ? ' • $slowBadge' : ''}',
+                      showChevron: true,
+                      onTap: _openGroupPermissions,
+                    ),
+                    TheavListRow(
+                      leading: iconoir.Clock(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'История чата для новых участников',
+                      valueText: _historyForNew ? 'Видна' : 'Скрыта',
+                      showChevron: true,
+                      onTap: _showHistoryVisibilitySheet,
+                    ),
+                  ],
                   TheavListRow(
-                    leading: iconoir.Clock(
+                    leading: iconoir.Heart(
                       width: 20,
                       height: 20,
                       color: palette.primary,
                     ),
-                    title: 'История чата для новых участников',
-                    valueText: _historyForNew ? 'Видна' : 'Скрыта',
+                    title: 'Реакции',
+                    valueText: _reactionSummary(),
                     showChevron: true,
-                    onTap: _showHistoryVisibilitySheet,
+                    onTap: _openReactionsSettings,
                   ),
+                  TheavListRow(
+                    leading: iconoir.Link(
+                      width: 20,
+                      height: 20,
+                      color: palette.primary,
+                    ),
+                    title: 'Пригласительные ссылки',
+                    valueText: (_inviteLink ?? '').isNotEmpty ? 'Активна' : '',
+                    showChevron: true,
+                    onTap: _openInviteLinks,
+                  ),
+                  TheavListRow(
+                    leading: iconoir.ShieldCheck(
+                      width: 20,
+                      height: 20,
+                      color: palette.primary,
+                    ),
+                    title: 'Администраторы',
+                    valueText: '$_adminsCount',
+                    showChevron: true,
+                    onTap: _openAdminsSheet,
+                  ),
+                  if (_myRole == 'owner')
+                    TheavListRow(
+                      leading: iconoir.Crown(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Передать права владельца',
+                      showChevron: true,
+                      onTap: _openTransferOwnershipFlow,
+                    ),
                 ],
-                TheavListRow(
-                  leading: iconoir.Heart(
-                    width: 20,
-                    height: 20,
-                    color: palette.primary,
-                  ),
-                  title: 'Реакции',
-                  valueText: _reactionSummary(),
-                  showChevron: true,
-                  onTap: _openReactionsSettings,
-                ),
-                TheavListRow(
-                  leading: iconoir.Link(
-                    width: 20,
-                    height: 20,
-                    color: palette.primary,
-                  ),
-                  title: 'Пригласительные ссылки',
-                  valueText: (_inviteLink ?? '').isNotEmpty ? 'Активна' : '',
-                  showChevron: true,
-                  onTap: _openInviteLinks,
-                ),
-                TheavListRow(
-                  leading: iconoir.ShieldCheck(
-                    width: 20,
-                    height: 20,
-                    color: palette.primary,
-                  ),
-                  title: 'Администраторы',
-                  valueText: '$_adminsCount',
-                  showChevron: true,
-                  onTap: _openAdminsSheet,
-                ),
-              ],
-            ),
+              ),
+            ],
           ],
         ),
       ),

@@ -1161,12 +1161,38 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     } else if (event.data['poll'] is Map) {
       newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
     }
+    final dynamic replyMarkup = event.data['reply_markup'];
 
-    final isPollEvent =
-        event.data['message_type'] == 'poll' || newMediaPayload != null;
-    if (newContent == null && newMediaPayload == null) return;
+    final isPollEvent = event.data['message_type'] == 'poll' ||
+        event.data['poll'] is Map ||
+        (newMediaPayload != null &&
+            (newMediaPayload.containsKey('poll_id') ||
+                newMediaPayload.containsKey('options')));
+    if (newContent == null &&
+        newMediaPayload == null &&
+        newEntities == null &&
+        replyMarkup == null) {
+      return;
+    }
 
     String? effectiveContent = newContent;
+    Map<String, dynamic>? mergedPayloadForDb = newMediaPayload != null
+        ? ChatService.mergeIncomingMediaPayload(
+            null,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          )
+        : (replyMarkup != null
+            ? ChatService.mergeIncomingMediaPayload(
+                null,
+                null,
+                replyMarkup: replyMarkup,
+              )
+            : null);
+    bool effectiveIsEdited = event.data.containsKey('is_edited')
+        ? event.data['is_edited'] == true
+        : !isPollEvent;
+
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
@@ -1174,11 +1200,21 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           final current = _messages[index];
           effectiveContent ??= current.content;
           final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          final mergedMedia = ChatService.mergeIncomingMediaPayload(
+            current.mediaPayload,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          );
+          mergedPayloadForDb = mergedMedia;
+          final bool nextIsEdited = event.data.containsKey('is_edited')
+              ? (event.data['is_edited'] == true ? true : current.isEdited)
+              : (isPollMsg ? current.isEdited : true);
+          effectiveIsEdited = nextIsEdited;
           _messages[index] = current.copyWith(
             content: effectiveContent,
             entities: newEntities ?? current.entities,
-            mediaPayload: newMediaPayload ?? current.mediaPayload,
-            isEdited: isPollMsg ? current.isEdited : true,
+            mediaPayload: mergedMedia,
+            isEdited: nextIsEdited,
           );
           _updateFeedItems();
         }
@@ -1192,8 +1228,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         newEntities != null && newEntities.isNotEmpty
             ? jsonEncode(newEntities.map((e) => e.toJson()).toList())
             : null,
-        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
-        !isPollEvent,
+        mergedPayloadForDb != null ? jsonEncode(mergedPayloadForDb) : null,
+        effectiveIsEdited,
       );
     } catch (_) {}
   }

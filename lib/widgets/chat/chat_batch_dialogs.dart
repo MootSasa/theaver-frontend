@@ -47,16 +47,18 @@ String _tr(
 class ChatBatchDialogs {
   const ChatBatchDialogs._();
 
-  static Future<bool> confirmDeleteChats(
+  static Future<({bool confirmed, bool revoke})> confirmDeleteChatsWithOptions(
     BuildContext context,
     List<Chat> chats,
   ) async {
     final deletable = chats.where((c) => c.chatType != 'saved').toList();
-    if (deletable.isEmpty) return false;
+    if (deletable.isEmpty) return (confirmed: false, revoke: false);
 
     final String title;
     final String body;
     final String confirmLabel;
+    final bool hasPrivate = deletable.any((c) => c.chatType == 'private');
+    final String? revokeLabel;
 
     if (deletable.length == 1) {
       final chat = deletable.first;
@@ -69,6 +71,7 @@ class ChatBatchDialogs {
           {'name': chat.name},
         );
         confirmLabel = _tr(context, 'chats_leave_group_action', 'Покинуть');
+        revokeLabel = null;
       } else if (chat.chatType == 'channel') {
         title = _tr(context, 'chats_leave_channel_title', 'Покинуть канал?');
         body = _tr(
@@ -78,6 +81,7 @@ class ChatBatchDialogs {
           {'name': chat.name},
         );
         confirmLabel = _tr(context, 'chats_leave_group_action', 'Покинуть');
+        revokeLabel = null;
       } else {
         title = _tr(context, 'chats_delete_private_title', 'Удалить чат?');
         body = _tr(
@@ -87,6 +91,7 @@ class ChatBatchDialogs {
           {'name': chat.name},
         );
         confirmLabel = _tr(context, 'selection_delete', 'Удалить');
+        revokeLabel = 'Также удалить для ${chat.name}';
       }
     } else {
       final countStr = '${deletable.length}';
@@ -102,14 +107,54 @@ class ChatBatchDialogs {
         'Личные чаты будут удалены, а из выбранных групп и каналов будет выполнен выход.',
       );
       confirmLabel = _tr(context, 'selection_delete', 'Удалить');
+      revokeLabel = hasPrivate
+          ? 'Также удалить личные переписки у собеседников'
+          : null;
     }
 
     final cancelLabel = _tr(context, 'common_cancel', 'Отмена');
+    bool revoke = false;
 
     final confirmed = await showTheavDialog<bool>(
       context: context,
       title: title,
       message: body,
+      content: revokeLabel == null
+          ? null
+          : StatefulBuilder(
+              builder: (ctx, setDialogState) {
+                final palette = ctx.theav;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticUtils.selection();
+                    setDialogState(() => revoke = !revoke);
+                  },
+                  child: Row(
+                    children: [
+                      TheavCheckCircle(
+                        selected: revoke,
+                        size: 20,
+                        onTap: () {
+                          HapticUtils.selection();
+                          setDialogState(() => revoke = !revoke);
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          revokeLabel!,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: palette.onSurface,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
       actions: [
         TheavDialogAction<bool>(label: cancelLabel, result: false),
         TheavDialogAction<bool>(
@@ -120,7 +165,15 @@ class ChatBatchDialogs {
       ],
     );
 
-    return confirmed == true;
+    return (confirmed: confirmed == true, revoke: revoke);
+  }
+
+  static Future<bool> confirmDeleteChats(
+    BuildContext context,
+    List<Chat> chats,
+  ) async {
+    final res = await confirmDeleteChatsWithOptions(context, chats);
+    return res.confirmed;
   }
 
   static Future<bool> executeClearHistory(

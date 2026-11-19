@@ -113,6 +113,9 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
         description: desc,
         isPublic: _isPublic,
         username: _isPublic && rawUsername.isNotEmpty ? rawUsername : null,
+        signMessages: _enableSignatures,
+        historyForNewMembers: _enableHistory,
+        createDiscussionGroup: _enableComments,
         participantIds: const [],
       );
 
@@ -134,6 +137,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 'is_public': _isPublic,
                 'username': _isPublic ? rawUsername : '',
                 'history_for_new': _enableHistory,
+                'sign_messages': _enableSignatures,
               },
               options: Options(headers: {'Authorization': 'Bearer $token'}),
             );

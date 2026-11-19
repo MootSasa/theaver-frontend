@@ -24,6 +24,7 @@ import '../../services/auth_service.dart';
 import '../../services/avatar_sync_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -164,6 +165,8 @@ class ProfileScreenState extends State<ProfileScreen>
   DateTime? _lastSeen;
   bool _isMuted = false;
   bool _isBlocked = false;
+  bool _isInContacts = false;
+  ContactItem? _contactEntry;
 
   // Поля для групп и каналов
   String _inviteLink = '';
@@ -285,8 +288,12 @@ class ProfileScreenState extends State<ProfileScreen>
   Timer? _wheelSnapTimer;
   double _lastWheelDy = 0.0;
 
-  bool get _canEditGroupOrChannel =>
+  bool get _canManageGroupAdminSettings =>
       (_isGroup || _isChannel) && (_myRole == 'owner' || _myRole == 'admin');
+
+  bool get _canEditGroupOrChannel =>
+      _canManageGroupAdminSettings ||
+      (_isGroup && (_chatDetails?.canChangeInfoEffective ?? false));
 
   bool get _canAddGroupMembers =>
       _isGroup &&
@@ -448,6 +455,8 @@ class ProfileScreenState extends State<ProfileScreen>
         if (cache.isUserBlockedSync(uid)) {
           _isBlocked = true;
         }
+        _contactEntry = ContactsService.getCached(uid);
+        _isInContacts = _contactEntry != null;
       }
       if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) {
         if (cache.isChatMutedSync(_resolvedChatId)) {
@@ -830,6 +839,16 @@ class ProfileScreenState extends State<ProfileScreen>
         }
       }
       if (_isUser && widget.userId != null && widget.userId!.isNotEmpty) {
+        final targetUid = widget.userId!;
+        await ContactsService.getContacts();
+        final cachedContact = ContactsService.getCached(targetUid);
+        if (mounted) {
+          setState(() {
+            _contactEntry = cachedContact;
+            _isInContacts = cachedContact != null;
+          });
+        }
+
         final token = await AuthService.getToken();
         if (token != null) {
           final dio = Dio();
@@ -952,16 +971,33 @@ class ProfileScreenState extends State<ProfileScreen>
     if (cid == null || cid.isEmpty) return;
 
     try {
-      final results = await Future.wait([
+      final metaResults = await Future.wait([
         ChatService.getChat(cid).catchError((_) => const <String, dynamic>{}),
         ChatService.getGroupSettings(cid)
             .catchError((_) => const <String, dynamic>{}),
-        ChatService.getGroupMembers(cid).catchError((_) => <ChatParticipant>[]),
       ]);
 
-      final chatRes = results[0] as Map<String, dynamic>;
-      final settingsData = results[1] as Map<String, dynamic>;
-      final groupMembers = results[2] as List<ChatParticipant>;
+      final chatRes = metaResults[0];
+      final settingsData = metaResults[1];
+
+      var effectiveRole = _myRole;
+      if (chatRes['success'] == true && chatRes['chat'] is ChatDetails) {
+        final role = (chatRes['chat'] as ChatDetails).myRole;
+        if (role != null && role.isNotEmpty) {
+          effectiveRole = role;
+        }
+      }
+      if (settingsData['success'] == true &&
+          settingsData['my_role'] != null &&
+          settingsData['my_role'].toString().isNotEmpty) {
+        effectiveRole = settingsData['my_role'].toString();
+      }
+      final shouldLoadMembers =
+          !_isChannel || effectiveRole == 'owner' || effectiveRole == 'admin';
+      final groupMembers = shouldLoadMembers
+          ? await ChatService.getGroupMembers(cid)
+              .catchError((_) => <ChatParticipant>[])
+          : <ChatParticipant>[];
       final currentUid = _accountManager.currentAccount?.userId;
 
       if (!mounted) return;
@@ -969,6 +1005,9 @@ class ProfileScreenState extends State<ProfileScreen>
         if (chatRes['success'] == true && chatRes['chat'] is ChatDetails) {
           final details = chatRes['chat'] as ChatDetails;
           _chatDetails = details;
+          if (details.effectiveMemberCount > 0) {
+            _memberCount = details.effectiveMemberCount;
+          }
           if (details.name.isNotEmpty) {
             _nameController.text = details.name;
           }
@@ -1064,8 +1103,15 @@ class ProfileScreenState extends State<ProfileScreen>
               settingsData['my_role'].toString().isNotEmpty) {
             _myRole = settingsData['my_role'].toString();
           }
-          _memberCount =
-              (settingsData['member_count'] as num?)?.toInt() ?? _memberCount;
+          final settingsCount =
+              (settingsData['subscriber_count'] as num?)?.toInt() ??
+                  (settingsData['member_count'] as num?)?.toInt();
+          if (settingsCount != null && settingsCount > 0) {
+            _memberCount = settingsCount;
+          } else if (_chatDetails != null &&
+              _chatDetails!.effectiveMemberCount > 0) {
+            _memberCount = _chatDetails!.effectiveMemberCount;
+          }
           final srvAvatar = settingsData['avatar_url']?.toString();
           if (srvAvatar != null && srvAvatar.isNotEmpty) {
             _avatarUrl = srvAvatar;
@@ -1811,6 +1857,8 @@ class ProfileScreenState extends State<ProfileScreen>
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
     final l10n = context.l10n;
+    bool revoke = false;
+    final peerName = _getDisplayName();
 
     final confirmed = await showTheavDialog<bool>(
       context: context,
@@ -1830,6 +1878,44 @@ class ProfileScreenState extends State<ProfileScreen>
               'profile_delete_chat_confirm_message',
               'Чат и вся переписка будут удалены.',
             ),
+      content: _isUser
+          ? StatefulBuilder(
+              builder: (ctx, setDialogState) {
+                final palette = ctx.theav;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticUtils.selection();
+                    setDialogState(() => revoke = !revoke);
+                  },
+                  child: Row(
+                    children: [
+                      TheavCheckCircle(
+                        selected: revoke,
+                        size: 20,
+                        onTap: () {
+                          HapticUtils.selection();
+                          setDialogState(() => revoke = !revoke);
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          peerName.isNotEmpty
+                              ? 'Также удалить для $peerName'
+                              : 'Также удалить для собеседника',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: palette.onSurface,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            )
+          : null,
       actions: [
         TheavDialogAction<bool>(
           label: _tr(l10n, 'profile_cancel', 'Отмена'),
@@ -1847,12 +1933,23 @@ class ProfileScreenState extends State<ProfileScreen>
 
     if (confirmed != true || !mounted) return;
     try {
-      final token = await AuthService.getToken();
-      final dio = Dio();
-      await dio.delete(
-        '${AppConfig.baseUrl}/api/chats/$cid',
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      final res = await ChatService.deleteChat(
+        cid,
+        revoke: _isUser && revoke,
       );
+      if (res['success'] != true) {
+        if (mounted) {
+          _showToast(
+            res['message']?.toString() ??
+                _tr(
+                  l10n,
+                  'profile_delete_chat_error',
+                  'Ошибка при удалении чата',
+                ),
+          );
+        }
+        return;
+      }
       await AppDatabase().deleteChat(cid);
       await AppDatabase().deleteMessagesForChat(cid);
       if (mounted) {
@@ -1890,6 +1987,7 @@ class ProfileScreenState extends State<ProfileScreen>
           initialDefaultPermissions: _defaultPermissions,
           initialReactionSettings: _reactionSettings,
           inviteLink: _inviteLink,
+          canEditAdminSettings: _canManageGroupAdminSettings,
         ),
       ),
     );
@@ -5049,7 +5147,7 @@ class ProfileScreenState extends State<ProfileScreen>
                                                   'profile_age_years', 'лет'),
                                             ),
                                             if ((_isGroup || _isChannel) &&
-                                                _canEditGroupOrChannel) ...[
+                                                _canManageGroupAdminSettings) ...[
                                               const SizedBox(height: 12),
                                               _buildGroupAdminQuickSettingsCard(
                                                 context,
@@ -5143,7 +5241,7 @@ class ProfileScreenState extends State<ProfileScreen>
                                                     canAddMembers:
                                                         _canAddGroupMembers,
                                                     canManageMembers:
-                                                        _canEditGroupOrChannel,
+                                                        _canManageGroupAdminSettings,
                                                     onAddMemberTap:
                                                         _showAddMemberDialog,
                                                     onMemberTap: (m) {
@@ -5470,10 +5568,11 @@ class ProfileScreenState extends State<ProfileScreen>
           context.read<ProfileThemeProvider>().currentOwnBadge?.id == 'creator';
       final targetBadgeId =
           PeerCustomizationCache.instance.getSync(widget.userId ?? '')?.badge?.id;
-      final canManageBadge = viewerIsCreator &&
-          widget.userId != null &&
+      final isPeerUser = widget.userId != null &&
           widget.userId!.isNotEmpty &&
-          widget.userId != _accountManager.currentAccount?.userId &&
+          widget.userId != _accountManager.currentAccount?.userId;
+      final canManageBadge = viewerIsCreator &&
+          isPeerUser &&
           !_peerIsBot &&
           targetBadgeId != 'creator';
 
@@ -5489,6 +5588,28 @@ class ProfileScreenState extends State<ProfileScreen>
             iconBuilder: (color, size) =>
                 iconoir.BadgeCheck(color: color, width: size, height: size),
           ),
+        if (isPeerUser && !_isInContacts)
+          _MorphMenuItemData(
+            id: 'add_contact',
+            label: 'Добавить в контакты',
+            iconBuilder: (color, size) =>
+                iconoir.UserPlus(color: color, width: size, height: size),
+          ),
+        if (isPeerUser && _isInContacts) ...[
+          _MorphMenuItemData(
+            id: 'edit_contact',
+            label: 'Изменить имя контакта',
+            iconBuilder: (color, size) =>
+                iconoir.EditPencil(color: color, width: size, height: size),
+          ),
+          _MorphMenuItemData(
+            id: 'remove_contact',
+            label: 'Удалить из контактов',
+            isDestructive: true,
+            iconBuilder: (color, size) =>
+                iconoir.UserXmark(color: color, width: size, height: size),
+          ),
+        ],
         _MorphMenuItemData(
           id: 'search_chat',
           label: _tr(l10n, 'chat_menu_search_messages', 'Поиск сообщений'),
@@ -5586,6 +5707,15 @@ class ProfileScreenState extends State<ProfileScreen>
       case 'manage_badge':
         _openManageBadgeSheet();
         break;
+      case 'add_contact':
+        unawaited(_openManageContactDialog(isEdit: false));
+        break;
+      case 'edit_contact':
+        unawaited(_openManageContactDialog(isEdit: true));
+        break;
+      case 'remove_contact':
+        unawaited(_confirmRemoveContact());
+        break;
       case 'copy_link':
         _copyProfileLink();
         break;
@@ -5608,6 +5738,127 @@ class ProfileScreenState extends State<ProfileScreen>
       case 'edit_group_channel':
         _openEditGroupOrChannel();
         break;
+    }
+  }
+
+  Future<void> _openManageContactDialog({required bool isEdit}) async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty) return;
+    HapticUtils.tap();
+
+    final firstNameCtrl = TextEditingController(
+      text: isEdit
+          ? (_contactEntry?.customFirstName.isNotEmpty == true
+              ? _contactEntry!.customFirstName
+              : _nameController.text.trim())
+          : _nameController.text.trim(),
+    );
+    final lastNameCtrl = TextEditingController(
+      text: isEdit
+          ? (_contactEntry?.customLastName.isNotEmpty == true
+              ? _contactEntry!.customLastName
+              : _surnameController.text.trim())
+          : _surnameController.text.trim(),
+    );
+
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: isEdit ? 'Изменить имя контакта' : 'Добавить в контакты',
+      content: TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        dividerIndent: 16,
+        children: [
+          TheavInlineTextField(
+            controller: firstNameCtrl,
+            placeholder: 'Имя',
+            autofocus: true,
+          ),
+          TheavInlineTextField(
+            controller: lastNameCtrl,
+            placeholder: 'Фамилия',
+          ),
+        ],
+      ),
+      actions: [
+        const TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: isEdit ? 'Сохранить' : 'Добавить',
+          result: true,
+          isPrimary: true,
+        ),
+      ],
+    );
+
+    final firstName = firstNameCtrl.text.trim();
+    final lastName = lastNameCtrl.text.trim();
+    firstNameCtrl.dispose();
+    lastNameCtrl.dispose();
+
+    if (confirmed != true || !mounted) return;
+
+    final res = isEdit
+        ? await ContactsService.updateContact(
+            uid,
+            firstName: firstName,
+            lastName: lastName,
+          )
+        : await ContactsService.addContact(
+            userId: uid,
+            firstName: firstName,
+            lastName: lastName,
+          );
+    if (!mounted) return;
+
+    if (res['success'] == true) {
+      final updated = ContactsService.getCached(uid);
+      setState(() {
+        _contactEntry = updated;
+        _isInContacts = true;
+      });
+      _showToast(isEdit ? 'Контакт обновлён' : 'Контакт добавлен');
+      unawaited(_loadOtherUserProfile());
+    } else {
+      _showToast(
+        res['message']?.toString() ?? 'Не удалось сохранить контакт',
+      );
+    }
+  }
+
+  Future<void> _confirmRemoveContact() async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty) return;
+    HapticUtils.tap();
+
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: 'Удалить из контактов?',
+      message:
+          'Контакт «${_getDisplayName()}» будет удалён из вашего списка контактов.',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Удалить',
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true || !mounted) return;
+
+    final res = await ContactsService.deleteContact(uid);
+    if (!mounted) return;
+
+    if (res['success'] == true) {
+      setState(() {
+        _contactEntry = null;
+        _isInContacts = false;
+      });
+      _showToast('Контакт удалён');
+      unawaited(_loadOtherUserProfile());
+    } else {
+      _showToast(
+        res['message']?.toString() ?? 'Не удалось удалить контакт',
+      );
     }
   }
 

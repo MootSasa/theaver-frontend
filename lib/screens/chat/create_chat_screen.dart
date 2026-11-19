@@ -8,6 +8,7 @@ import '../../widgets/settings/settings_floating_header.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../community/create_community_screen.dart';
+import '../contacts/contacts_screen.dart';
 import 'create_channel_screen.dart';
 import 'create_group_screen.dart';
 import 'create_private_chat_screen.dart';
@@ -19,6 +20,7 @@ enum CreateChatOptionType {
   channel,
   community,
   joinByCode,
+  contacts,
 }
 
 class CreateChatOptionSpec {
@@ -85,6 +87,13 @@ List<CreateChatOptionSpec> buildCreateChatOptions(BuildContext context) {
       accentColor: const Color(0xFFEC4899),
       iconBuilder: (c, s) => Icon(Icons.link_rounded, color: c, size: s),
     ),
+    CreateChatOptionSpec(
+      type: CreateChatOptionType.contacts,
+      title: 'Контакты',
+      subtitle: 'Список контактов и добавление по @username',
+      accentColor: const Color(0xFF06B6D4),
+      iconBuilder: (c, s) => iconoir.Book(color: c, width: s, height: s),
+    ),
   ];
 }
 
@@ -92,7 +101,7 @@ List<CreateChatOptionSpec> buildCreateChatOptions(BuildContext context) {
 /// на главном экране (в режимах Liquid Glass и Material Matte).
 class CreateChatSelectorPanel extends StatelessWidget {
   static const double kPanelWidth = 304.0;
-  static const double kPanelHeight = 342.0;
+  static const double kPanelHeight = 404.0;
 
   final double width;
   final double height;
@@ -330,6 +339,12 @@ class CreateChatScreen extends StatelessWidget {
               onCommunityCreated: onCommunityCreated,
             ),
           ),
+        );
+        break;
+      case CreateChatOptionType.contacts:
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const ContactsScreen()),
         );
         break;
     }

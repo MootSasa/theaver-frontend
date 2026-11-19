@@ -1379,6 +1379,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _pinnedMessages = [chat.pinnedMessage!];
       }
     });
+    if (chat.slowModeWaitSeconds > 0 && !chat.isAdmin) {
+      _startSlowmodeCountdown(chat.slowModeWaitSeconds);
+    }
   }
 
   void _maybeStartLocalSlowmode() {
@@ -1792,12 +1795,38 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } else if (event.data['poll'] is Map) {
       newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
     }
+    final dynamic replyMarkup = event.data['reply_markup'];
 
-    final isPollEvent =
-        event.data['message_type'] == 'poll' || newMediaPayload != null;
-    if (newContent == null && newMediaPayload == null) return;
+    final isPollEvent = event.data['message_type'] == 'poll' ||
+        event.data['poll'] is Map ||
+        (newMediaPayload != null &&
+            (newMediaPayload.containsKey('poll_id') ||
+                newMediaPayload.containsKey('options')));
+    if (newContent == null &&
+        newMediaPayload == null &&
+        newEntities == null &&
+        replyMarkup == null) {
+      return;
+    }
 
     String? effectiveContent = newContent;
+    Map<String, dynamic>? mergedPayloadForDb = newMediaPayload != null
+        ? ChatService.mergeIncomingMediaPayload(
+            null,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          )
+        : (replyMarkup != null
+            ? ChatService.mergeIncomingMediaPayload(
+                null,
+                null,
+                replyMarkup: replyMarkup,
+              )
+            : null);
+    bool effectiveIsEdited = event.data.containsKey('is_edited')
+        ? event.data['is_edited'] == true
+        : !isPollEvent;
+
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
@@ -1805,11 +1834,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           final current = _messages[index];
           effectiveContent ??= current.content;
           final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          final mergedMedia = ChatService.mergeIncomingMediaPayload(
+            current.mediaPayload,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          );
+          mergedPayloadForDb = mergedMedia;
+          final bool nextIsEdited = event.data.containsKey('is_edited')
+              ? (event.data['is_edited'] == true ? true : current.isEdited)
+              : (isPollMsg ? current.isEdited : true);
+          effectiveIsEdited = nextIsEdited;
           _messages[index] = current.copyWith(
             content: effectiveContent,
             entities: newEntities ?? current.entities,
-            mediaPayload: newMediaPayload ?? current.mediaPayload,
-            isEdited: isPollMsg ? current.isEdited : true,
+            mediaPayload: mergedMedia,
+            isEdited: nextIsEdited,
           );
           _updateFeedItems();
         }
@@ -1823,8 +1862,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         newEntities != null && newEntities.isNotEmpty
             ? jsonEncode(newEntities.map((e) => e.toJson()).toList())
             : null,
-        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
-        !isPollEvent,
+        mergedPayloadForDb != null ? jsonEncode(mergedPayloadForDb) : null,
+        effectiveIsEdited,
       );
     } catch (_) {}
   }
@@ -4642,6 +4681,33 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final bool isKeyboardVisible = bottomInset > 0;
 
     final int onlineCount = _participants.where((p) => p.isOnline).length;
+    final int memberCount =
+        (_chatDetails != null && _chatDetails!.effectiveMemberCount > 0)
+            ? _chatDetails!.effectiveMemberCount
+            : _participants.length;
+    final bool canStartOrJoinCall = _chatDetails == null ||
+        _chatDetails!.hasActiveCall ||
+        _chatDetails!.canManageCallsEffective;
+    void openGroupCall() {
+      if (!canStartOrJoinCall) {
+        GlassToastService().showError(
+          context,
+          'Начать голосовой чат могут только администраторы',
+        );
+        return;
+      }
+      Navigator.of(context, rootNavigator: true).push(
+        MaterialPageRoute(
+          builder: (_) => GroupCallScreen(
+            callId: widget.chatId,
+            chatId: widget.chatId,
+            userId: _currentUserId ?? 'local',
+            title: displayName,
+          ),
+        ),
+      );
+    }
+
     final String statusSubtitle;
     if (_isTyping && _typingUserName != null && _typingUserName!.isNotEmpty) {
       final String l10nKey;
@@ -4658,12 +4724,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } else if (onlineCount >= 1) {
       statusSubtitle = context.l10n
           .translate('chat_status_members_and_online')
-          .replaceAll('{count}', _participants.length.toString())
+          .replaceAll('{count}', memberCount.toString())
           .replaceAll('{online}', onlineCount.toString());
     } else {
       statusSubtitle = context.l10n
           .translate('chat_status_members_count')
-          .replaceAll('{count}', _participants.length.toString());
+          .replaceAll('{count}', memberCount.toString());
     }
 
     return ChatScaffold(
@@ -4711,30 +4777,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: _openGroupInfo,
                 onViewProfile: _openGroupInfo,
-                onVoiceCall: () {
-                  Navigator.of(context, rootNavigator: true).push(
-                    MaterialPageRoute(
-                      builder: (_) => GroupCallScreen(
-                        callId: widget.chatId,
-                        chatId: widget.chatId,
-                        userId: _currentUserId ?? 'local',
-                        title: displayName,
-                      ),
-                    ),
-                  );
-                },
-                onVideoCall: () {
-                  Navigator.of(context, rootNavigator: true).push(
-                    MaterialPageRoute(
-                      builder: (_) => GroupCallScreen(
-                        callId: widget.chatId,
-                        chatId: widget.chatId,
-                        userId: _currentUserId ?? 'local',
-                        title: displayName,
-                      ),
-                    ),
-                  );
-                },
+                onVoiceCall: openGroupCall,
+                onVideoCall: openGroupCall,
                 onSearch: () {
                   ChatActionsHelper.openSearch(
                     context: context,

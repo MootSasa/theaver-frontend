@@ -6,6 +6,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/community_models.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/glass_toast_service.dart';
 import '../../widgets/design_system/theav_design_system.dart';
@@ -18,6 +19,7 @@ import '../../utils/swipe_back_route.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../community/create_community_screen.dart';
+import '../contacts/contacts_screen.dart';
 import 'create_channel_screen.dart';
 import 'create_group_screen.dart';
 import 'private_chat_screen.dart';
@@ -99,10 +101,23 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
         });
       }
 
-      // 2. Пользователи с сервера
+      // 2. Контакты пользователя (/api/contacts) и глобальные пользователи с сервера
+      final contacts = await ContactsService.getContacts();
+      for (final ct in contacts) {
+        merged[ct.contactUserId] = SearchResultUser(
+          id: ct.contactUserId,
+          username: ct.username,
+          name: ct.effectiveName,
+          avatarUrl: ct.avatarUrl,
+          bio: '',
+          isOnline: ct.isOnline,
+          isBot: ct.isBot,
+          isVerified: ct.isVerified,
+        );
+      }
       final remote = await SearchService.searchUsers(query: '');
       for (final u in remote) {
-        merged[u.id] = u;
+        merged.putIfAbsent(u.id, () => u);
       }
 
       if (mounted) {
@@ -275,6 +290,20 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
       title: _tr('chat_new_private', 'Новое сообщение'),
       backgroundColor: palette.bgBase,
       padBodyTop: true,
+      actions: [
+        SettingsHeaderAction(
+          tooltip: 'Контакты',
+          foregroundColor: palette.primary,
+          icon: iconoir.Book(width: 21, height: 21, color: palette.primary),
+          onTap: () {
+            HapticUtils.tap();
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(builder: (_) => const ContactsScreen()),
+            );
+          },
+        ),
+      ],
       body: Stack(
         children: [
           Column(

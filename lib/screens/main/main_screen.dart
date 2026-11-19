@@ -13,6 +13,7 @@ import '../../screens/chat/create_private_chat_screen.dart';
 import '../../screens/chat/create_group_screen.dart';
 import '../../screens/chat/create_channel_screen.dart';
 import '../../screens/chat/create_chat_screen.dart';
+import '../../screens/contacts/contacts_screen.dart';
 import '../../screens/settings/settings_screen.dart';
 import '../../screens/settings/profile_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
@@ -1579,6 +1580,12 @@ class _MainScreenState extends State<MainScreen>
       case CreateChatOptionType.joinByCode:
         _showCreateCommunityDialog(initialJoinMode: true);
         break;
+      case CreateChatOptionType.contacts:
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const ContactsScreen()),
+        );
+        break;
     }
   }
 
@@ -2966,18 +2973,23 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _toggleReadChat(Chat chat) async {
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
     final db = AppDatabase(_currentUserId);
     if (chat.unreadCount > 0 || chat.unreadCount == -1) {
       await db.batchMarkAsRead([chat.id]);
-      try {
-        context.read<UnreadCountProvider>().setCount(chat.id, 0);
-      } catch (_) {}
-      await ChatService.markMessagesAsRead(chatId: chat.id);
+      unreadProvider?.setCount(chat.id, 0);
+      if (chat.unreadCount == -1) {
+        await ChatService.unmarkChatUnread(chat.id);
+      } else {
+        await ChatService.markMessagesAsRead(chatId: chat.id);
+      }
     } else {
       await db.updateUnreadCount(chat.id, -1);
-      try {
-        context.read<UnreadCountProvider>().setCount(chat.id, -1);
-      } catch (_) {}
+      unreadProvider?.setCount(chat.id, -1);
+      unawaited(ChatService.markChatUnread(chat.id));
     }
   }
 
@@ -3229,28 +3241,35 @@ class _MainScreenState extends State<MainScreen>
       return;
     }
 
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+
     final db = AppDatabase(_currentUserId);
     final ids = regular.map((c) => c.id).toList();
     await db.batchMarkAsUnread(ids);
     for (final id in ids) {
-      try {
-        context.read<UnreadCountProvider>().setCount(id, -1);
-      } catch (_) {}
+      unreadProvider?.setCount(id, -1);
+      unawaited(ChatService.markChatUnread(id));
     }
     _exitSelectMode();
   }
 
   /// Batch mark selected chats as read
   Future<void> _batchMarkAsRead(List<Chat> chats) async {
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+
     final db = AppDatabase(_currentUserId);
     final ids = chats.map((c) => c.id).toList();
 
     // Оптимистичное обновление SQLite и провайдера — стрим мгновенно обновит UI
     await db.batchMarkAsRead(ids);
     for (final id in ids) {
-      try {
-        context.read<UnreadCountProvider>().setCount(id, 0);
-      } catch (_) {}
+      unreadProvider?.setCount(id, 0);
     }
     _exitSelectMode();
 
@@ -3262,7 +3281,12 @@ class _MainScreenState extends State<MainScreen>
           successCount++;
         }
       } else if (chat.unreadCount == -1) {
-        successCount++;
+        final result = await ChatService.unmarkChatUnread(chat.id);
+        if (result['success'] == true) {
+          successCount++;
+        } else {
+          successCount++;
+        }
       }
     }
 
@@ -3279,10 +3303,12 @@ class _MainScreenState extends State<MainScreen>
     final deletable = chats.where((c) => c.chatType != 'saved').toList();
     if (deletable.isEmpty) return;
 
-    final confirmed =
-        await ChatBatchDialogs.confirmDeleteChats(context, deletable);
+    final delRes = await ChatBatchDialogs.confirmDeleteChatsWithOptions(
+      context,
+      deletable,
+    );
 
-    if (confirmed && mounted) {
+    if (delRes.confirmed && mounted) {
       final db = AppDatabase(_currentUserId);
       final ids = deletable.map((c) => c.id).toList();
 
@@ -3293,7 +3319,10 @@ class _MainScreenState extends State<MainScreen>
       int deleted = 0;
       int failed = 0;
       for (final chat in deletable) {
-        final result = await ChatService.deleteChat(chat.id);
+        final result = await ChatService.deleteChat(
+          chat.id,
+          revoke: chat.chatType == 'private' && delRes.revoke,
+        );
         if (result['success'] == true) {
           deleted++;
         } else {
@@ -3319,6 +3348,7 @@ class _MainScreenState extends State<MainScreen>
       try {
         context.read<UnreadCountProvider>().setCount(chat.id, 0);
       } catch (_) {}
+      unawaited(ChatService.unmarkChatUnread(chat.id));
     }
 
     final effectiveSavedAvatar = chat.avatarUrl ??

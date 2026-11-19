@@ -314,6 +314,8 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         description: desc.isNotEmpty ? desc : null,
         username: _isPublic && cleanUsername.isNotEmpty ? cleanUsername : null,
         isPublic: _isPublic,
+        historyForNewMembers: _enableHistory,
+        allowInvites: _allowInvites,
         participantIds: participantIds,
       );
 

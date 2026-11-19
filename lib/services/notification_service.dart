@@ -619,6 +619,31 @@ class NotificationService with WidgetsBindingObserver {
         final cid = data['chat_id']?.toString();
         if (cid != null && cid.isNotEmpty) cancelChatNotifications(cid);
         break;
+      case 'channel_live_started':
+        final liveChatId = payloadString(data, const ['chat_id']);
+        if (liveChatId.isNotEmpty) {
+          final liveTitle = payloadString(
+            data,
+            const ['chat_title', 'chat_name', 'caller_name'],
+            'Канал',
+          );
+          final liveAvatar =
+              payloadString(data, const ['caller_avatar', 'avatar_url']);
+          await _onChatMessage(
+            ChatMessageNotification(
+              chatId: liveChatId,
+              chatName: liveTitle,
+              senderName: '',
+              text: 'Прямой эфир начался',
+              senderId: payloadString(data, const ['caller_id']),
+              avatarUrl: liveAvatar.isNotEmpty ? liveAvatar : null,
+              isChannel: true,
+              messageType: 'system',
+            ),
+            NotificationSource.push,
+          );
+        }
+        break;
       case 'incoming_call':
         _handleIncomingCallPush(data);
         break;

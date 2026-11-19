@@ -45,6 +45,7 @@ enum WebSocketEventType {
   chatDeleted,
   scheduledMessagesUpdated,
   joinRequestsUpdated,
+  chatUnreadMarked,
   rpcResult,
   rpcError,
 }
@@ -182,6 +183,8 @@ class WebSocketEvent {
         return WebSocketEventType.scheduledMessagesUpdated;
       case 'join_requests_updated':
         return WebSocketEventType.joinRequestsUpdated;
+      case 'chat_unread_marked':
+        return WebSocketEventType.chatUnreadMarked;
       case 'rpc_result':
         return WebSocketEventType.rpcResult;
       case 'rpc_error':

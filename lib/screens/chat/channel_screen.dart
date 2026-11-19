@@ -313,7 +313,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _channelName = chat.name;
     _channelAvatar = chat.avatarUrl;
     _channelDescription = chat.description;
-    _subscriberCount = chat.participants.length;
+    _subscriberCount = chat.effectiveMemberCount;
     _isVerified = chat.isVerified;
     _showAuthorProfiles = chat.showAuthorProfiles;
     _signMessages = chat.signMessages;
@@ -1757,6 +1757,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     } else if (event.data['poll'] is Map) {
       newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
     }
+    final dynamic replyMarkup = event.data['reply_markup'];
 
     List<MessageEntity>? parsedEntities;
     if (event.data['entities'] is List) {
@@ -1766,13 +1767,36 @@ class _ChannelScreenState extends State<ChannelScreen>
           .toList();
     }
 
-    final isPollEvent =
-        event.data['message_type'] == 'poll' || newMediaPayload != null;
-    if (newContent == null && newMediaPayload == null && parsedEntities == null) {
+    final isPollEvent = event.data['message_type'] == 'poll' ||
+        event.data['poll'] is Map ||
+        (newMediaPayload != null &&
+            (newMediaPayload.containsKey('poll_id') ||
+                newMediaPayload.containsKey('options')));
+    if (newContent == null &&
+        newMediaPayload == null &&
+        parsedEntities == null &&
+        replyMarkup == null) {
       return;
     }
 
     String? effectiveContent = newContent;
+    Map<String, dynamic>? mergedPayloadForDb = newMediaPayload != null
+        ? ChatService.mergeIncomingMediaPayload(
+            null,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          )
+        : (replyMarkup != null
+            ? ChatService.mergeIncomingMediaPayload(
+                null,
+                null,
+                replyMarkup: replyMarkup,
+              )
+            : null);
+    bool effectiveIsEdited = event.data.containsKey('is_edited')
+        ? event.data['is_edited'] == true
+        : !isPollEvent;
+
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
@@ -1780,11 +1804,21 @@ class _ChannelScreenState extends State<ChannelScreen>
           final current = _messages[index];
           effectiveContent ??= current.content;
           final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          final mergedMedia = ChatService.mergeIncomingMediaPayload(
+            current.mediaPayload,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          );
+          mergedPayloadForDb = mergedMedia;
+          final bool nextIsEdited = event.data.containsKey('is_edited')
+              ? (event.data['is_edited'] == true ? true : current.isEdited)
+              : (isPollMsg ? current.isEdited : true);
+          effectiveIsEdited = nextIsEdited;
           _messages[index] = current.copyWith(
             content: effectiveContent,
             entities: parsedEntities ?? current.entities,
-            mediaPayload: newMediaPayload ?? current.mediaPayload,
-            isEdited: isPollMsg ? current.isEdited : true,
+            mediaPayload: mergedMedia,
+            isEdited: nextIsEdited,
           );
           _updateFeedItems();
         }
@@ -1798,8 +1832,8 @@ class _ChannelScreenState extends State<ChannelScreen>
         parsedEntities != null
             ? jsonEncode(parsedEntities.map((e) => e.toJson()).toList())
             : null,
-        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
-        !isPollEvent,
+        mergedPayloadForDb != null ? jsonEncode(mergedPayloadForDb) : null,
+        effectiveIsEdited,
       );
     } catch (_) {}
   }
@@ -3352,7 +3386,10 @@ class _ChannelScreenState extends State<ChannelScreen>
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => PollCreateScreen(chatId: widget.channelId),
+            builder: (_) => PollCreateScreen(
+              chatId: widget.channelId,
+              isChannel: true,
+            ),
           ),
         );
         break;

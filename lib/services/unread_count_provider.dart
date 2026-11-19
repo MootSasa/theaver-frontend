@@ -145,10 +145,12 @@ class UnreadCountProvider extends ChangeNotifier {
     await _wsSubscription?.cancel();
     _wsService.unsubscribe(WebSocketEventType.unreadCountUpdated, _onUnreadCountUpdated);
     _wsService.unsubscribe(WebSocketEventType.newMessage, _onNewMessage);
+    _wsService.unsubscribe(WebSocketEventType.chatUnreadMarked, _onChatUnreadMarked);
     // Subscribe to WebSocket events
     _wsSubscription = _wsService.eventStream.listen(_handleWebSocketEvent);
     _wsService.subscribe(WebSocketEventType.unreadCountUpdated, _onUnreadCountUpdated);
     _wsService.subscribe(WebSocketEventType.newMessage, _onNewMessage);
+    _wsService.subscribe(WebSocketEventType.chatUnreadMarked, _onChatUnreadMarked);
   }
 
   /// Load counts from the server (getChats API returns unread_count per chat)
@@ -290,6 +292,26 @@ class UnreadCountProvider extends ChangeNotifier {
     }
   }
 
+  void _onChatUnreadMarked(WebSocketEvent event) {
+    final chatId = event.data['chat_id']?.toString();
+    if (chatId == null || chatId.isEmpty) return;
+    final marked = event.data['is_marked_unread'] == true;
+    _knownChatIds.add(chatId);
+    final current = _counts[chatId] ?? 0;
+    if (marked) {
+      if (current == 0) {
+        _counts[chatId] = -1;
+        _persistCountToDb(chatId, -1);
+        _safeNotify();
+      }
+    } else if (current == -1) {
+      _counts.remove(chatId);
+      _persistCountToDb(chatId, 0);
+      NotificationService().cancelChatNotifications(chatId);
+      _safeNotify();
+    }
+  }
+
   void _persistCountToDb(String chatId, int count) {
     try {
       AppDatabase().updateUnreadCount(chatId, count);
@@ -315,6 +337,7 @@ class UnreadCountProvider extends ChangeNotifier {
     _wsSubscription?.cancel();
     _wsService.unsubscribe(WebSocketEventType.unreadCountUpdated, _onUnreadCountUpdated);
     _wsService.unsubscribe(WebSocketEventType.newMessage, _onNewMessage);
+    _wsService.unsubscribe(WebSocketEventType.chatUnreadMarked, _onChatUnreadMarked);
     super.dispose();
   }
 }

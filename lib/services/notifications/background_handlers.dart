@@ -97,6 +97,35 @@ Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
         chatId: data['chat_id']?.toString(),
       );
       return;
+    case 'channel_live_started':
+      final liveChatId = payloadString(data, const ['chat_id']);
+      if (liveChatId.isEmpty) return;
+      final liveTitle = payloadString(
+        data,
+        const ['chat_title', 'chat_name', 'caller_name'],
+        'Канал',
+      );
+      final liveAvatar =
+          payloadString(data, const ['caller_avatar', 'avatar_url']);
+      final liveNotif = ChatMessageNotification(
+        chatId: liveChatId,
+        chatName: liveTitle,
+        senderName: '',
+        text: 'Прямой эфир начался',
+        senderId: payloadString(data, const ['caller_id']),
+        avatarUrl: liveAvatar.isNotEmpty ? liveAvatar : null,
+        isChannel: true,
+        messageType: 'system',
+      );
+      final liveKey = NotificationDedupStore.keyFor(
+        kind: 'live',
+        chatId: liveNotif.chatId,
+        messageId: data['call_id']?.toString(),
+        fallbackText: liveNotif.text,
+      );
+      if (await NotificationDedupStore().checkAndMark(liveKey)) return;
+      await MessageNotificationPresenter(plugin).present(liveNotif);
+      return;
     case 'incoming_call':
       final callId = data['call_id']?.toString() ?? '';
       if (!await CallNotifications.markCallShown(callId)) return;
